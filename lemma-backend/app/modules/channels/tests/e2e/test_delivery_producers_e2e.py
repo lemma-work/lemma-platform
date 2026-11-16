@@ -253,7 +253,10 @@ async def test_a_contacts_run_calling_a_person_in_plans_the_keepers_push(scenari
         )
         theirs = await contact_channel(uow, pod_id=seeded.pod_id, contact_id=contact.id)
         await agent_channels.place_in_channel(
-            uow, conversation_id=seeded.conversation_id, channel_id=theirs.id
+            uow,
+            conversation_id=seeded.conversation_id,
+            channel_id=theirs.id,
+            platform=None,
         )
         await uow.commit()
 

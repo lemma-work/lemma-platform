@@ -56,7 +56,7 @@ const END_TIMEOUT_MS = 4000;
 /** Close codes the server ends a call with, as the person should read them. */
 const CLOSE_REASONS: Record<number, string> = {
     4401: "Your session expired. Sign in again to call.",
-    4403: "You can no longer reach this pod.",
+    4403: "You can no longer reach this Lemma.",
     4404: "This call no longer exists.",
     4429: "You already have the most calls open at once.",
     4503: "The voice is not available right now.",

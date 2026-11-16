@@ -116,7 +116,7 @@ async def refuse_a_model_the_provider_refused(
         return
     raise RuntimeUnavailableError(
         f"{selected.profile_name} just answered that it does not serve "
-        f"{selected.model_name}. Pick another model for this teammate, or "
+        f"{selected.model_name}. Pick another model for this Lemma, or "
         "check the provider in Settings → Models."
     )
 

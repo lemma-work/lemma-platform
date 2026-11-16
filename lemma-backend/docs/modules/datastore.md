@@ -20,7 +20,7 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | API lifespan | Starts local embeddings when configured. Nothing that reads stored data: the query role is ensured lazily |
 | Worker lifespan | Runs the change-log handoff (LISTEN on the datastore database plus a poll), which turns a watched write's wake row into a `changes.deliver` item |
 | Change-log work kinds | `changes.sync_subscribers`, `changes.deliver` (`events`), `changes.retention` (hourly, `admin`); see [Record change log](#record-change-log) |
-| Outcome work | `datastore.outcome_week` (`admin`) reads one pod's measure into its week, written by the `PodOutcomeChanged` fact and by the `datastore.outcome_weeks` periodic every `DATASTORE_OUTCOME_READ_INTERVAL_MINUTES`; see [What a pod owns](#what-a-pod-owns) |
+| Outcome work | `datastore.outcome_week` (`admin`) reads one pod's measure into its week, written by the `PodOutcomeChanged` fact and, when `DATASTORE_OUTCOME_SWEEP_ENABLED` is set (off by default, since nothing shows what a pod owns), by the `datastore.outcome_weeks` periodic every `DATASTORE_OUTCOME_READ_INTERVAL_MINUTES`; see [What a pod owns](#what-a-pod-owns) |
 
 ## Storage model
 

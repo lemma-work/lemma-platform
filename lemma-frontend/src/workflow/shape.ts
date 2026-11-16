@@ -102,7 +102,7 @@ function saySchedule(config: Record<string, unknown> | null): string[] {
         type === "ONCE" ? "Once." :
         type === "CRON" ? "Over and over." :
         "";
-    const where = "The timetable lives on a pod schedule, not on the workflow.";
+    const where = "The timetable lives on a schedule, not on the workflow.";
     return [when ? when + " " + where : where];
 }
 

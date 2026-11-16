@@ -52,7 +52,7 @@ jobs:
   upgrade:
     name: Install, update, verify
     timeout-minutes: 60
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -60,7 +60,7 @@ jobs:
       # This lane installs to `/Applications` and writes into the *real*
       # `~/Library/Application Support/Lemma`, deliberately -- an upgrade that
       # is not tested against the directory it must preserve tests nothing.
-      # That is safe on the ephemeral `macos-14` runner above and ruinous
+      # That is safe on the ephemeral `macos-15` runner above and ruinous
       # anywhere else, because the cleanup at the end deletes both. A
       # self-hosted runner, or this workflow copied onto one, would lose a real
       # installation's pods and secrets. So: refuse rather than assume, and

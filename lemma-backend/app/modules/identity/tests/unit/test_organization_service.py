@@ -835,6 +835,57 @@ async def test_revoke_invitation_updates_status(
     assert update_arg.status == OrganizationInvitationStatus.REVOKED
 
 
+@pytest.mark.asyncio
+async def test_invitee_can_decline_their_own_invitation(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+    user_repository_mock: AsyncMock,
+):
+    """The invitee is not a member yet, so no permission check can pass for
+    them; the address on the invitation is what lets them turn it down."""
+    invitee = UserEntity(email="Test+Invitee@example.com")
+    invitation = OrganizationInvitationEntity(
+        email="test+invitee@example.com",
+        organization_id=uuid4(),
+        role=OrganizationRole.ORG_MEMBER,
+    )
+    organization_repository_mock.get_invitation_by_id.return_value = invitation
+    organization_repository_mock.get_member.return_value = None
+    user_repository_mock.get.return_value = invitee
+
+    await organization_service.revoke_invitation(
+        invitation_id=invitation.id,
+        requester_user_id=invitee.id,
+    )
+
+    update_arg = organization_repository_mock.update_invitation.await_args.args[0]
+    assert update_arg.status == OrganizationInvitationStatus.REVOKED
+
+
+@pytest.mark.asyncio
+async def test_someone_else_cannot_decline_an_invitation(
+    organization_service: OrganizationService,
+    organization_repository_mock: AsyncMock,
+    user_repository_mock: AsyncMock,
+):
+    stranger = UserEntity(email="test+stranger@example.com")
+    invitation = OrganizationInvitationEntity(
+        email="test+invitee@example.com",
+        organization_id=uuid4(),
+        role=OrganizationRole.ORG_MEMBER,
+    )
+    organization_repository_mock.get_invitation_by_id.return_value = invitation
+    organization_repository_mock.get_member.return_value = None
+    user_repository_mock.get.return_value = stranger
+
+    with pytest.raises(IdentityAccessDeniedError):
+        await organization_service.revoke_invitation(
+            invitation_id=invitation.id,
+            requester_user_id=stranger.id,
+        )
+    organization_repository_mock.update_invitation.assert_not_awaited()
+
+
 MEMBER, EDITOR, OWNER = (
     OrganizationRole.ORG_MEMBER,
     OrganizationRole.ORG_EDITOR,

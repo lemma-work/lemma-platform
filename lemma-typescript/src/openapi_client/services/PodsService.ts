@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { JoinablePodListResponse } from '../models/JoinablePodListResponse.js';
 import type { OutcomeInput } from '../models/OutcomeInput.js';
 import type { OutcomeSetResponse } from '../models/OutcomeSetResponse.js';
 import type { PodCreateRequest } from '../models/PodCreateRequest.js';
@@ -30,6 +31,35 @@ export class PodsService {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/organizations/{organization_id}/pods',
+            path: {
+                'organization_id': organizationId,
+            },
+            query: {
+                'limit': limit,
+                'page_token': pageToken,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List Pods the Caller Can Join
+     * The organization's pods the caller is not in and may join without asking: those open to the organization (ORG_MEMBERS) or to everyone (PUBLIC). Join one with `POST /pods/{pod_id}/join`. Empty for an organization owner, who already opens every pod. 403 for someone outside the organization.
+     * @param organizationId
+     * @param limit
+     * @param pageToken
+     * @returns JoinablePodListResponse Successful Response
+     * @throws ApiError
+     */
+    public static podListJoinable(
+        organizationId: string,
+        limit: number = 100,
+        pageToken?: (string | null),
+    ): CancelablePromise<JoinablePodListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/organizations/{organization_id}/pods/joinable',
             path: {
                 'organization_id': organizationId,
             },

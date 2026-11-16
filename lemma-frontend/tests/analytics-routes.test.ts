@@ -45,7 +45,9 @@ test("a workspace address names the kind of place, never which one", () => {
     assert.equal(at({}), "/l/[lemma]");
     assert.equal(at({ tabId: "conversation" }), "/l/[pod]/conversation");
     assert.equal(at({ tabId: "conversation", conversationId: "c-9" }), "/l/[pod]/conversation/[id]");
-    assert.equal(at({ tabId: "space:pages" }), "/l/[pod]/pages");
+    /* Pages is a tab of the app's own now, so the workspace's word for
+       them names the app's place. */
+    assert.equal(at({ tabId: "space:pages" }), "/l/[lemma]/pages");
     assert.equal(at({ tabId: "space:about", section: "people" }), "/l/[pod]/about/people");
     assert.equal(at({ tabId: "table:payroll" }), "/l/[pod]/table/[name]");
     assert.equal(at({ tabId: "app:crm" }), "/l/[pod]/app/[name]");
@@ -68,6 +70,8 @@ test("an app address names the kind of view, never which one", () => {
     const at = (view: View) => toRouteTemplate(writeView(view));
     assert.equal(at({ name: "today" }), "/home");
     assert.equal(at({ name: "needs" }), "/needs");
+    assert.equal(at({ name: "history", podId: null }), "/history");
+    assert.equal(at({ name: "history", podId: "pod-1" }), "/history/[lemma]");
     assert.equal(at({ name: "apps" }), "/apps");
     assert.equal(at({ name: "connectors" }), "/connectors");
     assert.equal(at({ name: "outcomes" }), "/l");
@@ -77,7 +81,10 @@ test("an app address names the kind of view, never which one", () => {
     assert.equal(at({ name: "chats", open: { kind: "shared", podId: "pod-1", id: "g-1" } }), "/l/[lemma]/groups/[id]");
     assert.equal(at({ name: "chats", open: { kind: "contact", podId: "pod-1", id: "k-1" } }), "/l/[lemma]/contacts/[id]");
     assert.equal(at({ name: "outcome", podId: "pod-1", tab: "home" }), "/l/[lemma]");
-    assert.equal(at({ name: "outcome", podId: "pod-1", tab: "made" }), "/l/[lemma]/files");
+    assert.equal(at({ name: "outcome", podId: "pod-1", tab: "files" }), "/l/[lemma]/files");
+    assert.equal(at({ name: "outcome", podId: "pod-1", tab: "pages" }), "/l/[lemma]/pages");
+    assert.equal(at({ name: "outcome", podId: "pod-1", tab: "people" }), "/l/[lemma]/people");
+    assert.equal(at({ name: "outcome", podId: "pod-1", tab: "about" }), "/l/[lemma]/about");
     assert.equal(at({ name: "outcome", podId: "pod-1", tab: "settings", section: "people" }), "/l/[lemma]/settings/[section]");
     assert.equal(at({ name: "outcome", podId: "pod-1", tab: "automations", section: "schedules" }), "/l/[lemma]/automations/schedules", "one of a fixed few views");
     assert.equal(at({ name: "outcome", podId: "pod-1", tab: "chats", section: "channels" }), "/l/[lemma]/groups");
@@ -118,7 +125,7 @@ test("only a move to a new place is a new pageview", () => {
     assert.equal(isNewView("/l/pod-1/chats/new", "/l/pod-1/chats/c-9"), false);
     /* The workspace's own addresses, between themselves. */
     assert.equal(isNewView("/l/pod-1/conversation", "/l/pod-1/conversation/c-9"), false);
-    assert.equal(isNewView("/l/pod-1/home", "/l/pod-1/pages"), true);
+    assert.equal(isNewView("/l/pod-1/home", "/l/pod-1/about/people"), true);
     assert.equal(isNewView("/l/pod-1/conversation/c-1", "/l/pod-1/conversation/c-2"), true);
     /* Real moves. */
     assert.equal(isNewView("/home", "/needs"), true);

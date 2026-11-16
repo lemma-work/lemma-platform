@@ -69,12 +69,12 @@ PROVIDER_HTTP_ERROR = "PROVIDER_HTTP_ERROR"
 
 _DATABASE_BUSY = (
     "Lemma could not run this turn because its database was briefly busy. "
-    "That has nothing to do with this teammate or its settings. "
+    "That has nothing to do with this Lemma or its settings. "
     "Nothing you sent was lost — send your message again."
 )
 
 _UNCLASSIFIED = (
-    f"The run failed. Check the model settings for this teammate ({_SETTINGS})."
+    f"The run failed. Check the model settings for this Lemma ({_SETTINGS})."
 )
 
 
@@ -202,7 +202,7 @@ def _runtime_failure_message(exc: BaseException) -> str:
             "stopped. Please check the agent configuration."
         )
     if isinstance(exc, UsageLimitExceeded):
-        return f"The run hit a usage limit. Check the model settings for this teammate ({_SETTINGS})."
+        return f"The run hit a usage limit. Check the model settings for this Lemma ({_SETTINGS})."
     if isinstance(exc, HarnessDriverCancelled):
         # Whatever the agent was doing stopped part-way, so "try again" is the
         # honest advice. Everything it finished before that point is persisted.
@@ -270,11 +270,11 @@ def _http_error_message(exc: ModelHTTPError) -> str:
         # provider's model id can carry a private deployment or endpoint name,
         # and this string is written into the transcript.
         return (
-            "The model this teammate is set to use is not available on this "
-            "provider (HTTP 404). Pick another model for the teammate, or check "
+            "The model this Lemma is set to use is not available on this "
+            "provider (HTTP 404). Pick another model for the Lemma, or check "
             f"the provider's API base URL in {_SETTINGS}."
         )
     return (
         f"The model provider returned an error (HTTP {status}). Check the model "
-        f"settings for this teammate ({_SETTINGS})."
+        f"settings for this Lemma ({_SETTINGS})."
     )
