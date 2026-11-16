@@ -40,6 +40,10 @@ export function AboutTab({ pod, orgName, go, actions }: {
     const schedules = useQuery({ queryKey: ["outcome-schedules", pod.id], queryFn: () => source.listSchedules(pod.id), staleTime: 5 * 60_000 });
     const jobs = schedules.data ?? [];
     const people = pod.members.filter((member) => member.kind === "person");
+    /* Who is asking to join. Listing it is an admin's call, so anyone else is
+       refused, which leaves the part saying only who is in. */
+    const knocking = useQuery({ queryKey: ["pod-knocking", pod.id], queryFn: () => source.listJoinRequests(pod.id), retry: false });
+    const asking = knocking.data?.length ?? 0;
     /* What it has been taught is what it wrote down when it was: its
        memory, which every run of it reads. What it keeps for one person
        alone is theirs, so only what everyone in it shares is listed. */
@@ -64,6 +68,7 @@ export function AboutTab({ pod, orgName, go, actions }: {
                     </ul>
                 )}
                 {reach && <p className="ox-vs">{reach}.</p>}
+                {asking > 0 && <p><a className="ox-link" {...at("people")}>{asking === 1 ? "1 person" : `${asking} people`} asking to join</a></p>}
                 <p className="ox-about__more">
                     <button type="button" className="ox-btn ox-btn--small" onClick={() => actions.addPeople(pod.id)}>Add people</button>
                     <a className="ox-link" {...at("people")}>Everyone in it, and who can join</a>

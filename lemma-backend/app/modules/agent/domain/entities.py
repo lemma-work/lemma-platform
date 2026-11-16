@@ -186,6 +186,11 @@ class Conversation(Entity):
     contact_id: UUID | None = None
     #: The channel it works in, when it lives on one.
     channel_id: UUID | None = None
+    #: The platform of the places in that channel it answers -- WhatsApp,
+    #: email, Slack, a web widget -- or None for one kept in Lemma itself. A
+    #: person has one conversation per agent on each, never one shared across
+    #: them (``uq_agent_conversations_channel_person``).
+    platform: str | None = None
     organization_id: UUID | None = None
     agent_id: UUID | None = None
     title: str | None = None

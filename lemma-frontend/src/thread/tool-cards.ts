@@ -314,7 +314,7 @@ export function askCardView(ask: TeammateAsk): {
     linkable: boolean;
 } {
     const linkable = ask.askedAs === "AS_PERSON" && Boolean(ask.podId && ask.conversationId);
-    const name = ask.teammate || "The other teammate";
+    const name = ask.teammate || "The other Lemma";
     if (ask.pending) return { status: "asking", tone: "wait", line: "", linkable: false };
     if (ask.needsApproval) return { status: "needs your OK", tone: "wait", line: "", linkable: false };
     if (ask.failed) return { status: "not asked", tone: "bad", line: "", linkable: false };
@@ -334,7 +334,7 @@ export function askCardView(ask: TeammateAsk): {
         case "UNFINISHED":
             return { status: "couldn’t finish", tone: "bad", line: name + " couldn’t finish this request.", linkable };
         case "DISCONNECTED":
-            return { status: "disconnected", tone: "bad", line: name + " was disconnected before it answered. Someone needs to connect the two teammates again.", linkable: false };
+            return { status: "disconnected", tone: "bad", line: name + " was disconnected before it answered. Someone needs to connect the two Lemmas again.", linkable: false };
         default:
             return { status: "", line: "", linkable };
     }

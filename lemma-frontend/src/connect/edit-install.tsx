@@ -113,7 +113,7 @@ export function EditInstall({ orgId, install, connector, takenNames, onClose, on
                         <div className="record-form">
                             <div className="record-form__field">
                                 <label htmlFor="edit-install-name">Name<i aria-hidden="true"> *</i></label>
-                                <small>How your team and its teammates refer to this connection.</small>
+                                <small>How your team and its Lemmas refer to this connection.</small>
                                 <input id="edit-install-name" value={name} disabled={update.isPending} autoComplete="off" {...NOT_A_LOGIN}
                                     onChange={(event) => setName(event.target.value)} />
                             </div>

@@ -9,6 +9,7 @@ import { NeedRow } from "./answer";
 import { AskBox } from "./ask";
 import { markOf, readsAhead } from "./sidebar";
 import { Empty, to } from "./parts";
+import { Invited } from "./invited";
 
 /** What waits on the reader, on Home, before the rest is a click away. */
 const ASKS_SHOWN = 3;
@@ -57,6 +58,7 @@ export function Today({ org, pods, activity, channels, queue, queueFailed, onRet
     if (pods.length === 0) {
         return (
             <div className="ox-page ox-home">
+                <Invited go={go} />
                 <Empty title={`No Lemmas at ${org.name} yet.`}>
                     <p>Each one holds a team’s chats, pages, tables, files and apps, with an assistant that works in all of them.</p>
                     <a className="ox-btn ox-btn--primary" {...to({ name: "hire" }, go)}>Start a Lemma</a>
@@ -69,6 +71,7 @@ export function Today({ org, pods, activity, channels, queue, queueFailed, onRet
         <div className="ox-page ox-home">
             <h1 className="ox-home__t">{headline}</h1>
             <AskBox pods={pods} onAsk={onAsk} autoFocus />
+            <Invited go={go} />
             {queueFailed && queue.length === 0 && (
                 <section aria-label="Needs you">
                     <div className="ox-sec"><h2>Needs you</h2></div>

@@ -23,6 +23,7 @@ import { NewOrgDialog } from "@/org/new-org-dialog";
 import { ReachSheet } from "@/shell/reach";
 import { ShareSheet, type ShareSubject } from "@/space/share-sheet";
 import { AddPeople } from "@/shell/add-people";
+import { AtTheDoor } from "@/shell/at-the-door";
 import { Modal } from "@/shell/modal";
 import { ReconnectStrip } from "@/shell/reconnect-strip";
 import { DesktopNotices } from "@/desktop/desktop-notices";
@@ -487,9 +488,17 @@ export function OutcomesShell() {
     if (orgs.isSuccess && orgs.data.length === 0) {
         return (
             <FrameArrival
+                linkedPodId={scoped}
                 email={me.data?.email ?? null}
                 name={[me.data?.first_name, me.data?.last_name].filter(Boolean).join(" ") || null}
-                onEntered={(podId) => { void queryClient.invalidateQueries({ queryKey: ["orgs"] }); go(podId ? outcomeView(podId) : { name: "outcomes" }); }}
+                onEntered={(podId) => {
+                    void queryClient.invalidateQueries({ queryKey: ["orgs"] });
+                    void queryClient.invalidateQueries({ queryKey: ["pods"] });
+                    /* Already at the Lemma they came for: stay on the exact
+                       address, section and all, rather than its summary. */
+                    if (podId && podId === scoped) return;
+                    go(podId ? outcomeView(podId) : { name: "outcomes" });
+                }}
             />
         );
     }
@@ -529,7 +538,7 @@ export function OutcomesShell() {
         page = <History org={org} pods={withPeople} podId={view.podId} go={go} />;
     } else if (stranger) {
         page = (
-            <div className="settings-view ox-hire">
+            <div className="ox-hire">
                 <NotYours podId={stranger} onArrived={() => { void pods.refetch(); void linked.refetch(); }} />
             </div>
         );
@@ -665,6 +674,7 @@ export function OutcomesShell() {
             {shared && withPeople.some((one) => one.id === shared.podId) && <ShareSheet pod={withPeople.find((one) => one.id === shared.podId)!} orgId={orgId} subject={shared.subject} onClose={() => setShared(null)} />}
             {addingPeople && withPeople.some((one) => one.id === addingPeople) && (
                 <Modal title={"People with access to " + withPeople.find((one) => one.id === addingPeople)!.name} onClose={() => setAddingPeople(null)}>
+                    <AtTheDoor podId={addingPeople} teammate={withPeople.find((one) => one.id === addingPeople)!.name} />
                     <AddPeople pod={withPeople.find((one) => one.id === addingPeople)!} orgId={orgId} />
                 </Modal>
             )}

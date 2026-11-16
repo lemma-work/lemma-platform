@@ -6,7 +6,7 @@ export default async function Page({
   params: Promise<{ invitationId: string }>;
 }) {
   return (
-    <SitePage title="Join this organization">
+    <SitePage title="Your invitation">
       <ActionHost
         action="invite"
         decision="accept"

@@ -16021,8 +16021,27 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Withdraw My Pod Join Request
+     * Take back the current user's pending join request for this pod
+     * @param podId
+     * @returns PodJoinRequestCreateResponse Successful Response
+     * @throws ApiError
+     */
+    static podJoinRequestWithdraw(podId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/join-requests/me",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get My Pod Join Request
-     * Get the current user's pending join request for this pod
+     * Get the current user's pending join request for this pod, or the last one if it was rejected
      * @param podId
      * @returns any Successful Response
      * @throws ApiError
@@ -16063,6 +16082,27 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Reject Pod Join Request
+     * Turn down a pending pod join request; the asker is told by email
+     * @param podId
+     * @param joinRequestId
+     * @returns PodJoinRequestCreateResponse Successful Response
+     * @throws ApiError
+     */
+    static podJoinRequestReject(podId, joinRequestId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/join-requests/{join_request_id}/reject",
+        path: {
+          "pod_id": podId,
+          "join_request_id": joinRequestId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/pod-join-requests.ts
@@ -16075,6 +16115,10 @@ var LemmaClient = (() => {
     }
     me(podId) {
       return this.client.request(() => PodJoinRequestsService.podJoinRequestMe(podId));
+    }
+    /** Take back your own pending request, before anybody answers it. */
+    withdraw(podId) {
+      return this.client.request(() => PodJoinRequestsService.podJoinRequestWithdraw(podId));
     }
     list(podId, options = {}) {
       return this.client.request(
@@ -16098,6 +16142,12 @@ var LemmaClient = (() => {
             pod_role: (_b = payload.pod_role) != null ? _b : "POD_USER" /* POD_USER */
           });
         }
+      );
+    }
+    /** Turn a pending request down; the asker is told by email. */
+    reject(podId, joinRequestId) {
+      return this.client.request(
+        () => PodJoinRequestsService.podJoinRequestReject(podId, joinRequestId)
       );
     }
   };

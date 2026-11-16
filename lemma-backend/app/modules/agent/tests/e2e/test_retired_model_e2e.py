@@ -71,7 +71,7 @@ async def test_saving_a_teammate_on_a_model_the_provider_does_not_offer_is_refus
     # "never" was never offered, so nothing says it went away.
     assert "does not offer a model named never" in unknown.json()["message"]
     assert "no longer" not in unknown.json()["message"]
-    assert "this teammate" in unknown.json()["message"]
+    assert "this Lemma" in unknown.json()["message"]
 
     for_a_conversation = await authenticated_client.post(
         f"/pods/{pod_id}/conversations",

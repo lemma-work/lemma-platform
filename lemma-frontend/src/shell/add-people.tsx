@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lemma } from "@/session/client";
-import { MANAGE_MEMBERS, POD_ROLES, type Pod } from "@/data";
+import { MANAGE_MEMBERS, POD_ROLES, type Member as PodMember, type Pod } from "@/data";
 import { isLandingPreview } from "@/marketing/preview-mode";
 import { inviteProblem, unsentInvitation, type InvitationForInviter } from "@/org/membership";
 import { CopyLink } from "@/org/people";
@@ -23,6 +23,24 @@ interface PodInvite extends InvitationForInviter {
 function itemsOf(value: unknown): unknown[] {
     if (Array.isArray(value)) return value;
     return (value as Listish)?.items ?? [];
+}
+
+/** Every member of the organization, page by page.
+ *
+ *  The first hundred used to be all there was, so somebody further down the
+ *  list could not be found by typing their address — it went down the invite
+ *  path instead and the server answered that they were already a member.
+ *  Bounded, so a runaway cursor cannot loop for ever. */
+async function everyOrgMember(orgId: string): Promise<unknown[]> {
+    const all: unknown[] = [];
+    let token: string | undefined;
+    for (let page = 0; page < 50; page++) {
+        const listed = (await lemma().organizations.members.list(orgId, { limit: 100, pageToken: token })) as Listish & { next_page_token?: string | null };
+        all.push(...itemsOf(listed));
+        token = listed.next_page_token ?? undefined;
+        if (!token) break;
+    }
+    return all;
 }
 
 /** Whether the server lets the signed-in person add people to this pod.
@@ -77,6 +95,8 @@ export function AddPeople({ pod, orgId }: { pod: Pod; orgId: string | null }) {
     const [error, setError] = useState<string | null>(null);
     const [invited, setInvited] = useState<string | null>(null);
     const [unsent, setUnsent] = useState<ReturnType<typeof unsentInvitation>>(null);
+    /* The row whose Remove was pressed, waiting on a second click. */
+    const [removing, setRemoving] = useState<string | null>(null);
     const queryClient = useQueryClient();
     const preview = isLandingPreview();
 
@@ -98,7 +118,7 @@ export function AddPeople({ pod, orgId }: { pod: Pod; orgId: string | null }) {
                 const { previewCandidates } = await import("@/marketing/preview-source");
                 return { items: previewCandidates.map(person => ({ id: person.id, role: person.orgRole, user: { email: person.label } })) };
             }
-            return lemma().organizations.members.list(orgId as string, { limit: 100 });
+            return { items: await everyOrgMember(orgId as string) };
         },
         enabled: canAdd && Boolean(orgId),
     });
@@ -121,6 +141,7 @@ export function AddPeople({ pod, orgId }: { pod: Pod; orgId: string | null }) {
     );
 
     const people = useMemo(() => pod.members.filter((member) => member.kind === "person"), [pod.members]);
+    const admins = people.filter((member) => member.podRole === "POD_ADMIN").length;
 
     /* By address, which is what an organization member is known by here. The
        name is the fallback only for a source that has no address to give. */
@@ -158,7 +179,7 @@ export function AddPeople({ pod, orgId }: { pod: Pod; orgId: string | null }) {
     /* Said under the field, before anything is pressed, so the answer to "why
        is the button off" is already on screen. */
     const hint = inPod
-        ? "They’re already in this pod."
+        ? "They’re already in this Lemma."
         : pendingMatch
           ? "They’ve already been invited here."
           : !typed && orgMembers.isSuccess && candidates.length === 0 && pendingHere.length === 0
@@ -218,6 +239,54 @@ export function AddPeople({ pod, orgId }: { pod: Pod; orgId: string | null }) {
             await queryClient.invalidateQueries({ queryKey: ["org-invitations", orgId] });
         } catch (problem) {
             setError(problem instanceof Error ? problem.message : "That invitation was not sent.");
+        } finally {
+            setBusy(null);
+        }
+    }
+
+    async function refresh() {
+        await Promise.all([
+            queryClient.invalidateQueries({ queryKey: ["pod-detail", pod.id] }),
+            queryClient.invalidateQueries({ queryKey: ["pods"] }),
+        ]);
+    }
+
+    async function changeRole(member: PodMember, role: string) {
+        if (role === member.podRole) return;
+        setBusy("role:" + member.id);
+        setError(null);
+        try {
+            await lemma(pod.id).podMembers.updateRoles(pod.id, member.id, [role]);
+            await refresh();
+        } catch (problem) {
+            setError(problem instanceof Error ? problem.message : "Couldn’t change their access.");
+        } finally {
+            setBusy(null);
+        }
+    }
+
+    async function remove(member: PodMember) {
+        setBusy("remove:" + member.id);
+        setError(null);
+        try {
+            await lemma(pod.id).podMembers.remove(pod.id, member.id);
+            setRemoving(null);
+            await refresh();
+        } catch (problem) {
+            setError(problem instanceof Error ? problem.message : "Couldn’t remove them.");
+        } finally {
+            setBusy(null);
+        }
+    }
+
+    async function withdrawInvite(invite: PodInvite) {
+        setBusy("withdraw:" + invite.id);
+        setError(null);
+        try {
+            await lemma().organizations.invitations.revoke(invite.id);
+            await queryClient.invalidateQueries({ queryKey: ["org-invitations", orgId] });
+        } catch (problem) {
+            setError(problem instanceof Error ? problem.message : "Couldn’t withdraw the invitation.");
         } finally {
             setBusy(null);
         }
@@ -319,6 +388,12 @@ export function AddPeople({ pod, orgId }: { pod: Pod; orgId: string | null }) {
                     <div className="addpeople__list" aria-label={"People with access to " + pod.name}>
                         {people.map((member) => {
                             const mine = Boolean(myEmail) && (member.email ?? "").toLowerCase() === myEmail;
+                            /* Your own row only while somebody else could
+                               still let people in: the last admin changing or
+                               removing themselves leaves a Lemma nobody can
+                               manage, which the server refuses anyway. */
+                            const managed = canAdd && !preview && Boolean(member.podRole) && !(mine && admins <= 1 && member.podRole === "POD_ADMIN");
+                            const confirming = removing === member.id;
                             return (
                                 <div key={member.id} className="addpeople__row addpeople__row--member" title={member.email}>
                                     <span className="face" aria-hidden="true">{member.initials}</span>
@@ -326,7 +401,37 @@ export function AddPeople({ pod, orgId }: { pod: Pod; orgId: string | null }) {
                                         {member.name}
                                         {mine && <span className="addpeople__you"> · you</span>}
                                     </span>
-                                    <span className="addpeople__access">{member.can}</span>
+                                    {confirming ? (
+                                        <span className="addpeople__confirm">
+                                            <span>{mine ? "Leave " + pod.name + "?" : "Remove from " + pod.name + "?"}</span>
+                                            <button type="button" className="addpeople__drop" disabled={busy !== null} onClick={() => void remove(member)}>
+                                                {busy === "remove:" + member.id ? "Removing…" : mine ? "Leave" : "Remove"}
+                                            </button>
+                                            <button type="button" className="linkish" onClick={() => setRemoving(null)}>Cancel</button>
+                                        </span>
+                                    ) : managed ? (
+                                        <span className="addpeople__manage">
+                                            <select
+                                                aria-label={"Access for " + member.name}
+                                                className="addpeople__role"
+                                                value={member.podRole ?? ""}
+                                                disabled={busy !== null}
+                                                onChange={(event) => void changeRole(member, event.target.value)}
+                                            >
+                                                {!POD_ROLES.some((option) => option.value === member.podRole) && (
+                                                    <option value={member.podRole ?? ""}>{member.role}</option>
+                                                )}
+                                                {ROLES.map((option) => (
+                                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                                ))}
+                                            </select>
+                                            <button type="button" className="linkish" disabled={busy !== null} onClick={() => setRemoving(member.id)}>
+                                                {mine ? "Leave" : "Remove"}
+                                            </button>
+                                        </span>
+                                    ) : (
+                                        <span className="addpeople__access">{member.can}</span>
+                                    )}
                                 </div>
                             );
                         })}
@@ -335,6 +440,11 @@ export function AddPeople({ pod, orgId }: { pod: Pod; orgId: string | null }) {
                                 <span className="face" aria-hidden="true">@</span>
                                 <span className="addpeople__name">{invite.email}</span>
                                 <span className="addpeople__access">Invited</span>
+                                {canAdd && (
+                                    <button type="button" className="linkish" disabled={busy !== null} onClick={() => void withdrawInvite(invite)}>
+                                        {busy === "withdraw:" + invite.id ? "Withdrawing…" : "Withdraw"}
+                                    </button>
+                                )}
                             </div>
                         ))}
                     </div>

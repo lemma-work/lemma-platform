@@ -116,7 +116,7 @@ async def open_call(
             or conversation.contact_id is not None
         ):
             raise ConversationStateError(
-                "A call can only be held in your own chat with a teammate."
+                "A call can only be held in your own chat with a Lemma."
             )
     agent = await resolve_agent(
         conversation, user_id=user_id, agent_repository=AgentRepository(uow)

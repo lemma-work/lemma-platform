@@ -154,7 +154,7 @@ export function coverageLine(coverage: Coverage): string {
 /** Said beside the count when the server stopped counting: the pod has more
  *  members than it weighed, so the count is of some of them. Empty otherwise. */
 export function truncatedLine(coverage: Coverage): string {
-    return coverage.truncated ? "Only some of the pod’s members were counted" : "";
+    return coverage.truncated ? "Only some of the people here were counted" : "";
 }
 
 function names(members: AwaitedMember[], most = 5): string {
@@ -331,7 +331,7 @@ export const SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 export function slugProblem(slug: string, taken: string[]): string {
     if (!slug) return "Give it a name apps and agents can call it by.";
     if (!SLUG_PATTERN.test(slug)) return "Lowercase letters, digits, - and _ only, starting with a letter or digit.";
-    if (taken.includes(slug)) return "This teammate already has a connector called " + slug + ".";
+    if (taken.includes(slug)) return "This Lemma already has a connector called " + slug + ".";
     return "";
 }
 

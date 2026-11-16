@@ -96,9 +96,9 @@ export function ConnectTeammate({ pod, asker: editing, onClose }: {
         },
         onError: (error) => setProblem(
             isForbidden(error)
-                ? "Only an admin of " + pod.name + " can let another teammate ask it."
+                ? "Only an admin of " + pod.name + " can let another Lemma ask it."
                 : statusOf(error) === 409
-                  ? "You can only connect a teammate you’re in."
+                  ? "You can only connect a Lemma you’re in."
                   : statusOf(error) === 400
                     ? "Something ticked can’t be shared. Untick it and try again."
                     : "That couldn’t be saved. Try again.",
@@ -152,7 +152,7 @@ export function ConnectTeammate({ pod, asker: editing, onClose }: {
 
     return (
         <Modal
-            title={editing && chosen ? "What " + chosen.name + " can read in " + pod.name : "Let another teammate ask " + pod.name}
+            title={editing && chosen ? "What " + chosen.name + " can read in " + pod.name : "Let another Lemma ask " + pod.name}
             subtitle="It can ask with nobody present, and reads only what you share and what is Public."
             narrow
             onClose={onClose}
@@ -168,11 +168,11 @@ export function ConnectTeammate({ pod, asker: editing, onClose }: {
                 )}
                 {editing && askable.isSuccess && links.isSuccess && !chosen && (
                     <p className="aboutpage__quiet">
-                        You’re not in {links.data.find((link) => link.podId === editing)?.name ?? "that teammate"}, so you can’t change what it reads. You can still disconnect it.
+                        You’re not in {links.data.find((link) => link.podId === editing)?.name ?? "that Lemma"}, so you can’t change what it reads. You can still disconnect it.
                     </p>
                 )}
                 {askable.isSuccess && links.isSuccess && choices.length === 0 && (
-                    <p className="aboutpage__quiet">There’s no other teammate you’re in. You can only connect one you’re in yourself.</p>
+                    <p className="aboutpage__quiet">There’s no other Lemma you’re in. You can only connect one you’re in yourself.</p>
                 )}
                 <ul className="connect__choices">
                     {choices.map((other) => (
@@ -193,7 +193,7 @@ export function ConnectTeammate({ pod, asker: editing, onClose }: {
                 <p className="connect__exposed">
                     {chosen
                         ? "Anyone in " + chosen.name + ", and its automations with nobody present, will be able to read what you tick here, and anything Public in " + pod.name + "."
-                        : "Whoever is in the teammate you choose, and its automations, will be able to read what you tick here."}
+                        : "Whoever is in the Lemma you choose, and its automations, will be able to read what you tick here."}
                 </p>
                 {listing && <p className="aboutpage__quiet">Loading…</p>}
                 {(tables.isError || folderLists[0]?.isError) && (
@@ -251,7 +251,7 @@ export function AskedBy({ pod, onOpen, onEdit }: {
             void cache.invalidateQueries({ queryKey: ["askable-pods", link.podId] });
         },
         onError: (error) => setProblem(
-            isForbidden(error) ? "Only an admin of " + pod.name + " can disconnect a teammate." : "That couldn’t be disconnected. Try again.",
+            isForbidden(error) ? "Only an admin of " + pod.name + " can disconnect a Lemma." : "That couldn’t be disconnected. Try again.",
         ),
     });
     if (links.isPending) return null;

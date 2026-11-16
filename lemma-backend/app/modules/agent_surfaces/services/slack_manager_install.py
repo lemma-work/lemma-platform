@@ -106,8 +106,8 @@ async def _lemma_app_grant(
         or str(raw.get("app_id") or "") != expected_app
     ):
         raise AgentSurfaceValidationError(
-            "That account is for a Slack app of your own, not Lemma's. A teammate's "
-            "own app is added from the teammate; Lemma's app manages them."
+            "That account is for a Slack app of your own, not Lemma's. A Lemma's "
+            "own app is added from that Lemma; Lemma's app manages them."
         )
     return raw
 

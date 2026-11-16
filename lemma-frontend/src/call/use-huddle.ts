@@ -87,8 +87,8 @@ export function useHuddle() {
         try {
             const opened = await lemma(place.pod.id).calls.open({
                 ...(existing ? { conversation_id: existing } : {}),
-                display_name: place.teammate || "your teammate",
-                title: `Call with ${place.teammate || "your teammate"}`,
+                display_name: place.teammate || "this Lemma",
+                title: `Call with ${place.teammate || "this Lemma"}`,
             });
             if (attempt !== setupAttempt.current) return null;
             setCallId(opened.call_id);

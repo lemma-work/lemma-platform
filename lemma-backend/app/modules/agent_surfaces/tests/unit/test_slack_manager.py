@@ -289,7 +289,7 @@ async def test_a_roster_that_leaves_teammates_off_says_how_many():
         lemma_url="https://lemma.test",
         more=3,
     )
-    assert "3 more teammates are in Lemma." in str(home["blocks"])
+    assert "3 more are in the Lemma app." in str(home["blocks"])
 
 
 async def test_a_long_picker_fits_slacks_rows_and_says_who_it_left_off():

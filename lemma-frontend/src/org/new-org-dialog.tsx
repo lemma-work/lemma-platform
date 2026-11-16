@@ -44,7 +44,7 @@ export function NewOrgDialog({ taken, onClose, onCreated }: {
     });
 
     return (
-        <Modal title="New organization" subtitle="Its own teammates, people, connectors and billing." narrow onClose={onClose}>
+        <Modal title="New organization" subtitle="Its own Lemmas, people, connectors and billing." narrow onClose={onClose}>
             <div className="new-org">
                 {me.isPending && source.label !== "sample" ? (
                     <p className="new-org__quiet" role="status">Loading your account…</p>

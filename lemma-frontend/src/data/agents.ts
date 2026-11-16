@@ -313,10 +313,10 @@ export function whyNot(agent: Pick<AgentRow, "actions" | "front" | "broken" | "l
     if (may(agent, action)) return "";
     if (agent.broken) return "This row has no name, so nothing can be done to it.";
     if (agent.front && action === AGENT_EDIT) {
-        return "The agent a pod answers with cannot be edited through the API — talk to it instead.";
+        return "The agent a Lemma answers with cannot be edited here — talk to it instead.";
     }
     if (agent.front && action === AGENT_REMOVE) {
-        return "The agent a pod answers with cannot be deleted. It is the pod.";
+        return "The agent a Lemma answers with cannot be deleted. It is the Lemma.";
     }
     if (action === AGENT_EDIT) return "You may read " + agent.label + ", not change it.";
     if (action === AGENT_REMOVE) return "You may not delete " + agent.label + ".";

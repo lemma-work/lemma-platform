@@ -59,7 +59,7 @@ export function installedNote(outcome: ConnectOutcome | null): InstalledNote {
             title: "Lemma is joining your workspace",
             // Only what every path does: a re-add, or a grant finished in another
             // browser, sends no message, but the Home tab is always there.
-            lead: "Open Lemma's Home tab in Slack to add your first teammate. If the workspace already belongs to another Lemma organization, Lemma says so in Slack when it can.",
+            lead: "Open Lemma's Home tab in Slack to add your first Lemma. If the workspace already belongs to another Lemma organization, Lemma says so in Slack when it can.",
             ok: true,
         };
     }
