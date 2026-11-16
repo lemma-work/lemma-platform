@@ -23,15 +23,30 @@ class FileTooLargeError(RuntimeError):
     pass
 
 
+class ProtectedPathError(ValueError):
+    """A change to a protected path, however the path was spelled."""
+
+
 class FilesystemManager:
+    """Files under the allowed roots.
+
+    ``protected_paths`` (the browser profile, in the runtime) may not be
+    written, moved, deleted or created -- nor anything that contains them --
+    and may not be read through a path that only *resolves* there. Checked
+    here on the resolved path, because the API checks the path as spelled:
+    ``~/lemma/p -> ~/.lemma/browser/profile`` got a write past it.
+    """
+
     def __init__(
         self,
         allowed_roots: tuple[str, ...],
         *,
         max_read_bytes: int = 256 * 1024 * 1024,
         max_write_bytes: int = 256 * 1024 * 1024,
+        protected_paths: tuple[str, ...] = (),
     ) -> None:
         self._roots = tuple(Path(root).resolve() for root in allowed_roots)
+        self._protected = tuple(protected_paths)
         self._max_read_bytes = max_read_bytes
         self._max_write_bytes = max_write_bytes
 
@@ -160,12 +175,14 @@ class FilesystemManager:
 
     def _create_directory_sync(self, path: str) -> None:
         candidate = self._new_path(path)
+        self._refuse_protected(candidate)
         if candidate.exists() and not candidate.is_dir():
             raise ValueError("directory path conflicts with a non-directory")
         candidate.mkdir(parents=True, exist_ok=True)
 
     def _list_sync(self, path: str) -> tuple[FileStat, ...]:
         directory = self._existing_path(path, follow_symlinks=True)
+        self._refuse_protected_through_link(path, directory)
         if not directory.is_dir():
             raise ValueError("file list path is not a directory")
         return tuple(
@@ -177,6 +194,7 @@ class FilesystemManager:
         self, path: str, byte_range: ByteRange
     ) -> tuple[BinaryIO, int]:
         candidate = self._existing_path(path, follow_symlinks=True)
+        self._refuse_protected_through_link(path, candidate)
         if not candidate.is_file():
             raise ValueError("file read path is not a regular file")
         size = candidate.stat().st_size
@@ -196,6 +214,7 @@ class FilesystemManager:
         self, path: str, expected_sha256: str | None, mode: int | None = None
     ) -> tuple[Path, Path, BinaryIO]:
         candidate = self._new_path(path)
+        self._refuse_protected(candidate)
         if expected_sha256 is not None:
             if (
                 not candidate.exists()
@@ -241,11 +260,14 @@ class FilesystemManager:
 
     def _move_sync(self, source: str, destination: str) -> None:
         source_path = self._existing_path(source, follow_symlinks=False)
+        self._refuse_protected(source_path)
         destination_path = self._new_path(destination)
+        self._refuse_protected(destination_path)
         os.replace(source_path, destination_path)
 
     def _delete_sync(self, path: str, recursive: bool) -> bool:
         candidate = self._existing_path(path, follow_symlinks=False)
+        self._refuse_protected(candidate)
         if candidate in self._roots:
             raise ValueError("cannot delete an allowed filesystem root")
         if candidate.is_symlink() or candidate.is_file():
@@ -294,6 +316,44 @@ class FilesystemManager:
         parent = parent.resolve(strict=True)
         self._require_allowed(parent)
         return parent / candidate.name
+
+    def _protected_roots(self) -> tuple[Path, ...]:
+        # Resolved on every call: the profile may be created, or replaced by a
+        # link, after the runtime starts.
+        return tuple(Path(path).resolve() for path in self._protected)
+
+    def _refuse_protected(self, resolved: Path) -> None:
+        """``resolved`` (its parent resolved, for a link not followed) is, is
+        inside, or contains a protected path."""
+        for protected in self._protected_roots():
+            if (
+                resolved == protected
+                or resolved.is_relative_to(protected)
+                or protected.is_relative_to(resolved)
+            ):
+                raise ProtectedPathError(
+                    "that path is the browser's profile, which holds the "
+                    "machine's logins"
+                )
+
+    def _refuse_protected_through_link(self, spelled: str, resolved: Path) -> None:
+        """A read that reaches a protected path only by following a link.
+
+        Reading the profile by its own name is the API's to refuse (and the
+        runtime's own callers may); reaching it through ``~/lemma/p`` is a
+        way around that refusal, and is refused here.
+        """
+        named = Path(os.path.normpath(spelled))
+        for protected, given in zip(self._protected_roots(), self._protected):
+            inside = resolved == protected or resolved.is_relative_to(protected)
+            named_inside = named.is_relative_to(Path(given)) or named.is_relative_to(
+                protected
+            )
+            if inside and not named_inside:
+                raise ProtectedPathError(
+                    "that path leads into the browser's profile, which holds "
+                    "the machine's logins"
+                )
 
     def _require_allowed(self, candidate: Path) -> None:
         if not any(

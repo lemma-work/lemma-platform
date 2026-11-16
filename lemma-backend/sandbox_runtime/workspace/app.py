@@ -24,7 +24,11 @@ from fastapi import (
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from sandbox_runtime.paths import RUNTIME_FILESYSTEM_ROOTS, running_runtime_version
+from sandbox_runtime.paths import (
+    PROTECTED_PATHS,
+    RUNTIME_FILESYSTEM_ROOTS,
+    running_runtime_version,
+)
 from sandbox_runtime.protocol import ByteRange, ProcessState
 from sandbox_runtime.tasks import create_inherited_task
 
@@ -118,6 +122,7 @@ def create_app(
         allowed_roots=allowed_roots,
         max_read_bytes=transfer_limit,
         max_write_bytes=transfer_limit,
+        protected_paths=PROTECTED_PATHS,
     )
     python_sessions = PythonSessionManager(allowed_roots=allowed_roots)
     quiescer = WorkspaceQuiescer()

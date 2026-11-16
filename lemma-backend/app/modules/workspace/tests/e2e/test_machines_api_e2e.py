@@ -222,6 +222,33 @@ async def test_the_browser_profile_cannot_be_read_deleted_or_overwritten(
     for response in (read, deleted, overwritten, moved):
         assert response.status_code == status.HTTP_403_FORBIDDEN, response.text
 
+    # Spelled through a link, the path gets past the API's check; the runtime
+    # checks where it resolves.
+    link = f"{WORKSPACE_ROOT}/p-{uuid4().hex[:6]}"
+    made = await _finished(
+        client,
+        (
+            await _start(
+                client, f"mkdir -p {BROWSER_PROFILE} && ln -s {BROWSER_PROFILE} {link}"
+            )
+        )["id"],
+    )
+    assert made["exit_code"] == 0, made["text"]
+    through = await client.put(
+        "/machines/me/files/content",
+        params={"path": f"{link}/planted"},
+        content=b"x",
+    )
+    removed = await client.delete(
+        "/machines/me/files", params={"path": f"{link}/Default", "recursive": True}
+    )
+    for response in (through, removed):
+        assert response.status_code >= 400, response.text
+    planted = await _finished(
+        client, (await _start(client, f"test ! -e {BROWSER_PROFILE}/planted"))["id"]
+    )
+    assert planted["exit_code"] == 0, "nothing was written into the profile"
+
 
 async def test_files_sync_between_the_machine_and_the_pod(
     machine, fixed_test_org
