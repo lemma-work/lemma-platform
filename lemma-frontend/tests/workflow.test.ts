@@ -449,7 +449,7 @@ test("a branch puts both arms under the decision and the join under both", () =>
     assert.equal(shape.ordered[3].says, "Runs pay-invoice");
     assert.equal(shape.ordered[3].detail[0], "With: amount");
     // The times live on a pod schedule, not on the workflow (domain/start.py:47).
-    assert.match(shape.start.detail[0], /Over and over\. The timetable lives on a pod schedule/);
+    assert.match(shape.start.detail[0], /Over and over\. The timetable lives on a schedule/);
 });
 
 test("a loop prints its body before what comes after it, and does not hang", () => {

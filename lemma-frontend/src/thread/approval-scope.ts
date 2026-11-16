@@ -36,9 +36,9 @@ const SCOPE: Record<string, string> = {
     "workflow.delete": "delete any workflow",
     "schedule.update": "change any schedule",
     "schedule.delete": "delete any schedule",
-    "connector.use": "use any of the pod's connectors",
-    "connector_account.use": "use any account shared with the pod",
-    "pod.delete": "delete the pod",
+    "connector.use": "use any of this Lemma's connectors",
+    "connector_account.use": "use any account shared with this Lemma",
+    "pod.delete": "delete this Lemma",
 };
 
 export const FOR_THE_CONVERSATION = "for the rest of this conversation";

@@ -85,7 +85,7 @@ logger = get_logger(__name__)
 ResolveConfig = Callable[[AgentRuntimeConfig], Awaitable[ResolvedAgentRuntime]]
 
 _NO_IN_PROCESS_MODEL = (
-    "This teammate cannot answer people outside the space: that needs a model "
+    "This Lemma cannot answer people outside its space: that needs a model "
     "the organization provides, not a coding agent or someone's personal key. "
     "Choose one for the organization in Settings → Models."
 )

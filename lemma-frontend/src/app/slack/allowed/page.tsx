@@ -21,7 +21,7 @@ export default function SlackAllowedPage() {
                     <p className="portal__lead">
                         {refused
                             ? `${refused} Go back to Slack and try "Add to Slack" again.`
-                            : "Your teammate is joining Slack. Lemma will tell you there when it’s in. You can close this tab."}
+                            : "Your Lemma is joining Slack. Lemma will tell you there when it’s in. You can close this tab."}
                     </p>
                 </div>
             </div>

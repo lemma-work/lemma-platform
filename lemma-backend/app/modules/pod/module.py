@@ -40,6 +40,7 @@ def _routers():
 
 
 def _register_work() -> None:
+    import app.modules.pod.events.access_email_work  # noqa: F401
     import app.modules.pod.events.join_request_work  # noqa: F401
 
 

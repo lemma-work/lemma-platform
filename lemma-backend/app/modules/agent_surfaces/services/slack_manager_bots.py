@@ -137,7 +137,7 @@ async def _refusal(
             f"<{sign_in_url(ctx.team_id, ctx.slack_user_id)}|connect>."
         )
     if mate is None:
-        return "That teammate isn't one you can see in Lemma."
+        return "That Lemma isn't one you can see."
     if mate.surface is not None:
         return f"{views.escape(mate.name)} is already in Slack."
     if not mate.can_manage:
@@ -229,7 +229,7 @@ async def acknowledge_add(
     body: dict[str, object] = {
         "response_action": "update",
         "view": views.working_modal(
-            name=mate.name if mate else "the teammate",
+            name=mate.name if mate else "the Lemma",
             metadata=views.modal_metadata(parsed.pod_id, parsed.agent_id),
         ),
     }
@@ -452,7 +452,7 @@ async def bind_allowed_app(
             organization_id=organization_id,
             team_id=team_id,
             slack_user_id=slack_user_id,
-            text=f"I couldn't finish adding the teammate: {exc.message}",
+            text=f"I couldn't finish adding the Lemma: {exc.message}",
             cause=f"bind-failed:{fact.account_id}",
         )
         await uow.commit()

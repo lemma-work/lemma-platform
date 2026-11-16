@@ -1056,6 +1056,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'observability.worker_liveness.publish_failed.degraded': EventSpec('warning', frozenset()),
     'observability.worker_liveness.read_failed.degraded': EventSpec('warning', frozenset()),
     'observability.worker_liveness.read_timed_out.degraded': EventSpec('warning', frozenset({'timeout_seconds'})),
+    'pod.access_email.skipped': EventSpec('info', frozenset({'pod_id', 'reason'})),
     'pod.config.outcome_unreadable.degraded': EventSpec('warning', frozenset()),
     'pod.join_request.email_skipped': EventSpec('info', frozenset({'pod_id', 'reason'})),
     'pod.member_event.creation_failed': EventSpec('debug', frozenset()),

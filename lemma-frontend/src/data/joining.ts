@@ -216,10 +216,10 @@ export function orgJoinSaid(join: OrgJoin): { who: string; then: string } {
  *  it cannot know which it will be until it has asked.
  */
 
-/** What became of an ask. */
-export type JoinStanding = "pending" | "approved" | "refused";
+/** What became of an ask. `withdrawn` is the asker taking it back. */
+export type JoinStanding = "pending" | "approved" | "refused" | "withdrawn";
 
-/** Somebody's ask to be let in to a teammate. */
+/** Somebody's ask to be let in to a Lemma. */
 export interface JoinRequest {
     id: string;
     podId: string;
@@ -236,6 +236,7 @@ const STANDING: Record<string, JoinStanding> = {
     PENDING: "pending",
     APPROVED: "approved",
     REJECTED: "refused",
+    WITHDRAWN: "withdrawn",
 };
 
 /** What the platform said about an ask, or null if it did not describe one.

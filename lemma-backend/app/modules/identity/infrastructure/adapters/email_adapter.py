@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 from app.core.config import settings
 from app.core.email.email_sender import EmailNotConfiguredError, EmailSender
 from app.core.email.transactional import (
     EmailAction,
     EmailDetail,
+    RenderedEmail,
     render_transactional_email,
 )
 from app.core.helpers.humanize import humanize_name
@@ -136,7 +139,7 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             action_label = f"Open {display_pod_name}"
             details = (
                 EmailDetail("Lemma", display_pod_name or ""),
-                EmailDetail("Workspace", display_organization_name),
+                EmailDetail("Organization", display_organization_name),
                 EmailDetail(
                     "About",
                     pod_description
@@ -149,22 +152,19 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             preheader = (
                 f"You have been invited to join {display_organization_name} on Lemma."
             )
-            eyebrow = "Workspace invitation"
+            eyebrow = "Invitation"
             heading = f"Join {display_organization_name} on Lemma."
             body = (
-                f"{inviter_name} invited you to the {display_organization_name} workspace.",
+                f"{inviter_name} invited you to {display_organization_name} on Lemma.",
                 *said,
-                (
-                    "Accept the invitation to work with the team's agents, data, "
-                    "automations, and apps in one place."
-                ),
+                ("Accept the invitation to work in its Lemmas with the people there."),
             )
             action_label = "Accept invitation"
-            details = (EmailDetail("Workspace", display_organization_name),)
+            details = (EmailDetail("Organization", display_organization_name),)
             highlights = (
-                "Shared agents, data, and workspace apps",
+                "Lemmas that own a piece of the work",
                 "Automations and tools for team workflows",
-                "One place to build with your organization",
+                "One place to work with your organization",
             )
 
         rendered = render_transactional_email(
@@ -277,17 +277,16 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
         display_organization_name = humanize_name(organization_name)
         rendered = render_transactional_email(
             preheader=f"You have joined {display_organization_name} on Lemma.",
-            eyebrow="Workspace joined",
+            eyebrow="Invitation accepted",
             heading=f"You're in {display_organization_name}.",
             body=(
                 (
-                    "The workspace is now available in your Lemma account. You can open "
-                    "shared pods, collaborate with the team, and connect the tools needed "
-                    "for your workflows."
+                    "The organization is now in your Lemma account. You can open the "
+                    "Lemmas you were added to and work in them with the people there."
                 ),
             ),
             action=EmailAction("Open Lemma", settings.frontend_url.rstrip("/")),
-            details=(EmailDetail("Active workspace", display_organization_name),),
+            details=(EmailDetail("Organization", display_organization_name),),
             footer=(
                 "You are receiving this because an invitation was accepted for this email.",
             ),
@@ -304,6 +303,7 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
         self,
         *,
         to_email: str,
+        pod_id: UUID,
         pod_name: str,
         organization_name: str,
         requester_name: str,
@@ -314,24 +314,27 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
         requester_label = requester_name or requester_email
         rendered = render_transactional_email(
             preheader=f"{requester_label} asked to join {display_pod_name}.",
-            eyebrow="Pod join request",
+            eyebrow="Request to join",
             heading=f"New request to join {display_pod_name}.",
             body=(
                 (
                     f"{requester_label} requested access to {display_pod_name} in "
                     f"{display_organization_name}."
                 ),
-                "Review the pending request in Lemma to approve or decline it.",
+                "Let them in from its People settings in Lemma.",
             ),
-            action=EmailAction("Review requests", settings.frontend_url.rstrip("/")),
+            action=EmailAction(
+                "Review the request",
+                f"{settings.frontend_url.rstrip('/')}/l/{pod_id}/settings/people",
+            ),
             details=(
                 EmailDetail("Requester", requester_label),
                 EmailDetail("Email", requester_email),
-                EmailDetail("Pod", display_pod_name),
-                EmailDetail("Workspace", display_organization_name),
+                EmailDetail("Lemma", display_pod_name),
+                EmailDetail("Organization", display_organization_name),
             ),
             footer=(
-                f"This notification was sent to {to_email} because you are a pod admin.",
+                f"This was sent to {to_email} because you are an admin of {display_pod_name}.",
             ),
         )
         return await self._send(
@@ -341,3 +344,132 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             html_content=rendered.html,
             text_content=rendered.text,
         )
+
+    async def send_pod_join_decided_email(
+        self,
+        *,
+        to_email: str,
+        pod_id: UUID,
+        pod_name: str,
+        organization_name: str,
+        approved: bool,
+        decided_by_name: str,
+    ) -> bool:
+        subject, rendered = join_decided_email(
+            to_email=to_email,
+            pod_id=pod_id,
+            pod_name=pod_name,
+            organization_name=organization_name,
+            approved=approved,
+            decided_by_name=decided_by_name,
+        )
+        return await self._send(
+            kind="pod_join_decided",
+            to_email=to_email,
+            subject=subject,
+            html_content=rendered.html,
+            text_content=rendered.text,
+        )
+
+    async def send_pod_member_added_email(
+        self,
+        *,
+        to_email: str,
+        pod_id: UUID,
+        pod_name: str,
+        organization_name: str,
+        added_by_name: str,
+    ) -> bool:
+        subject, rendered = member_added_email(
+            to_email=to_email,
+            pod_id=pod_id,
+            pod_name=pod_name,
+            organization_name=organization_name,
+            added_by_name=added_by_name,
+        )
+        return await self._send(
+            kind="pod_member_added",
+            to_email=to_email,
+            subject=subject,
+            html_content=rendered.html,
+            text_content=rendered.text,
+        )
+
+
+def _lemma_url(pod_id: UUID) -> str:
+    return f"{settings.frontend_url.rstrip('/')}/l/{pod_id}"
+
+
+def join_decided_email(
+    *,
+    to_email: str,
+    pod_id: UUID,
+    pod_name: str,
+    organization_name: str,
+    approved: bool,
+    decided_by_name: str,
+) -> tuple[str, RenderedEmail]:
+    """The answer to a request to join, for whoever asked: subject and body.
+
+    Approval opens the Lemma; a refusal says so plainly and offers nothing to
+    click, because there is nothing on the other side of a closed door to
+    open. Built apart from sending, so the words are tested without a sender.
+    """
+    display_pod_name = _humanize_pod_name(pod_name)
+    display_organization_name = humanize_name(organization_name)
+    by = decided_by_name or "Someone who runs it"
+    details = (
+        EmailDetail("Lemma", display_pod_name),
+        EmailDetail("Organization", display_organization_name),
+    )
+    footer = (
+        f"This was sent to {to_email} because you asked to join {display_pod_name}.",
+    )
+    if approved:
+        return f"You're in {display_pod_name}", render_transactional_email(
+            preheader=f"You're in {display_pod_name}.",
+            eyebrow="Request approved",
+            heading=f"You're in {display_pod_name}.",
+            body=(
+                f"{by} let you into {display_pod_name} at {display_organization_name}.",
+            ),
+            action=EmailAction(f"Open {display_pod_name}", _lemma_url(pod_id)),
+            details=details,
+            footer=footer,
+        )
+    return f"Your request to join {display_pod_name}", render_transactional_email(
+        preheader=f"Your request to join {display_pod_name} was declined.",
+        eyebrow="Request declined",
+        heading=f"Your request to join {display_pod_name} was declined.",
+        body=(f"{by} declined it. If you still need access, ask them directly.",),
+        details=details,
+        footer=footer,
+    )
+
+
+def member_added_email(
+    *,
+    to_email: str,
+    pod_id: UUID,
+    pod_name: str,
+    organization_name: str,
+    added_by_name: str,
+) -> tuple[str, RenderedEmail]:
+    """Somebody added you to a Lemma directly, with no invitation to accept."""
+    display_pod_name = _humanize_pod_name(pod_name)
+    display_organization_name = humanize_name(organization_name)
+    by = added_by_name or "Someone"
+    return f"{by} added you to {display_pod_name}", render_transactional_email(
+        preheader=f"{by} added you to {display_pod_name}.",
+        eyebrow="Added to a Lemma",
+        heading=f"You're in {display_pod_name}.",
+        body=(f"{by} added you to {display_pod_name} at {display_organization_name}.",),
+        action=EmailAction(f"Open {display_pod_name}", _lemma_url(pod_id)),
+        details=(
+            EmailDetail("Lemma", display_pod_name),
+            EmailDetail("Organization", display_organization_name),
+        ),
+        footer=(
+            f"This was sent to {to_email} because you were added to {display_pod_name}.",
+        ),
+    )

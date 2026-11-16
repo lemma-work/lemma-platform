@@ -109,9 +109,15 @@ class PodJoinRequestRepositoryPort(Protocol):
 
     async def update(self, entity: PodJoinRequestEntity) -> PodJoinRequestEntity: ...
 
-    async def get(self, id: UUID) -> Optional[PodJoinRequestEntity]: ...
+    async def get(
+        self, id: UUID, *, lock: bool = False
+    ) -> Optional[PodJoinRequestEntity]: ...
 
     async def get_pending_by_pod_and_user(
+        self, pod_id: UUID, user_id: UUID, *, lock: bool = False
+    ) -> Optional[PodJoinRequestEntity]: ...
+
+    async def get_latest_by_pod_and_user(
         self, pod_id: UUID, user_id: UUID
     ) -> Optional[PodJoinRequestEntity]: ...
 

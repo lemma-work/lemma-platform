@@ -14604,7 +14604,7 @@
             "title": "Conversation Id"
           },
           "display_name": {
-            "default": "your teammate",
+            "default": "your Lemma",
             "description": "What the agent is called in a new call's title.",
             "maxLength": 120,
             "minLength": 1,
@@ -17602,7 +17602,8 @@
         "enum": [
           "PENDING",
           "APPROVED",
-          "REJECTED"
+          "REJECTED",
+          "WITHDRAWN"
         ],
         "title": "PodJoinRequestStatus",
         "type": "string"
@@ -46049,8 +46050,60 @@
       }
     },
     "/pods/{pod_id}/join-requests/me": {
+      "delete": {
+        "description": "Take back the current user's pending join request for this pod",
+        "operationId": "pod.join_request.withdraw",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PodJoinRequestCreateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Withdraw My Pod Join Request",
+        "tags": [
+          "Pod Join Requests"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod.join_request"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod.join_request",
+          "result": "entity",
+          "verb": "withdraw"
+        }
+      },
       "get": {
-        "description": "Get the current user's pending join request for this pod",
+        "description": "Get the current user's pending join request for this pod, or the last one if it was rejected",
         "operationId": "pod.join_request.me",
         "parameters": [
           {
@@ -46178,6 +46231,70 @@
           "resource": "pod.join_request",
           "result": "entity",
           "verb": "approve"
+        }
+      }
+    },
+    "/pods/{pod_id}/join-requests/{join_request_id}/reject": {
+      "post": {
+        "description": "Turn down a pending pod join request; the asker is told by email",
+        "operationId": "pod.join_request.reject",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "join_request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Join Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PodJoinRequestCreateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reject Pod Join Request",
+        "tags": [
+          "Pod Join Requests"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod.join_request"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod.join_request",
+          "result": "entity",
+          "verb": "reject"
         }
       }
     },
