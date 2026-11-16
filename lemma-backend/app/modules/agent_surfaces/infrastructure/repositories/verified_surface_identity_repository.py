@@ -136,6 +136,37 @@ class VerifiedSurfaceIdentityRepository:
             )
         )
 
+    async def revoke_all_for_user(self, user_id: UUID) -> None:
+        """Revoke every identity the person proved, and forget their pending
+        onboarding -- the account was deleted.
+
+        The number and the destination go with the proof: a revoked row may
+        not carry a route (``ck_surface_identity_route_is_live``), and a phone
+        number left on it would be the person's, kept after they asked to go.
+        """
+        await self.session.execute(
+            update(VerifiedSurfaceIdentity)
+            .where(
+                VerifiedSurfaceIdentity.user_id == user_id,
+                VerifiedSurfaceIdentity.revoked_at.is_(None),
+            )
+            .values(
+                revoked_at=datetime.now(timezone.utc),
+                installation_surface_id=None,
+                pod_id=None,
+            )
+        )
+        await self.session.execute(
+            update(VerifiedSurfaceIdentity)
+            .where(VerifiedSurfaceIdentity.user_id == user_id)
+            .values(verified_phone=None)
+        )
+        await self.session.execute(
+            delete(PendingChatOnboarding).where(
+                PendingChatOnboarding.user_id == user_id
+            )
+        )
+
     async def prove_by_session(
         self,
         *,

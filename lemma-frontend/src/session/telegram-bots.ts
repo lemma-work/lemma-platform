@@ -9,7 +9,9 @@
    choice however many of the member's spaces use it. It comes first, because
    it is the chat a member most likely has already. */
 
+import type { AgentSurfaceResponse } from "lemma-sdk";
 import { listStamp } from "@/data/stamp";
+import { isOwnBot } from "@/data/surface-settings";
 
 /** One of the member's Telegram bots, in one of their spaces. */
 export interface TelegramBot {
@@ -76,6 +78,32 @@ export function botChoices(bots: readonly TelegramBot[], preferred: string | nul
         else if (!known.spaces.includes(bot.podName)) known.spaces.push(bot.podName);
     }
     return [...choices, ...[...own.values()].sort((a, b) => a.podName.localeCompare(b.podName))];
+}
+
+/** One space's Telegram surfaces (`podSurfaces.list`), as the bots among the
+ *  member's own: the ones `/surfaces/me` named, and only those still working. */
+export function readBots(listed: readonly AgentSurfaceResponse[], wanted: ReadonlySet<string>, pod: { id: string; name: string }): TelegramBot[] {
+    return listed
+        .filter((surface) => wanted.has(surface.id) && (surface.status ?? "ACTIVE") === "ACTIVE")
+        .map((surface) => ({
+            surfaceId: surface.id,
+            podId: pod.id,
+            podName: pod.name,
+            handle: surface.reach?.handle ?? surface.surface_identity_username ?? "",
+            shared: !isOwnBot(surface),
+        }));
+}
+
+/** A bot to pick, by what Telegram calls it. */
+export function botTitle(choice: Pick<BotChoice, "shared" | "handle">): string {
+    return choice.shared ? "Lemma’s bot" : choice.handle || "Telegram bot";
+}
+
+/** Under it: its handle and the spaces it answers for. */
+export function botDetail(choice: Pick<BotChoice, "shared" | "handle" | "spaces">): string {
+    const spaces = spacesSaid(choice.spaces);
+    if (choice.shared) return (choice.handle ? choice.handle + " · " : "") + spaces;
+    return choice.spaces.length > 1 ? "Its own bot in " + spaces : spaces + "’s own bot";
 }
 
 /** "Marketing", "Marketing and Sales", "Marketing, Sales and 2 more". */

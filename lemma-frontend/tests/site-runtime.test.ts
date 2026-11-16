@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { siteRuntimeScript, startedWith } from "../src/site/runtime.ts";
 import { asksForSignUp } from "../src/auth/config.ts";
+import { sellsHere } from "../src/site/config.ts";
 
 /** The desktop app ships one build to every machine and tells it where the API
  *  is only when it starts it -- and again, with every URL changed, when
@@ -53,4 +54,20 @@ test("show=signup opens sign-up, from the query or the hash", () => {
     assert.equal(asksForSignUp("", "#show=signup"), true);
     assert.equal(asksForSignUp("?redirect_uri=/"), false);
     assert.equal(asksForSignUp("?show=signin"), false);
+});
+
+test("plans and checkout are offered on hosted Lemma, but not inside the phone app", () => {
+    // The phone sells nothing for now, and its WebViews say so in their user agent.
+    const real = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+    const browsingAs = (userAgent: string) => Object.defineProperty(globalThis, "navigator", { value: { userAgent }, configurable: true });
+    try {
+        browsingAs("Mozilla/5.0 (iPhone; CPU iPhone OS 26_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148");
+        assert.equal(sellsHere(), true);
+        browsingAs("Mozilla/5.0 (iPhone; CPU iPhone OS 26_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 LemmaApp/1");
+        assert.equal(sellsHere(), false);
+        browsingAs("Mozilla/5.0 (Linux; Android 15; wv) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0 Mobile Safari/537.36 LemmaApp/1");
+        assert.equal(sellsHere(), false);
+    } finally {
+        if (real) Object.defineProperty(globalThis, "navigator", real);
+    }
 });

@@ -10,7 +10,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
-import { isOwnBot } from "@/data/surface-settings";
 import { LinkTelegramSteps } from "@/channels/identity-link";
 import { problemOf } from "@/channels/problem";
 import { ChannelIcon } from "@/shell/channels";
@@ -18,7 +17,7 @@ import { Modal } from "@/shell/modal";
 import { lemma } from "./client";
 import { linkedTelegramAccounts, unlinkTelegramAccount } from "./telegram-accounts";
 import {
-    botChoices, linkedWhen, readMine, spacesSaid,
+    botChoices, botDetail, botTitle, linkedWhen, readBots, readMine,
     type BotChoice, type MyTelegramSurfaces, type TelegramBot,
 } from "./telegram-bots";
 
@@ -49,29 +48,11 @@ async function myTelegramBots(mine: MyTelegramSurfaces): Promise<BotChoice[]> {
             source.getPod(podId),
             lemma(podId).podSurfaces.list(podId, { platform: "TELEGRAM", limit: 30 }),
         ]);
-        return listed.items
-            .filter((surface) => wanted.has(surface.id) && (surface.status ?? "ACTIVE") === "ACTIVE")
-            .map((surface): TelegramBot => ({
-                surfaceId: surface.id,
-                podId,
-                podName: pod?.name ?? "A space",
-                handle: surface.reach?.handle ?? surface.surface_identity_username ?? "",
-                shared: !isOwnBot(surface),
-            }));
+        return readBots(listed.items, wanted, { id: podId, name: pod?.name ?? "A space" });
     }));
     const failed = read.find((one) => one.status === "rejected");
     if (failed && read.every((one) => one.status === "rejected")) throw failed.reason;
     return botChoices(read.flatMap((one) => (one.status === "fulfilled" ? one.value : [])), mine.preferred);
-}
-
-function title(choice: BotChoice): string {
-    return choice.shared ? "Lemma’s bot" : choice.handle || "Telegram bot";
-}
-
-function detail(choice: BotChoice): string {
-    const spaces = spacesSaid(choice.spaces);
-    if (choice.shared) return (choice.handle ? choice.handle + " · " : "") + spaces;
-    return choice.spaces.length > 1 ? "Its own bot in " + spaces : spaces + "’s own bot";
 }
 
 /** The profile's row: the accounts already linked, each to unlink, and the
@@ -194,8 +175,8 @@ function LinkTelegramFromProfile({ mine, onClose }: { mine: MyTelegramSurfaces; 
                                             onChange={() => setPicked(choice.surfaceId)}
                                         />
                                         <span>
-                                            <span className="gsheet__check-title">{title(choice)}</span>
-                                            <span className="gsheet__fine">{detail(choice)}</span>
+                                            <span className="gsheet__check-title">{botTitle(choice)}</span>
+                                            <span className="gsheet__fine">{botDetail(choice)}</span>
                                         </span>
                                     </label>
                                 ))}

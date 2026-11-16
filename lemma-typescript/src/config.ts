@@ -6,6 +6,12 @@ export interface LemmaAppConfig {
   iconUrl?: string;
 }
 
+/** A token-mode client's current token, and a fresh one when it has expired. */
+export interface TokenSource {
+  current(): Promise<string>;
+  renew(): Promise<string>;
+}
+
 export interface LemmaConfig {
   /** API base URL, e.g. https://api.lemma.work */
   apiUrl: string;
@@ -22,6 +28,15 @@ export interface LemmaConfig {
    * a token pasted into page config is a token in the page.
    */
   token?: string;
+  /**
+   * Where a token-mode client gets a current token, for a caller whose token
+   * changes under it: a phone app that refreshes its own session. The live
+   * changes socket asks `current()` when it connects and `renew()` after the
+   * server refuses one, instead of reusing `token`, which stays the token the
+   * client was built with. Requests still send `token`; such a caller swaps
+   * the header in its own fetch.
+   */
+  tokenSource?: TokenSource;
   app?: LemmaAppConfig;
   /** Per-request timeout in ms (default 30000). */
   timeoutMs?: number;
@@ -174,6 +189,7 @@ export function resolveConfig(overrides: Partial<LemmaConfig> = {}): LemmaConfig
     authUrl: authUrl.replace(/\/$/, ""),
     podId,
     token,
+    tokenSource: overrides.tokenSource,
     app: overrides.app ?? win.app,
     timeoutMs: overrides.timeoutMs ?? win.timeoutMs,
     maxRetries: overrides.maxRetries ?? win.maxRetries,

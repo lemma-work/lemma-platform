@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { botChoices, linkedWhen, readLinkedAccounts, readMine, spacesSaid, type TelegramBot } from "../src/session/telegram-bots.ts";
+import type { AgentSurfaceResponse } from "lemma-sdk";
+import { botChoices, botDetail, botTitle, linkedWhen, readBots, readLinkedAccounts, readMine, spacesSaid, type TelegramBot } from "../src/session/telegram-bots.ts";
 
 const shared = (surfaceId: string, podName: string, handle = "@lemma_example_bot"): TelegramBot =>
     ({ surfaceId, podId: "pod-" + surfaceId, podName, handle, shared: true });
@@ -93,4 +94,28 @@ test("when an account was linked reads as a day, never a bare clock", () => {
     assert.equal(linkedWhen(new Date(2026, 9, 1, 9, 30).toISOString(), now), new Date(2026, 9, 1).toLocaleDateString([], { day: "numeric", month: "short" }));
     assert.equal(linkedWhen(null, now), "");
     assert.equal(linkedWhen("not a date", now), "");
+});
+
+test("a space's Telegram surfaces are the member's bots only where /surfaces/me named them and they still work", () => {
+    const surface = (id: string, extra: Record<string, unknown> = {}) => ({ id, platform: "TELEGRAM", status: "ACTIVE", ...extra }) as unknown as AgentSurfaceResponse;
+    const bots = readBots([
+        surface("tg-shared", { reach: { handle: "@lemma_example_bot" } }),
+        surface("tg-own", { credential_mode: "CUSTOM", surface_identity_username: "@sales_example_bot" }),
+        surface("tg-paused", { status: "PAUSED" }),
+        surface("tg-other"),
+    ], new Set(["tg-shared", "tg-own", "tg-paused"]), { id: "pod-1", name: "Sales" });
+    assert.deepEqual(bots, [
+        { surfaceId: "tg-shared", podId: "pod-1", podName: "Sales", handle: "@lemma_example_bot", shared: true },
+        { surfaceId: "tg-own", podId: "pod-1", podName: "Sales", handle: "@sales_example_bot", shared: false },
+    ]);
+});
+
+test("a bot is named by what Telegram calls it, with the spaces it answers for under it", () => {
+    assert.equal(botTitle({ shared: true, handle: "@lemma_example_bot" }), "Lemma’s bot");
+    assert.equal(botTitle({ shared: false, handle: "@sales_example_bot" }), "@sales_example_bot");
+    assert.equal(botTitle({ shared: false, handle: "" }), "Telegram bot");
+    assert.equal(botDetail({ shared: true, handle: "@lemma_example_bot", spaces: ["Marketing", "Sales"] }), "@lemma_example_bot · Marketing and Sales");
+    assert.equal(botDetail({ shared: true, handle: "", spaces: ["Marketing"] }), "Marketing");
+    assert.equal(botDetail({ shared: false, handle: "@acme_example_bot", spaces: ["Support"] }), "Support’s own bot");
+    assert.equal(botDetail({ shared: false, handle: "@acme_example_bot", spaces: ["Support", "Billing"] }), "Its own bot in Support and Billing");
 });

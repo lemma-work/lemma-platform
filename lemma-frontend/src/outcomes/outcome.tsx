@@ -18,10 +18,10 @@ import { useMe } from "@/session/use-me";
 import { useWorkflowList } from "@/workflow/use-run";
 import {
     NOTHING_OWNED, PLAN_PATH, PLAN_SECTIONS, SECTION_TITLES,
-    ageOf, chatItems, chatView, draftPlan, formatMeasure, inSidebar, outcomeView, sectionRows, standingOf, stampOf, withOwned, workRows,
+    ageOf, chatItems, chatView, draftPlan, formatMeasure, inSidebar, outcomeView, planRequest, sectionRows, standingOf, stampOf, withOwned, workRows,
     type Ask, type Go, type OutcomeTab, type Owned, type Plan, type PlanLine, type PlanSection, type QueueItem, type View,
 } from "./model";
-import { mcpUrl, planRequest, PlanMovedOn, readPlan, saveOwned, savePlan, standingKey, useMeasure, useOwned, useWeeks } from "./data";
+import { mcpUrl, PlanMovedOn, readPlan, saveOwned, savePlan, standingKey, useMeasure, useOwned, useWeeks } from "./data";
 import { Empty, Icon, to, type IconName } from "./parts";
 import type { FrameActions } from "./actions";
 import { NeedRow } from "./answer";

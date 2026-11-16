@@ -13,6 +13,8 @@ extend-exclude = [
     "lemma-backend/openapi_specs/",
     "**/openapi_client/",
     "**/generated/",
+    # The phone's WebView pages: bundles built from the web's sources.
+    "*.generated.ts",
     "*.min.js",
     "*.lock",
     "package-lock.json",
