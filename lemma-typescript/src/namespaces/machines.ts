@@ -106,6 +106,16 @@ function rangeHonoured(status: number, contentRange: string | null, start: numbe
   return status === 206;
 }
 
+/**
+ * Whether an unranged read came back short of the file: a 206 whose
+ * `Content-Range` names a total past the bytes received.
+ */
+function cutShort(status: number, contentRange: string | null, received: number): boolean {
+  if (status !== 206 || !contentRange) return false;
+  const match = /^bytes (\d+)-\d+\/(\d+)$/.exec(contentRange.trim());
+  return match !== null && Number(match[1]) + received < Number(match[2]);
+}
+
 /** A process's states once it has stopped, by whatever means. */
 const STOPPED_STATES = new Set(["succeeded", "failed", "cancelled", "timed_out"]);
 
@@ -538,6 +548,11 @@ export class MachineFilesApi {
    * A file, or a slice of one. `range` sends an HTTP `Range` and gets a 206
    * back, which is how a file past the server's single-read ceiling is
    * reachable at all; `readWhole` does that for you.
+   *
+   * Without a slice asked for, this is the whole file: a file past the
+   * ceiling comes back as a 206 naming its total, and the rest is read in
+   * ranges and stitched on, rather than handing back the first 8 MiB as if
+   * it were all of it.
    */
   async read(
     ref: string,
@@ -548,7 +563,13 @@ export class MachineFilesApi {
       contentPath(ref, path, options),
       options.range ? rangeHeader(options.range) : undefined,
     );
-    return answer.blob;
+    const asked =
+      options.range !== undefined || options.offset !== undefined || options.length !== undefined;
+    if (asked || !cutShort(answer.status, answer.contentRange, answer.blob.size)) {
+      return answer.blob;
+    }
+    const rest = await this.readFrom(ref, path, answer.blob.size, MAX_READ_BYTES);
+    return new Blob([answer.blob, rest]);
   }
 
   /**
@@ -568,17 +589,22 @@ export class MachineFilesApi {
     chunk = MAX_READ_BYTES,
   ): Promise<Blob> {
     const step = Math.min(Math.max(Math.floor(chunk), 1), MAX_READ_BYTES);
-    const parts: Blob[] = [];
-    let start = 0;
+    // An unranged read follows a truncation it is told about (see `read`),
+    // so a stale hint costs nothing: a file that grew is still read whole.
     if (sizeBytes > 0 && sizeBytes <= step) {
       const only = await this.read(ref, path);
-      // Short of the ceiling means that was the whole file. Exactly the
-      // ceiling means the hint was stale -- the file grew after the listing
-      // that measured it -- so keep what arrived and read on from there.
-      if (only.size < MAX_READ_BYTES) return only;
-      parts.push(only);
-      start = only.size;
+      // Exactly the ceiling is a server that cut the file without saying so
+      // (one older than the 206): read on from there. A 416 there means the
+      // file really was exactly that long.
+      if (only.size !== MAX_READ_BYTES) return only;
+      return new Blob([only, await this.readFrom(ref, path, only.size, step)]);
     }
+    return this.readFrom(ref, path, 0, step);
+  }
+
+  /** Everything from byte `start` on, in ranges of `step`. */
+  private async readFrom(ref: string, path: string, start: number, step: number): Promise<Blob> {
+    const parts: Blob[] = [];
     for (;;) {
       let part: Blob;
       let honoured: boolean;
