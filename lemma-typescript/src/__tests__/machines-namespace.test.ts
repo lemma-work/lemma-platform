@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { LemmaClient } from "../client.js";
 import type { HttpClient } from "../http.js";
 import {
-  MachineConsentRequiredError,
   MachinesNamespace,
   machinePathRef,
   type MachineProcessEvent,
@@ -53,48 +52,6 @@ describe("machine refs in paths", () => {
     const machines = await new MachinesNamespace(http).list({ podId: "p1" });
     expect(machines).toEqual([{ ref: "pod:p1/ci" }]);
     expect(asked[0].options.params).toEqual({ pod_id: "p1" });
-  });
-});
-
-describe("consent", () => {
-  it("throws MachineConsentRequiredError with the page that asks", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          code: "MACHINE_CONSENT_REQUIRED",
-          message: "This app needs your permission to use your machine.",
-          details: { app_id: "app-42" },
-        }),
-        { status: 403, headers: { "content-type": "application/json" } },
-      ),
-    );
-    const client = new LemmaClient({
-      apiUrl: "https://api.example.test",
-      authUrl: "https://lemma.example.test/auth",
-      token: "t",
-      maxRetries: 0,
-    });
-
-    const failure = await client.machines.me().catch((error: unknown) => error);
-
-    expect(failure).toBeInstanceOf(MachineConsentRequiredError);
-    const consent = failure as MachineConsentRequiredError;
-    expect(consent.appId).toBe("app-42");
-    expect(consent.statusCode).toBe(403);
-    expect(consent.consentUrl).toBe("https://lemma.example.test/consent/machine?app=app-42");
-  });
-
-  it("leaves other refusals as they were", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ code: "MACHINE_NOT_FOUND", message: "no" }), {
-        status: 404,
-        headers: { "content-type": "application/json" },
-      }),
-    );
-    const client = new LemmaClient({ apiUrl: "https://api.example.test", token: "t", maxRetries: 0 });
-    const failure = await client.machines.get("mine:gone").catch((error: unknown) => error);
-    expect(failure).not.toBeInstanceOf(MachineConsentRequiredError);
-    expect((failure as { statusCode: number }).statusCode).toBe(404);
   });
 });
 

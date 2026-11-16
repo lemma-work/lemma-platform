@@ -15,9 +15,6 @@ The table below is generated from the committed OpenAPI specification by `script
 | `machine.browser.display` | POST | `/machines/{ref}/browser:display` | Set the size of a machine's browser display |
 | `machine.browser.navigate` | POST | `/machines/{ref}/browser:navigate` | Open a page in a machine's browser |
 | `machine.browser.status` | GET | `/machines/{ref}/browser` | Whether a machine's browser can be watched |
-| `machine.consent.grant` | POST | `/machine-consents` | Let an app run code on your machine |
-| `machine.consent.list` | GET | `/machine-consents` | Apps you let run code on your machine |
-| `machine.consent.revoke` | DELETE | `/machine-consents/{app_id}` | Stop an app running code on your machine |
 | `machine.files.content` | GET | `/machines/{ref}/files:content` | Read a file on a machine |
 | `machine.files.delete` | DELETE | `/machines/{ref}/files` | Delete a file or directory on a machine |
 | `machine.files.list` | GET | `/machines/{ref}/files` | List a directory on a machine |
@@ -29,9 +26,9 @@ The table below is generated from the committed OpenAPI specification by `script
 | `machine.list` | GET | `/machines` | List the machines you can see |
 | `machine.pod.create` | POST | `/pods/{pod_id}/machines` | Create a machine the pod's agents share |
 | `machine.pod.delete` | DELETE | `/pods/{pod_id}/machines/{name}` | Delete a pod machine and its disk |
-| `machine.pod.grants.get` | GET | `/pods/{pod_id}/machines/{name}/grants` | Who is granted a pod machine |
-| `machine.pod.grants.set` | PUT | `/pods/{pod_id}/machines/{name}/grants` | Replace who is granted a pod machine |
-| `machine.pod.update` | PATCH | `/pods/{pod_id}/machines/{name}` | Rename, resize or change who sees a pod machine |
+| `machine.pod.grants.get` | GET | `/pods/{pod_id}/machines/{name}/grants` | Which agents and functions are granted a pod machine |
+| `machine.pod.grants.set` | PUT | `/pods/{pod_id}/machines/{name}/grants` | Replace which agents and functions are granted a pod machine |
+| `machine.pod.update` | PATCH | `/pods/{pod_id}/machines/{name}` | Rename or resize a pod machine |
 | `machine.policy` | GET | `/machines:policy` | Which machines you or a pod may create |
 | `machine.preview.create` | POST | `/machines/{ref}/previews` | Open a port on a machine as a preview URL |
 | `machine.preview.list` | GET | `/machines/{ref}/previews` | A machine's live previews |

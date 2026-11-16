@@ -5998,59 +5998,6 @@
         "title": "ConnectorStatusResponse",
         "type": "object"
       },
-      "ConsentListResponse": {
-        "properties": {
-          "consents": {
-            "items": {
-              "$ref": "#/components/schemas/ConsentResponse"
-            },
-            "title": "Consents",
-            "type": "array"
-          }
-        },
-        "required": [
-          "consents"
-        ],
-        "title": "ConsentListResponse",
-        "type": "object"
-      },
-      "ConsentResponse": {
-        "properties": {
-          "app_id": {
-            "format": "uuid",
-            "title": "App Id",
-            "type": "string"
-          },
-          "app_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "App Name"
-          },
-          "granted_at": {
-            "format": "date-time",
-            "title": "Granted At",
-            "type": "string"
-          },
-          "pod_id": {
-            "format": "uuid",
-            "title": "Pod Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "app_id",
-          "pod_id",
-          "granted_at"
-        ],
-        "title": "ConsentResponse",
-        "type": "object"
-      },
       "ContactAnswer": {
         "description": "Whom a bot answers in a private chat, beyond the pod's members.",
         "enum": [
@@ -7513,15 +7460,6 @@
               "workspace-docker"
             ],
             "title": "Template",
-            "type": "string"
-          },
-          "visibility": {
-            "default": "pod",
-            "enum": [
-              "pod",
-              "restricted"
-            ],
-            "title": "Visibility",
             "type": "string"
           }
         },
@@ -12077,20 +12015,6 @@
         "title": "GenerationSettings",
         "type": "object"
       },
-      "GrantConsentRequest": {
-        "properties": {
-          "app_id": {
-            "format": "uuid",
-            "title": "App Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "app_id"
-        ],
-        "title": "GrantConsentRequest",
-        "type": "object"
-      },
       "GranteeRef": {
         "properties": {
           "grantee_id": {
@@ -14020,7 +13944,7 @@
         "type": "object"
       },
       "MachineGrantsModel": {
-        "description": "Who may use a pod machine beyond what visibility already allows.\n\nAgents and functions by name; people by user id. A RESTRICTED machine is\nusable only by those named here (and pod admins).",
+        "description": "Which agents and functions may use a pod machine, by name.\n\nA workload uses a pod machine only with this grant, and then only as far\nas the person it acts for may. People need none: their pod role decides.",
         "properties": {
           "agents": {
             "items": {
@@ -14034,14 +13958,6 @@
               "type": "string"
             },
             "title": "Functions",
-            "type": "array"
-          },
-          "members": {
-            "items": {
-              "format": "uuid",
-              "type": "string"
-            },
-            "title": "Members",
             "type": "array"
           }
         },
@@ -14237,8 +14153,7 @@
           "visibility": {
             "enum": [
               "private",
-              "pod",
-              "restricted"
+              "pod"
             ],
             "title": "Visibility",
             "type": "string"
@@ -25974,21 +25889,6 @@
               }
             ],
             "title": "Size"
-          },
-          "visibility": {
-            "anyOf": [
-              {
-                "enum": [
-                  "pod",
-                  "restricted"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Visibility"
           }
         },
         "title": "UpdatePodMachineRequest",
@@ -29883,129 +29783,6 @@
           "resource": "icon",
           "result": "entity",
           "verb": "upload"
-        }
-      }
-    },
-    "/machine-consents": {
-      "get": {
-        "operationId": "machine.consent.list",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ConsentListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Apps you let run code on your machine",
-        "tags": [
-          "Machine Consents"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "machine.consent",
-          "result": "collection",
-          "verb": "list"
-        }
-      },
-      "post": {
-        "operationId": "machine.consent.grant",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GrantConsentRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ConsentResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Let an app run code on your machine",
-        "tags": [
-          "Machine Consents"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "machine.consent"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "machine.consent",
-          "result": "entity",
-          "verb": "grant"
-        }
-      }
-    },
-    "/machine-consents/{app_id}": {
-      "delete": {
-        "operationId": "machine.consent.revoke",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "app_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "App Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Stop an app running code on your machine",
-        "tags": [
-          "Machine Consents"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "machine.consent"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "machine.consent",
-          "result": "void",
-          "verb": "revoke"
         }
       }
     },
@@ -50039,7 +49816,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Rename, resize or change who sees a pod machine",
+        "summary": "Rename or resize a pod machine",
         "tags": [
           "Machines"
         ],
@@ -50101,7 +49878,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Who is granted a pod machine",
+        "summary": "Which agents and functions are granted a pod machine",
         "tags": [
           "Machines"
         ],
@@ -50168,7 +49945,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Replace who is granted a pod machine",
+        "summary": "Replace which agents and functions are granted a pod machine",
         "tags": [
           "Machines"
         ],

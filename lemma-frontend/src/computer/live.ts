@@ -16,7 +16,6 @@ const CLOSE_NOT_FOUND = 4404;
 const CLOSE_NO_BROWSER = 4409;
 const CLOSE_UNSUPPORTED = 4422;
 const CLOSE_STALE_IMAGE = 4426;
-const CLOSE_CONSENT_REQUIRED = 4428;
 
 export type LiveState =
     | "connecting"
@@ -30,9 +29,7 @@ export type LiveState =
 
 export function stateFromClose(code: number): LiveState {
     if (code === CLOSE_UNAUTHENTICATED) return "signed-out";
-    /* An app's consent is asked for on an app's page, never on Lemma's own,
-       so here it can only mean the page is not one the socket trusts. */
-    if (code === CLOSE_ORIGIN_REFUSED || code === CLOSE_CONSENT_REQUIRED) return "refused";
+    if (code === CLOSE_ORIGIN_REFUSED) return "refused";
     /* No machine by that ref: retrying asks for the same missing thing. */
     if (code === CLOSE_NOT_FOUND) return "unsupported";
     if (code === CLOSE_NO_BROWSER) return "no-browser";

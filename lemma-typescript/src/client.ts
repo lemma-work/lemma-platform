@@ -44,20 +44,6 @@ export type { LemmaAppConfig };
 export { AuthManager };
 export type { AuthState, AuthListener };
 
-/**
- * Lemma's own origin, where pages like the machine consent screen live.
- *
- * Read off the auth URL because that is the one setting that always names the
- * Lemma web app (`https://lemma.work/auth`), whereas the API is its own host.
- */
-function hostOriginOf(authUrl: string): string | undefined {
-  try {
-    return new URL(authUrl).origin;
-  } catch {
-    return undefined;
-  }
-}
-
 interface LemmaClientInternalOptions {
   authManager?: AuthManager;
 }
@@ -158,7 +144,6 @@ export class LemmaClient {
     this.apps = new AppsNamespace(this._generated, this._http, podIdFn);
     this.widgets = new WidgetsNamespace(this._http, podIdFn);
     this.machines = new MachinesNamespace(this._http, {
-      hostOrigin: hostOriginOf(this._config.authUrl),
       bearerToken: () => this.auth.getBearerToken(),
     });
     this.webLogins = new WebLoginsNamespace(this._http);

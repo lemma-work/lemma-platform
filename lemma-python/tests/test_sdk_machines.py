@@ -128,7 +128,7 @@ def test_a_pod_machine_is_created_in_the_bound_pod() -> None:
     transport = RecordingTransport()
 
     Machines(transport, pod_id=POD).create(  # type: ignore[arg-type]
-        "builder", template="workspace-docker", visibility="restricted", run_slots=2
+        "builder", template="workspace-docker", run_slots=2
     )
 
     endpoint, path_args, kwargs = transport.calls[0]
@@ -137,7 +137,6 @@ def test_a_pod_machine_is_created_in_the_bound_pod() -> None:
     assert kwargs["body"].to_dict() == {
         "name": "builder",
         "template": "workspace-docker",
-        "visibility": "restricted",
         "run_slots": 2,
     }
 

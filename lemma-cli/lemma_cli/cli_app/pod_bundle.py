@@ -2690,8 +2690,7 @@ def import_pod_bundle(
             load_resource_payload(resource_dir, machine_name, resource_type="machines")
         )
         fields = {
-            key: payload.get(key)
-            for key in ("size", "visibility", "run_slots", "display_name")
+            key: payload.get(key) for key in ("size", "run_slots", "display_name")
         }
         if machine_name in existing_machines:
             if not upsert:

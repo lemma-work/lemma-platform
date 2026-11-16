@@ -15,7 +15,7 @@ machine come from `lemma-backend/sandbox_runtime/paths.py` and nowhere else.
 
 | Kind | What it is | Ref | Owner | Compute counts against |
 |---|---|---|---|---|
-| Default machine | One per person, created on first use, 2 vCPU / 4 GB | `me` | The person | The person |
+| Default machine | One per person, created on first use, 1 vCPU / 2 GB by default (a plan may choose another size) | `me` | The person | The person |
 | Pod machine | Shared by a pod's agents; created by its editors and admins within the plan's policy; templates `workspace` and `workspace-docker` (has Docker; E2B only) | `pod:<name>` in the pod, `pod:<pod>/<name>` or `pod:<pod>:<name>` from outside | The pod — it outlives whoever created it | The organization |
 | Connected machine | A person's own laptop or VM joined with the CLI | `mine:<name>` | The person | — |
 
@@ -23,59 +23,73 @@ The API's `ref` field uses the colon form, `pod:<pod>:<name>`, because a
 slash cannot sit in a URL path segment; both forms parse. Any machine can also
 be named by its id. `services/machine_resolver.py` is the
 only thing that turns a ref into a machine, and it decides access on the way
-(`domain/machine_access.py`). A machine a caller may not reach is reported as
-not found, so a `restricted` machine's name does not leak.
+(below). A machine a caller may not reach is reported as not found, so its
+name does not leak to the people it is kept from.
 
-A pod machine is `pod` (every agent in the pod may use it) or `restricted`
-(only agents, functions and members named in its `machine.use` grants, and pod
-admins) — for isolation, such as a verifier's machine the builder must not
-reach. `run_slots` bounds how many agent runs share it at once; later runs
+`run_slots` bounds how many agent runs share a pod machine at once; later runs
 queue.
 
 ## Who may do what
 
 Access is cumulative: **status** (see that it exists and how it is), **use**
 (processes, files, previews, the browser) and **manage** (resize, reset,
-delete).
+delete). Two rules decide it.
 
-| Caller → machine | Default (`me`) | Pod, `pod` visibility | Pod, `restricted` | Connected |
-|---|---|---|---|---|
-| Its owner | manage | — | — | manage |
-| Pod viewer | — | status | status, if granted | status, if shared |
-| Pod editor | — | manage | manage, if granted | use, if shared |
-| Pod admin | — | manage | manage | use, if shared |
-| Agent run started by its person in Lemma | use, on that person's machine | use | use, with a grant | use, if shared and granted |
-| Agent run started by a channel, schedule or other surface | never | use | use, with a grant | use, if shared and granted |
-| Function | never | use, with a grant | use, with a grant | use, if shared and granted |
-| App page, as its viewer | processes, files and previews, after the viewer's consent | as the viewer, in the app's own pod only | as the viewer, in the app's own pod only | never |
+**`me` is the person and every run they own.** A person's default machine is
+theirs to manage, and every agent run they own uses it — a chat, a schedule, a
+workflow step, a Slack or WhatsApp message, a call, a sub-agent, whatever
+started it. The only runs that get no machine are those answering somebody
+outside the pod: a contact, or another pod asking over a link. Their toolset
+has no machine tools (`OUTSIDER_TOOLSETS`), `refuse_owner_workspace` is the
+backstop, and the resolver reads whom the run's conversation answers as a
+third line (`agent/contracts/run_audience.py`). Nobody else reaches `me`: not a
+function, not an app's page, not another person. An app's page acts as its
+viewer inside its own pod, and a person's own machine is not a pod resource.
 
-Three rules carry most of the weight:
+**A pod machine is a pod resource**, authorized by the core `Authorizer`
+like every other (`ResourceType.MACHINE`, `machine.use`, `machine.manage`):
 
-- **A run that a person did not start in Lemma never touches a person's own
-  machine.** A schedule, a channel message or a webhook acts for nobody sitting
-  at a computer, so such an agent needs a pod machine, named by its `machine`
-  field. Which runs count is the run's own kind (`agent_runs.kind`), not the
-  kind of conversation it is in: a `chat` turn by the conversation's person,
-  in a conversation with no contact and no channel, or a sub-agent that turn
-  spawned. A person writing into a schedule's conversation is theirs; the
-  schedule's own turns there are not.
-- **An app reaches its viewer's machine only after the viewer says yes, in
-  Lemma.** The first call answers `MACHINE_CONSENT_REQUIRED` with the URL of a
-  Lemma page that asks them; the app cannot grant consent to itself, and the
-  person can revoke it in Settings. Even then the app gets processes, files and
-  previews: the browser, its logins and a `home` reset stay the person's own.
-- **Agents pick a machine, they do not pick a person.** An agent's `machine`
-  field names where its commands run; unset, it is the default machine of
-  whoever the run acts for. Each tool call can name another machine the agent
-  may use (`list_machines` shows them).
+- members by their pod role — editors and admins manage, anyone who may read
+  the pod sees its status;
+- agents and functions by a `machine.use` grant, intersected with the person
+  they act for (`workload_authority`), so a grant never lifts a run above its
+  person;
+- the pod's default agent as the person it acts for;
+- an app's page as its viewer, in its own pod only, and never past use.
+
+Grants are for agents and functions; people need none. Setting an agent's
+`machine: pod:<name>` — in the editor or in a bundle — confers that agent the
+`machine.use` grant, bounded like any conferral by what the person saving it
+may do themselves, so naming a machine and granting it cannot drift apart. A
+tool call may still name any machine the run may use (`list_machines` shows
+them). Keeping a machine from somebody — a verifier the builder must not
+reach — is not granting it to them. Creating, changing, deleting and granting
+pod machines are a person's own acts, never an app's or an agent's.
+
+A connected machine is its owner's. Shared into a pod, it is that pod's
+resource as above, but never more than usable by anybody else, and never by an
+app.
+
+**A pod machine is one trust domain.** Every process on it runs as one Linux
+user, so anything running there can read what the others hold: their
+environment, their checkouts, their credentials. That is why the tokens Lemma
+places on a pod machine are scoped to the workload (its grant intersected with
+its person) and short-lived: the most a co-tenant can take is that run's own
+narrowed authority. Work that must not share with another run belongs on a
+machine of its own.
 
 ```mermaid
 flowchart TD
-  R[Agent run] --> F{agent.machine set?}
-  F -- yes --> P[That machine, if the agent may use it]
-  F -- no --> S{Started by its person in Lemma?}
-  S -- yes --> M["The person's default machine (me)"]
-  S -- no --> X[Refused: name a pod machine]
+  C[A caller names a machine] --> K{Which machine?}
+  K -- "me" --> D{Who?}
+  D -- "the person" --> M1[manage]
+  D -- "a run of theirs answering a member" --> U1[use]
+  D -- "a run answering a contact or a pod, a function, an app, anyone else" --> N1[not found]
+  K -- "pod:&lt;name&gt;" --> A["Authorizer: machine.use / machine.manage"]
+  A --> R1[members: by pod role]
+  A --> R2["agents, functions: grant ∩ their person"]
+  A --> R3[default pod agent: as its person]
+  A --> R4["app page: as its viewer, own pod, at most use"]
 ```
 
 ## Inside a machine
@@ -166,7 +180,8 @@ it means asking them again for something an agent cannot explain. So:
 ## Compute
 
 Machine time is metered in **compute units**: one CU is an hour of a 2 vCPU /
-4 GB machine, and other sizes scale with their vCPUs. Running time is sliced
+4 GB machine, and other sizes scale with their vCPUs (a default 1 vCPU machine
+uses half a CU an hour). Running time is sliced
 into the usage ledger as it accrues — a default machine's against its person, a
 pod machine's against the organization — and, with a price set, counts in the
 same spend limits as model calls. Allowances and prices come from the plan, or
@@ -183,7 +198,7 @@ fails halfway.
 
 | From | How |
 |---|---|
-| API | `/machines`, `/machines/{ref}` and its `processes`, `files`, `previews`, `browser` routes; `/pods/{pod}/machines` and its grants; `/machine-consents` |
+| API | `/machines`, `/machines/{ref}` and its `processes`, `files`, `previews`, `browser` routes; `/pods/{pod}/machines` and its grants |
 | TypeScript SDK | `client.machines` |
 | Python SDK | `lemma.machines`; `ctx.machines` inside a function |
 | CLI | `lemma machine list \| exec \| shell \| ps \| kill \| cp \| preview \| reset \| logins` |

@@ -9100,8 +9100,6 @@ var LemmaClient = (() => {
     LEMMA_COMPOSE_RESULT_MESSAGE_TYPE: () => LEMMA_COMPOSE_RESULT_MESSAGE_TYPE,
     LEMMA_THEME_EVENT: () => LEMMA_THEME_EVENT,
     LemmaClient: () => LemmaClient,
-    MACHINE_CONSENT_MESSAGE_TYPE: () => MACHINE_CONSENT_MESSAGE_TYPE,
-    MachineConsentRequiredError: () => MachineConsentRequiredError,
     POD_DEFAULT_AGENT_SELECTOR: () => POD_DEFAULT_AGENT_SELECTOR,
     applyLemmaHostTheme: () => applyLemmaHostTheme,
     buildAuthUrl: () => buildAuthUrl,
@@ -22100,17 +22098,6 @@ var LemmaClient = (() => {
   };
 
   // src/namespaces/machines.ts
-  var MACHINE_CONSENT_MESSAGE_TYPE = "lemma:machine-consent";
-  var MACHINE_CONSENT_REQUIRED = "MACHINE_CONSENT_REQUIRED";
-  var MachineConsentRequiredError = class extends ForbiddenError {
-    constructor(appId, consentUrl, source) {
-      super(403, source.message, source.code, source.details, source.rawResponse);
-      __publicField(this, "appId", appId);
-      __publicField(this, "consentUrl", consentUrl);
-      __publicField(this, "name", "MachineConsentRequiredError");
-      this.requestId = source.requestId;
-    }
-  };
   function machinePathRef(ref) {
     const trimmed = ref.trim();
     if (!trimmed) throw new Error("A machine ref is required.");
@@ -22255,7 +22242,6 @@ var LemmaClient = (() => {
       __publicField(this, "files");
       __publicField(this, "previews");
       __publicField(this, "browser");
-      __publicField(this, "consents");
       __publicField(this, "pod");
       var _a;
       this.pollWaitSeconds = (_a = options.pollWaitSeconds) != null ? _a : 20;
@@ -22263,38 +22249,15 @@ var LemmaClient = (() => {
       this.files = new MachineFilesApi(this);
       this.previews = new MachinePreviewsApi(this);
       this.browser = new MachineBrowserApi(this);
-      this.consents = new MachineConsentsApi(this);
       this.pod = new PodMachinesApi(this);
     }
-    /** @internal A request, with a consent refusal turned into its own error. */
-    async call(method, path, options = {}) {
-      try {
-        return await this.http.request(method, path, options);
-      } catch (error) {
-        throw this.translate(error);
-      }
+    /** @internal A request. */
+    call(method, path, options = {}) {
+      return this.http.request(method, path, options);
     }
     /** @internal `call`, for a response that is bytes. */
-    async bytes(path, headers) {
-      try {
-        return await this.http.requestBytesResponse("GET", path, { headers });
-      } catch (error) {
-        throw this.translate(error);
-      }
-    }
-    /** The page where a person says whether an app may use their machine. */
-    consentUrl(appId) {
-      var _a;
-      const origin = (_a = this.options.hostOrigin) != null ? _a : "";
-      return `${origin}/consent/machine?app=${encodeURIComponent(appId)}`;
-    }
-    translate(error) {
-      if (error instanceof ApiError && error.code === MACHINE_CONSENT_REQUIRED) {
-        const details = error.details;
-        const appId = typeof (details == null ? void 0 : details.app_id) === "string" ? details.app_id : "";
-        return new MachineConsentRequiredError(appId, this.consentUrl(appId), error);
-      }
-      return error;
+    bytes(path, headers) {
+      return this.http.requestBytesResponse("GET", path, { headers });
     }
     /** @internal */
     webSocketFactory() {
@@ -22619,21 +22582,6 @@ var LemmaClient = (() => {
       );
     }
   };
-  var MachineConsentsApi = class {
-    constructor(machines) {
-      __publicField(this, "machines", machines);
-    }
-    async list() {
-      const response = await this.machines.call("GET", "/machine-consents");
-      return response.consents;
-    }
-    grant(appId) {
-      return this.machines.call("POST", "/machine-consents", { body: { app_id: appId } });
-    }
-    revoke(appId) {
-      return this.machines.call("DELETE", `/machine-consents/${encodeURIComponent(appId)}`);
-    }
-  };
   var PodMachinesApi = class {
     constructor(machines) {
       __publicField(this, "machines", machines);
@@ -22644,7 +22592,6 @@ var LemmaClient = (() => {
         display_name: options.displayName,
         template: options.template,
         size: options.size,
-        visibility: options.visibility,
         run_slots: options.runSlots
       };
       return this.machines.call("POST", podMachinesPath(podId), { body });
@@ -22653,7 +22600,6 @@ var LemmaClient = (() => {
       const body = {};
       if (changes.displayName !== void 0) body.display_name = changes.displayName;
       if (changes.size !== void 0) body.size = changes.size;
-      if (changes.visibility !== void 0) body.visibility = changes.visibility;
       if (changes.runSlots !== void 0) body.run_slots = changes.runSlots;
       return this.machines.call("PATCH", `${podMachinesPath(podId)}/${encodeURIComponent(name)}`, {
         body
@@ -23228,13 +23174,6 @@ var LemmaClient = (() => {
   };
 
   // src/client.ts
-  function hostOriginOf(authUrl) {
-    try {
-      return new URL(authUrl).origin;
-    } catch {
-      return void 0;
-    }
-  }
   var LemmaClient = class _LemmaClient {
     constructor(overrides = {}, internalOptions = {}) {
       __publicField(this, "_config");
@@ -23319,7 +23258,6 @@ var LemmaClient = (() => {
       this.apps = new AppsNamespace(this._generated, this._http, podIdFn);
       this.widgets = new WidgetsNamespace(this._http, podIdFn);
       this.machines = new MachinesNamespace(this._http, {
-        hostOrigin: hostOriginOf(this._config.authUrl),
         bearerToken: () => this.auth.getBearerToken()
       });
       this.webLogins = new WebLoginsNamespace(this._http);
@@ -23604,8 +23542,6 @@ var LemmaClient = (() => {
       ApiError,
       ConnectionRequiredError,
       isConnectionRequiredError,
-      MACHINE_CONSENT_MESSAGE_TYPE,
-      MachineConsentRequiredError,
       POD_DEFAULT_AGENT_SELECTOR,
       LEMMA_APP_THEME_MESSAGE_TYPE,
       LEMMA_THEME_EVENT,

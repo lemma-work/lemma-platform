@@ -111,7 +111,8 @@ Run read-only and deterministic cases first. For side-effecting cases:
 
 - use an isolated pod, sandbox connector, draft-only path, or uniquely namespaced
   fixture whenever possible;
-- run code-executing cases on a `restricted` pod machine made for the evaluation,
+- run code-executing cases on a pod machine made for the evaluation and granted
+  to the agents under test alone,
   not on a person's own machine, and clear finished runs afterwards
   (`lemma machine reset pod:<name> -s runs`);
 - take a before-state snapshot and declare the exact allowed delta;

@@ -63,6 +63,5 @@ export namespace MachineResponse {
     export enum visibility {
         PRIVATE = 'private',
         POD = 'pod',
-        RESTRICTED = 'restricted',
     }
 }

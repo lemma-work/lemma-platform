@@ -2,7 +2,7 @@
 
 The workspace module owns **machines**: user authorization over them, the
 `/machines` API, conversation and session naming, short-lived machine
-credentials, previews, app consents, compute metering, login protection, and
+credentials, previews, compute metering, login protection, and
 the translation of agent tools into calls on the sandbox runtime. It does not
 own provider lifecycle or provider SDKs; those belong to the sandbox fabric.
 
@@ -25,7 +25,7 @@ this module document. They belong in the canonical design set.
 | Concern | Code |
 | --- | --- |
 | A machine, its ref, size, template and capabilities | `domain/machine.py` |
-| Turning a ref into a machine, with authorization | `services/machine_resolver.py` (the only entry point), deciding by `domain/machine_access.py` |
+| Turning a ref into a machine, with authorization | `services/machine_resolver.py` (the only entry point): a pod machine through the core `Authorizer` (`infrastructure/machine_facts.py`), a person's own and a connected machine by `domain/machine_access.py` |
 | What a plan allows: sizes, templates, how many | `services/machine_policy.py` |
 | Routes | `api/controllers/machines_controller.py` and the `machine_*_controller.py` beside it |
 | Pod machines and their `machine.use` grants | `services/pod_machines.py` |
@@ -50,12 +50,16 @@ names out of code, docs and skills.
 | `sandbox_instances` | One concrete provider object backing a sandbox at a given epoch, unique per `(sandbox_id, epoch)`. Kept as its own row rather than columns on the sandbox so the destroy of an old container can be driven to completion while a new epoch is already serving |
 | `machine_connections` | A person's own computer joined with the CLI: its owner, mode, the hash of its secret, the capabilities and home it reports, and when it was last seen or revoked. A machine row names it by `connection_id`, without a foreign key, so the row outlives a revoked connection |
 | `machine_previews` | A port on a machine reachable at `p-<label>.<MACHINE_PREVIEW_DOMAIN>`, `private` or `link`, revocable before it expires |
-| `app_machine_consents` | A person's yes to one app running code on their default machine; revoking it sets `revoked_at` |
 | `machine_sessions` | A stretch of a machine running, metered into compute-unit slices in the usage ledger |
 | `machine_login_backups` | Encrypted copies of the login-bearing parts of a machine's browser profile, kept off the machine |
 
 `agents.machine` is the ref an agent's commands run on; unset means the default
-machine of whoever the run acts for.
+machine of whoever the run acts for. Naming a pod machine there confers the
+agent its `machine.use` grant (`agent/services/agent_machine_grant.py`).
+A pod machine's `visibility` is always `pod`; `private` is a person's own
+machine, or a connected one they have not shared. Who may use a pod machine is
+the pod's roles and `machine.use` grants to agents and functions, never the
+row.
 
 These rows are the durable half. Live process, session, and credential state
 belongs to the sandbox runtime and Redis, and the lifecycle rules that move a

@@ -211,21 +211,20 @@ declarations are in the app project's **`node_modules/lemma-sdk/dist/`** — rea
 them for exact signatures (`cat node_modules/lemma-sdk/dist/react/useRecords.d.ts`).
 
 **Running code from an app: `client.machines`.** An app that runs a command,
-reads a file or opens a preview does it on a machine, named by a ref: `"me"` is
-the *viewer's* own default machine, `"pod:<pod-id>/<name>"` a pod machine.
+reads a file or opens a preview does it on a machine of **its own pod**, named
+by a ref: `"pod:<name>"` (or `"pod:<pod-id>/<name>"`).
 
 ```ts
-const run = await client.machines.exec("me", { command: "python report.py", cwd: "~/lemma/report" });
+const run = await client.machines.exec("pod:report", { command: "python report.py", cwd: "~/lemma/report" });
 for await (const event of run) { /* output events, then the exit */ }
 ```
 
-On `"me"` the app acts as the viewer, so it needs their **one-time consent** per
-app. Until they give it, the call throws `MachineConsentRequiredError`; open its
-`consentUrl` (the Lemma page that asks them), then retry. An app cannot grant
-itself consent, and the viewer can revoke it in Settings. With consent the app
-gets processes, files and previews; the browser, its logins and a `home` reset
-stay the person's own. A pod machine the app reaches as its viewer — with
-whatever the viewer may do there — and only in the app's own pod.
+The app acts as its viewer, as it does for every pod resource: a viewer whose
+pod role lets them use the machine (editors and admins) gets processes, files
+and previews; anyone else is told the machine does not exist. An app never
+reaches its viewer's own machine (`"me"`) -- that is not the pod's to offer --
+and the browser, its logins, a `home` reset, and creating, changing or granting
+machines stay the person's own.
 
 ## Calling the API well — fetch once, subscribe, don't re-render the world
 

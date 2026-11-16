@@ -88,8 +88,8 @@ const preview = await client.machines.previews.create("me", { port: 3000, visibi
 ```
 
 - **Output** comes over the process's WebSocket where there is one and from polling `/output` where there is not (or the socket drops), resuming from the last sequence either way. `run.input(...)`, `run.resize(...)` and `run.kill()` steer it.
-- **Namespaces.** `processes`, `files` (`list`/`stat`/`read`/`readWhole`/`write`/`delete`/`move`/`sync`), `previews`, `browser`, `consents`, and `pod` (create, update, delete and grants for a pod's machines), plus `startup`, `release`, `restart`, `reset` and `policy`.
-- **Consent.** An app calling these for `"me"` needs the person's say-so. Without it the call throws `MachineConsentRequiredError`, whose `consentUrl` is the Lemma page that asks them; open it (a popup works: the page posts `{ type: MACHINE_CONSENT_MESSAGE_TYPE, app_id, granted }` to its opener and closes) and retry once they answer. An app cannot grant itself consent.
+- **Namespaces.** `processes`, `files` (`list`/`stat`/`read`/`readWhole`/`write`/`delete`/`move`/`sync`), `previews`, `browser`, and `pod` (create, update, delete and agent and function grants for a pod's machines), plus `startup`, `release`, `restart`, `reset` and `policy`.
+- **Apps.** An app's page reaches the machines of its own pod, as its viewer, and never anybody's own `"me"`: that is not the pod's to offer. Creating, changing, deleting and granting machines stay the person's own.
 
 ## Browser bundle (no-build HTML)
 

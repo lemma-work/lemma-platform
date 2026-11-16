@@ -73,16 +73,15 @@ def sync_detailed(
     client: AuthenticatedClient | Client,
     body: MachineGrantsModel,
 ) -> Response[ErrorResponse | MachineGrantsModel]:
-    """Replace who is granted a pod machine
+    """Replace which agents and functions are granted a pod machine
 
     Args:
         pod_id (UUID):
         name (str):
-        body (MachineGrantsModel): Who may use a pod machine beyond what visibility already
-            allows.
+        body (MachineGrantsModel): Which agents and functions may use a pod machine, by name.
 
-            Agents and functions by name; people by user id. A RESTRICTED machine is
-            usable only by those named here (and pod admins).
+            A workload uses a pod machine only with this grant, and then only as far
+            as the person it acts for may. People need none: their pod role decides.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -112,16 +111,15 @@ def sync(
     client: AuthenticatedClient | Client,
     body: MachineGrantsModel,
 ) -> ErrorResponse | MachineGrantsModel | None:
-    """Replace who is granted a pod machine
+    """Replace which agents and functions are granted a pod machine
 
     Args:
         pod_id (UUID):
         name (str):
-        body (MachineGrantsModel): Who may use a pod machine beyond what visibility already
-            allows.
+        body (MachineGrantsModel): Which agents and functions may use a pod machine, by name.
 
-            Agents and functions by name; people by user id. A RESTRICTED machine is
-            usable only by those named here (and pod admins).
+            A workload uses a pod machine only with this grant, and then only as far
+            as the person it acts for may. People need none: their pod role decides.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -146,16 +144,15 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
     body: MachineGrantsModel,
 ) -> Response[ErrorResponse | MachineGrantsModel]:
-    """Replace who is granted a pod machine
+    """Replace which agents and functions are granted a pod machine
 
     Args:
         pod_id (UUID):
         name (str):
-        body (MachineGrantsModel): Who may use a pod machine beyond what visibility already
-            allows.
+        body (MachineGrantsModel): Which agents and functions may use a pod machine, by name.
 
-            Agents and functions by name; people by user id. A RESTRICTED machine is
-            usable only by those named here (and pod admins).
+            A workload uses a pod machine only with this grant, and then only as far
+            as the person it acts for may. People need none: their pod role decides.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -183,16 +180,15 @@ async def asyncio(
     client: AuthenticatedClient | Client,
     body: MachineGrantsModel,
 ) -> ErrorResponse | MachineGrantsModel | None:
-    """Replace who is granted a pod machine
+    """Replace which agents and functions are granted a pod machine
 
     Args:
         pod_id (UUID):
         name (str):
-        body (MachineGrantsModel): Who may use a pod machine beyond what visibility already
-            allows.
+        body (MachineGrantsModel): Which agents and functions may use a pod machine, by name.
 
-            Agents and functions by name; people by user id. A RESTRICTED machine is
-            usable only by those named here (and pod admins).
+            A workload uses a pod machine only with this grant, and then only as far
+            as the person it acts for may. People need none: their pod role decides.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

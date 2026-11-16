@@ -1,9 +1,7 @@
-import { ApiError, ForbiddenError } from "../http.js";
+import { ApiError } from "../http.js";
 import type { HttpClient } from "../http.js";
 import type { BrowserAccessResponse } from "../openapi_client/models/BrowserAccessResponse.js";
 import type { BrowserStatusResponse } from "../openapi_client/models/BrowserStatusResponse.js";
-import type { ConsentListResponse } from "../openapi_client/models/ConsentListResponse.js";
-import type { ConsentResponse } from "../openapi_client/models/ConsentResponse.js";
 import type { CreatePodMachineRequest } from "../openapi_client/models/CreatePodMachineRequest.js";
 import type { ForgetResponse } from "../openapi_client/models/ForgetResponse.js";
 import type { MachineFileEntry } from "../openapi_client/models/MachineFileEntry.js";
@@ -24,7 +22,6 @@ import type { WebLoginListResponse } from "../openapi_client/models/WebLoginList
 export type {
   BrowserAccessResponse as MachineBrowserAccess,
   BrowserStatusResponse as MachineBrowserStatus,
-  ConsentResponse as MachineConsent,
   MachineFileEntry,
   MachineFileListResponse,
   MachineGrantsModel as MachineGrants,
@@ -36,36 +33,6 @@ export type {
   ProcessResponse as MachineProcess,
   ResetResponse as MachineResetResult,
 };
-
-/**
- * What the consent page posts to the window that opened it once the person
- * answers: `{ type, app_id, granted }`. An app that opened `consentUrl` in a
- * popup listens for it rather than polling.
- */
-export const MACHINE_CONSENT_MESSAGE_TYPE = "lemma:machine-consent";
-
-/** The error code a machine route answers with when an app has no consent. */
-export const MACHINE_CONSENT_REQUIRED = "MACHINE_CONSENT_REQUIRED";
-
-/**
- * An app asked to use somebody's machine and they have not said it may.
- *
- * Not something an app can grant itself: the server refuses a grant whose
- * Origin is an app host. `consentUrl` is the Lemma page that asks the person,
- * so the app opens it (a new tab or a popup) and tries again once they answer.
- */
-export class MachineConsentRequiredError extends ForbiddenError {
-  override name = "MachineConsentRequiredError";
-
-  constructor(
-    public readonly appId: string,
-    public readonly consentUrl: string,
-    source: ApiError,
-  ) {
-    super(403, source.message, source.code, source.details, source.rawResponse);
-    this.requestId = source.requestId;
-  }
-}
 
 /**
  * A machine ref as it goes in a URL path.
@@ -131,8 +98,6 @@ export interface ExecOptions {
 export type WebSocketFactory = new (url: string) => WebSocket;
 
 export interface MachinesOptions {
-  /** Where the consent page lives, e.g. `https://lemma.work`. */
-  hostOrigin?: string;
   /** The token a socket presents as `access_token`, when not using cookies. */
   bearerToken?: () => string | null;
   /** Overrides the global `WebSocket`; tests pass a fake. */
@@ -283,9 +248,8 @@ export class MachineExecution implements AsyncIterable<MachineProcessEvent> {
  * keeps (`pod:<pod-id>/<name>`), and the ones they connected (`mine:<name>`).
  *
  * Hand-written rather than generated because a ref is not a plain path
- * parameter -- see `machinePathRef` -- and because a page calling these for an
- * app has to be told, in a form it can act on, that the person has not yet
- * said the app may: `MachineConsentRequiredError`.
+ * parameter -- see `machinePathRef`. An app's page reaches the machines of its
+ * own pod, as its viewer; never anybody's own (`me`).
  */
 export class MachinesNamespace {
   readonly pollWaitSeconds: number;
@@ -293,7 +257,6 @@ export class MachinesNamespace {
   readonly files: MachineFilesApi;
   readonly previews: MachinePreviewsApi;
   readonly browser: MachineBrowserApi;
-  readonly consents: MachineConsentsApi;
   readonly pod: PodMachinesApi;
 
   constructor(
@@ -305,48 +268,24 @@ export class MachinesNamespace {
     this.files = new MachineFilesApi(this);
     this.previews = new MachinePreviewsApi(this);
     this.browser = new MachineBrowserApi(this);
-    this.consents = new MachineConsentsApi(this);
     this.pod = new PodMachinesApi(this);
   }
 
-  /** @internal A request, with a consent refusal turned into its own error. */
-  async call<T>(
+  /** @internal A request. */
+  call<T>(
     method: string,
     path: string,
     options: Parameters<HttpClient["request"]>[2] = {},
   ): Promise<T> {
-    try {
-      return await this.http.request<T>(method, path, options);
-    } catch (error) {
-      throw this.translate(error);
-    }
+    return this.http.request<T>(method, path, options);
   }
 
   /** @internal `call`, for a response that is bytes. */
-  async bytes(
+  bytes(
     path: string,
     headers?: Record<string, string>,
   ): Promise<{ blob: Blob; status: number; contentRange: string | null }> {
-    try {
-      return await this.http.requestBytesResponse("GET", path, { headers });
-    } catch (error) {
-      throw this.translate(error);
-    }
-  }
-
-  /** The page where a person says whether an app may use their machine. */
-  consentUrl(appId: string): string {
-    const origin = this.options.hostOrigin ?? "";
-    return `${origin}/consent/machine?app=${encodeURIComponent(appId)}`;
-  }
-
-  private translate(error: unknown): unknown {
-    if (error instanceof ApiError && error.code === MACHINE_CONSENT_REQUIRED) {
-      const details = error.details as { app_id?: unknown } | undefined;
-      const appId = typeof details?.app_id === "string" ? details.app_id : "";
-      return new MachineConsentRequiredError(appId, this.consentUrl(appId), error);
-    }
-    return error;
+    return this.http.requestBytesResponse("GET", path, { headers });
   }
 
   /** @internal */
@@ -766,28 +705,7 @@ export class MachineBrowserApi {
   }
 }
 
-/**
- * Which apps may use the caller's machine. Granting only works from Lemma
- * itself: an app page asking to grant its own consent is refused.
- */
-export class MachineConsentsApi {
-  constructor(private readonly machines: MachinesNamespace) {}
-
-  async list(): Promise<ConsentResponse[]> {
-    const response = await this.machines.call<ConsentListResponse>("GET", "/machine-consents");
-    return response.consents;
-  }
-
-  grant(appId: string): Promise<ConsentResponse> {
-    return this.machines.call("POST", "/machine-consents", { body: { app_id: appId } });
-  }
-
-  revoke(appId: string): Promise<void> {
-    return this.machines.call("DELETE", `/machine-consents/${encodeURIComponent(appId)}`);
-  }
-}
-
-/** The machines a pod keeps, and who may use each. */
+/** The machines a pod keeps, and which agents and functions may use each. */
 export class PodMachinesApi {
   constructor(private readonly machines: MachinesNamespace) {}
 
@@ -798,7 +716,6 @@ export class PodMachinesApi {
       displayName?: string;
       template?: "workspace" | "workspace-docker";
       size?: string;
-      visibility?: "pod" | "restricted";
       runSlots?: number;
     },
   ): Promise<MachineResponse> {
@@ -807,7 +724,6 @@ export class PodMachinesApi {
       display_name: options.displayName,
       template: options.template,
       size: options.size,
-      visibility: options.visibility,
       run_slots: options.runSlots,
     };
     return this.machines.call("POST", podMachinesPath(podId), { body });
@@ -819,14 +735,12 @@ export class PodMachinesApi {
     changes: {
       displayName?: string | null;
       size?: string | null;
-      visibility?: "pod" | "restricted" | null;
       runSlots?: number | null;
     },
   ): Promise<MachineResponse> {
     const body: Partial<Record<keyof UpdatePodMachineRequest, unknown>> = {};
     if (changes.displayName !== undefined) body.display_name = changes.displayName;
     if (changes.size !== undefined) body.size = changes.size;
-    if (changes.visibility !== undefined) body.visibility = changes.visibility;
     if (changes.runSlots !== undefined) body.run_slots = changes.runSlots;
     return this.machines.call("PATCH", `${podMachinesPath(podId)}/${encodeURIComponent(name)}`, {
       body,

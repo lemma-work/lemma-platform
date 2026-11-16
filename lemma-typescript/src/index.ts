@@ -47,9 +47,6 @@ export type { SseRawEvent } from "./streams.js";
 export { watchDatastoreChanges } from "./datastore-changes.js";
 export { isEmbeddedInHost } from "./embedded.js";
 export {
-  MACHINE_CONSENT_MESSAGE_TYPE,
-  MACHINE_CONSENT_REQUIRED,
-  MachineConsentRequiredError,
   MachineExecution,
   machinePathRef,
 } from "./namespaces/machines.js";
@@ -58,7 +55,6 @@ export type {
   Machine,
   MachineBrowserAccess,
   MachineBrowserStatus,
-  MachineConsent,
   MachineFileEntry,
   MachineFileListResponse,
   MachineGrants,

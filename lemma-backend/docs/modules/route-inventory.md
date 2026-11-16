@@ -483,12 +483,10 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
-| DELETE | `/machine-consents/{app_id}` | `machine.consent.revoke` | Stop an app running code on your machine |
 | DELETE | `/machines/{ref}/files` | `machine.files.delete` | Delete a file or directory on a machine |
 | DELETE | `/machines/{ref}/previews/{preview_id}` | `machine.preview.revoke` | Revoke a preview; its URL stops answering |
 | DELETE | `/machines/{ref}/processes/{process_id}` | `machine.process.kill` | Stop a process |
 | DELETE | `/pods/{pod_id}/machines/{name}` | `machine.pod.delete` | Delete a pod machine and its disk |
-| GET | `/machine-consents` | `machine.consent.list` | Apps you let run code on your machine |
 | GET | `/machine-previews/{label}:open` | `machine.preview.open` | Open a private preview as the signed-in person |
 | GET | `/machines` | `machine.list` | List the machines you can see |
 | GET | `/machines/{ref}` | `machine.get` | Get one machine |
@@ -503,9 +501,8 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/machines/{ref}/processes/{process_id}/output` | `machine.process.output` | A page of a process's output |
 | GET | `/machines/{ref}/startup` | `machine.startup` | Whether a machine is ready, without waking it |
 | GET | `/machines:policy` | `machine.policy` | Which machines you or a pod may create |
-| GET | `/pods/{pod_id}/machines/{name}/grants` | `machine.pod.grants.get` | Who is granted a pod machine |
-| PATCH | `/pods/{pod_id}/machines/{name}` | `machine.pod.update` | Rename, resize or change who sees a pod machine |
-| POST | `/machine-consents` | `machine.consent.grant` | Let an app run code on your machine |
+| GET | `/pods/{pod_id}/machines/{name}/grants` | `machine.pod.grants.get` | Which agents and functions are granted a pod machine |
+| PATCH | `/pods/{pod_id}/machines/{name}` | `machine.pod.update` | Rename or resize a pod machine |
 | POST | `/machines/{ref}/browser:access` | `machine.browser.access` | A signed link to a machine's browser |
 | POST | `/machines/{ref}/browser:display` | `machine.browser.display` | Set the size of a machine's browser display |
 | POST | `/machines/{ref}/browser:navigate` | `machine.browser.navigate` | Open a page in a machine's browser |
@@ -520,4 +517,4 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/machines/{ref}:restart` | `machine.restart` | Stop a machine and start it again |
 | POST | `/pods/{pod_id}/machines` | `machine.pod.create` | Create a machine the pod's agents share |
 | PUT | `/machines/{ref}/files/content` | `machine.files.write` | Write a file on a machine |
-| PUT | `/pods/{pod_id}/machines/{name}/grants` | `machine.pod.grants.set` | Replace who is granted a pod machine |
+| PUT | `/pods/{pod_id}/machines/{name}/grants` | `machine.pod.grants.set` | Replace which agents and functions are granted a pod machine |
