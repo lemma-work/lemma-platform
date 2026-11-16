@@ -8,7 +8,9 @@ nothing they do needs to call back -- so no token is minted for them.
 from __future__ import annotations
 
 import shlex
+from collections.abc import Awaitable
 from dataclasses import dataclass
+from typing import Protocol
 from uuid import UUID
 
 from sandbox_runtime.paths import HOME_ROOT
@@ -23,6 +25,19 @@ class ShellOutcome:
     @property
     def ok(self) -> bool:
         return self.exit_code == 0
+
+
+class Shell(Protocol):
+    """How a housekeeping command reaches a machine: `run_on_machine`'s shape."""
+
+    def __call__(
+        self,
+        machine_id: UUID,
+        *,
+        acting_user: UUID,
+        command: str,
+        timeout_seconds: int = ...,
+    ) -> Awaitable[ShellOutcome]: ...
 
 
 async def run_on_machine(
