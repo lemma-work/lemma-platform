@@ -161,3 +161,99 @@ async def test_a_released_machines_session_is_closed_and_not_metered_again(
         metered["uow_factory"], now=now + timedelta(hours=1)
     )
     assert await sessions() == closed
+
+
+async def _sessions(metered) -> list:
+    from sqlalchemy import select
+
+    from app.modules.workspace.infrastructure.machine_models import (
+        MachineSessionModel,
+    )
+
+    async with metered["uow_factory"]() as uow:
+        rows = await uow.session.scalars(
+            select(MachineSessionModel)
+            .where(MachineSessionModel.sandbox_id == metered["machine_id"])
+            .order_by(MachineSessionModel.started_at)
+        )
+        return list(rows.all())
+
+
+async def test_a_machine_the_provider_paused_is_not_billed_for_the_pause(
+    metered,
+) -> None:
+    """E2B pauses a sandbox on its own timeout and the row still says READY.
+    Reported stopped, its session ends where it was last metered."""
+    metered["allowance"].units = None
+    now = datetime.now(timezone.utc) + timedelta(minutes=1)
+    await compute_meter.meter_running(metered["uow_factory"], now=now)
+
+    paused = await compute_meter.meter_running(
+        metered["uow_factory"],
+        now=now + timedelta(hours=3),
+        stopped=frozenset({metered["machine_id"]}),
+    )
+
+    assert metered["machine_id"] not in paused.running
+    [session] = await _sessions(metered)
+    assert session.ended_at is not None
+    assert session.metered_until <= now + timedelta(seconds=1)
+
+
+async def test_a_session_the_machine_restarted_past_is_ended_and_a_new_one_opened(
+    metered,
+) -> None:
+    """A stop nothing closed: the instance came up again after the session's
+    last metering. The gap is not billed, and the resume is noticed."""
+    from sqlalchemy import update
+
+    from app.modules.workspace.infrastructure.machine_models import (
+        MachineSessionModel,
+    )
+
+    metered["allowance"].units = None
+    now = datetime.now(timezone.utc) + timedelta(minutes=1)
+    await compute_meter.meter_running(metered["uow_factory"], now=now)
+    stale_until = datetime.now(timezone.utc) - timedelta(hours=5)
+    async with metered["uow_factory"]() as uow:
+        await uow.session.execute(
+            update(MachineSessionModel)
+            .where(MachineSessionModel.sandbox_id == metered["machine_id"])
+            .values(started_at=stale_until, metered_until=stale_until)
+        )
+        await uow.commit()
+
+    tick = await compute_meter.meter_running(
+        metered["uow_factory"], now=now + timedelta(minutes=1)
+    )
+
+    assert metered["machine_id"] in tick.resumed
+    old, new = await _sessions(metered)
+    assert old.ended_at == stale_until
+    assert new.ended_at is None and new.started_at >= stale_until
+
+
+async def test_a_machine_has_at_most_one_open_session(metered) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    from app.modules.workspace.infrastructure.machine_models import (
+        MachineSessionModel,
+    )
+
+    metered["allowance"].units = None
+    await compute_meter.meter_running(metered["uow_factory"])
+    now = datetime.now(timezone.utc)
+
+    with pytest.raises(IntegrityError):
+        async with metered["uow_factory"]() as uow:
+            uow.session.add(
+                MachineSessionModel(
+                    sandbox_id=metered["machine_id"],
+                    size="1x2",
+                    compute_units_per_hour=0.5,
+                    billing_scope="user",
+                    started_at=now,
+                    metered_until=now,
+                )
+            )
+            await uow.commit()
