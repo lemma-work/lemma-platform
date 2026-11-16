@@ -51,7 +51,7 @@ async def test_a_refused_turn_is_one_note_in_the_members_own_channel(scenario):
     pod_id, owner = UUID(scenario.pod_id), UUID(scenario.owner_user["id"])
     context = _in_a_group(pod_id, owner)
     refused = RuntimeUnavailableError(
-        "This teammate runs on Ada's own Claude Code, which only they can use.",
+        "This Lemma runs on Ada's own Claude Code, which only they can use.",
         code="runtime_profile_not_shareable",
     )
     heard = AsyncMock()

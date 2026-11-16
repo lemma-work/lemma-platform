@@ -254,6 +254,10 @@ def _record_request_failure(
     state["lemma_error_type"] = error_type
     if exception is not None:
         state["lemma_exception"] = exception
+        # Kept apart from the exception: Starlette (1.10+) sets
+        # ``exc.__traceback__ = None`` once the handler returns, and the access
+        # log that reads this is written after that.
+        state["lemma_exception_traceback"] = exception.__traceback__
 
 
 def _unhandled_error_headers(request: Request) -> dict[str, str]:

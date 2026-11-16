@@ -46,7 +46,6 @@ import {
     installedApp,
     landingPath,
     needsAnswer,
-    ownsLine,
     statusLine,
     suggestedValue,
     teammateName,
@@ -107,7 +106,7 @@ function Gate(props: Props) {
             <Panel>
                 <h2 className={s.panelTitle}>Install {props.title}</h2>
                 <p className={s.muted}>
-                    Give it to a new or existing teammate. You see everything it
+                    Give it to a new or existing Lemma. You see everything it
                     adds before anything is installed.
                 </p>
                 <button className={s.primary} onClick={session.signIn}>
@@ -156,7 +155,7 @@ function FirstWorkspace({ onMade }: { onMade: () => void }) {
             }}
         >
             <p className={s.muted}>
-                First, a workspace for your teammates. It is private to you;
+                First, an organization for your Lemmas. It is private to you;
                 you can invite people later.
             </p>
             <label className={s.field}>
@@ -261,7 +260,7 @@ function Journey({ repo, owner, title }: Props) {
     const who =
         target === NEW
             ? (created?.teammate.name ?? name.trim())
-            : (existing?.teammate.name ?? "your teammate");
+            : (existing?.teammate.name ?? "your Lemma");
     const podForMark = target === NEW ? created : existing;
 
     const jobId = job?.import_id;
@@ -418,7 +417,7 @@ function Journey({ repo, owner, title }: Props) {
         return (
             <Panel>
                 <p role="status" className={s.muted}>
-                    Loading your teammates…
+                    Loading your Lemmas…
                 </p>
             </Panel>
         );
@@ -519,7 +518,7 @@ function Journey({ repo, owner, title }: Props) {
                             <Plus size={16} />
                         </span>
                         <span className={s.choiceText}>
-                            <b>Hire a new teammate</b>
+                            <b>Start a new Lemma</b>
                             <small>Starts with only what {title} brings</small>
                         </span>
                     </label>
@@ -536,12 +535,12 @@ function Journey({ repo, owner, title }: Props) {
                     )}
                     {pods.isPending && (
                         <p className={s.muted} role="status">
-                            Loading your teammates…
+                            Loading your Lemmas…
                         </p>
                     )}
                     {pods.isError && (
                         <p className={s.muted} role="alert">
-                            Could not load your teammates.{" "}
+                            Could not load your Lemmas.{" "}
                             <button
                                 className={s.link}
                                 onClick={() => void pods.refetch()}
@@ -622,7 +621,6 @@ function Journey({ repo, owner, title }: Props) {
     const valueOf = (v: VariableSpec) =>
         values[v.name] ?? suggestedValue(v, who);
     const warnings = [...job.warnings, ...(plan?.warnings ?? [])];
-    const owns = ownsLine(plan?.outcome);
     const markFor = podForMark ?? {
         id: job.pod_id,
         teammate: { name: who, iconUrl: null },
@@ -749,9 +747,6 @@ function Journey({ repo, owner, title }: Props) {
                     {groups.length > 0 ? " — " + contentsLine(groups) : ""}.
                 </p>
             )}
-            {/* Said before approving: an install sets what this Lemma owns
-                only when it owns nothing yet. */}
-            {reviewing && owns && <p className={s.muted}>{owns}</p>}
             {!reviewing && (
                 <Progress done={job.progress.done} total={job.progress.total} />
             )}

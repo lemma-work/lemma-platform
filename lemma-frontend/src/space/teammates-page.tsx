@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { initialsOf, source, type Org, type Pod, type PodDetail } from "@/data";
 import { lemma } from "@/session/client";
 import { isForbidden } from "@/session/auth-state";
-import { AI_MATE, MATES, NEW_MATE } from "@/copy";
+import { MATE, MATES, NEW_MATE } from "@/copy";
 import { Mark, markTint } from "@/shell/mark";
 import { unbound } from "@/thread/conversation-list";
 import { CheckIcon, ChevronDownIcon, ConnectorIcon, PeopleIcon, PlusIcon } from "@/ui/icons";
@@ -110,7 +110,7 @@ export function TeammatesPage({ pods, pending, failed, onRetry, owed, orgName, o
                         )
                         : pods.length === 0 ? (
                             <div className="team__empty">
-                                <p>Nobody here yet. Hire your first {AI_MATE} and this is where it will be.</p>
+                                <p>Nothing here yet. Start your first {MATE} and this is where it will be.</p>
                                 {onHire && <button className="pill-button" onClick={onHire}><PlusIcon size={15} /> {NEW_MATE}</button>}
                             </div>
                         ) : (

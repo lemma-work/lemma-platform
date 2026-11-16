@@ -1,13 +1,17 @@
 """Where a run was asked, so that it answers there and nowhere else.
 
-One conversation serves a person across every place of a channel -- their
-email, their WhatsApp, Lemma's own channels -- so the conversation cannot say
-where a turn was asked; only the run can. A run answers the place of the
-message that started it. A message from another place, sent while it works, is
-not taken into it: it waits for the run to end and is answered by a turn of its
-own, where it was said. Taken in, the run read both, and its one answer went
-wherever the person had last written: what was asked by email was answered on
-WhatsApp, and the WhatsApp message was never answered at all.
+A person's conversation with an agent is kept on one platform of a channel --
+their WhatsApp, their email, Lemma itself -- so their platforms no longer
+share one (``uq_agent_conversations_channel_person``). A conversation can
+still be reached from more than one place: a group's threads in Lemma, a line
+another agent was named for, a message typed into the conversation itself. So
+the run, not the conversation, says where a turn was asked. A run answers the
+place of the message that started it. A message from another place, sent
+while it works, is not taken into it: it waits for the run to end and is
+answered by a turn of its own, where it was said. Taken in, the run read both,
+and its one answer went wherever the person had last written: what was asked
+by email was answered on WhatsApp, and the WhatsApp message was never answered
+at all.
 
 A message's place is the channel source it was heard at (set by the server,
 never taken from a sender), or Lemma's own channels for a line written there

@@ -28,6 +28,14 @@ class PodJoinPolicy(str, Enum):
     PUBLIC = "PUBLIC"  # any Lemma user may self-join (auto-added to the org)
 
 
+#: The policies a member of the organization may join under without asking:
+#: what a pod must be for it to be offered to them, and for it to take in the
+#: people who join the organization after it.
+OPEN_JOIN_POLICIES: frozenset[PodJoinPolicy] = frozenset(
+    {PodJoinPolicy.ORG_MEMBERS, PodJoinPolicy.PUBLIC}
+)
+
+
 class PodCreationSource(str, Enum):
     """Whether somebody asked for a pod, or the platform made it for them.
 
@@ -90,19 +98,12 @@ class OutcomeKind(str, Enum):
 
     ``week`` is a bar held every week, which never finishes ("Every customer
     hears back within a day"). ``date`` is a finish line, reached once by its
-    ``due`` date ("The launch ships by the date it is due"). The values are the plan
-    file's own (``kind: week`` in ``/plan.md``), so a plan a person or the
-    pod's agent wrote reads straight across.
+    ``due`` date ("The launch ships by the date it is due").
     """
 
     WEEK = "week"
     DATE = "date"
 
-
-#: Where the plan for what a pod owns is kept: the prose people and the pod's
-#: agent both edit -- what must be true, how the work is done, who holds what,
-#: what never happens -- beside the structured part on the pod's config.
-PLAN_PATH = "/plan.md"
 
 #: A measure is one query; anything near this long is several pasted together.
 MEASURE_MAX_CHARS = 4000
@@ -115,11 +116,9 @@ SHARE_UNIT = "%"
 class OutcomeInput(BaseModel):
     """What the pod owns, as a person or its agent sets it.
 
-    The fields are the front matter of the plan file the workspace keeps at
-    ``/plan.md`` -- ``outcome`` (here ``sentence``), ``kind``, ``target``,
-    ``unit``, ``due`` and ``measure`` -- held here so there is one copy of
-    them. The plan's prose (what must be true, how the work is done, who holds
-    what, what never happens) stays in the file.
+    Kept on the pod's config, the one copy of it. How the work is done, who
+    holds what and what never happens are what the pod has been taught, kept
+    in its shared memory.
     """
 
     sentence: str = Field(
@@ -231,6 +230,18 @@ class PodConfig(BaseModel):
     default_profile_id: str | None = Field(default=None, min_length=1)
     default_runtime: AgentRuntimeConfig | None = None
     join_policy: PodJoinPolicy = PodJoinPolicy.INVITE_ONLY
+    #: Always serialized, unlike the empty defaults below: an update merges the
+    #: config it is sent key by key, so a ``false`` dropped on the way in could
+    #: never turn this off again.
+    auto_join_new_members: bool = Field(
+        default=False,
+        description=(
+            "Everyone who joins the organization from now on becomes a member "
+            "of this pod, as a pod user. Needs join_policy ORG_MEMBERS or "
+            "PUBLIC, and the authority to change the join policy. People "
+            "already in the organization are not added."
+        ),
+    )
     # Bundles installed into this pod, appended on each successful import. Omitted
     # from the serialized config when empty so legacy config blobs are unchanged.
     recipes: list[PodRecipe] = Field(default_factory=list)
@@ -365,6 +376,21 @@ class PodUpdateEntity(BaseModel):
     config: PodConfig | None = None
 
 
+class JoinablePod(BaseModel):
+    """A pod a member of its organization may join and is not in, as offered.
+
+    What someone deciding whether to walk in needs to see, and nothing they
+    could only read from inside: no config beyond who may join, no owner.
+    """
+
+    id: UUID
+    name: str
+    description: str | None = None
+    icon_url: str | None = None
+    join_policy: PodJoinPolicy
+    member_count: int
+
+
 class PodMemberEntity(AggregateRoot):
     """Pod member entity."""
 
@@ -417,6 +443,7 @@ class PodMemberEntity(AggregateRoot):
         email: str,
         first_name: str | None = None,
         last_name: str | None = None,
+        added_by_user_id: UUID | None = None,
     ) -> None:
         from app.modules.pod.domain.events import PodMemberAddedEvent
 
@@ -428,6 +455,7 @@ class PodMemberEntity(AggregateRoot):
                 email=email,
                 first_name=first_name,
                 last_name=last_name,
+                added_by_user_id=added_by_user_id,
             )
         )
 
@@ -446,6 +474,8 @@ class PodJoinRequestStatus(str, Enum):
     PENDING = "PENDING"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
+    #: Taken back by the person who asked, before anybody answered.
+    WITHDRAWN = "WITHDRAWN"
 
 
 class PodJoinRequestEntity(AggregateRoot):
@@ -488,3 +518,42 @@ class PodJoinRequestEntity(AggregateRoot):
         self.approved_at = approved_at or datetime.now(timezone.utc)
         self.org_role = org_role
         self.pod_role = pod_role
+        if approved_by_user_id != self.user_id:
+            self._announce_decision(
+                approved=True, decided_by_user_id=approved_by_user_id
+            )
+
+    def mark_rejected(
+        self,
+        *,
+        rejected_by_user_id: UUID,
+        rejected_at: datetime | None = None,
+    ) -> None:
+        """Turned down by somebody who manages the pod.
+
+        Who decided and when are kept in the approval columns, which record the
+        decision whichever way it went: a second pair of columns for the other
+        answer would be a migration to say the same thing.
+        """
+        self.status = PodJoinRequestStatus.REJECTED
+        self.approved_by_user_id = rejected_by_user_id
+        self.approved_at = rejected_at or datetime.now(timezone.utc)
+        self._announce_decision(approved=False, decided_by_user_id=rejected_by_user_id)
+
+    def mark_withdrawn(self) -> None:
+        """Taken back by the asker. Nobody decided, so nobody is told."""
+        self.status = PodJoinRequestStatus.WITHDRAWN
+
+    def _announce_decision(self, *, approved: bool, decided_by_user_id: UUID) -> None:
+        from app.modules.pod.domain.events import PodJoinRequestDecidedEvent
+
+        self.add_event(
+            PodJoinRequestDecidedEvent(
+                pod_id=self.pod_id,
+                organization_id=self.organization_id,
+                requester_user_id=self.user_id,
+                join_request_id=self.id,
+                approved=approved,
+                decided_by_user_id=decided_by_user_id,
+            )
+        )

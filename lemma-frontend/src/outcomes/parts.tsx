@@ -39,6 +39,9 @@ const PATHS = {
     agent: <><circle cx="12" cy="9" r="3.4" /><path d="M5.5 20c1-3.6 3.6-5.4 6.5-5.4s5.5 1.8 6.5 5.4" /></>,
     plug: <><path d="M9 4v5M15 4v5M6.5 9h11v3a5.5 5.5 0 0 1-11 0z" /><path d="M12 17.5V21" /></>,
     file: <><path d="M6 3h8l4 4v14H6z" /><path d="M14 3v4h4" /></>,
+    page: <><path d="M6 3h8l4 4v14H6z" /><path d="M14 3v4h4M9 12h6M9 16h6" /></>,
+    upload: <><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5" /><path d="M5 15v4.5h14V15" /></>,
+    download: <><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5" /><path d="M5 15v4.5h14V15" /></>,
     link: <><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>,
     out: <><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v5H5V6h5" /></>,
     chat: <path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 17H10l-4.5 3.5V17H5a1.5 1.5 0 0 1-1.5-1.5V7A1.5 1.5 0 0 1 5 5.5z" />,
@@ -56,6 +59,7 @@ const PATHS = {
     menu: <path d="M4.5 7h15M4.5 12h15M4.5 17h15" />,
     send: <path d="M12 19V5M6 11l6-6 6 6" />,
     more: <><circle cx="6" cy="12" r="1.4" /><circle cx="12" cy="12" r="1.4" /><circle cx="18" cy="12" r="1.4" /></>,
+    about: <><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5.5M12 7.6v.2" /></>,
     gear: <><circle cx="12" cy="12" r="3" /><path d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4 18 18M6 18l1.6-1.6M16.4 7.6 18 6" /></>,
 } satisfies Record<string, ReactNode>;
 

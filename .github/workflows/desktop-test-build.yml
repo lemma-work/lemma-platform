@@ -103,7 +103,7 @@ jobs:
     name: Build an installable ${{ inputs.platform }} package
     timeout-minutes: 90
     needs: guest-runtime
-    runs-on: ${{ inputs.platform == 'macos' && 'macos-14' || 'windows-latest' }}
+    runs-on: ${{ inputs.platform == 'macos' && 'macos-15' || 'windows-latest' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v7

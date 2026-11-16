@@ -25,9 +25,46 @@ def _known_zones() -> frozenset[str]:
     return frozenset(available_timezones()) | {DEFAULT_ZONE}
 
 
+#: Zones the tz database renamed, by the old name browsers still report:
+#: Chrome answers ``Asia/Calcutta`` for India. This host keeps the old names
+#: as links, so they pass the check below -- but a database built on a
+#: distribution that ships only the current names does not, and the day count
+#: fails there with "time zone not recognized". Read as the current name, the
+#: host and the database agree. The list is the names CLDR still calls
+#: canonical where IANA has moved on, which is what a browser hands over.
+RENAMED_ZONES: dict[str, str] = {
+    "Africa/Asmera": "Africa/Asmara",
+    "America/Buenos_Aires": "America/Argentina/Buenos_Aires",
+    "America/Catamarca": "America/Argentina/Catamarca",
+    "America/Coral_Harbour": "America/Atikokan",
+    "America/Cordoba": "America/Argentina/Cordoba",
+    "America/Godthab": "America/Nuuk",
+    "America/Indianapolis": "America/Indiana/Indianapolis",
+    "America/Jujuy": "America/Argentina/Jujuy",
+    "America/Louisville": "America/Kentucky/Louisville",
+    "America/Mendoza": "America/Argentina/Mendoza",
+    "Asia/Calcutta": "Asia/Kolkata",
+    "Asia/Katmandu": "Asia/Kathmandu",
+    "Asia/Rangoon": "Asia/Yangon",
+    "Asia/Saigon": "Asia/Ho_Chi_Minh",
+    "Atlantic/Faeroe": "Atlantic/Faroe",
+    "Europe/Kiev": "Europe/Kyiv",
+    "Pacific/Enderbury": "Pacific/Kanton",
+    "Pacific/Ponape": "Pacific/Pohnpei",
+    "Pacific/Truk": "Pacific/Chuuk",
+}
+
+
 def known_zone(name: str | None) -> ZoneInfo:
-    """The zone ``name`` names, or raise ``ValueError``. Blank is UTC."""
+    """The zone ``name`` names, or raise ``ValueError``. Blank is UTC.
+
+    A renamed zone is answered by its current name (``RENAMED_ZONES``), so
+    what is handed on to the database is a name every tz database has.
+    """
     text = (name or "").strip() or DEFAULT_ZONE
+    current = RENAMED_ZONES.get(text)
+    if current is not None and current in _known_zones():
+        text = current
     if text not in _known_zones():
         raise ValueError(
             f"Unknown time zone: {name!r}. Use an IANA zone name such as "

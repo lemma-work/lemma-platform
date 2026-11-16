@@ -177,7 +177,9 @@ test("a refresh cuts every loaded view back to its first page, then asks the ser
     assert.deepEqual(trimmed.pages, [all.pages[0]]);
     assert.deepEqual(trimmed.pageParams, [null]);
     assert.equal(cache.getQueryData<Pages>(allConversationsKey("other-pod", ""))!.pages.length, 2, "another pod is left alone");
-    assert.deepEqual(cache.invalidated, [["conversations", "pod"]]);
+    /* The organization's overview lists the same chats for every Lemma at
+       once, so it is asked again too. */
+    assert.deepEqual(cache.invalidated, [["org-recents"], ["conversations", "pod"]]);
 });
 
 test("a conversation created here is at the top of the history at once, named for what was asked", () => {

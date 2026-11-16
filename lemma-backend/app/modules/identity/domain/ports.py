@@ -210,10 +210,32 @@ class IdentityEmailPort(Protocol):
         self,
         *,
         to_email: str,
+        pod_id: UUID,
         pod_name: str,
         organization_name: str,
         requester_name: str,
         requester_email: str,
+    ) -> bool: ...
+
+    async def send_pod_join_decided_email(
+        self,
+        *,
+        to_email: str,
+        pod_id: UUID,
+        pod_name: str,
+        organization_name: str,
+        approved: bool,
+        decided_by_name: str,
+    ) -> bool: ...
+
+    async def send_pod_member_added_email(
+        self,
+        *,
+        to_email: str,
+        pod_id: UUID,
+        pod_name: str,
+        organization_name: str,
+        added_by_name: str,
     ) -> bool: ...
 
 

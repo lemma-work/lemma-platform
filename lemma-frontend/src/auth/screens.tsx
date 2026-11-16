@@ -486,7 +486,7 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
                right half does not say it again — it asks. Sign-up keeps a line
                because it is the one screen where somebody does not yet know
                what they are agreeing to do. */
-            lead={signingIn ? undefined : "Create your account, then hire your first AI teammate."}
+            lead={signingIn ? undefined : "Create your account, then start your first Lemma."}
             footer={mode === "in"
                 ? <>First time here? <a href={other}>Make an account</a></>
                 : <>Already have one? <a href={other}>Sign in</a></>}

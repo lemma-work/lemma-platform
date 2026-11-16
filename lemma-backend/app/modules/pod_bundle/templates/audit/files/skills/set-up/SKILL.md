@@ -5,7 +5,7 @@ description: Set Audit up with an owner and evidence for every control. Use once
 
 # Set Audit up
 
-Audit owns passing on its date, counted from `controls`, which already holds a list of common controls with none ready. The number is real from the start; the first job is to make the list this team's, find the evidence that already exists, and give every control an owner. Do the steps in order and say what you did after each one, in a line. `lemma-setup` holds the rules behind each step; this skill is what is particular to Audit.
+Audit keeps its work in `controls`, which already holds a list of common controls with none ready. The first job is to make the list this team's, find the evidence that already exists, and give every control an owner. Do the steps in order and say what you did after each one, in a line. `lemma-setup` holds the rules behind each step; this skill is what is particular to Audit.
 
 1. **Show the controls.** Read `controls` with `lemma records list controls` and show it as a small widget with `display_resource`: each control, ready or not, against the audit date.
 2. **Ask where evidence is kept.** One `ask_user` with two questions: where evidence is kept (Notion, Google Drive, Confluence, nowhere yet), and which city's time the team works in. Check `lemma connectors list` first and put anything already connected at the top. Then set each schedule in `lemma schedules list` to that timezone, keeping its cron: `lemma schedules update <name> -d '{"config":{"cron":"<its cron>","timezone":"<zone>"}}'`.
@@ -20,6 +20,6 @@ Audit owns passing on its date, counted from `controls`, which already holds a l
    When there is none, create a daily automation instead (`--agent POD_DEFAULT --cron "0 8 * * 1-5"`, same instruction) that reads only the documents changed since its last run, and tell the person new evidence can show a day late.
 7. **Name the people.** Say who owns most controls, and that adding them to Audit (⋯ › Add people) sends the Monday checks to them. You cannot add people yourself.
 
-Then fill in `/plan.md` and finish as `lemma-setup` says (steps 8 and Finish).
+Then keep what you were taught in memory and finish as `lemma-setup` says (step 6 and Finish).
 
 Never mark a control ready without evidence that names it.

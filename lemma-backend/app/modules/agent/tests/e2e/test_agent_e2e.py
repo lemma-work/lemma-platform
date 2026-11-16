@@ -2734,11 +2734,13 @@ class TestAgentRuntimeConfigApis:
             json={"config": {"default_profile_id": org_profile_id}},
         )
         assert patched_pod.status_code == 200, patched_pod.text
-        # PodConfig carries join_policy (default INVITE_ONLY) alongside the
-        # default_profile_id, so the serialized config includes both.
+        # PodConfig carries join_policy (default INVITE_ONLY) and
+        # auto_join_new_members (default off) alongside the
+        # default_profile_id, so the serialized config includes all three.
         assert patched_pod.json()["config"] == {
             "default_profile_id": org_profile_id,
             "join_policy": "INVITE_ONLY",
+            "auto_join_new_members": False,
         }
 
         create_agent = await authenticated_client.post(

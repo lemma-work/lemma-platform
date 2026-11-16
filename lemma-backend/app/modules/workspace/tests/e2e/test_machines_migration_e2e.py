@@ -21,8 +21,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = pytest.mark.e2e
 
 BACKEND = Path(__file__).resolve().parents[5]
-BEFORE = "0072_workflow_runs_by_time"
-REVISION = "0073_machines"
+BEFORE = "0073_conversation_per_platform"
+REVISION = "0074_machines"
 TABLES = (
     "machine_connections",
     "machine_previews",

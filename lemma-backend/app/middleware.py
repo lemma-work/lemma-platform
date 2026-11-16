@@ -10,6 +10,8 @@ import asyncio
 import re
 import time
 import uuid
+from collections.abc import Mapping
+from types import TracebackType
 from opentelemetry import metrics, trace
 from opentelemetry.trace import SpanKind
 from fastapi.responses import JSONResponse
@@ -255,11 +257,7 @@ class RequestObserverMiddleware:
                         fields["error_code"] = state.get(
                             "lemma_error_code", "INTERNAL_ERROR"
                         )
-                        exc_info = (
-                            (type(failure), failure, failure.__traceback__)
-                            if isinstance(failure, BaseException)
-                            else None
-                        )
+                        exc_info = _failure_exc_info(failure, caught, state)
                         logger.error(
                             "http.request.failed",
                             method=fields["method"],
@@ -324,6 +322,24 @@ class RequestObserverMiddleware:
         if isinstance(value, str):
             return value
         return _template_for_unrouted(scope)
+
+
+def _failure_exc_info(
+    failure: object, caught: BaseException | None, state: Mapping[str, object]
+) -> tuple[type[BaseException], BaseException, TracebackType | None] | None:
+    """The ``exc_info`` to log a failed request with.
+
+    One raised through the middleware carries its own traceback. One an
+    exception handler answered does not by now: Starlette (1.10+) clears
+    ``__traceback__`` once the handler returns, so the handler's copy is read.
+    """
+    if not isinstance(failure, BaseException):
+        return None
+    tb = failure.__traceback__
+    kept = state.get("lemma_exception_traceback")
+    if failure is not caught and isinstance(kept, TracebackType):
+        tb = kept
+    return (type(failure), failure, tb)
 
 
 def _template_for_unrouted(scope: Scope) -> str:

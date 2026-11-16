@@ -199,6 +199,49 @@ are shown with a retry action rather than an indefinite loading message.
 
 **Contracts:** `org.update`, `org.get`
 
+### PS-ONB-015 — A new organization opens in a Lemma everyone in it can find
+**Status:** manual
+
+> **Verified by:** signing up in the web app with an address on a company
+> domain, on a stack running this build: the organization is made, a Lemma
+> called what the organization is called opens, and its header says everyone
+> in the organization can find it. Then making a second organization from the
+> organization menu, which opens in its own Lemma the same way.
+
+- When the web app makes an organization for a person who belongs to none, or
+  a person makes one from the organization menu, the system shall also make a
+  Lemma in it and open it: called what the organization is called, or
+  Personal for a workspace of one.
+- That Lemma shall be open to every member of the organization, and everyone
+  who joins the organization afterwards shall be in it (PS-POD-024).
+- If that Lemma cannot be made, then the system shall still open the
+  organization, on its list of Lemmas, where one can be made.
+
+**Contracts:** `org.create`, `pod.create`
+
+### PS-ONB-016 — An organization's own Lemma starts by bringing the team's stuff in
+**Status:** manual
+
+> **Verified by:** opening the Lemma PS-ONB-015 made, before anything is in
+> it: the welcome asks where the team's stuff is, picking places counts them
+> on the button, and Bring in opens a chat with the Lemma whose first message
+> names those places. "Start another way" shows the ways in PS-POD-061 offers.
+> `npm test` in `lemma-frontend` checks the request's wording and what counts
+> as empty (`tests/lemma-space.test.ts`).
+
+- While the organization's own Lemma holds nothing a person put there, its home
+  shall say in one sentence what a Lemma holds, then ask where the team's stuff
+  is today, offering Notion, Google Drive, Airtable, Google Sheets and Slack,
+  each saying which of the Lemma's tabs it lands in.
+- When the person picks places and chooses Bring in, the system shall start a
+  chat with the Lemma whose first message names those places, and the Lemma
+  shall bring their contents into its pages, tables and files.
+- Before bringing in anything only that person could see at its source, the
+  Lemma shall ask, because everyone in the Lemma can read what lands in it.
+- The person shall be able to start another way instead.
+
+**Contracts:** `pod.get`, `agent.conversation.create`
+
 ---
 
 ## Capability: Bring a team in

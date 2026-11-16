@@ -45,7 +45,7 @@ export type Back = (fallback: View) => void;
  *  an app, a file or page, a table and its rows, an agent. The bar says
  *  which Lemma it is in and is the way back; the workspace's own view of it
  *  fills the rest. */
-export function Stage({ pod, title, here, go, fill, ownBar = false, actions, children }: {
+export function Stage({ pod, title, here, head, go, fill, ownBar = false, actions, children }: {
     pod: Pod;
     /** Where in the Lemma this is. Left out, the Lemma itself is: its
      *  summary, where the crumb ends at its name. */
@@ -53,6 +53,9 @@ export function Stage({ pod, title, here, go, fill, ownBar = false, actions, chi
     /** In place of `title`, a step that does more than name the place: a
      *  section's page names itself with a menu of the other sections. */
     here?: ReactNode;
+    /** In place of the bar, the Lemma's own header: who it is, its tabs.
+     *  A Lemma's own pages wear it; what it holds wears the bar. */
+    head?: ReactNode;
     go: Go;
     fill?: boolean;
     /** The page draws the one bar itself, with `StageCrumbs` at its start:
@@ -63,7 +66,8 @@ export function Stage({ pod, title, here, go, fill, ownBar = false, actions, chi
 }) {
     return (
         <div className={"ox-stagepage" + (fill ? " ox-stagepage--fill" : "")}>
-            {!ownBar && (
+            {head}
+            {!head && !ownBar && (
                 <div className="ox-stagebar">
                     <StageCrumbs pod={pod} title={title} here={here} go={go} />
                     {actions && <div className="ox-stagebar__acts">{actions}</div>}
