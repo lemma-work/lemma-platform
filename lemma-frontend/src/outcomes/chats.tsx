@@ -20,14 +20,13 @@ import type { Channel } from "@/channels/model";
 import { ChannelIcon } from "@/shell/channels";
 import { useSurfaces } from "@/shell/surfaces";
 import { useMaySeeContacts } from "@/space/contact-queries";
-import { NEW_CHAT, broughtSaid, chatView, outcomeView, type ChatOpen, type Fill, type Go, type Handoff, type OpenChat, type View } from "./model";
+import { NEW_CHAT, chatView, outcomeView, type ChatOpen, type Fill, type Go, type Handoff, type OpenChat, type View } from "./model";
 import { closeMenu } from "./lemma-bar";
 import { pinKey, retitlePin, togglePin, unpin, usePins } from "./pins";
 import type { Calls } from "./calls";
 import { useVoiceConfigured } from "@/call/voice-config";
 import { ConnectBanner } from "@/connect/pod-connect";
 import { Empty, Icon, to } from "./parts";
-import { useSetup } from "./data";
 import type { FrameActions } from "./actions";
 import { BesidePane, type Beside } from "./beside";
 import { PaneDivider } from "@/shell/pane-divider";
@@ -219,7 +218,6 @@ function ChatThread({ pod, id, title, go, actions, calls, handoff, onHandoffSent
                     {fresh ? <p className="ox-thread__t">New chat</p> : <ChatHead pod={pod} open={{ kind: "chat", podId: pod.id, id }} title={title} go={go} onComputer={() => open({ kind: "computer" })} />}
                 </header>
                 <ConnectBanner key={pod.id} pod={pod} />
-                <SetupStrip pod={pod} />
                 {!threaded ? <p className="ox-loading">Opening {pod.name}…</p> : (
                     <div className="ox-thread__body">
                         <div className="split">
@@ -255,28 +253,6 @@ function ChatThread({ pod, id, title, go, actions, calls, handoff, onHandoffSent
             {beside && <PaneDivider value={width} onChange={setWidth} />}
             {beside && <BesidePane pod={pod} conversationId={fresh ? null : id} beside={beside} onOpen={open} onClose={() => setHeld(null)} go={go} actions={actions} />}
         </div>
-    );
-}
-
-/** Over a Lemma's first chat, while its template is coming in: what it
- *  brings, and that its agent starts once it is in. Gone once it is. */
-function SetupStrip({ pod }: { pod: Pod }) {
-    const setup = useSetup(pod.id);
-    if (!setup) return null;
-    const brought = broughtSaid(setup.plan?.steps ?? []);
-    const status = setup.status as string;
-    const said = status === "COMPLETED"
-        ? `Brought in ${brought || "what it starts with"}.`
-        : status === "FAILED"
-            ? `Couldn’t bring in everything${setup.error ? `: ${setup.error}` : ""}. ${pod.name} starts with what is here.`
-            : status === "AWAITING_CONFIRMATION"
-                ? "What it brings is waiting for a person to confirm it."
-                : `Bringing in ${brought || "its tables, skills and automations"}…`;
-    return (
-        <p className="ox-setup" role="status">
-            <span className="ox-setup__t">Setting up {pod.name}</span>
-            <span className="ox-setup__items">{said}</span>
-        </p>
     );
 }
 

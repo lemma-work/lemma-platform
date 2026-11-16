@@ -4,11 +4,11 @@
  *  Nothing here reaches the network or the page, so all of it is tested
  *  directly (`tests/outcomes.test.ts`). */
 
-import { CORE_SCHEMA, dump, load } from "js-yaml";
 import type { ConversationRef } from "@/data/types";
 import type { ChatItem, ChatKind } from "@/channels/chat-list";
 import type { Channel } from "@/channels/model";
 import { readableName } from "@/library/reading";
+import type { OriginKind } from "@/thread/conversation-origin";
 import type { AskedRow } from "@/thread/waiting-on-you";
 import type { WaitingRow } from "@/workflow/waiting-inbox";
 
@@ -50,7 +50,9 @@ export function viewOfAddress(address: { podId: string | null; tabId: string | n
         case "space:about":
             /* Schedules are a part of About in the workspace and a view of
                Automations here. */
-            return address.section === "schedules" ? outcomeView(podId, "automations", "schedules") : outcomeView(podId, "settings", address.section ?? null);
+            if (address.section === "schedules") return outcomeView(podId, "automations", "schedules");
+            /* One part of it is that part of Settings; the page itself is About. */
+            return address.section ? outcomeView(podId, "settings", address.section) : outcomeView(podId, "about");
         case "profile":
             return address.agentName ? { name: "agent", podId, agent: address.agentName } : outcomeView(podId, "settings");
         case "conversation":
@@ -60,12 +62,14 @@ export function viewOfAddress(address: { podId: string | null; tabId: string | n
         case "space:apps":
         case "apps":
             return outcomeView(podId, "apps");
+        case "space:pages":
+            return outcomeView(podId, "pages");
+        case "space:tables":
+            return outcomeView(podId, "tables");
         case "space:all":
         case "space:files":
-        case "space:pages":
-        case "space:tables":
         case "library":
-            return outcomeView(podId, "made");
+            return outcomeView(podId, "files");
         case "space:workflows":
             return outcomeView(podId, "automations");
         case "computer":
@@ -217,368 +221,6 @@ export function workSince(conversations: readonly ConversationRef[], sinceMs: nu
 
 export function isRunning(conversation: Pick<ConversationRef, "status">): boolean {
     return (conversation.status ?? "").toUpperCase() === "RUNNING";
-}
-
-/* ── the plan ─────────────────────────────────────────────────────────── */
-
-/** Where an outcome's plan lives: a pod file people and Lemma both edit. */
-export const PLAN_PATH = "/plan.md";
-
-export type PlanSection = "must" | "how" | "who" | "never";
-
-export const PLAN_SECTIONS: readonly PlanSection[] = ["must", "how", "who", "never"];
-
-export const SECTION_TITLES: Record<PlanSection, string> = {
-    must: "What must be true",
-    how: "How we work",
-    who: "Who holds what",
-    never: "Never",
-};
-
-export interface PlanLine {
-    text: string;
-    /** Who added the line, as written after it. */
-    by?: string;
-    /** When, as written: "Oct 14". */
-    on?: string;
-}
-
-export interface Plan {
-    /** The sentence Lemma owns: "Every customer hears back within a day". */
-    outcome: string;
-    /** A bar held every week, or a finish line by a date. */
-    kind: "week" | "date" | null;
-    /** As written: "90%", "22 steps". */
-    target: string | null;
-    /** `YYYY-MM-DD`, for a finish line. */
-    due: string | null;
-    /** A read-only SQL query over this pod's tables that answers one number. */
-    measure: string | null;
-    /** `%` when the measure is a share. */
-    unit: string | null;
-    sections: Record<PlanSection, PlanLine[]>;
-    /** The file's text as it was read, when it was: a save edits that text
-     *  rather than replacing it, and refuses when the file has moved on. */
-    file?: string;
-    /** What the Lemma itself keeps it owns, with the number its measure
-     *  answers now -- shown in place of the file's front matter, which only
-     *  Lemmas from before it was kept on the Lemma still carry. */
-    owned?: Owned;
-}
-
-/** What a Lemma owns as the server keeps it (`GET .../outcome/standing`),
- *  and what its measure answers now: one number, the same for everyone. */
-export interface Owned {
-    sentence: string;
-    kind: "week" | "date";
-    target: number | null;
-    unit: string | null;
-    /** `YYYY-MM-DD`, for a finish line. */
-    due: string | null;
-    measure: string | null;
-    value: number | null;
-    /** Why the measure could not be read, when it could not. */
-    problem: string | null;
-}
-
-/** A target as a person reads it: "90%", "2 posts", "99.95%". Exactly the
- *  number kept, never rounded: it is what readings are compared against, and
- *  what the plan editor writes back. */
-export function targetText(target: number | null, unit: string | null): string | null {
-    if (target === null || !Number.isFinite(target)) return null;
-    const said = String(target);
-    if (unit === "%") return said + "%";
-    return unit ? `${said} ${unit}` : said;
-}
-
-/** The plan as the frame shows it: the file's lines, with what the Lemma
- *  owns taken from the Lemma when it keeps one. The file itself is never
- *  given these fields, so saving its lines does not write them back into it. */
-export function withOwned(plan: Plan | null | undefined, owned: Owned | null | undefined): Plan | null | undefined {
-    if (!owned) return plan;
-    const base = plan ?? emptyPlan();
-    return {
-        ...base,
-        outcome: owned.sentence,
-        kind: owned.kind,
-        target: targetText(owned.target, owned.unit),
-        due: owned.due,
-        unit: owned.unit,
-        measure: owned.measure,
-        owned,
-    };
-}
-
-export function emptyPlan(outcome = ""): Plan {
-    return { outcome, kind: null, target: null, due: null, measure: null, unit: null, sections: { must: [], how: [], who: [], never: [] } };
-}
-
-function sectionOf(heading: string): PlanSection | null {
-    const said = heading.toLowerCase();
-    if (said.includes("never")) return "never";
-    if (said.includes("who")) return "who";
-    if (said.includes("how")) return "how";
-    if (said.includes("must") || said.includes("true") || said.includes("outcome")) return "must";
-    return null;
-}
-
-/** "Refunds over $200 need Dev — Priya, Oct 14" → the line and who/when. */
-function lineOf(raw: string): PlanLine {
-    const said = raw.trim();
-    const match = /^(.*\S)\s+(?:—|--)\s+([^,—]+),\s*([^,—]+)$/.exec(said);
-    if (!match) return { text: said };
-    return { text: match[1].trim(), by: match[2].trim(), on: match[3].trim() };
-}
-
-function text(value: unknown): string | null {
-    if (typeof value === "number") return String(value);
-    return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-const HEADING = /^#{2,3}\s+(.*)$/;
-const ITEM = /^(\s*[-*]\s+)(.*)$/;
-const META_KEYS = ["outcome", "kind", "target", "due", "unit", "measure"] as const;
-
-/** A plan file cut at its front matter: the raw block with its fences, what
- *  is inside them, and the rest. A file with no closed block is all body. */
-function splitFront(source: string): { head: string; front: string | null; body: string } {
-    const all = source.replace(/\r\n/g, "\n");
-    if (!all.startsWith("---\n")) return { head: "", front: null, body: all };
-    const end = all.indexOf("\n---", 4);
-    if (end <= 0) return { head: "", front: null, body: all };
-    return { head: all.slice(0, end + 4), front: all.slice(4, end), body: all.slice(end + 4) };
-}
-
-/** The front matter as a map, or null when it will not parse. The core
- *  schema keeps an unquoted `due: 2026-10-30` the string it was written as,
- *  where the default one would read a Date and the plan would lose it. */
-function loadFront(front: string): Record<string, unknown> | null {
-    try {
-        const loaded = load(front, { schema: CORE_SCHEMA });
-        if (loaded === null || loaded === undefined) return {};
-        return typeof loaded === "object" && !Array.isArray(loaded) ? (loaded as Record<string, unknown>) : null;
-    } catch {
-        return null;
-    }
-}
-
-/** Reads a plan written by a person, by Lemma, or by this frame. Forgiving on
- *  purpose: an unknown heading is skipped, not fatal, and front matter that
- *  will not parse leaves the lines readable. */
-export function parsePlan(source: string): Plan {
-    const plan = emptyPlan();
-    const { front, body } = splitFront(source);
-    if (front !== null) {
-        const meta = loadFront(front) ?? {};
-        plan.outcome = text(meta.outcome) ?? "";
-        const kind = text(meta.kind);
-        plan.kind = kind === "week" || kind === "date" ? kind : null;
-        plan.target = text(meta.target);
-        plan.due = text(meta.due);
-        plan.measure = text(meta.measure);
-        plan.unit = text(meta.unit);
-    }
-    let current: PlanSection | null = null;
-    for (const raw of body.split("\n")) {
-        const heading = HEADING.exec(raw);
-        if (heading) {
-            current = sectionOf(heading[1]);
-            continue;
-        }
-        const item = ITEM.exec(raw);
-        if (item && current && item[2].trim()) plan.sections[current].push(lineOf(item[2]));
-    }
-    if (!plan.outcome && plan.sections.must[0]) plan.outcome = plan.sections.must[0].text;
-    return plan;
-}
-
-const PREAMBLE = "<!-- The plan for what this Lemma owns. People and the Lemma both edit it: every line ends with who added it and when. The measure is one read-only SQL query that answers a single number. -->";
-
-function metaOf(plan: Plan): Record<string, string> {
-    const meta: Record<string, string> = {};
-    for (const key of META_KEYS) {
-        const value = plan[key];
-        if (value) meta[key] = value;
-    }
-    return meta;
-}
-
-function written(line: PlanLine): string {
-    const by = line.by && line.on ? ` — ${line.by}, ${line.on}` : "";
-    return `${line.text}${by}`;
-}
-
-function sameLine(a: PlanLine, b: PlanLine): boolean {
-    return a.text === b.text && a.by === b.by && a.on === b.on;
-}
-
-/** The steps from a section's old lines to its new ones, as the longest run
- *  they share: each old line kept or dropped, and the new lines that follow
- *  each (-1: before the first). An edited line is a drop and an add in the
- *  same place, so it stays where it was. */
-function alignLines(old: readonly PlanLine[], next: readonly PlanLine[]): { kept: boolean[]; after: Map<number, PlanLine[]> } {
-    const shared = Array.from({ length: old.length + 1 }, () => new Array<number>(next.length + 1).fill(0));
-    for (let i = old.length - 1; i >= 0; i -= 1) {
-        for (let j = next.length - 1; j >= 0; j -= 1) {
-            shared[i][j] = sameLine(old[i], next[j]) ? shared[i + 1][j + 1] + 1 : Math.max(shared[i + 1][j], shared[i][j + 1]);
-        }
-    }
-    const kept = new Array<boolean>(old.length).fill(false);
-    const after = new Map<number, PlanLine[]>();
-    const add = (at: number, line: PlanLine) => after.set(at, [...(after.get(at) ?? []), line]);
-    let i = 0;
-    let j = 0;
-    while (i < old.length || j < next.length) {
-        if (i < old.length && j < next.length && sameLine(old[i], next[j])) {
-            kept[i] = true;
-            i += 1;
-            j += 1;
-        } else if (i < old.length && (j >= next.length || shared[i + 1][j] >= shared[i][j + 1])) {
-            i += 1;
-        } else {
-            add(i - 1, next[j]);
-            j += 1;
-        }
-    }
-    return { kept, after };
-}
-
-/** The new front matter block, or the old one untouched when the plan's
- *  own keys did not change, so a line edit never reformats it. */
-function mergedHead(plan: Plan, before: Plan, head: string, front: string | null): string {
-    const meta = metaOf(plan);
-    const was = metaOf(before);
-    if (META_KEYS.every((key) => meta[key] === was[key])) return head;
-    if (front === null) return Object.keys(meta).length ? "---\n" + dump(meta, { lineWidth: -1 }) + "---\n\n" : "";
-    const kept = loadFront(front);
-    if (kept === null) throw new Error("plan.md's front matter doesn't parse, so saving the measure would lose it. Fix it in plan.md first.");
-    for (const key of META_KEYS) {
-        if (meta[key]) kept[key] = meta[key];
-        else delete kept[key];
-    }
-    /* Nothing left once what it owns moved onto the Lemma: no empty block. */
-    if (!Object.keys(kept).length) return "";
-    return "---\n" + dump(kept, { lineWidth: -1 }) + "---";
-}
-
-/** Writes the plan. Given the file it was read from, it edits that file in
- *  place: only the lines and front matter keys the plan holds change, and
- *  everything the parser does not read -- a title, prose, another heading,
- *  another key -- stays as it was written. */
-export function serializePlan(plan: Plan, onto?: string | null): string {
-    if (onto) return mergePlan(plan, onto);
-    const meta = metaOf(plan);
-    const front = Object.keys(meta).length ? "---\n" + dump(meta, { lineWidth: -1 }) + "---\n\n" : "";
-    const sections = PLAN_SECTIONS.map((section) => {
-        const lines = plan.sections[section].map((line) => `- ${written(line)}`);
-        return `## ${SECTION_TITLES[section]}\n${lines.join("\n")}`;
-    });
-    return `${front}${PREAMBLE}\n\n${sections.join("\n\n")}\n`;
-}
-
-function mergePlan(plan: Plan, onto: string): string {
-    const before = parsePlan(onto);
-    const { head, front, body } = splitFront(onto);
-    const aligned = Object.fromEntries(PLAN_SECTIONS.map((section) => [section, alignLines(before.sections[section], plan.sections[section])])) as Record<PlanSection, ReturnType<typeof alignLines>>;
-    const seen: Record<PlanSection, number> = { must: 0, how: 0, who: 0, never: 0 };
-    const headingAt: Partial<Record<PlanSection, number>> = {};
-    const out: string[] = [];
-    let current: PlanSection | null = null;
-    for (const raw of body.split("\n")) {
-        const heading = HEADING.exec(raw);
-        if (heading) {
-            current = sectionOf(heading[1]);
-            out.push(raw);
-            if (current && headingAt[current] === undefined) headingAt[current] = out.length - 1;
-            continue;
-        }
-        const item = ITEM.exec(raw);
-        if (!item || !current || !item[2].trim()) {
-            out.push(raw);
-            continue;
-        }
-        const { kept, after } = aligned[current];
-        const index = seen[current];
-        seen[current] += 1;
-        if (index === 0) out.push(...(after.get(-1) ?? []).map((line) => `- ${written(line)}`));
-        if (kept[index]) out.push(raw);
-        /* A replaced line keeps the bullet and indent it was written with. */
-        out.push(...(after.get(index) ?? []).map((line, at) => `${at === 0 && !kept[index] ? item[1] : "- "}${written(line)}`));
-    }
-    /* Lines for a section that had none: under its heading when the file has
-       one, else under a new heading at the end. Inserted from the bottom up,
-       so earlier positions hold. */
-    const empty = PLAN_SECTIONS.filter((section) => before.sections[section].length === 0 && (aligned[section].after.get(-1) ?? []).length > 0);
-    const under = empty.filter((section) => headingAt[section] !== undefined).sort((a, b) => (headingAt[b] as number) - (headingAt[a] as number));
-    for (const section of under) {
-        out.splice((headingAt[section] as number) + 1, 0, ...(aligned[section].after.get(-1) ?? []).map((line) => `- ${written(line)}`));
-    }
-    for (const section of empty.filter((one) => headingAt[one] === undefined)) {
-        while (out.length && !out[out.length - 1].trim()) out.pop();
-        out.push("", `## ${SECTION_TITLES[section]}`, ...(aligned[section].after.get(-1) ?? []).map((line) => `- ${written(line)}`), "");
-    }
-    const top = mergedHead(plan, before, head, front);
-    /* A block that was taken away leaves the blank line after it behind. */
-    return top || !head ? top + out.join("\n") : out.join("\n").replace(/^\n+/, "");
-}
-
-export interface DraftInput {
-    description?: string | null;
-    schedules: readonly { title: string; trigger: string; active: boolean; internal: boolean }[];
-    agents: readonly { label: string; blurb: string; front: boolean }[];
-    skills: readonly string[];
-}
-
-function lowerFirst(value: string): string {
-    return value ? value.charAt(0).toLowerCase() + value.slice(1) : value;
-}
-
-/** A first plan, read off what the pod already runs, for a pod with no plan
- *  file yet. Nothing invented: every line names something that exists. */
-export function draftPlan(input: DraftInput): Plan {
-    const plan = emptyPlan(input.description?.trim() ?? "");
-    if (plan.outcome) plan.sections.must.push({ text: plan.outcome });
-    for (const name of input.skills.slice(0, 6)) plan.sections.how.push({ text: `Follows the ${name} skill` });
-    for (const job of input.schedules) {
-        if (!job.active || job.internal) continue;
-        plan.sections.who.push({ text: `${job.title} · ${lowerFirst(job.trigger)}` });
-    }
-    for (const agent of input.agents) {
-        if (agent.front) continue;
-        plan.sections.who.push({ text: agent.blurb ? `${agent.label}: ${lowerFirst(agent.blurb)}` : agent.label });
-    }
-    return plan;
-}
-
-/** The number a measure answered: the first finite value in its first row. */
-export function readMeasure(rows: readonly Record<string, unknown>[]): number | null {
-    const first = rows[0];
-    if (!first) return null;
-    for (const value of Object.values(first)) {
-        const number = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
-        if (Number.isFinite(number)) return number;
-    }
-    return null;
-}
-
-export function formatMeasure(value: number, unit: string | null): string {
-    const rounded = Math.abs(value) >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
-    return unit === "%" ? `${rounded}%` : String(rounded);
-}
-
-/** Whether an outcome is holding its bar: only for a weekly outcome whose
- *  plan names a target and whose measure answered. A finish line has no pace
- *  to compare against yet, so it says nothing rather than guess. */
-export function standingOf(plan: Plan | null | undefined, value: number | null | undefined): "on" | "behind" | null {
-    if (!plan || value === null || value === undefined || !plan.target || plan.kind === "date") return null;
-    const target = Number.parseFloat(plan.target);
-    if (!Number.isFinite(target)) return null;
-    return value >= target ? "on" : "behind";
-}
-
-/** "Oct 14", the stamp a line is written with. */
-export function stampOf(at: Date): string {
-    return at.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 /* ── the queue ────────────────────────────────────────────────────────── */
@@ -751,69 +393,19 @@ export function queueFromNeeds(needs: readonly NeedsItem[], waits: readonly Wait
     return items.sort((a, b) => a.sinceMs - b.sinceMs);
 }
 
-/* ── the shelf: what a new Lemma can start from ─────────────────────── */
+/* ── templates ───────────────────────────────────────────────────────── */
 
-/** A template as the shelf shows it (`GET /pods/bundle/templates`). */
+/** A template as the server lists it (`GET /pods/bundle/templates`): a kit
+ *  of tables, skills and automations a Lemma can be given. */
 export interface ShelfCard {
     id: string;
     name: string;
-    /** What it owns. A finish line's carries `{due}` until a date is picked. */
-    sentence: string;
-    kind: "week" | "date";
     /** The kind of work it does: support, sales, engineering… */
     work: string | null;
     face: string | null;
     /** Where its work usually happens, as a label. */
     place: string | null;
     brings: readonly string[];
-    never: readonly string[];
-}
-
-/** The templates of one kind of work, as one card on the first shelf. */
-export interface ShelfWork {
-    id: string;
-    label: string;
-    cards: ShelfCard[];
-    /** Where its templates' work usually happens, once each. */
-    places: string[];
-    face: string | null;
-}
-
-/** "support" → "Support"; templates that say no kind of work sit together
- *  under "More". */
-export function workLabel(id: string): string {
-    return id === "more" ? "More" : id.charAt(0).toUpperCase() + id.slice(1);
-}
-
-/** The shelf's first view: the templates grouped by the work they do, in
- *  the order the server ships them -- a group sits where its first template
- *  does. Nothing here names a kind of work the templates do not. */
-export function shelfOf(cards: readonly ShelfCard[]): ShelfWork[] {
-    const groups = new Map<string, ShelfWork>();
-    for (const card of cards) {
-        const id = card.work?.trim().toLowerCase() || "more";
-        const group = groups.get(id) ?? { id, label: workLabel(id), cards: [], places: [], face: card.face };
-        group.cards.push(card);
-        if (card.place && !group.places.includes(card.place)) group.places.push(card.place);
-        groups.set(id, group);
-    }
-    return [...groups.values()];
-}
-
-/** What a finish line says before and after its date is picked. */
-export function sentenceFor(card: Pick<ShelfCard, "sentence">, due: string | null): string {
-    if (!card.sentence.includes("{due}")) return card.sentence;
-    if (!due) return card.sentence.replace("{due}", "a date you pick");
-    const at = new Date(due + "T12:00:00Z");
-    return Number.isNaN(at.getTime()) ? card.sentence.replace("{due}", due) : card.sentence.replace("{due}", at.toLocaleDateString("en-US", { month: "long", day: "numeric", timeZone: "UTC" }));
-}
-
-/** A short name for a Lemma started from its owner's own words: the first
- *  word that says what it is about. */
-export function ownName(text: string): string {
-    const words = text.replace(/[^A-Za-z0-9 ]+/g, " ").trim().split(/\s+/).filter(Boolean);
-    const pick = words.find((word) => word.length > 4 && !/^(every|within|before|after|their|there)$/i.test(word)) ?? words[0] ?? "Lemma";
-    return pick.charAt(0).toUpperCase() + pick.slice(1).toLowerCase();
 }
 
 /** "40 min", "26 h", "3 d". */
@@ -909,7 +501,7 @@ export function workRows(input: {
     tables: readonly { name: string; title: string; updated: string | null }[];
     now: number;
 }): SideRow[] {
-    const latest = new Map<string, { row: SideRow; runs: Set<string> }>();
+    const latest = new Map<string, { row: SideRow; runs: Set<string>; counted: number }>();
     for (const conversation of input.conversations) {
         const origin = conversation.origin;
         if (!origin || conversation.waitingOnYou) continue;
@@ -936,14 +528,17 @@ export function workRows(input: {
         };
         const held = latest.get(row.key);
         if (!held) {
-            latest.set(row.key, { row, runs: new Set([run]) });
+            latest.set(row.key, { row, runs: new Set([run]), counted: conversation.runs ?? 0 });
             continue;
         }
         held.runs.add(run);
+        held.counted = Math.max(held.counted, conversation.runs ?? 0);
         if ((row.at ?? 0) > (held.row.at ?? 0)) held.row = { ...row, running: row.running || held.row.running };
         else if (row.running) held.row = { ...held.row, running: true };
     }
-    const automations = [...latest.values()].map(({ row, runs }) => ({ ...row, runs: runs.size }));
+    /* Runs listed one by one are counted here; a source that counted them
+       itself (the organization's overview) says how many there were. */
+    const automations = [...latest.values()].map(({ row, runs, counted }) => ({ ...row, runs: Math.max(runs.size, counted) }));
     const tables = input.tables.flatMap((table): SideRow[] => {
         const at = timeOf(table.updated);
         if (at === null || input.now - at > QUIET_AFTER_MS) return [];
@@ -1065,11 +660,6 @@ export function repeatedTitles(items: readonly Pick<ChatItem, "key" | "title">[]
     return new Set(items.filter((item) => (counts.get(item.title) ?? 0) > 1).map((item) => item.key));
 }
 
-/** What a Lemma owns, said as it should be read: only a plan's sentence
- *  counts. A description is what it is about, not a result it holds, and
- *  shown as one it read as a fake ("owns: do something cool"). */
-export const NOTHING_OWNED = "Nothing it owns yet. Give it a bar or a finish line.";
-
 /** Whether two opens show the same thing. */
 export function sameOpen(a: ChatOpen, b: ChatOpen): boolean {
     if (a.kind !== b.kind) return false;
@@ -1184,4 +774,306 @@ export function broughtSaid(steps: readonly { kind: string; name: string }[]): s
     }
     const parts = [...counts.values()].map(({ one, many, count }) => `${count} ${count === 1 ? one : many}`);
     return parts.length <= 1 ? parts.join("") : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+/* ── a Lemma as a space ──────────────────────────────────────────────────── */
+
+/** "Notion", "Notion and Airtable", "Notion, Google Drive and Airtable". */
+function listed(names: readonly string[]): string {
+    return names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/** What "Bring it in" sends: the places the person picked, in their words.
+ *  The assistant's bring-in skill takes it from there. */
+export function bringInRequest(places: readonly string[]): string {
+    return `Bring in ${listed(places)}.`;
+}
+
+/** What a Lemma is asked once a template it was given has landed in it. */
+export function templateSetupRequest(name: string): string {
+    return `Set up the ${name} template I just added. Follow its set-up skill.`;
+}
+
+/** Who can find a Lemma, as its header says it; nothing until it is known. */
+export function reachSaid(reach: "invited" | "org" | "anyone" | null, orgName: string): string {
+    if (reach === null) return "";
+    if (reach === "anyone") return "Anyone with a Lemma account can join";
+    if (reach === "org") return `Everyone at ${orgName.trim() || "this organization"} can find it`;
+    return "Only the people in it can find it";
+}
+
+/** What a Lemma says at the top of its pages, in its own voice: what it is
+ *  doing, then whether it needs the reader. It counts only what the frame
+ *  can show -- chats running now, things waiting on the reader -- so it
+ *  never claims work nobody can open. */
+export function lemmaSays(now: { empty: boolean; running: number; needs: number }): string {
+    if (now.empty) return "I’m new here. I don’t have anything to work with yet.";
+    const doing = now.running > 0
+        ? `I’m working on ${now.running} ${now.running === 1 ? "thing" : "things"} right now.`
+        : "All quiet.";
+    const needs = now.needs > 0
+        ? `${now.needs} ${now.needs === 1 ? "thing needs" : "things need"} you.`
+        : "Nothing needs you.";
+    return doing + " " + needs;
+}
+
+/* ── history ──────────────────────────────────────────────────────────── */
+
+/** What moved in one Lemma lately, as the organization's overview answers it
+ *  (`org.recents.get`): the reader's chats there, and the schedules and
+ *  workflows that ran. Only the fields History reads. */
+export interface RecentsPod {
+    pod_id: string;
+    pod_name: string;
+    chats: readonly {
+        conversation_id: string;
+        title?: string | null;
+        origin: string;
+        status?: string | null;
+        agent_id?: string | null;
+        last_activity_at: string;
+        waiting_on_you: boolean;
+        platform?: string | null;
+        channel_name?: string | null;
+    }[];
+    automations: readonly {
+        kind: string;
+        id: string;
+        name?: string | null;
+        run_count: number;
+        latest_status: string;
+        latest_at: string;
+        workflow_run_id?: string | null;
+        conversation_id?: string | null;
+    }[];
+    /** One count per day of the window, oldest first. */
+    activity?: readonly { day: string; by_agent: number; by_people: number }[];
+}
+
+const ORIGIN_KINDS: ReadonlySet<string> = new Set(["chat", "channel", "notification", "schedule", "workflow", "resource", "task", "ask"]);
+
+/** Every Lemma's recent chats and automation runs from the organization's
+ *  one overview read, in the shape the frame reads a Lemma's own list in, so
+ *  the sidebar, Home and a Lemma's page draw the same rows from one request
+ *  that they drew from one request per Lemma.
+ *
+ *  A chat is itself. A schedule or a workflow that ran is one entry -- its
+ *  newest run, carrying how many times it ran -- for the line `workRows`
+ *  gives each automation. One that started nothing has nothing to open and
+ *  is left out; one whose newest run is waiting on the reader is already
+ *  listed as that chat, and is not listed twice. `stamp` says a time the way
+ *  the frame's lists do. */
+export function activityOfRecents(pods: readonly RecentsPod[], stamp: (iso: string) => string): Map<string, ConversationRef[]> {
+    const byPod = new Map<string, ConversationRef[]>();
+    for (const pod of pods) {
+        const waiting = new Set(pod.chats.filter((chat) => chat.waiting_on_you).map((chat) => chat.conversation_id));
+        const chats = pod.chats.map((chat): ConversationRef => {
+            const kind = ORIGIN_KINDS.has(chat.origin) ? chat.origin as OriginKind : "chat";
+            return {
+                id: chat.conversation_id,
+                title: chat.title?.trim() || "Untitled",
+                at: stamp(chat.last_activity_at),
+                activityAt: chat.last_activity_at,
+                kind: "CHAT",
+                /* The overview does not say which thing a chat about a page
+                   or a table is bound to, only that it is: enough to keep it
+                   out of the chats, where its own list never put it. */
+                boundTo: kind === "resource" ? "resource" : null,
+                origin: kind === "chat" ? undefined : { kind, label: chat.channel_name?.trim() || STARTED_BY[kind] || "", platform: chat.platform ?? undefined },
+                agentId: chat.agent_id ?? null,
+                status: chat.status ?? null,
+                waitingOnYou: chat.waiting_on_you,
+            };
+        });
+        const ran = pod.automations.flatMap((each): ConversationRef[] => {
+            const opens = each.conversation_id ?? each.workflow_run_id;
+            if (!opens || (each.conversation_id && waiting.has(each.conversation_id))) return [];
+            const workflow = each.kind.toUpperCase() === "WORKFLOW";
+            const name = each.name?.trim() ? readableName(each.name.trim()) : workflow ? "A workflow" : "A schedule";
+            return [{
+                id: opens,
+                title: name,
+                at: stamp(each.latest_at),
+                activityAt: each.latest_at,
+                kind: "CHAT",
+                boundTo: null,
+                origin: { kind: workflow ? "workflow" : "schedule", label: (workflow ? "Workflow · " : "Schedule · ") + name, runId: each.workflow_run_id ?? undefined },
+                agentId: null,
+                status: ranSaid(each.latest_status).tone === "live" ? "RUNNING" : null,
+                waitingOnYou: false,
+                runs: Math.max(1, each.run_count),
+            }];
+        });
+        byPod.set(pod.pod_id, [...chats, ...ran]);
+    }
+    return byPod;
+}
+
+/** Each Lemma's work a day, from the overview's own count: every
+ *  conversation of the reader's, not only the latest few it lists. */
+export function daysOfRecents(pods: readonly RecentsPod[]): Map<string, DayCount[]> {
+    return new Map(pods.map((pod) => [pod.pod_id, (pod.activity ?? []).map((day) => ({ day: day.day, lemma: day.by_agent, people: day.by_people }))]));
+}
+
+export type HistoryTone = "live" | "wait" | "bad" | "done" | null;
+
+/** One row of History: a chat, or everything one schedule or workflow did
+ *  in the window, said once with a count. */
+export interface HistoryRow {
+    key: string;
+    podId: string;
+    podName: string;
+    kind: "chat" | "schedule" | "workflow";
+    title: string;
+    /** What kind of thing it is, as a person would say it. */
+    what: string;
+    /** How it ended, or how it stands; empty when there is nothing to say. */
+    said: string;
+    tone: HistoryTone;
+    /** How many times it ran in the window; 1 for a chat. */
+    count: number;
+    /** When it last moved, epoch ms. */
+    at: number;
+    view: View;
+}
+
+/** A run's status as the server names it, in a person's words. A schedule's
+ *  fire that its filter turned away is not a failure: it looked, and there
+ *  was nothing to do. */
+export function ranSaid(status: string): { said: string; tone: HistoryTone } {
+    const state = status.toUpperCase();
+    if (state === "COMPLETED") return { said: "Done", tone: "done" };
+    if (state === "WAITING") return { said: "Waiting on someone", tone: "wait" };
+    if (state.includes("FAIL") || state === "ERROR") return { said: "Went wrong", tone: "bad" };
+    if (state === "CANCELLED") return { said: "Stopped", tone: null };
+    if (state === "FILTERED") return { said: "Nothing to do", tone: null };
+    if (["PENDING", "RUNNING", "RECEIVED", "FILTERING", "PROCESSING", "DISPATCHED"].includes(state)) return { said: "Running", tone: "live" };
+    return { said: state ? state.charAt(0) + state.slice(1).toLowerCase().replace(/_/g, " ") : "", tone: null };
+}
+
+/** What started a chat, for a reader who was not there. */
+const STARTED_BY: Readonly<Record<string, string>> = {
+    chat: "Chat",
+    channel: "Shared chat",
+    notification: "It told you something",
+    schedule: "Started on a schedule",
+    workflow: "Started by a workflow",
+    resource: "About something it holds",
+    task: "A task it was given",
+    ask: "Asked by another Lemma",
+};
+
+/** Everything that moved, across the Lemmas given, newest first. A chat opens
+ *  itself; a workflow opens its newest run; a schedule opens what its newest
+ *  fire started, or the list of schedules when it started nothing. */
+export function historyRows(pods: readonly RecentsPod[]): HistoryRow[] {
+    const rows: HistoryRow[] = [];
+    for (const pod of pods) {
+        for (const chat of pod.chats) {
+            const running = (chat.status ?? "").toUpperCase() === "RUNNING";
+            rows.push({
+                key: "c:" + chat.conversation_id,
+                podId: pod.pod_id,
+                podName: pod.pod_name,
+                kind: "chat",
+                title: chat.title?.trim() || "A chat with no name",
+                what: STARTED_BY[chat.origin] ?? "Chat",
+                said: chat.waiting_on_you ? "Waiting on you" : running ? "Working now" : "",
+                tone: chat.waiting_on_you ? "wait" : running ? "live" : null,
+                count: 1,
+                at: Date.parse(chat.last_activity_at) || 0,
+                view: chatView({ kind: "chat", podId: pod.pod_id, id: chat.conversation_id }),
+            });
+        }
+        for (const ran of pod.automations) {
+            const workflow = ran.kind.toUpperCase() === "WORKFLOW";
+            const view: View = ran.workflow_run_id ? { name: "run", podId: pod.pod_id, runId: ran.workflow_run_id }
+                : ran.conversation_id ? chatView({ kind: "chat", podId: pod.pod_id, id: ran.conversation_id })
+                : outcomeView(pod.pod_id, "automations", workflow ? "workflows" : "schedules");
+            rows.push({
+                key: (workflow ? "w:" : "s:") + ran.id,
+                podId: pod.pod_id,
+                podName: pod.pod_name,
+                kind: workflow ? "workflow" : "schedule",
+                /* The server answers with the name it stores (`friday_number`);
+                   a person reads it the way the rest of the app writes it. */
+                title: ran.name?.trim() ? readableName(ran.name.trim()) : workflow ? "A workflow" : "A schedule",
+                what: workflow ? "Workflow" : "On a schedule",
+                ...ranSaid(ran.latest_status),
+                count: Math.max(1, ran.run_count),
+                at: Date.parse(ran.latest_at) || 0,
+                view,
+            });
+        }
+    }
+    return rows.sort((a, b) => b.at - a.at);
+}
+
+/** History's rows under the day each last moved: Today, Yesterday, then the
+ *  day by name. Rows keep their order, so days come newest first. */
+export function historyDays(rows: readonly HistoryRow[], now: number): { label: string; rows: HistoryRow[] }[] {
+    const startOf = (at: number) => { const day = new Date(at); day.setHours(0, 0, 0, 0); return day.getTime(); };
+    const today = startOf(now);
+    const days: { key: number; label: string; rows: HistoryRow[] }[] = [];
+    for (const row of rows) {
+        const key = startOf(row.at);
+        let day = days.find((one) => one.key === key);
+        if (!day) {
+            const ago = Math.round((today - key) / 86_400_000);
+            const label = ago <= 0 ? "Today" : ago === 1 ? "Yesterday" : new Date(key).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+            days.push(day = { key, label, rows: [] });
+        }
+        day.rows.push(row);
+    }
+    return days.map(({ label, rows: held }) => ({ label, rows: held }));
+}
+
+/** History in one sentence: how much moved, and whether anything went wrong. */
+export function historySaid(rows: readonly HistoryRow[], days: number): string {
+    if (rows.length === 0) return `Nothing has moved in the last ${days} days.`;
+    const chats = rows.filter((row) => row.kind === "chat").length;
+    const ran = rows.length - chats;
+    const wrong = rows.filter((row) => row.tone === "bad").length;
+    const parts = [
+        chats ? `${chats} ${chats === 1 ? "chat" : "chats"}` : "",
+        ran ? `${ran} ${ran === 1 ? "thing" : "things"} that ran by ${ran === 1 ? "itself" : "themselves"}` : "",
+    ].filter(Boolean).join(" and ");
+    return `${parts} in the last ${days} days.` + (wrong ? ` ${wrong} went wrong.` : "");
+}
+
+/** Whether the reader is new to a Lemma somebody else made: in it, and not
+ *  yet in a chat with it. That is who it introduces itself to, once. Its
+ *  maker met it by making it, and anyone with a chat has met it already. */
+export function isNewcomer(who: { madeBy: string | null; me: string | null; chats: number }): boolean {
+    return Boolean(who.me) && Boolean(who.madeBy) && who.madeBy !== who.me && who.chats === 0;
+}
+
+/** A Lemma's first words to someone new to it, in its own voice. */
+export function welcomeSaid(pod: { name: string; description?: string | null }, reader: string, people: number): string {
+    /* By their first name when they have given one. Someone with no profile
+       yet goes by the start of their address, which is not a name to say. */
+    const named = reader && reader !== "You" ? reader.split(" ")[0] : "";
+    const first = /^\p{L}+$/u.test(named) ? named : "";
+    const others = people - 1;
+    return [
+        first ? `Hi ${first}. I’m ${pod.name}.` : `Hi. I’m ${pod.name}.`,
+        pod.description?.trim() ? `What I’m for: ${pod.description.trim().replace(/[.\s]+$/, "")}.` : "",
+        others > 0 ? `${others} other ${others === 1 ? "person works" : "people work"} with me.` : "",
+        "Anything waiting for you is listed below, and you can ask me anything in the box at the bottom.",
+    ].filter(Boolean).join(" ");
+}
+
+/** A page's title: its file's name without the extension. */
+export function pageTitle(name: string): string {
+    return name.replace(/\.md$/i, "");
+}
+
+/** What a Lemma's root holds before anyone puts anything there: dot-names,
+ *  the plan file Lemmas started before memory held what they were taught,
+ *  its skills, and each person's own folder (`me`), made for them. */
+const KEPT_FOR_ITSELF = new Set(["plan.md", "skills", "system", "me"]);
+
+/** Whether a Lemma's root, by name, holds nothing a person would call theirs. */
+export function holdsNothing(rootNames: readonly string[]): boolean {
+    return rootNames.every((name) => name.startsWith(".") || KEPT_FOR_ITSELF.has(name));
 }

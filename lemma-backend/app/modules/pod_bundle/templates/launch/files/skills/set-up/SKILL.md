@@ -5,7 +5,7 @@ description: Set Launch up with an owner and a date for every step. Use once, in
 
 # Set Launch up
 
-Launch owns shipping on its date, counted from `steps`, which already holds a checklist of common launch steps with nothing done. The number is real from the start; the first job is to make the checklist this team's, give every step an owner and a date, and connect where the work is tracked. Do the steps in order and say what you did after each one, in a line. `lemma-setup` holds the rules behind each step; this skill is what is particular to Launch.
+Launch keeps its work in `steps`, which already holds a checklist of common launch steps with nothing done. The first job is to make the checklist this team's, give every step an owner and a date, and connect where the work is tracked. Do the steps in order and say what you did after each one, in a line. `lemma-setup` holds the rules behind each step; this skill is what is particular to Launch.
 
 1. **Show the checklist.** Read `steps` with `lemma records list steps` and show it as a small widget with `display_resource`: each step, done or not, against the launch date.
 2. **Ask where the work is tracked.** One `ask_user` with two questions: where the work is tracked (Linear, Jira, GitHub, nowhere yet), and which city's time the team works in. Check `lemma connectors list` first and put anything already connected at the top. Then set each schedule in `lemma schedules list` to that timezone, keeping its cron: `lemma schedules update <name> -d '{"config":{"cron":"<its cron>","timezone":"<zone>"}}'`.
@@ -20,6 +20,6 @@ Launch owns shipping on its date, counted from `steps`, which already holds a ch
    When there is none, create a daily automation instead (`--agent POD_DEFAULT --cron "0 8 * * 1-5"`, same instruction) that reads only the issues changed since its last run, and tell the person a finished step can show a day late.
 7. **Name the people.** Say who owns most steps, and that adding them to Launch (⋯ › Add people) sends the chases to them. You cannot add people yourself.
 
-Then fill in `/plan.md` and finish as `lemma-setup` says (steps 8 and Finish).
+Then keep what you were taught in memory and finish as `lemma-setup` says (step 6 and Finish).
 
 Never move the launch date yourself.

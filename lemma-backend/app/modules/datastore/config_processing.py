@@ -13,6 +13,15 @@ from pydantic_settings import BaseSettings
 class DocumentWorkSettings(BaseSettings):
     # What a pod owns: its measure is read on this interval into the week's row
     # of `pod_outcome_weeks`, and a week keeps its last reading.
+    datastore_outcome_sweep_enabled: bool = Field(
+        default=False,
+        description=(
+            "Whether the worker reads every pod's measure on the interval below. "
+            "Off while nothing in the product or the agent's brief shows what a "
+            "pod owns; a measure set through the API is still read once when it "
+            "is set. Env: ``DATASTORE_OUTCOME_SWEEP_ENABLED``."
+        ),
+    )
     datastore_outcome_read_interval_minutes: int = Field(
         default=60,
         ge=5,

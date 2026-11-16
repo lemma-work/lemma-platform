@@ -1,22 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { registerHooks } from "node:module";
-import { readFileSync } from "node:fs";
-import ts from "typescript";
-
-registerHooks({
-    load(url, context, nextLoad) {
-        if (!url.endsWith(".tsx")) return nextLoad(url, context);
-        return { format: "module", shortCircuit: true, source: ts.transpileModule(readFileSync(new URL(url), "utf8"), {
-            compilerOptions: { module: ts.ModuleKind.ESNext, jsx: ts.JsxEmit.ReactJSX },
-        }).outputText };
-    },
-});
+import { arrivalStep } from "../src/outcomes/arrival-step.ts";
 
 /** What somebody with no organization meets first. A Lemma's link used to be
- *  dropped for a new organization and the shelf; it is their way in now. */
-
-const { arrivalStep } = await import("../src/outcomes/arrival.tsx");
+ *  dropped for a new organization; it is their way in now. */
 
 test("nothing is decided before both reads are back", () => {
     assert.equal(arrivalStep({ invitations: null, suggested: 0, linkedPodId: "p1", ownInstead: false }), "wait");

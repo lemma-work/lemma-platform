@@ -374,6 +374,8 @@ _NAME_TO_MODULE = {
     'InstallationOperationExecutionRequestPayload': 'installation_operation_execution_request_payload',
     'InstallationOption': 'installation_option',
     'InstalledAppSummary': 'installed_app_summary',
+    'JoinablePodListResponse': 'joinable_pod_list_response',
+    'JoinablePodResponse': 'joinable_pod_response',
     'JsonObject': 'json_object',
     'LineDelivery': 'line_delivery',
     'LinePreview': 'line_preview',
@@ -1163,6 +1165,8 @@ if TYPE_CHECKING:
     from .installation_operation_execution_request_payload import InstallationOperationExecutionRequestPayload
     from .installation_option import InstallationOption
     from .installed_app_summary import InstalledAppSummary
+    from .joinable_pod_list_response import JoinablePodListResponse
+    from .joinable_pod_response import JoinablePodResponse
     from .json_object import JsonObject
     from .line_delivery import LineDelivery
     from .line_preview import LinePreview
@@ -1965,6 +1969,8 @@ __all__ = [
     'InstallationOperationExecutionRequestPayload',
     'InstallationOption',
     'InstalledAppSummary',
+    'JoinablePodListResponse',
+    'JoinablePodResponse',
     'JsonObject',
     'LineDelivery',
     'LinePreview',

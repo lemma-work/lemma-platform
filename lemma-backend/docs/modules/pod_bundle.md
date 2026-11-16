@@ -144,8 +144,9 @@ the service's own trigger, show the weeks it read, and ask for the bar. A
 template whose tables ship with rows (Launch, Audit) starts from those instead.
 
 `POST /pods/start` (`application/start_use_cases.py`) writes a Lemma in one
-transaction: the pod (under a free name), what it owns, a first `/plan.md`, and
-a conversation with the pod's agent opened with the caller's first message.
+transaction: the pod (under a free name), what it owns, a template's own rules
+as a note in its shared memory (`/memory/how-we-work.md`, pointed at from
+`/memory/AGENTS.md`), and a conversation with the pod's agent opened with the caller's first message.
 From the caller's own words the agent's turn is staged with it. From a template
 the archive is staged before anything is written, the conversation is opened
 held -- its run written without its turn -- and `pod_bundle.set_up_lemma` is

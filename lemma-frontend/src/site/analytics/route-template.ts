@@ -75,6 +75,8 @@ export const ROUTE_TEMPLATES: readonly string[] = [
     "/demo/query-context",
     "/docs/[[...slug]]",
     "/download",
+    "/history",
+    "/history/[lemma]",
     "/home",
     "/import/github/[owner]/[repo]",
     "/invitations/[invitationId]/accept",
@@ -225,6 +227,7 @@ function viewTemplate(view: View): string {
         case "apps": return "/apps";
         case "connectors": return "/connectors";
         case "people": return "/people";
+        case "history": return view.podId ? "/history/[lemma]" : "/history";
         case "hire": return "/l/new";
         case "chats": {
             const { open } = view;
@@ -237,7 +240,7 @@ function viewTemplate(view: View): string {
         case "outcome": {
             if (view.tab === "home") return lemma;
             if (view.tab === "chats" && view.section === "channels") return lemma + "/groups";
-            const word = view.tab === "made" ? "files" : view.tab;
+            const word = view.tab;
             if (!view.section) return lemma + "/" + word;
             /* A view of Automations is only ever one of a fixed few words; a
                settings section is whatever the address said. */
