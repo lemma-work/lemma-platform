@@ -71,6 +71,7 @@ def _agent(toolsets):
     made.user_id = uuid4()
     made.name = "reporter"
     made.toolsets = toolsets
+    made.machine = None
     return made
 
 

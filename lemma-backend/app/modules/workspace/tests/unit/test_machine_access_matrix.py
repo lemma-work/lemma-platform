@@ -1,9 +1,11 @@
-"""Every cell of the machine authorization matrix, one row each.
+"""Every cell of the machine access rules that are not the authorizer's.
 
-Rows are (caller, machine, facts) -> the access the caller gets. The matrix is
-the plan's: a person's default machine is theirs, their in-Lemma runs' and
-their consented apps'; a pod machine follows pod roles, visibility and grants;
-a connected machine is its owner's, and a pod's only where shared.
+A person's default machine is theirs and every run they own that answers a
+member; a connected machine is its owner's, and a pod's resource -- never
+past use -- where shared. A pod machine is the core authorizer's to decide
+(``test_pod_machine_authorization_e2e`` holds that against real roles and
+grants); what is pure about it is the two limits on an app's page, and how
+the resolver maps the authorizer's three answers onto a level.
 """
 
 from __future__ import annotations
@@ -25,13 +27,17 @@ from app.modules.workspace.domain.machine import (
 )
 from app.modules.workspace.domain.machine_access import (
     CallerKind,
-    DenialReason,
     MachineAccess,
     MachineCaller,
-    MachineFacts,
-    PodStanding,
-    decide,
+    PodAccess,
+    connected_machine_access,
+    default_machine_access,
+    pod_machine_access,
 )
+from app.modules.workspace.domain.machine_errors import MachineNotFound
+from app.modules.workspace.services.machine_resolver import MachineResolver
+
+pytestmark = pytest.mark.unit
 
 OWNER = uuid4()
 OTHER = uuid4()
@@ -72,8 +78,7 @@ def _machine(kind: MachineKind, visibility: MachineVisibility) -> Machine:
 
 
 DEFAULT = _machine(MachineKind.DEFAULT, MachineVisibility.PRIVATE)
-POD_WIDE = _machine(MachineKind.POD, MachineVisibility.POD)
-RESTRICTED = _machine(MachineKind.POD, MachineVisibility.RESTRICTED)
+POD_MACHINE = _machine(MachineKind.POD, MachineVisibility.POD)
 CONNECTED = _machine(MachineKind.CONNECTED, MachineVisibility.PRIVATE)
 SHARED_CONNECTED = replace(
     _machine(MachineKind.CONNECTED, MachineVisibility.POD), pod_id=POD
@@ -98,147 +103,177 @@ def agent(who=OWNER, pod=POD):
     )
 
 
-def function(pod=POD):
+def function(pod=POD, who=None):
     return MachineCaller(
-        CallerKind.FUNCTION, user_id=None, pod_id=pod, workload_id=FUNCTION
+        CallerKind.FUNCTION, user_id=who, pod_id=pod, workload_id=FUNCTION
     )
 
 
-def facts(**values) -> MachineFacts:
-    return MachineFacts(**values)
+# --- the default machine (`me`) ------------------------------------------------
+
+DEFAULT_MATRIX = [
+    ("the person on their own machine", user(), True, MANAGE),
+    ("someone else", user(OTHER), True, NONE),
+    ("a run of theirs answering a member", agent(), True, USE),
+    ("a run of theirs answering a contact or a pod", agent(), False, NONE),
+    ("somebody else's run", agent(OTHER), True, NONE),
+    ("a function, with a person behind it", function(who=OWNER), True, NONE),
+    ("a function with nobody behind it", function(), True, NONE),
+    ("an app's page, as its own viewer", app(), True, NONE),
+    ("an app's page, as another viewer", app(OTHER), True, NONE),
+]
 
 
-VIEWER = facts(standing=PodStanding.VIEWER)
-EDITOR = facts(standing=PodStanding.EDITOR)
-ADMIN = facts(standing=PodStanding.ADMIN)
-STRANGER = facts()
+@pytest.mark.parametrize(
+    ("caller", "answers_member", "expected"),
+    [row[1:] for row in DEFAULT_MATRIX],
+    ids=[row[0] for row in DEFAULT_MATRIX],
+)
+def test_default_machine(caller, answers_member, expected):
+    assert (
+        default_machine_access(caller, DEFAULT, answers_member=answers_member)
+        is expected
+    )
 
-MATRIX = [
-    # --- default machine (`me`) -----------------------------------------------
-    ("owner on own machine", user(), DEFAULT, STRANGER, MANAGE),
-    ("someone else's default machine", user(OTHER), DEFAULT, ADMIN, NONE),
-    ("pod viewer on a default machine", user(OTHER), DEFAULT, VIEWER, NONE),
-    ("app before consent", app(), DEFAULT, STRANGER, NONE),
-    ("app after consent", app(), DEFAULT, facts(app_consented=True), USE),
-    ("app as another viewer", app(OTHER), DEFAULT, facts(app_consented=True), NONE),
+
+# --- a pod machine: the authorizer's answer, and the app's limits ------------
+
+EDITOR = PodAccess(manage=True, use=True, see=True)
+USER_ROLE = PodAccess(use=True, see=True)
+VIEWER = PodAccess(see=True)
+OUTSIDER = PodAccess()
+
+POD_MATRIX = [
+    ("an editor manages", user(OTHER), EDITOR, MANAGE),
+    ("a member who may use", user(OTHER), USER_ROLE, USE),
+    ("a viewer sees status", user(OTHER), VIEWER, STATUS),
+    ("not in the pod", user(OTHER), OUTSIDER, NONE),
+    ("a granted agent uses", agent(), USER_ROLE, USE),
+    ("an ungranted agent", agent(), OUTSIDER, NONE),
+    ("an app as an editor only uses", app(OTHER), EDITOR, USE),
+    ("an app as a viewer sees", app(OTHER), VIEWER, STATUS),
+    ("an app of another pod", app(OTHER, pod=OTHER_POD), EDITOR, NONE),
+    ("an app with no pod", app(OTHER, pod=None), EDITOR, NONE),
+]
+
+
+@pytest.mark.parametrize(
+    ("caller", "pod", "expected"),
+    [row[1:] for row in POD_MATRIX],
+    ids=[row[0] for row in POD_MATRIX],
+)
+def test_pod_machine(caller, pod, expected):
+    assert pod_machine_access(caller, POD_MACHINE, pod) is expected
+
+
+# --- a connected machine ---------------------------------------------------------
+
+CONNECTED_MATRIX = [
+    ("its owner", user(), CONNECTED, OUTSIDER, MANAGE),
+    ("someone else, unshared", user(OTHER), CONNECTED, EDITOR, NONE),
+    ("an agent, unshared", agent(), CONNECTED, USER_ROLE, NONE),
+    ("an app never", app(), CONNECTED, EDITOR, NONE),
+    ("an app never, shared", app(OTHER), SHARED_CONNECTED, EDITOR, NONE),
     (
-        "agent run started in Lemma",
-        agent(),
-        DEFAULT,
-        facts(run_started_in_lemma=True),
+        "a pod editor on a shared laptop only uses",
+        user(OTHER),
+        SHARED_CONNECTED,
+        EDITOR,
         USE,
     ),
-    ("channel-triggered run", agent(), DEFAULT, STRANGER, NONE),
+    ("a pod viewer on a shared laptop", user(OTHER), SHARED_CONNECTED, VIEWER, STATUS),
     (
-        "run for somebody else",
-        agent(OTHER),
-        DEFAULT,
-        facts(run_started_in_lemma=True),
-        NONE,
-    ),
-    ("function on a default machine", function(), DEFAULT, STRANGER, NONE),
-    # --- pod machine, POD visibility -------------------------------------------
-    ("pod viewer sees status", user(OTHER), POD_WIDE, VIEWER, STATUS),
-    ("pod editor has it all", user(OTHER), POD_WIDE, EDITOR, MANAGE),
-    ("pod admin has it all", user(OTHER), POD_WIDE, ADMIN, MANAGE),
-    ("not in the pod", user(OTHER), POD_WIDE, STRANGER, NONE),
-    ("agent of the pod uses a POD machine", agent(), POD_WIDE, STRANGER, USE),
-    ("agent with a grant", agent(), POD_WIDE, facts(workload_granted=True), USE),
-    (
-        "agent of another pod",
-        agent(pod=OTHER_POD),
-        POD_WIDE,
-        facts(workload_granted=True),
-        NONE,
-    ),
-    ("function without a grant", function(), POD_WIDE, STRANGER, NONE),
-    ("function with a grant", function(), POD_WIDE, facts(workload_granted=True), USE),
-    ("app as a viewer", app(OTHER), POD_WIDE, VIEWER, STATUS),
-    ("app as an editor", app(OTHER), POD_WIDE, EDITOR, MANAGE),
-    ("app of another pod", app(OTHER, pod=OTHER_POD), POD_WIDE, ADMIN, NONE),
-    ("channel run of the pod's agent", agent(), POD_WIDE, STRANGER, USE),
-    # --- pod machine, RESTRICTED -----------------------------------------------
-    ("viewer cannot see it", user(OTHER), RESTRICTED, VIEWER, NONE),
-    (
-        "granted viewer sees status",
-        user(OTHER),
-        RESTRICTED,
-        facts(standing=PodStanding.VIEWER, member_granted=True),
-        STATUS,
-    ),
-    ("editor without a grant", user(OTHER), RESTRICTED, EDITOR, NONE),
-    (
-        "editor with a grant",
-        user(OTHER),
-        RESTRICTED,
-        facts(standing=PodStanding.EDITOR, member_granted=True),
-        MANAGE,
-    ),
-    ("admins see all", user(OTHER), RESTRICTED, ADMIN, MANAGE),
-    ("agent without a grant", agent(), RESTRICTED, STRANGER, NONE),
-    ("agent with a grant", agent(), RESTRICTED, facts(workload_granted=True), USE),
-    (
-        "function with a grant",
-        function(),
-        RESTRICTED,
-        facts(workload_granted=True),
-        USE,
-    ),
-    ("function without a grant", function(), RESTRICTED, STRANGER, NONE),
-    ("app as an ungranted editor", app(OTHER), RESTRICTED, EDITOR, NONE),
-    # --- connected -------------------------------------------------------------
-    ("owner on their laptop", user(), CONNECTED, STRANGER, MANAGE),
-    ("someone else on an unshared laptop", user(OTHER), CONNECTED, ADMIN, NONE),
-    (
-        "agent on an unshared laptop",
-        agent(),
-        CONNECTED,
-        facts(workload_granted=True),
-        NONE,
-    ),
-    ("app never reaches a laptop", app(), CONNECTED, facts(app_consented=True), NONE),
-    ("pod viewer on a shared laptop", user(OTHER), SHARED_CONNECTED, VIEWER, STATUS),
-    ("pod editor on a shared laptop", user(OTHER), SHARED_CONNECTED, EDITOR, USE),
-    (
-        "agent with a grant on a shared laptop",
+        "a granted agent on a shared laptop",
         agent(OTHER),
         SHARED_CONNECTED,
-        facts(workload_granted=True),
+        USER_ROLE,
         USE,
     ),
     (
-        "agent without a grant on a shared laptop",
+        "an ungranted agent on a shared laptop",
         agent(OTHER),
         SHARED_CONNECTED,
-        STRANGER,
+        OUTSIDER,
         NONE,
     ),
     (
-        "function with a grant on a shared laptop",
+        "a granted function on a shared laptop",
         function(),
         SHARED_CONNECTED,
-        facts(workload_granted=True),
+        USER_ROLE,
         USE,
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    ("caller", "machine", "known", "expected"),
-    [row[1:] for row in MATRIX],
-    ids=[row[0] for row in MATRIX],
+    ("caller", "machine", "pod", "expected"),
+    [row[1:] for row in CONNECTED_MATRIX],
+    ids=[row[0] for row in CONNECTED_MATRIX],
 )
-def test_matrix(caller, machine, known, expected):
-    assert decide(caller, machine, known).access is expected
+def test_connected_machine(caller, machine, pod, expected):
+    assert connected_machine_access(caller, machine, pod) is expected
 
 
-def test_an_app_that_has_not_asked_is_told_to_ask():
-    decision = decide(app(), DEFAULT, STRANGER)
-
-    assert decision.reason is DenialReason.CONSENT_REQUIRED
+# --- the resolver puts them together -----------------------------------------
 
 
-def test_every_other_refusal_reads_as_not_found():
-    decision = decide(user(OTHER), RESTRICTED, VIEWER)
+class _Facts:
+    def __init__(self, *, member: bool = True, pod: PodAccess = OUTSIDER) -> None:
+        self.member = member
+        self.pod = pod
+        self.asked: list[str] = []
 
-    assert decision.reason is DenialReason.NOT_FOUND
+    async def answers_member(self, caller: MachineCaller) -> bool:
+        self.asked.append("audience")
+        return self.member
+
+    async def pod_access(self, caller: MachineCaller, machine: Machine) -> PodAccess:
+        self.asked.append("authorizer")
+        return self.pod
+
+
+class _NoDatabase:
+    """``decide`` reads no rows: anything touching the session fails the test."""
+
+    session = None
+
+
+def _resolver(facts: _Facts) -> MachineResolver:
+    return MachineResolver(_NoDatabase(), facts=facts)  # type: ignore[arg-type]
+
+
+async def test_a_pod_machine_is_the_authorizers_to_decide():
+    facts = _Facts(pod=USER_ROLE)
+
+    assert await _resolver(facts).decide(agent(), POD_MACHINE) is USE
+    assert facts.asked == ["authorizer"]
+
+
+async def test_the_persons_own_machine_never_asks_the_authorizer():
+    facts = _Facts(member=True, pod=EDITOR)
+
+    assert await _resolver(facts).decide(user(), DEFAULT) is MANAGE
+    assert await _resolver(facts).decide(agent(), DEFAULT) is USE
+    assert "authorizer" not in facts.asked
+
+
+async def test_an_outsider_run_is_refused_the_persons_own_machine():
+    facts = _Facts(member=False)
+
+    assert await _resolver(facts).decide(agent(), DEFAULT) is NONE
+
+
+async def test_somebody_elses_run_is_refused_without_reading_its_conversation():
+    facts = _Facts(member=True)
+
+    assert await _resolver(facts).decide(agent(OTHER), DEFAULT) is NONE
+    assert facts.asked == []
+
+
+def test_not_found_is_what_a_refusal_reads_as():
+    from app.modules.workspace.services.machine_resolver import _require
+    from app.modules.workspace.domain.machine import MachineRef
+
+    with pytest.raises(MachineNotFound):
+        _require(NONE, USE, MachineRef.parse("pod:qa"))

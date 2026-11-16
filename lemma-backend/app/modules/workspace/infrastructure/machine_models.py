@@ -1,5 +1,5 @@
-"""Persistence for what machines add to sandboxes: previews, app consents,
-metered sessions and login backups."""
+"""Persistence for what machines add to sandboxes: previews, metered
+sessions and login backups."""
 
 from __future__ import annotations
 
@@ -55,30 +55,6 @@ class MachinePreviewModel(UUIDAuditBase):
     expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    revoked_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-
-class AppMachineConsentModel(UUIDAuditBase):
-    """A person's yes to one app running code on their default machine."""
-
-    __tablename__ = "app_machine_consents"
-    __table_args__ = (
-        Index(
-            "uq_app_machine_consents_live",
-            "user_id",
-            "app_id",
-            unique=True,
-            postgresql_where=text("revoked_at IS NULL"),
-        ),
-    )
-
-    user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
-    )
-    app_id: Mapped[UUID] = mapped_column(nullable=False)
-    pod_id: Mapped[UUID] = mapped_column(nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

@@ -29,7 +29,6 @@ from app.modules.workspace.domain.machine_access import (
 )
 from app.modules.workspace.domain.machine_errors import (
     MachineAccessDenied,
-    MachineConsentRequired,
     MachineNotFound,
 )
 from app.modules.workspace.services.machine_resolver import (
@@ -42,7 +41,6 @@ logger = get_logger(__name__)
 CLOSE_UNAUTHENTICATED = 4401
 CLOSE_ORIGIN_REFUSED = 4403
 CLOSE_NOT_FOUND = 4404
-CLOSE_CONSENT_REQUIRED = 4428
 
 
 async def _hang_up(websocket: WebSocket, code: int) -> None:
@@ -91,9 +89,6 @@ async def authorize_socket(
             caller = await _caller(websocket, user_id)
             resolved = await MachineResolver(uow).resolve(ref, caller, need=need)
             await uow.commit()
-    except MachineConsentRequired:
-        await _hang_up(websocket, CLOSE_CONSENT_REQUIRED)
-        return None
     except MachineNotFound, MachineAccessDenied:
         await _hang_up(websocket, CLOSE_NOT_FOUND)
         return None
@@ -117,7 +112,6 @@ async def _caller(websocket: WebSocket, user_id: UUID) -> MachineCaller:
         user_id=user_id,
         pod_id=app.pod_id,
         app_id=app.app_id,
-        app_name=app.name,
     )
 
 
@@ -190,9 +184,6 @@ async def machine_for_view(
             caller = await _caller(websocket, user_id)
             resolved = await MachineResolver(uow).resolve(ref, caller, need=need)
             await uow.commit()
-    except MachineConsentRequired:
-        await refuse(websocket, CLOSE_CONSENT_REQUIRED)
-        return None
     except MachineNotFound, MachineAccessDenied:
         await refuse(websocket, CLOSE_NOT_FOUND)
         return None

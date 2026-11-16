@@ -1,15 +1,28 @@
-"""Who may do what with a machine: the authorization matrix, as one function.
+"""Who may do what with a machine that is not a pod resource.
 
-Pure on purpose. The facts it needs -- the caller's standing in the machine's
-pod, the grant rows, an app's consent, whether a run was started in Lemma --
-are gathered by ``infrastructure/machine_facts.py`` and handed in, so every
-cell of the matrix is a table row in a unit test rather than a fixture.
+A **pod machine** is a pod resource and is decided by the core authorizer
+like any other (``services/machine_resolver``): members by their pod role,
+agents and functions by a ``machine.use`` grant intersected with the person
+they act for, the pod's default agent as its person, an app's page as its
+viewer in its own pod. Nothing about it is decided here except the two limits
+that hold whatever the authorizer says: an app's page never manages a
+machine, and acts only in its own pod.
+
+What is left here is pure, so every cell is a table row in a unit test:
+
+- **a person's default machine** (``me``) is theirs and every run they own
+  that answers a member -- chat, schedule, workflow, a channel message, a
+  call, a sub-agent. A run answering a contact or another pod never reaches
+  it, and neither does a function, an app or anybody else;
+- **a connected machine** is its owner's; shared into a pod, it is that pod's
+  resource as far as the authorizer goes, but never more than usable by
+  anybody but its owner, and never by an app.
 
 The levels are cumulative: ``STATUS`` lets a caller see that a machine exists
 and how it is; ``USE`` adds processes, files, previews and the browser;
 ``MANAGE`` adds resizing, resetting and deleting. ``NONE`` is reported to the
-caller as "not found", never "forbidden", so a RESTRICTED machine's name does
-not leak to the people it is kept from.
+caller as "not found", never "forbidden", so a machine's name does not leak
+to the people it is kept from.
 """
 
 from __future__ import annotations
@@ -54,157 +67,101 @@ class MachineCaller:
     #: The agent or function id, for grant lookups.
     workload_id: UUID | None = None
     app_id: UUID | None = None
-    #: The app's name, from Lemma's own records -- for the consent card, which
-    #: must not take an app's word for what it is called.
-    app_name: str | None = None
-    #: The run's conversation, for an agent; how "started in Lemma" is decided.
+    #: The run's conversation, for an agent: whom it answers decides whether
+    #: it may use its person's own machine.
     conversation_id: UUID | None = None
 
 
-class PodStanding(IntEnum):
-    """The caller's role in a pod, as far as machines care."""
-
-    NONE = 0
-    VIEWER = 1
-    EDITOR = 2
-    ADMIN = 3
-
-
 @dataclass(frozen=True, slots=True)
-class MachineFacts:
-    """What the matrix needs to know beyond the caller and the machine."""
+class PodAccess:
+    """What the core authorizer said about a machine as a pod resource."""
 
-    #: The person's standing in the machine's pod (or the pod it is shared to).
-    standing: PodStanding = PodStanding.NONE
-    #: A `machine.use` grant to the calling agent or function.
-    workload_granted: bool = False
-    #: A `machine.use` grant to the person, for a RESTRICTED machine.
-    member_granted: bool = False
-    #: The viewer said yes to this app running code on their machine.
-    app_consented: bool = False
-    #: The agent run was started by its person, in Lemma itself -- not by a
-    #: channel message, a schedule or another surface.
-    run_started_in_lemma: bool = False
+    manage: bool = False
+    use: bool = False
+    #: May read the pod the machine is in (``pod.read``).
+    see: bool = False
 
-
-class DenialReason(StrEnum):
-    NOT_FOUND = "not_found"
-    CONSENT_REQUIRED = "consent_required"
+    @property
+    def level(self) -> MachineAccess:
+        if self.manage:
+            return MachineAccess.MANAGE
+        if self.use:
+            return MachineAccess.USE
+        if self.see:
+            return MachineAccess.STATUS
+        return MachineAccess.NONE
 
 
-@dataclass(frozen=True, slots=True)
-class AccessDecision:
-    access: MachineAccess
-    #: Why it is NONE, when it is: an app that has not asked yet is told to
-    #: ask, everything else is told the machine does not exist.
-    reason: DenialReason | None = None
+def default_machine_access(
+    caller: MachineCaller, machine: Machine, *, answers_member: bool
+) -> MachineAccess:
+    """A person's own machine: theirs to manage, and usable by every run they
+    own that answers a member -- whatever started it.
 
-    @classmethod
-    def deny(cls, reason: DenialReason = DenialReason.NOT_FOUND) -> AccessDecision:
-        return cls(MachineAccess.NONE, reason)
-
-
-def decide(
-    caller: MachineCaller, machine: Machine, facts: MachineFacts
-) -> AccessDecision:
-    if machine.kind is MachineKind.DEFAULT:
-        return _default_machine(caller, machine, facts)
-    if machine.kind is MachineKind.POD:
-        return _pod_machine(caller, machine, facts)
-    return _connected_machine(caller, machine, facts)
-
-
-def _default_machine(
-    caller: MachineCaller, machine: Machine, facts: MachineFacts
-) -> AccessDecision:
-    """A person's own machine: theirs, their in-Lemma runs', and their apps'
-    once they said yes. Never a channel's, a schedule's or a function's."""
-    if caller.user_id != machine.owner_id:
-        return AccessDecision.deny()
+    ``answers_member`` is whom the agent run's conversation answers. A run
+    answering a contact or another pod is the pod's, acting toward somebody
+    outside it; its toolset already has no machine, and this is the second
+    line behind that.
+    """
+    if machine.kind is not MachineKind.DEFAULT:
+        raise ValueError("default_machine_access is for a default machine")
+    if caller.user_id is None or caller.user_id != machine.owner_id:
+        return MachineAccess.NONE
     if caller.kind is CallerKind.USER:
-        return AccessDecision(MachineAccess.MANAGE)
+        return MachineAccess.MANAGE
+    if caller.kind is CallerKind.AGENT and answers_member:
+        return MachineAccess.USE
+    return MachineAccess.NONE
+
+
+def pod_machine_access(
+    caller: MachineCaller, machine: Machine, pod: PodAccess
+) -> MachineAccess:
+    """The authorizer's answer, with the two limits an app's page is held to.
+
+    An app's page acts as its viewer only inside its own pod, and never
+    manages a machine: creating, resizing, resetting and deleting are a
+    person's own acts, not something an app's script does for them.
+    """
     if caller.kind is CallerKind.APP:
-        if not facts.app_consented:
-            return AccessDecision.deny(DenialReason.CONSENT_REQUIRED)
-        return AccessDecision(MachineAccess.USE)
-    if caller.kind is CallerKind.AGENT and facts.run_started_in_lemma:
-        return AccessDecision(MachineAccess.USE)
-    return AccessDecision.deny()
+        if caller.pod_id is None or caller.pod_id != machine.pod_id:
+            return MachineAccess.NONE
+        return min(pod.level, MachineAccess.USE)
+    return pod.level
 
 
-def _pod_machine(
-    caller: MachineCaller, machine: Machine, facts: MachineFacts
-) -> AccessDecision:
-    if caller.kind in (CallerKind.AGENT, CallerKind.FUNCTION):
-        return _workload_on_pod_machine(caller, machine, facts)
-    if caller.kind is CallerKind.APP and caller.pod_id != machine.pod_id:
-        # An app's page acts for its viewer only in its own pod.
-        return AccessDecision.deny()
-    # A person, or an app acting as its viewer in its own pod -- the same rule.
-    restricted = machine.visibility is MachineVisibility.RESTRICTED
-    if facts.standing is PodStanding.ADMIN:
-        return AccessDecision(MachineAccess.MANAGE)
-    if facts.standing is PodStanding.EDITOR:
-        if restricted and not facts.member_granted:
-            return AccessDecision.deny()
-        return AccessDecision(MachineAccess.MANAGE)
-    if facts.standing is PodStanding.VIEWER:
-        # A viewer only ever sees how a machine is. A grant names a
-        # RESTRICTED machine to them; it does not make them its user.
-        if restricted and not facts.member_granted:
-            return AccessDecision.deny()
-        return AccessDecision(MachineAccess.STATUS)
-    return AccessDecision.deny()
-
-
-def _workload_on_pod_machine(
-    caller: MachineCaller, machine: Machine, facts: MachineFacts
-) -> AccessDecision:
-    """An agent of the pod may use a POD machine; a RESTRICTED one, or any
-    machine for a function, takes a grant. Another pod's workload never."""
-    if caller.pod_id != machine.pod_id:
-        return AccessDecision.deny()
-    if facts.workload_granted:
-        return AccessDecision(MachineAccess.USE)
-    if caller.kind is CallerKind.AGENT and machine.visibility is MachineVisibility.POD:
-        return AccessDecision(MachineAccess.USE)
-    return AccessDecision.deny()
-
-
-def _connected_machine(
-    caller: MachineCaller, machine: Machine, facts: MachineFacts
-) -> AccessDecision:
-    """A laptop or VM: its owner's; a pod's only where the owner shared it,
-    and then to agents and functions only with a grant. Never an app's -- a
-    page running code on somebody's own computer is not something one
-    consent card should be able to buy."""
+def connected_machine_access(
+    caller: MachineCaller, machine: Machine, pod: PodAccess
+) -> MachineAccess:
+    """A laptop or VM: its owner's; shared into a pod, the pod's resource --
+    but only ever usable, never managed, by anyone but its owner. Never an
+    app's: a page running code on somebody's own computer is not something
+    an app's script should be able to do."""
+    if machine.kind is not MachineKind.CONNECTED:
+        raise ValueError("connected_machine_access is for a connected machine")
     if caller.kind is CallerKind.APP:
-        return AccessDecision.deny()
+        return MachineAccess.NONE
     if caller.kind is CallerKind.USER and caller.user_id == machine.owner_id:
-        return AccessDecision(MachineAccess.MANAGE)
-    shared = machine.pod_id is not None and machine.visibility is not (
+        return MachineAccess.MANAGE
+    if not is_shared(machine):
+        return MachineAccess.NONE
+    return min(pod.level, MachineAccess.USE)
+
+
+def is_shared(machine: Machine) -> bool:
+    """Whether a connected machine was shared into a pod by its owner."""
+    return machine.pod_id is not None and machine.visibility is not (
         MachineVisibility.PRIVATE
     )
-    if not shared:
-        return AccessDecision.deny()
-    if caller.kind in (CallerKind.AGENT, CallerKind.FUNCTION):
-        if caller.pod_id == machine.pod_id and facts.workload_granted:
-            return AccessDecision(MachineAccess.USE)
-        return AccessDecision.deny()
-    if facts.standing >= PodStanding.EDITOR:
-        return AccessDecision(MachineAccess.USE)
-    if facts.standing is PodStanding.VIEWER:
-        return AccessDecision(MachineAccess.STATUS)
-    return AccessDecision.deny()
 
 
 __all__ = [
-    "AccessDecision",
     "CallerKind",
-    "DenialReason",
     "MachineAccess",
     "MachineCaller",
-    "MachineFacts",
-    "PodStanding",
-    "decide",
+    "PodAccess",
+    "connected_machine_access",
+    "default_machine_access",
+    "is_shared",
+    "pod_machine_access",
 ]

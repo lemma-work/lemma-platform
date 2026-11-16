@@ -27,6 +27,9 @@ from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.errors import AgentNotFoundError
 from app.modules.agent.domain.sentinels import UNSET, UnsetType
 from app.modules.agent.domain.value_objects import AgentToolset, JsonObject
+from app.modules.agent.services.agent_machine_grant import (
+    sync_agent_machine_grant as _sync_agent_machine_grant,
+)
 from app.modules.agent.services.agent_memory_grant import sync_memory_folder_grant
 
 
@@ -205,10 +208,32 @@ async def sync_agent_memory_grant(
     )
 
 
+async def sync_agent_machine_grant(
+    uow,
+    *,
+    pod_id: UUID,
+    agent_id: UUID,
+    machine: str | None,
+    ctx: Context,
+    created_by_user_id: UUID,
+) -> None:
+    """Re-derive the `machine.use` grant an agent's `machine:` implies, after
+    its grants were replaced -- the same ordering as the memory grant above."""
+    await _sync_agent_machine_grant(
+        uow,
+        pod_id=pod_id,
+        agent_id=agent_id,
+        machine=machine,
+        ctx=ctx,
+        created_by_user_id=created_by_user_id,
+    )
+
+
 __all__ = [
     "ensure_pod_default_agent",
     "pod_default_agent_exists",
     "create_agent",
+    "sync_agent_machine_grant",
     "get_agent",
     "list_agents",
     "provision_pod_default_agent",

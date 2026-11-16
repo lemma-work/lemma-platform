@@ -27,18 +27,6 @@ class MachineAccessDenied(DomainError):
         )
 
 
-class MachineConsentRequired(DomainError):
-    """An app asked to run code on its viewer's machine before they said yes."""
-
-    def __init__(self, app_id: str, app_name: str | None = None) -> None:
-        super().__init__(
-            "This app needs your permission to run commands on your machine.",
-            code="MACHINE_CONSENT_REQUIRED",
-            status_code=403,
-            details={"app_id": app_id, "app_name": app_name},
-        )
-
-
 class MachineNotConnected(DomainError):
     """A connected machine whose link is down. Never answered by another one."""
 

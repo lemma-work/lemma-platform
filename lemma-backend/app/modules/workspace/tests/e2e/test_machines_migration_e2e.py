@@ -26,7 +26,6 @@ REVISION = "0074_machines"
 TABLES = (
     "machine_connections",
     "machine_previews",
-    "app_machine_consents",
     "machine_sessions",
     "machine_login_backups",
 )

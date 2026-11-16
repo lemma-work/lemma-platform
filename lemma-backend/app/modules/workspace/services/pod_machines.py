@@ -5,10 +5,11 @@ creator leaving, any editor may change or delete it, and its compute counts
 in the organization's window. Creating one is checked against the plan's
 policy -- the template, the size, and how many the organization may have.
 
-Who may use one beyond what its visibility allows is said with grants: the
-same `resource_permission_grants` rows every pod resource uses, with
-`machine.use` on resource type `machine`. Agents and functions by name,
-people by membership.
+It is a pod resource like any other: members use and manage it by their pod
+role (`machine.use`, `machine.manage`), and agents and functions by a grant --
+the same `resource_permission_grants` rows every pod resource uses, with
+`machine.use` on resource type `machine` -- intersected with the person they
+act for. Keeping one from somebody is not granting it to them.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from uuid import UUID
 
 from sqlalchemy import delete, insert, select
 
-from app.core.authorization.context import ResourceType
+from app.core.authorization.context import ResourceRef, ResourceType
 from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -29,16 +30,15 @@ from app.modules.workspace.domain.machine import (
     Machine,
     MachineSize,
     MachineTemplate,
-    MachineVisibility,
     validate_machine_name,
 )
-from app.modules.workspace.domain.machine_access import PodStanding
+from app.modules.workspace.domain.machine_access import CallerKind, MachineCaller
 from app.modules.workspace.domain.machine_errors import (
     MachineConflict,
     MachineNotFound,
     MachinePolicyRefused,
 )
-from app.modules.workspace.infrastructure.machine_facts import pod_standing
+from app.modules.workspace.infrastructure.machine_facts import DatabaseMachineFacts
 from app.modules.workspace.infrastructure.machine_repository import MachineRepository
 from app.modules.workspace.services.machine_policy import (
     EffectivePolicy,
@@ -50,21 +50,25 @@ from app.modules.workspace.services.machine_policy import (
 class MachineGrants:
     agents: tuple[str, ...] = ()
     functions: tuple[str, ...] = ()
-    members: tuple[UUID, ...] = ()
 
 
-async def require_pod_role(
-    uow: SqlAlchemyUnitOfWork, pod_id: UUID, user_id: UUID, at_least: PodStanding
-) -> PodStanding:
-    standing = await pod_standing(uow, pod_id, user_id)
-    if standing < at_least:
-        if standing is PodStanding.NONE:
-            raise MachineNotFound(f"pod:{pod_id}")
+async def require_in_pod(
+    uow: SqlAlchemyUnitOfWork, pod_id: UUID, user_id: UUID, *, manage: bool
+) -> None:
+    """The person may read the pod -- and, with ``manage``, change its
+    machines (``machine.manage``, an editor's). A pod they cannot read is
+    reported as one that does not exist."""
+    ctx = await DatabaseMachineFacts(uow).context(
+        MachineCaller(CallerKind.USER, user_id=user_id), pod_id
+    )
+    pod = ResourceRef.pod(pod_id)
+    if ctx is None or not await ctx.can(Permissions.POD_READ, pod):
+        raise MachineNotFound(f"pod:{pod_id}")
+    if manage and not await ctx.can(Permissions.MACHINE_MANAGE, pod):
         raise MachinePolicyRefused(
             "Only the pod's editors can create or change its machines.",
             code="MACHINE_EDITOR_REQUIRED",
         )
-    return standing
 
 
 async def pod_policy(uow: SqlAlchemyUnitOfWork, pod_id: UUID) -> EffectivePolicy:
@@ -90,11 +94,10 @@ async def create_pod_machine(
     display_name: str | None,
     template: MachineTemplate,
     size: MachineSize | None,
-    visibility: MachineVisibility,
     run_slots: int,
 ) -> Machine:
     _enabled()
-    await require_pod_role(uow, pod_id, user_id, PodStanding.EDITOR)
+    await require_in_pod(uow, pod_id, user_id, manage=True)
     try:
         validate_machine_name(name)
     except ValueError as exc:
@@ -116,7 +119,6 @@ async def create_pod_machine(
         display_name=display_name or name,
         template=template,
         size=chosen,
-        visibility=visibility,
         run_slots=run_slots,
         created_by=user_id,
     )
@@ -159,19 +161,16 @@ async def update_pod_machine(
     user_id: UUID,
     display_name: str | None,
     size: MachineSize | None,
-    visibility: MachineVisibility | None,
     run_slots: int | None,
 ) -> Machine:
     assert machine.pod_id is not None
-    await require_pod_role(uow, machine.pod_id, user_id, PodStanding.EDITOR)
+    await require_in_pod(uow, machine.pod_id, user_id, manage=True)
     values: dict[str, object] = {}
     if display_name is not None:
         values["display_name"] = display_name
     if size is not None and size != machine.size:
         (await pod_policy(uow, machine.pod_id)).check(machine.template, size)
         values["size"] = size.label
-    if visibility is not None:
-        values["visibility"] = visibility.value
     if run_slots is not None:
         values["run_slots"] = run_slots
     repository = MachineRepository(uow)
@@ -188,11 +187,11 @@ async def set_grants(
     *,
     created_by: UUID,
 ) -> MachineGrants:
-    """Replace who is granted this machine. Unknown names are refused, all
-    of them in one sentence."""
+    """Replace which agents and functions are granted this machine. Unknown
+    names are refused, all of them in one sentence. People need no grant:
+    their pod role is what lets them use a pod machine."""
     assert machine.pod_id is not None
     from app.core.authorization.resource_names import resolve_resource_ids_by_names
-    from app.modules.pod.contracts.members import pod_member_id
 
     refs = [(ResourceType.AGENT, name) for name in grants.agents] + [
         (ResourceType.FUNCTION, name) for name in grants.functions
@@ -210,18 +209,6 @@ async def set_grants(
         ("FUNCTION", resolved[(ResourceType.FUNCTION, name)])
         for name in grants.functions
     ]
-    unknown: list[str] = []
-    for user_id in grants.members:
-        member_id = await pod_member_id(uow, machine.pod_id, user_id)
-        if member_id is None:
-            unknown.append(str(user_id))
-            continue
-        rows.append(("POD_MEMBER", member_id))
-    if unknown:
-        raise MachineConflict(
-            "Not members of this pod: " + ", ".join(unknown),
-            code="MACHINE_GRANT_UNKNOWN_MEMBER",
-        )
     await uow.session.execute(
         delete(ResourcePermissionGrantModel).where(
             ResourcePermissionGrantModel.resource_type == ResourceType.MACHINE.value,
@@ -250,7 +237,6 @@ async def set_grants(
 async def read_grants(uow: SqlAlchemyUnitOfWork, machine: Machine) -> MachineGrants:
     assert machine.pod_id is not None
     from app.core.authorization.resource_names import resolve_resource_names_by_ids
-    from app.modules.pod.contracts.members import pod_member_user_id
 
     rows = (
         await uow.session.execute(
@@ -274,13 +260,6 @@ async def read_grants(uow: SqlAlchemyUnitOfWork, machine: Machine) -> MachineGra
         refs=[(ResourceType.AGENT, i) for i in by_type.get("AGENT", [])]
         + [(ResourceType.FUNCTION, i) for i in by_type.get("FUNCTION", [])],
     )
-    members: list[UUID] = []
-    for member_id in by_type.get("POD_MEMBER", []):
-        user_id = await pod_member_user_id(
-            uow, pod_id=machine.pod_id, pod_member_id=member_id
-        )
-        if user_id is not None:
-            members.append(user_id)
     return MachineGrants(
         agents=tuple(
             sorted(
@@ -296,5 +275,4 @@ async def read_grants(uow: SqlAlchemyUnitOfWork, machine: Machine) -> MachineGra
                 if (n := names.get((ResourceType.FUNCTION, i)))
             )
         ),
-        members=tuple(sorted(members)),
     )

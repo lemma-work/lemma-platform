@@ -81,7 +81,6 @@ def _as_app(caller: MachineCaller, request: Request) -> MachineCaller:
         user_id=caller.user_id,
         pod_id=app.pod_id,
         app_id=app.app_id,
-        app_name=app.name,
     )
 
 

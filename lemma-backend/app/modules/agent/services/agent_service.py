@@ -198,6 +198,7 @@ class AgentService:
                 output_schema=output_schema,
                 visibility=normalized_visibility,
                 metadata=metadata,
+                machine=_machine_ref(machine),
             )
         )
 
@@ -221,7 +222,29 @@ class AgentService:
             agent_name=agent.name,
         )
         await self._derive_memory_grant(agent, pod_id=pod_id, ctx=ctx, user_id=user_id)
+        await self._derive_machine_grant(agent, pod_id=pod_id, ctx=ctx, user_id=user_id)
         return agent
+
+    async def _derive_machine_grant(
+        self, agent, *, pod_id: UUID, ctx: Context | None, user_id: UUID | None
+    ) -> None:
+        """The `machine.use` grant the agent's `machine:` implies
+        (``agent_machine_grant``). Not best-effort, unlike memory's: naming a
+        machine the saver could not use themselves is refused."""
+        if ctx is None or not agent.machine or agent.id is None:
+            return
+        from app.modules.agent.services.agent_machine_grant import (
+            sync_agent_machine_grant,
+        )
+
+        await sync_agent_machine_grant(
+            self.uow,
+            pod_id=pod_id,
+            agent_id=agent.id,
+            machine=agent.machine,
+            ctx=ctx,
+            created_by_user_id=user_id or agent.user_id,
+        )
 
     async def _derive_memory_grant(
         self, agent, *, pod_id: UUID, ctx: Context | None, user_id: UUID | None
@@ -374,6 +397,9 @@ class AgentService:
             # From the agent as saved, never from the request: a PATCH that
             # omits `toolsets` is not the same thing as one turning memory off.
             await self._derive_memory_grant(
+                saved, pod_id=pod_id, ctx=ctx, user_id=requester_user_id
+            )
+            await self._derive_machine_grant(
                 saved, pod_id=pod_id, ctx=ctx, user_id=requester_user_id
             )
             return saved

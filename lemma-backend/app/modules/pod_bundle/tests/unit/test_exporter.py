@@ -1128,7 +1128,6 @@ async def test_a_machine_and_the_agent_on_it_round_trip_through_a_bundle(
                 display_name="builder",
                 template="workspace-docker",
                 size="4x8",
-                visibility="restricted",
                 run_slots=2,
             )
         ]
@@ -1167,7 +1166,6 @@ async def test_a_machine_and_the_agent_on_it_round_trip_through_a_bundle(
         "name": "builder",
         "template": "workspace-docker",
         "size": "4x8",
-        "visibility": "restricted",
         "run_slots": 2,
     }
     agent = load_resource_payload(
@@ -1212,11 +1210,10 @@ async def test_a_machine_and_the_agent_on_it_round_trip_through_a_bundle(
             await applier.apply_step(step)
 
     assert upserted["pod_id"] == target_pod
-    assert {k: upserted[k] for k in ("name", "template", "size", "visibility")} == {
+    assert {k: upserted[k] for k in ("name", "template", "size")} == {
         "name": "builder",
         "template": "workspace-docker",
         "size": "4x8",
-        "visibility": "restricted",
     }
     assert upserted["run_slots"] == 2
     assert created["machine"] == "pod:builder"

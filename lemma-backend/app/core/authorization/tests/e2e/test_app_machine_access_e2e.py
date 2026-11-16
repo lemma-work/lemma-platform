@@ -1,14 +1,15 @@
-"""An app's page on its viewer's own machine: refused until the viewer says yes.
+"""An app's page on machines: its own pod's, as its viewer -- never anybody's own.
 
-The one exception to H20's "an app has no business in its viewer's sandbox"
-(``test_app_person_only_e2e``): an app may run code on its viewer's default
-machine, and only after that viewer granted it -- in Lemma, never from the
-app's own page. Granted, it reaches the machine's processes, files and
-previews and nothing else: the browser, its logins and resetting the machine
-stay the person's own. Revoked, it is refused again.
+An app's page acts as its viewer inside its own pod, for machines as for
+every other resource (``core/app_pin``). A pod machine is a pod resource, so
+the page reaches its processes, files and previews when its viewer could.
+A person's own machine (``me``) is not a pod resource: no app reaches it,
+and nothing an app or its viewer does changes that -- there is no consent
+to give. Managing a machine -- creating, changing, deleting, granting,
+resetting, the browser and its logins -- stays the person's own.
 
 Nothing here starts a machine: every route asked is answered from rows
-(`previews`) or refused before a sandbox would be reached.
+(``previews``) or refused before a sandbox would be reached.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import pytest
 from httpx import AsyncClient
 from starlette import status
 
-from app.core.api.actor_policy import APP_ROUTE_NOT_ALLOWED
+from app.core.api.actor_policy import APP_PERSON_ONLY, APP_ROUTE_NOT_ALLOWED
 from app.core.authorization.tests.e2e import test_app_pin_e2e as pin
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
@@ -27,52 +28,104 @@ browser = pin.browser
 world = pin.world
 
 
-async def _app_id(browser: AsyncClient, world) -> str:
-    """The app's own id, as the refusal names it to the page."""
-    refused = await browser.get(
-        "/machines/me/previews",
-        headers=pin._from_app(world["origin"], world["owner"]),
-    )
-    assert refused.status_code == status.HTTP_403_FORBIDDEN, refused.text
-    assert pin._code(refused) == "MACHINE_CONSENT_REQUIRED", refused.text
-    return refused.json()["details"]["app_id"]
+async def _pod_machine(client: AsyncClient, pod_id: str, name: str = "shared") -> str:
+    created = await client.post(f"/pods/{pod_id}/machines", json={"name": name})
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    return created.json()["ref"]
 
 
-async def test_an_app_is_refused_its_viewers_machine_until_they_say_yes(
+async def test_an_app_never_reaches_its_viewers_own_machine(
     browser: AsyncClient, world
 ):
     as_app = pin._from_app(world["origin"], world["owner"])
-    app_id = await _app_id(browser, world)
 
-    # The page cannot say yes for its viewer: consents are a person's route.
-    by_the_app = await browser.post(
-        "/machine-consents", headers=as_app, json={"app_id": app_id}
+    refused = await browser.get("/machines/me/previews", headers=as_app)
+
+    assert refused.status_code == status.HTTP_404_NOT_FOUND, refused.text
+    assert pin._code(refused) == "MACHINE_NOT_FOUND", refused.text
+    # The same person, in Lemma, has it.
+    own = await browser.get(
+        "/machines/me/previews", headers=pin._cookie(world["owner"])
     )
-    assert by_the_app.status_code == status.HTTP_403_FORBIDDEN, by_the_app.text
-    assert pin._code(by_the_app) == APP_ROUTE_NOT_ALLOWED, by_the_app.text
+    assert own.status_code == status.HTTP_200_OK, own.text
 
-    granted = await browser.post(
-        "/machine-consents",
-        headers=pin._cookie(world["owner"]),
-        json={"app_id": app_id},
-    )
-    assert granted.status_code == status.HTTP_201_CREATED, granted.text
 
-    previews = await browser.get("/machines/me/previews", headers=as_app)
+async def test_an_app_uses_a_machine_of_its_own_pod_as_its_viewer(
+    authenticated_client: AsyncClient, browser: AsyncClient, world
+):
+    ref = await _pod_machine(authenticated_client, world["pod_id"])
+    as_app = pin._from_app(world["origin"], world["owner"])
+
+    previews = await browser.get(f"/machines/{ref}/previews", headers=as_app)
+
     assert previews.status_code == status.HTTP_200_OK, previews.text
     assert previews.json() == {"previews": []}
+    listed = await browser.get(
+        "/machines", headers=as_app, params={"pod_id": world["pod_id"]}
+    )
+    assert listed.status_code == status.HTTP_200_OK, listed.text
+    refs = {m["ref"]: m for m in listed.json()["machines"]}
+    assert "me" not in refs, "an app is never shown its viewer's own machine"
+    # As its viewer, but never past use: managing is the person's own.
+    assert refs[ref]["access"] == "use", refs[ref]
 
 
-async def test_granted_or_not_the_browser_logins_and_reset_stay_the_persons(
+async def test_an_app_does_not_reach_another_pods_machine(
+    authenticated_client: AsyncClient, browser: AsyncClient, world
+):
+    ref = await _pod_machine(authenticated_client, world["other_pod_id"])
+
+    refused = await browser.get(
+        f"/machines/{ref}/previews",
+        headers=pin._from_app(world["origin"], world["owner"]),
+    )
+
+    assert refused.status_code in (
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+    ), refused.text
+
+
+async def test_an_app_does_not_manage_its_pods_machines(
+    authenticated_client: AsyncClient, browser: AsyncClient, world
+):
+    pod_id = world["pod_id"]
+    ref = await _pod_machine(authenticated_client, pod_id)
+    as_app = pin._from_app(world["origin"], world["owner"])
+
+    for method, path, body in (
+        ("POST", f"/pods/{pod_id}/machines", {"name": "from-app"}),
+        ("PATCH", f"/pods/{pod_id}/machines/shared", {"run_slots": 2}),
+        ("GET", f"/pods/{pod_id}/machines/shared/grants", None),
+        ("PUT", f"/pods/{pod_id}/machines/shared/grants", {"agents": []}),
+        ("DELETE", f"/pods/{pod_id}/machines/shared", None),
+    ):
+        response = await browser.request(method, path, headers=as_app, json=body)
+        assert response.status_code == status.HTTP_403_FORBIDDEN, (
+            f"{method} {path}: {response.text}"
+        )
+        assert pin._code(response) == APP_PERSON_ONLY, f"{method} {path}"
+
+    for method, path, body in (
+        ("POST", f"/machines/{ref}:release", None),
+        ("POST", f"/machines/{ref}:restart", None),
+        ("POST", f"/machines/{ref}:reset", {"scopes": ["home"], "confirm": True}),
+        ("GET", f"/machines/{ref}/browser", None),
+    ):
+        response = await browser.request(method, path, headers=as_app, json=body)
+        assert response.status_code == status.HTTP_403_FORBIDDEN, (
+            f"{method} {path}: {response.text}"
+        )
+        assert pin._code(response) == APP_ROUTE_NOT_ALLOWED, f"{method} {path}"
+
+    still = await authenticated_client.get(f"/machines/{ref}")
+    assert still.status_code == status.HTTP_200_OK, still.text
+
+
+async def test_the_browser_logins_and_reset_stay_the_persons(
     browser: AsyncClient, world
 ):
     as_app = pin._from_app(world["origin"], world["owner"])
-    app_id = await _app_id(browser, world)
-    await browser.post(
-        "/machine-consents",
-        headers=pin._cookie(world["owner"]),
-        json={"app_id": app_id},
-    )
 
     for method, path, body in (
         ("GET", "/machines/me/browser", None),
@@ -88,44 +141,3 @@ async def test_granted_or_not_the_browser_logins_and_reset_stay_the_persons(
             f"{method} {path}: {response.text}"
         )
         assert pin._code(response) == APP_ROUTE_NOT_ALLOWED, f"{method} {path}"
-
-
-async def test_revoking_closes_the_machine_to_the_app_again(
-    browser: AsyncClient, world
-):
-    as_app = pin._from_app(world["origin"], world["owner"])
-    owner = pin._cookie(world["owner"])
-    app_id = await _app_id(browser, world)
-    await browser.post("/machine-consents", headers=owner, json={"app_id": app_id})
-    assert (
-        await browser.get("/machines/me/previews", headers=as_app)
-    ).status_code == status.HTTP_200_OK
-
-    revoked = await browser.delete(f"/machine-consents/{app_id}", headers=owner)
-    assert revoked.status_code == status.HTTP_204_NO_CONTENT, revoked.text
-
-    again = await browser.get("/machines/me/previews", headers=as_app)
-    assert again.status_code == status.HTTP_403_FORBIDDEN, again.text
-    assert pin._code(again) == "MACHINE_CONSENT_REQUIRED", again.text
-
-
-async def test_one_viewers_yes_is_not_anothers(
-    authenticated_client: AsyncClient,
-    async_client: AsyncClient,
-    browser: AsyncClient,
-    world,
-):
-    """Consent is per person: the editor saying yes opens nothing for the owner."""
-    app_id = await _app_id(browser, world)
-    granted = await browser.post(
-        "/machine-consents",
-        headers=pin._cookie(world["editor"]),
-        json={"app_id": app_id},
-    )
-    assert granted.status_code == status.HTTP_201_CREATED, granted.text
-
-    owners = await browser.get(
-        "/machines/me/previews",
-        headers=pin._from_app(world["origin"], world["owner"]),
-    )
-    assert pin._code(owners) == "MACHINE_CONSENT_REQUIRED", owners.text

@@ -16,15 +16,13 @@ and takes the defaults: a default machine is private, billed to its user,
 and reports the size it was built at, 1x2 -- which is how the later move to
 2x4 finds the rows it has not moved yet.
 
-Five tables arrive with it:
+Four tables arrive with it:
 
 - `machine_connections`: a person's own computer joined with the CLI;
   `connection_id` names it, without a foreign key, because a machine row
   outlives a revoked connection;
 - `machine_previews`: a port reachable at a subdomain, revocable before it
   expires;
-- `app_machine_consents`: a person's yes to one app running code on their
-  machine;
 - `machine_sessions`: a stretch of a machine running, metered in slices;
 - `machine_login_backups`: encrypted copies of a browser profile's logins.
 
@@ -60,10 +58,7 @@ SANDBOX_COLUMNS = (
 )
 
 SANDBOX_CHECKS = (
-    (
-        "CONSTRAINT ck_sandboxes_visibility "
-        "CHECK (visibility IN ('private', 'pod', 'restricted'))"
-    ),
+    "CONSTRAINT ck_sandboxes_visibility CHECK (visibility IN ('private', 'pod'))",
     "CONSTRAINT ck_sandboxes_billing_scope CHECK (billing_scope IN ('user', 'org'))",
     "CONSTRAINT ck_sandboxes_run_slots CHECK (run_slots >= 1)",
 )
@@ -78,10 +73,6 @@ TABLES: dict[str, tuple[str, ...]] = {
     "machine_previews": (
         "CREATE TABLE machine_previews ( sandbox_id UUID NOT NULL, label VARCHAR(32) NOT NULL, port INTEGER NOT NULL, visibility VARCHAR(16) NOT NULL, created_by UUID NOT NULL, expires_at TIMESTAMP WITH TIME ZONE, revoked_at TIMESTAMP WITH TIME ZONE, id UUID NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id), CONSTRAINT ck_machine_previews_visibility CHECK (visibility IN ('private', 'link')), CONSTRAINT ck_machine_previews_port CHECK (port BETWEEN 1 AND 65535), CONSTRAINT uq_machine_previews_label UNIQUE (label), FOREIGN KEY(sandbox_id) REFERENCES sandboxes (id) ON DELETE CASCADE )",
         "CREATE INDEX ix_machine_previews_sandbox ON machine_previews (sandbox_id)",
-    ),
-    "app_machine_consents": (
-        "CREATE TABLE app_machine_consents ( user_id UUID NOT NULL, app_id UUID NOT NULL, pod_id UUID NOT NULL, revoked_at TIMESTAMP WITH TIME ZONE, id UUID NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id), FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE )",
-        "CREATE UNIQUE INDEX uq_app_machine_consents_live ON app_machine_consents (user_id, app_id) WHERE revoked_at IS NULL",
     ),
     "machine_sessions": (
         "CREATE TABLE machine_sessions ( sandbox_id UUID NOT NULL, size VARCHAR(16) NOT NULL, compute_units_per_hour FLOAT NOT NULL, billing_scope VARCHAR(8) NOT NULL, user_id UUID, organization_id UUID, pod_id UUID, started_at TIMESTAMP WITH TIME ZONE NOT NULL, metered_until TIMESTAMP WITH TIME ZONE NOT NULL, ended_at TIMESTAMP WITH TIME ZONE, id UUID NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id), CONSTRAINT ck_machine_sessions_billing_scope CHECK (billing_scope IN ('user', 'org')), FOREIGN KEY(sandbox_id) REFERENCES sandboxes (id) ON DELETE CASCADE )",

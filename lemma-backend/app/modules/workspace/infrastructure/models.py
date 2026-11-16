@@ -69,7 +69,7 @@ class SandboxModel(UUIDAuditBase):
             "delete_after",
         ),
         CheckConstraint(
-            "visibility IN ('private', 'pod', 'restricted')",
+            "visibility IN ('private', 'pod')",
             name="ck_sandboxes_visibility",
         ),
         CheckConstraint(
@@ -225,7 +225,6 @@ class SandboxInstanceModel(UUIDAuditBase):
 # Imported here so every place that registers this module's tables by importing
 # `models` -- Alembic's env, the e2e schema builder -- gets the machine tables too.
 from app.modules.workspace.infrastructure.machine_models import (  # noqa: E402
-    AppMachineConsentModel,
     MachineConnectionModel,
     MachineLoginBackupModel,
     MachinePreviewModel,
@@ -233,7 +232,6 @@ from app.modules.workspace.infrastructure.machine_models import (  # noqa: E402
 )
 
 __all__ = [
-    "AppMachineConsentModel",
     "MachineConnectionModel",
     "MachineLoginBackupModel",
     "MachinePreviewModel",

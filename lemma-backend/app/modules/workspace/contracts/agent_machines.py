@@ -1,10 +1,11 @@
 """Where an agent run's commands run, for the agent module's tools.
 
 The agent module names a machine (the agent's `machine:`, or a tool call's
-`machine` argument) and this decides it with the same resolver and matrix as
-every `/machines` route: a person's default machine only for a run they
-started in Lemma; a pod machine by visibility or grant; a connected machine by
-share and grant.
+`machine` argument) and this decides it with the same resolver as every
+`/machines` route: a person's default machine for every run they own that
+answers a member; a pod machine as a pod resource, by the agent's grant
+intersected with its person (the pod's default agent as its person); a
+connected machine by share and grant.
 
 A pod machine is shared, so work on one also gets what sharing needs: a slot
 (``run_slots`` at a time), its own working directory under
@@ -54,18 +55,6 @@ class AgentMachine:
         return self.machine.ref
 
 
-class ChannelRunHasNoMachine(MachineNotFound):
-    """A run started from a channel asked for a person's own machine."""
-
-    def __init__(self) -> None:
-        super().__init__("me")
-        self.message = (
-            "This run was not started by its person in Lemma, so it cannot use "
-            "anyone's own machine. Give the agent a pod machine "
-            "(machine: pod:<name>) to run commands here."
-        )
-
-
 def _slug(value: str | None) -> str:
     return _SLUG.sub("-", (value or "agent").lower()).strip("-")[:40] or "agent"
 
@@ -98,14 +87,9 @@ async def resolve_agent_machine(
     )
     target = (ref or "me").strip() or "me"
     async with get_uow_factory()() as uow:
-        try:
-            resolved = await MachineResolver(uow).resolve(
-                target, caller, need=MachineAccess.USE
-            )
-        except MachineNotFound:
-            if target == "me":
-                raise ChannelRunHasNoMachine() from None
-            raise
+        resolved = await MachineResolver(uow).resolve(
+            target, caller, need=MachineAccess.USE
+        )
         await uow.commit()
     machine = resolved.machine
     if machine.kind is MachineKind.DEFAULT or run_id is None:
@@ -405,7 +389,6 @@ __all__ = [
     "reset_for_agent",
     "sync_files",
     "AgentMachine",
-    "ChannelRunHasNoMachine",
     "begin_run",
     "end_run",
     "resolve_agent_machine",

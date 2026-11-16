@@ -182,7 +182,6 @@ class MachineRepository:
         display_name: str,
         template: MachineTemplate,
         size: MachineSize,
-        visibility: MachineVisibility,
         run_slots: int,
         created_by: UUID,
     ) -> Machine | None:
@@ -196,7 +195,7 @@ class MachineRepository:
                 "display_name": display_name,
                 "template": template.value,
                 "size": size.label,
-                "visibility": visibility.value,
+                "visibility": MachineVisibility.POD.value,
                 "billing_scope": MachineBillingScope.ORG.value,
                 "run_slots": run_slots,
                 "created_by": created_by,

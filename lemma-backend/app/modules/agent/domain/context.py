@@ -193,13 +193,8 @@ class ToolContext(BaseModel):
     workspace_cwd: str | None = None
     # The agent's `machine:`, the ref its commands run on unless a tool call
     # names another. None is the default machine of the person the run acts
-    # for -- which a run reaches only when that person started it in Lemma.
+    # for -- every run a member owns may use it, whatever started it.
     machine: str | None = None
-    # Whether the person this run acts for started it in Lemma itself. Only
-    # such a run may use their own machine; one started by a channel, a
-    # contact or a schedule needs a pod machine. Decided from the
-    # conversation when the run's context is built.
-    started_in_lemma: bool = True
     # The GitHub repository this conversation works in, when it was started
     # against a project rather than a scratchpad; None means the scratchpad cwd.
     workspace_repo: ProjectRepo | None = None
