@@ -448,14 +448,25 @@ Either can be revoked, and a revoked one answers 404 at once.
 ### Shared machines' disk
 
 A pod machine is shared by many runs on one disk, which on E2B is fixed in size.
-The disk janitor keeps it usable without touching anything protected (the
-browser profile, a running service):
+The disk janitor, a background job every few minutes, keeps it usable without
+touching anything protected (the browser profile, a running service) or any
+run still in progress:
 
 ```dotenv
 # Prune finished runs, then Docker images and build cache, from this fraction.
 MACHINE_DISK_PRUNE_FRACTION=0.75
 # Refuse new runs on the machine from this fraction.
 MACHINE_DISK_REFUSE_FRACTION=0.9
+```
+
+### Services
+
+A named service (a dev server behind a preview) keeps its machine awake only
+while it writes output. Past this much silence the idle sweep may release the
+machine; the service starts again, with a fresh token, when the machine does.
+
+```dotenv
+MACHINE_SERVICE_IDLE_SECONDS=14400
 ```
 
 ## Function execution

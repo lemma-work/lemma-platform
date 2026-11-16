@@ -56,9 +56,24 @@ class _Runtime:
         )
 
 
+class _Services:
+    """The durable service definitions, in memory."""
+
+    def __init__(self) -> None:
+        self.recorded: dict[str, dict[str, object]] = {}
+        self.stopped_ids: list[str] = []
+
+    async def record(self, machine_id: UUID, *, name: str, **values: object) -> None:
+        self.recorded[name] = values
+
+    async def stopped(self, machine_id: UUID, process_id: str) -> None:
+        self.stopped_ids.append(process_id)
+
+
 class _Processes(MachineProcesses):
     def __init__(self) -> None:
-        super().__init__(registry=_Registry())  # type: ignore[arg-type]
+        self.store = _Services()
+        super().__init__(registry=_Registry(), services=self.store)  # type: ignore[arg-type]
         self.runtime = _Runtime()
 
     def _client(self):

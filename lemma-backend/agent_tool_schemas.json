@@ -1459,7 +1459,7 @@
   {
     "tool_name": "exec_command",
     "toolset": "WORKSPACE_CLI",
-    "description": "Run a shell command on your machine, in this conversation's directory.\n\nUse it for repo inspection, builds, tests, file edits, and `lemma` CLI calls\n(pod credentials are pre-injected). `localhost` is the machine, not the\nLemma backend. Name `machine` to run on another one you may use (see\n`list_machines`); on a pod machine each run gets its own directory.\n\nDefault (`tty=false`) returns after a short wait; a command still running\nreturns a `process_id` instead of blocking. `tty=true` starts a real terminal\nfor interactive commands. Either way, drive the process afterwards with\n`manage_process` \u2014 send input or read new output with `action=\"input\"`, stop\nit with `action=\"kill\"`, and use `action=\"list\"` to find processes started\nearlier. To wait for one to finish, use `wait_for`.\n\nLong commands (installs, builds, test suites) are normal and supported. When\none outlives the wait window you get `completed: false` plus a `process_id`,\nand the command carries on running \u2014 nothing was cancelled and no output is\nlost. Hand that id to `wait_for` and stop:\n\n    exec_command(cmd=\"npm ci && npm run build\")\n    -> completed: false, process_id: \"abc\"\n    wait_for(reason=\"the build\", process_id=\"abc\")\n    -> woke_because: \"TARGET_FINISHED\", exit_code: 0\n\n`wait_for` ends your turn and gives you a new one when the process exits, so\na ten-minute build costs one model call rather than twenty. Use\n`manage_process` to send input to a process, to stop one, or to look at a\nrunning one \u2014 not to wait for it.\n\nNever re-run a command because it did not finish \u2014 that starts a second\nbuild alongside the first. If you lose a `process_id`, `action=\"list\"`\nrecovers it.",
+    "description": "Run a shell command on your machine, in this conversation's directory.\n\nUse it for repo inspection, builds, tests, file edits, and `lemma` CLI calls\n(pod credentials are pre-injected). `localhost` is the machine, not the\nLemma backend. Name `machine` to run on another one you may use (see\n`list_machines`); on a pod machine each run gets its own directory.\n\nDefault (`tty=false`) returns after a short wait; a command still running\nreturns a `process_id` instead of blocking. `tty=true` starts a real terminal\nfor interactive commands. Either way, drive the process afterwards with\n`manage_process` \u2014 send input or read new output with `action=\"input\"`, stop\nit with `action=\"kill\"`, and use `action=\"list\"` to find processes started\nearlier. To wait for one to finish, use `wait_for`.\n\nLong commands (installs, builds, test suites) are normal and supported. When\none outlives the wait window you get `completed: false` plus a `process_id`,\nand the command carries on running \u2014 nothing was cancelled and no output is\nlost. Hand that id to `wait_for` and stop:\n\n    exec_command(cmd=\"npm ci && npm run build\")\n    -> completed: false, process_id: \"abc\"\n    wait_for(reason=\"the build\", process_id=\"abc\")\n    -> woke_because: \"TARGET_FINISHED\", exit_code: 0\n\nA dev server a preview points at should outlive your run: start it with\n`service=\"web\"` (any name). It is not stopped when the run ends, and it\ncomes back after the machine sleeps.\n\n`wait_for` ends your turn and gives you a new one when the process exits, so\na ten-minute build costs one model call rather than twenty. Use\n`manage_process` to send input to a process, to stop one, or to look at a\nrunning one \u2014 not to wait for it.\n\nNever re-run a command because it did not finish \u2014 that starts a second\nbuild alongside the first. If you lose a `process_id`, `action=\"list\"`\nrecovers it.",
     "input_schema": {
       "properties": {
         "cmd": {
@@ -1525,6 +1525,20 @@
           ],
           "default": null,
           "description": "Which machine to run on: `me`, `pod:<name>` for one of the pod's machines, or one from `list_machines`. Omit for your usual one."
+        },
+        "service": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Start the command as a named service (a dev server behind a preview): it outlives this run, comes back after the machine sleeps, and keeps the machine awake only while it writes output. Returns its `process_id` at once. One service per name."
         },
         "yield_time_ms": {
           "anyOf": [
@@ -3727,13 +3741,12 @@
     "input_schema": {
       "properties": {
         "scopes": {
-          "description": "What to clean: `processes` (stops everything but services), `runs` (finished runs' folders), `caches` (package caches), `docker` (unused images, build cache, stopped containers). Logins are never touched.",
+          "description": "What to clean: `processes` (stops the processes this run started, services excepted), `runs` (finished runs' folders; live runs are kept), `caches` (package caches). Logins are never touched; pruning Docker is for the machine's managers.",
           "items": {
             "enum": [
               "processes",
               "runs",
-              "caches",
-              "docker"
+              "caches"
             ],
             "type": "string"
           },
