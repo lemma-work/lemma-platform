@@ -12,7 +12,7 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 from uuid import UUID, uuid7
 
-from sqlalchemy import Select, and_, func, select, update
+from sqlalchemy import Select, and_, delete, func, select, update
 from sqlalchemy.orm import aliased
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -229,6 +229,7 @@ class MachineRepository:
                 machine={k: v for k, v in values.items() if k != "display_name"},
             )
             return
+        await self._forget_previous_life(existing.id)
         await self.session.execute(
             update(SandboxModel)
             .where(SandboxModel.id == existing.id)
@@ -239,6 +240,37 @@ class MachineRepository:
                 provider_volume_id=None,
                 last_used_at=_now(),
                 updated_at=_now(),
+            )
+        )
+
+    async def _forget_previous_life(self, machine_id: UUID) -> None:
+        """A recreated machine is a new machine, though it keeps the old row's
+        id: nothing granted to or opened on the deleted one carries over.
+
+        The id stays because the sweep reclaims a deleted machine's provider
+        objects by it; giving the revived row a new id would orphan them.
+        Revoking here is the smaller change: the deleted machine's grants go,
+        and so do any previews its delete did not already revoke.
+        """
+        from app.core.authorization.context import ResourceType
+        from app.core.authorization.models import ResourcePermissionGrantModel
+        from app.modules.workspace.infrastructure.machine_models import (
+            MachinePreviewModel,
+        )
+
+        await self.session.execute(
+            update(MachinePreviewModel)
+            .where(
+                MachinePreviewModel.sandbox_id == machine_id,
+                MachinePreviewModel.revoked_at.is_(None),
+            )
+            .values(revoked_at=_now())
+        )
+        await self.session.execute(
+            delete(ResourcePermissionGrantModel).where(
+                ResourcePermissionGrantModel.resource_type
+                == ResourceType.MACHINE.value,
+                ResourcePermissionGrantModel.resource_id == machine_id,
             )
         )
 

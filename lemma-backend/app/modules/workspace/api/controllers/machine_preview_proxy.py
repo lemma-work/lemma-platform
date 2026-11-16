@@ -9,8 +9,10 @@ the API's own host must not be a way around the preview's origin.
 What a preview is forwarded, and what not. The preview's own cookies go
 through -- a dev server with a login needs them. The preview's access cookie
 does not, and nothing that could be mistaken for a Lemma credential does:
-Lemma's session cookies live on the API's host and never reach this one, and
-`authorization` and `x-api-key` are dropped.
+Lemma's session cookies are dropped by name (a session cookie scoped to a
+parent domain does reach this host), and so are `authorization` and
+`x-api-key`. Going the other way, an upstream `Set-Cookie` loses its `Domain`
+and may not name a Lemma cookie (`upstream_set_cookie`).
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ import contextlib
 from datetime import datetime, timedelta, timezone
 from http.cookies import CookieError, SimpleCookie
 from urllib.parse import quote
+from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Request, Response, WebSocket, status
@@ -46,11 +49,13 @@ from app.modules.workspace.services.machine_previews import (
     COOKIE_SECONDS,
     MachinePreviews,
     Preview,
-    cookie_is_valid,
+    cookie_user,
+    forwarded_cookie,
     label_from_host,
+    may_still_use,
     mint_cookie,
     open_url,
-    ticket_is_valid,
+    redeem_ticket,
 )
 from app.modules.workspace.services.ws_bridge import bridge, connect_upstream
 from sandbox_runtime.errors import SandboxCapabilityUnsupported, SandboxError
@@ -114,18 +119,6 @@ def _preview_cookie(cookie_header: str | None) -> str | None:
     return morsel.value if morsel else None
 
 
-def _forwarded_cookie(cookie_header: str | None) -> str | None:
-    """The preview's own cookies, without its access cookie."""
-    if not cookie_header:
-        return None
-    kept = [
-        part.strip()
-        for part in cookie_header.split(";")
-        if part.strip() and not part.strip().startswith(f"{COOKIE_NAME}=")
-    ]
-    return "; ".join(kept) or None
-
-
 _STRIPPED = frozenset(
     {
         "host",
@@ -156,7 +149,7 @@ def _target(base: str, path: str) -> httpx.URL:
 
 def _upstream(headers, fabric) -> dict[str, str]:
     forwarded = {k: v for k, v in headers.items() if k.lower() not in _STRIPPED}
-    if cookie := _forwarded_cookie(headers.get("cookie")):
+    if cookie := forwarded_cookie(headers.get("cookie")):
         forwarded["cookie"] = cookie
     return {**forwarded, **fabric}
 
@@ -187,11 +180,57 @@ async def _endpoint(preview: Preview) -> SandboxEndpoint | None:
         return None
 
 
-def _authorized(preview: Preview, cookie_header: str | None) -> bool:
+async def _visitor_admitted(preview: Preview, cookie_header: str | None) -> bool | None:
+    """True to serve; False to send the visitor to sign in; None to refuse.
+
+    A private preview's cookie names the person it was opened for, and they
+    must still be allowed to use the machine -- asked again at most every
+    minute, so someone removed from the pod loses the preview within that.
+    """
     if preview.visibility == "link":
         return True
     token = _preview_cookie(cookie_header)
-    return token is not None and cookie_is_valid(token, preview.label)
+    user_id = cookie_user(token, preview.label) if token is not None else None
+    if user_id is None:
+        return False
+    return (
+        True
+        if await may_still_use(
+            preview.sandbox_id, user_id, lambda: _user_may_use(preview, user_id)
+        )
+        else None
+    )
+
+
+async def _user_may_use(preview: Preview, user_id: UUID) -> bool:
+    from app.core.api.dependencies import get_uow_factory
+    from app.modules.workspace.domain.machine_access import (
+        CallerKind,
+        MachineAccess,
+        MachineCaller,
+    )
+    from app.modules.workspace.domain.machine_errors import (
+        MachineAccessDenied,
+        MachineNotFound,
+    )
+    from app.modules.workspace.services.machine_resolver import MachineResolver
+
+    try:
+        async with get_uow_factory()() as uow:
+            await MachineResolver(uow).resolve(
+                str(preview.sandbox_id),
+                MachineCaller(CallerKind.USER, user_id=user_id),
+                need=MachineAccess.USE,
+            )
+    except MachineNotFound, MachineAccessDenied:
+        return False
+    return True
+
+
+def _is_devtools(path: str) -> bool:
+    """Chrome's DevTools protocol lives under ``/devtools/``. Whatever port it
+    answers on, a preview never carries it: that is the signed-in browser."""
+    return ("/" + path.lstrip("/")).startswith("/devtools/")
 
 
 @router.api_route(PREFIX + "/{label}", methods=_METHODS, include_in_schema=False)
@@ -209,10 +248,17 @@ async def proxy_preview(label: str, request: Request, path: str = "") -> Respons
             media_type="text/plain",
         )
     if "/" + path == AUTH_PATH:
-        return _exchange(preview, request.query_params.get("ticket") or "")
-    if not _authorized(preview, request.headers.get("cookie")):
+        return await _exchange(preview, request.query_params.get("ticket") or "")
+    authorized = await _visitor_admitted(preview, request.headers.get("cookie"))
+    if authorized is False:
         return RedirectResponse(
             open_url(preview.label), status_code=status.HTTP_302_FOUND
+        )
+    if authorized is None or _is_devtools(path):
+        return Response(
+            "You no longer have access to this preview.",
+            status_code=status.HTTP_403_FORBIDDEN,
+            media_type="text/plain",
         )
     endpoint = await _endpoint(preview)
     if endpoint is None:
@@ -246,9 +292,12 @@ async def proxy_preview(label: str, request: Request, path: str = "") -> Respons
     return response
 
 
-def _exchange(preview: Preview, ticket: str) -> Response:
-    """A ticket from the API becomes this host's own cookie, then the page."""
-    if not ticket_is_valid(ticket, preview.label):
+async def _exchange(preview: Preview, ticket: str) -> Response:
+    """A ticket from the API becomes this host's own cookie, then the page.
+
+    Once: the ticket is spent on first use."""
+    user_id = await redeem_ticket(ticket, preview.label)
+    if user_id is None:
         return Response(
             "That link has expired. Open the preview from Lemma again.",
             status_code=status.HTTP_403_FORBIDDEN,
@@ -257,7 +306,7 @@ def _exchange(preview: Preview, ticket: str) -> Response:
     redirect = RedirectResponse("/", status_code=status.HTTP_302_FOUND)
     redirect.set_cookie(
         COOKIE_NAME,
-        mint_cookie(preview.label),
+        mint_cookie(preview.label, user_id),
         max_age=COOKIE_SECONDS,
         httponly=True,
         secure=_secure(),
@@ -280,7 +329,11 @@ async def proxy_preview_socket(
 ) -> None:
     """Hot reload and anything else a preview opens a socket for."""
     preview = await _live(label) if _came_through_host(websocket.headers) else None
-    if preview is None or not _authorized(preview, websocket.headers.get("cookie")):
+    if (
+        preview is None
+        or _is_devtools(path)
+        or await _visitor_admitted(preview, websocket.headers.get("cookie")) is not True
+    ):
         await websocket.close(code=1008)
         return
     endpoint = await _endpoint(preview)
@@ -291,7 +344,7 @@ async def proxy_preview_socket(
     upstream_url = target.copy_with(scheme="wss" if target.scheme == "https" else "ws")
     query = websocket.url.query
     headers = dict(endpoint.headers)
-    if cookie := _forwarded_cookie(websocket.headers.get("cookie")):
+    if cookie := forwarded_cookie(websocket.headers.get("cookie")):
         headers["cookie"] = cookie
     await websocket.accept(
         subprotocol=websocket.headers.get("sec-websocket-protocol") or None

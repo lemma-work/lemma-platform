@@ -43,6 +43,16 @@ from sandbox_runtime.tasks import create_inherited_task
 #: its WebSocket bridge, and the WebRTC streamer.
 RESERVED_PORTS = frozenset({8080, 4848, 4850, 5900, 5901, 4860})
 
+#: Chrome's conventional DevTools port. The port a running Chrome actually
+#: uses is chosen at launch and read by :func:`devtools_ports`; this one is
+#: refused even before any Chrome has recorded it.
+DEVTOOLS_DEFAULT_PORTS = frozenset({9222})
+
+#: Never a preview, wherever it is asked for: the API refuses these when a
+#: preview is created, and this relay refuses them (and the recorded DevTools
+#: ports) on every request. One list, so the two cannot disagree.
+REFUSED_PREVIEW_PORTS = RESERVED_PORTS | DEVTOOLS_DEFAULT_PORTS
+
 #: The header the runtime's own clients authenticate with. Never forwarded.
 _RUNTIME_TOKEN_HEADER = "x-lemma-runtime-token"
 
@@ -89,7 +99,7 @@ def refusal(port: int) -> str | None:
         return "not a port"
     if port in RESERVED_PORTS:
         return "that port is the machine's own"
-    if port in devtools_ports():
+    if port in DEVTOOLS_DEFAULT_PORTS or port in devtools_ports():
         return "that port is the browser's DevTools"
     return None
 

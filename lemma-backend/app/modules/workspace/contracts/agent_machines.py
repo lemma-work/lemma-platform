@@ -232,8 +232,12 @@ async def expose_port(
     created_by: UUID,
 ) -> tuple[str, str | None]:
     from app.core.api.dependencies import get_uow_factory
-    from app.modules.workspace.services.machine_previews import MachinePreviews
+    from app.modules.workspace.services.machine_previews import (
+        MachinePreviews,
+        refuse_unpreviewable_port,
+    )
 
+    refuse_unpreviewable_port(machine.machine.kind, port)
     preview = await MachinePreviews(get_uow_factory()).create(
         machine.machine_id,
         port=port,

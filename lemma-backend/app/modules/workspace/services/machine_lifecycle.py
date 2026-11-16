@@ -243,6 +243,10 @@ class MachineLifecycle:
     async def delete(self, machine: Machine) -> None:
         """A pod machine, gone: compute and disk. Its row stays DELETED so the
         sweep can still recognise anything of it left at the provider."""
+        from app.modules.workspace.services.machine_previews import MachinePreviews
+
+        # First, so its preview URLs stop answering before the machine goes.
+        await MachinePreviews(self._uow_factory).revoke_all(machine.id)
         await self._service().destroy(machine.id, delete_storage=True)
         from app.modules.workspace.services.compute_meter import close_sessions
 
