@@ -359,6 +359,33 @@ class PodJoinRequestService:
             if cursor is None:
                 return joined
 
+    async def join_default_pod(
+        self, *, pod_id: UUID, organization_id: UUID, user_id: UUID, add: bool
+    ) -> PodMemberEntity | None:
+        """Put a member into one default pod now, as their arrival would later.
+
+        For a caller that has to know they are in it before it answers --
+        first-workspace sign-up lands them there in the same response. The
+        rows are the ones ``join_default_pods`` writes, so when that handler
+        runs for the same arrival it finds them in the pod already and adds
+        nothing. With ``add`` false nobody is added: the membership they
+        already have is answered, or ``None``, so somebody who left the pod
+        is not put back by asking where they work. ``None`` too when they
+        are not in the organization.
+        """
+        org_member = await self.organization_repository.get_member(
+            user_id, organization_id
+        )
+        if org_member is None:
+            return None
+        if not add:
+            return await self.pod_member_repository.get_by_pod_and_org_member(
+                pod_id, org_member.id
+            )
+        return await self._ensure_pod_membership(
+            pod_id=pod_id, org_member=org_member, requester_user_id=user_id
+        )
+
     async def get_my_join_request(
         self,
         pod_id: UUID,

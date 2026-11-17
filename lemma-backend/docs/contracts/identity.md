@@ -42,6 +42,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `user.profile.get` | GET | `/users/me/profile` | Get User Profile |
 | `user.profile.upsert` | POST | `/users/me/profile` | Create or Update Profile |
 | `users.ensure_first_workspace` | POST | `/users/me/first-workspace` | Ensure The Current User Has A Workspace |
+| `users.work.set` | PUT | `/users/me/work` | Say What The Current User Does |
 
 <!-- /generated:operations -->
 
@@ -125,3 +126,53 @@ Marks the organization's Home seen by the caller.
 - **Shape:** `seen_at` after the write, and `previous_seen_at` before it.
 - **Errors:** 403 not a member; 422 a `seen_at` without a UTC offset.
 
+
+## `users.ensure_first_workspace`
+
+Puts the caller in an organization, making one if they belong to none, and
+says which Lemma they land in. The same rule every sign-up follows, chat
+included.
+
+- **Authorization:** a person's session. Workload and pod-app tokens are
+  refused. There is no organization hint on the wire; a company installation's
+  organization is fixed only by the chat sign-up that runs inside it.
+- **Order:** pending invitations for a verified address are accepted (each
+  with the role it offered); else an organization the caller already belongs
+  to; else, unless `own_organization`, their company's organization open to
+  their verified work domain is joined as a member; else one is made, owned by
+  the caller.
+- **What is made:** a company's organization -- verified work domain, `team`
+  not `false`, not `own_organization` -- is named after the company and open to
+  that domain (`EMAIL_DOMAIN`), or invitation-only when another organization
+  already holds the domain. Anything else is a workspace of one, named after
+  the person ("Ada's workspace", from the address when no name is set, else
+  "My workspace"), invitation-only. Either way a Lemma is made with it: open to
+  the organization's members and joined by every later arrival, named after
+  the organization ("Personal" for a workspace of one), the caller its admin.
+  A plan with no room for it leaves the organization without one.
+- **Where they land (`pod_id`):** the pod an accepted invitation named; else
+  the organization's Lemma -- its oldest live pod open to members that takes
+  in newcomers -- which the caller is added to as a pod user in this call if
+  they are not in it; else, with `with_pod`, a private pod of their own (an
+  organization older than its Lemma); else null.
+- **Effect:** every membership made here gets the organization role assignment
+  its permission checks read, the same as `org.create`, `org.join_auto_join`
+  and `org.invitation.accept` write.
+- **Idempotent:** a repeat call returns the same organization and pod and
+  makes nothing; concurrent calls serialize per person.
+- **Errors:** 403 an inactive or deleted account; 422 an unknown field.
+
+## `users.work.set`
+
+Keeps what the caller said they do.
+
+- **Authorization:** a person's session. Workload and pod-app tokens are
+  refused.
+- **Effect:** replaces the caller's answer with `jobs` (each kept once, in
+  order) and `other` (trimmed; empty is none), stamped `answered_at` now. Only
+  that one preference is written, so default chats and Home marks stored
+  beside it are untouched. An answer with no jobs and no `other` is a skip and
+  is kept as one.
+- **Shape:** the whole user, as `user.current.get` answers it, with `work`.
+- **Errors:** 422 an unknown job, more than 32 jobs, `other` over 120
+  characters once trimmed, or no `jobs`.

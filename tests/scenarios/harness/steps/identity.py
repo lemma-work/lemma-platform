@@ -193,6 +193,19 @@ class IdentitySteps:
             "/users/me/profile", json={"first_name": first, "last_name": last}
         )
 
+    async def says_what_they_do(
+        self, jobs: list[str], *, other: str | None = None
+    ) -> JSON:
+        """Answer "what do you do?" -- an empty answer is skipping it."""
+        body: JSON = {"jobs": jobs}
+        if other is not None:
+            body["other"] = other
+        return await self.api.put(
+            "/users/me/work",
+            what=f"{self.label} saying what they do",
+            json=body,
+        )
+
     async def has_a_mobile_number(self) -> str:
         """The number on this person's profile, writing one if there is none.
 
@@ -296,6 +309,13 @@ class IdentitySteps:
 
     async def own_role_in(self, organization: JSON) -> str:
         return str((await self.own_membership_of(organization))["role"])
+
+    async def org_permissions_in(self, organization: JSON) -> set[str]:
+        """What they may do in the organization, as its permission checks read it."""
+        payload = await self.api.get(
+            f"/organizations/{organization['id']}/permissions/me"
+        )
+        return set(payload.get("actions", []))
 
     # --- invitations -----------------------------------------------------
 

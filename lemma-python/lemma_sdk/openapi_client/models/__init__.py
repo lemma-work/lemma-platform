@@ -374,6 +374,7 @@ _NAME_TO_MODULE = {
     'InstallationOperationExecutionRequestPayload': 'installation_operation_execution_request_payload',
     'InstallationOption': 'installation_option',
     'InstalledAppSummary': 'installed_app_summary',
+    'Job': 'job',
     'JoinablePodListResponse': 'joinable_pod_list_response',
     'JoinablePodResponse': 'joinable_pod_response',
     'JsonObject': 'json_object',
@@ -767,6 +768,8 @@ _NAME_TO_MODULE = {
     'WhatsAppGroupRequest': 'whats_app_group_request',
     'WidgetAnswer': 'widget_answer',
     'WidgetEmbedUrlResponse': 'widget_embed_url_response',
+    'WorkAnswerRequest': 'work_answer_request',
+    'WorkAnswerResponse': 'work_answer_response',
     'WorkflowCreateRequest': 'workflow_create_request',
     'WorkflowDetailResponse': 'workflow_detail_response',
     'WorkflowEdge': 'workflow_edge',
@@ -1165,6 +1168,7 @@ if TYPE_CHECKING:
     from .installation_operation_execution_request_payload import InstallationOperationExecutionRequestPayload
     from .installation_option import InstallationOption
     from .installed_app_summary import InstalledAppSummary
+    from .job import Job
     from .joinable_pod_list_response import JoinablePodListResponse
     from .joinable_pod_response import JoinablePodResponse
     from .json_object import JsonObject
@@ -1558,6 +1562,8 @@ if TYPE_CHECKING:
     from .whats_app_group_request import WhatsAppGroupRequest
     from .widget_answer import WidgetAnswer
     from .widget_embed_url_response import WidgetEmbedUrlResponse
+    from .work_answer_request import WorkAnswerRequest
+    from .work_answer_response import WorkAnswerResponse
     from .workflow_create_request import WorkflowCreateRequest
     from .workflow_detail_response import WorkflowDetailResponse
     from .workflow_edge import WorkflowEdge
@@ -1969,6 +1975,7 @@ __all__ = [
     'InstallationOperationExecutionRequestPayload',
     'InstallationOption',
     'InstalledAppSummary',
+    'Job',
     'JoinablePodListResponse',
     'JoinablePodResponse',
     'JsonObject',
@@ -2362,6 +2369,8 @@ __all__ = [
     'WhatsAppGroupRequest',
     'WidgetAnswer',
     'WidgetEmbedUrlResponse',
+    'WorkAnswerRequest',
+    'WorkAnswerResponse',
     'WorkflowCreateRequest',
     'WorkflowDetailResponse',
     'WorkflowEdge',

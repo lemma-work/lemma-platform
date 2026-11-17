@@ -14,6 +14,7 @@ from app.modules.identity.domain.ports import (
     UserRepositoryPort,
 )
 from app.modules.identity.domain.user_entities import UserEntity
+from app.modules.identity.domain.user_preferences import WorkAnswer
 
 
 class UserService:
@@ -121,6 +122,12 @@ class UserService:
             owner_id = await self.user_repository.get_id_by_mobile_digits(digits)
             if owner_id is not None and owner_id != entity.id:
                 raise UserConflictError("This mobile number is already in use")
+
+    async def set_work(self, user_id: UUID, answer: WorkAnswer) -> UserEntity:
+        """Keep what the person said they do; reads see it once it commits."""
+        updated = await self.user_repository.set_work(user_id, answer)
+        await self._cache_after_commit(updated)
+        return updated
 
     async def update_user(self, entity: UserEntity) -> UserEntity:
         await self._ensure_identifiers_unique(entity)

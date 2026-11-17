@@ -345,6 +345,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/users/me/first-workspace` | `users.ensure_first_workspace` | Ensure The Current User Has A Workspace |
 | POST | `/users/me/profile` | `user.profile.upsert` | Create or Update Profile |
 | PUT | `/organizations/{organization_id}/home/seen` | `org.home.seen.set` | Mark Home Seen |
+| PUT | `/users/me/work` | `users.work.set` | Say What The Current User Does |
 
 ## mcp_access
 
