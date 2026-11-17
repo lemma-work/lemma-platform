@@ -46,6 +46,19 @@ export { readSSE, parseSSEJson } from "./streams.js";
 export type { SseRawEvent } from "./streams.js";
 export { watchDatastoreChanges } from "./datastore-changes.js";
 export { isEmbeddedInHost } from "./embedded.js";
+export {
+  LEMMA_LOCATION_MESSAGE_TYPE,
+  LEMMA_OPEN_MESSAGE_TYPE,
+  LEMMA_OPEN_RESULT_MESSAGE_TYPE,
+  appAddressAt,
+  currentAppPath,
+  isFramedByHost,
+  moveAppTo,
+  normalizeAppPath,
+  openApp,
+  watchAppPath,
+} from "./browser-location.js";
+export type { AppAddressFinder } from "./browser-location.js";
 export type {
   DatastoreChangeFrame,
   ChangeStreamStatus,

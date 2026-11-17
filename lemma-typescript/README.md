@@ -119,6 +119,30 @@ window.addEventListener("message", (event) => {
 });
 ```
 
+### Where the app is, and opening another app
+
+An app is often a list and a page for each of its records, and the record that is open is part of where the person is: a link they copy should land the next person on it. Framed inside Lemma the app has no address bar and no history of its own, so it says where it moved and Lemma writes the address (`/l/acme/sales/apps/people/1042`). Opened on its own in a tab, the same calls use the page's own address and history, so one routing path serves both.
+
+```ts
+import { currentAppPath, moveAppTo, watchAppPath } from "lemma-sdk";
+
+let path = currentAppPath();          // "/" or "/1042": where the app was opened
+moveAppTo("/1042");                   // the person opened a record; Back steps out of it
+const stop = watchAppPath((next) => { // Back, Forward, or an address followed in Lemma
+  path = next;                        // never called for the app's own moveAppTo
+});
+```
+
+A path is rooted and has one spelling: `/` is the app's one screen, and there is no trailing slash, query, fragment, `.` or `..`. `moveAppTo` returns the path as written, or `null` for something that is not one. Inside a frame, don't call `history.pushState` yourself: Back would undo a step the address above never showed.
+
+To open another app of the same Lemma, such as a deal naming its person, who lives in the People app:
+
+```ts
+const opened = await client.apps.open("people", "/1042"); // true once it is opening
+```
+
+Inside Lemma, Lemma switches to that app at that page, as a step Back undoes. On its own in a tab, the page goes to that app's own address. Inside an AI tool's conversation it does nothing and resolves `false`: the tool's frame hands this app its session, and another app loaded into it would arrive signed out. The browser bundle exposes the same functions on `window.LemmaClient` (`currentAppPath`, `moveAppTo`, `watchAppPath`, `openApp`, `isFramedByHost`).
+
 ### Agent web components (`lemma-ui.js`)
 
 For a drop-in agent UI in a no-build app, load the **opt-in** UI bundle *after* the client bundle. It registers two framework-agnostic custom elements that drive the same agent core, reuse `window.LemmaClient`, and read `window.__LEMMA_CONFIG__`:

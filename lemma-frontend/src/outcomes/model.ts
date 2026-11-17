@@ -130,6 +130,9 @@ export interface GoOptions {
     replace?: boolean;
     handoff?: Handoff;
     fill?: Fill;
+    /** The Lemma itself was asked for, by its name in a list, rather than
+     *  its Home: one that has apps opens on the first. */
+    landing?: boolean;
 }
 
 export type Go = (view: View, options?: GoOptions) => void;

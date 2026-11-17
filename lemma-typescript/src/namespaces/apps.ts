@@ -5,6 +5,7 @@ import type { AppBundleUploadRequest } from "../openapi_client/models/AppBundleU
 import type { UpdateAppRequest } from "../openapi_client/models/UpdateAppRequest.js";
 import type { AppReleaseResponse } from "../openapi_client/models/AppReleaseResponse.js";
 import { AppsService } from "../openapi_client/services/AppsService.js";
+import { openApp } from "../browser-location.js";
 
 export class AppsNamespace {
   constructor(
@@ -27,6 +28,15 @@ export class AppsNamespace {
   }
   delete(name: string) {
     return this.client.request(() => AppsService.appDelete(this.podId(), name));
+  }
+
+  /**
+   * Open another app of this Lemma at `path` (`/` is its one screen). Inside
+   * Lemma the host switches to it; on its own in a tab, the page goes to that
+   * app's address. Resolves false when it could not be opened.
+   */
+  open(name: string, path = "/") {
+    return openApp(name, path, async (app) => (await this.get(app)).url);
   }
 
   /** Promote a conversation widget into a persisted app (save as app). */

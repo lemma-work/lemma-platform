@@ -210,6 +210,30 @@ which the scaffold mounts). The scaffold depends on `lemma-sdk`, so its type
 declarations are in the app project's **`node_modules/lemma-sdk/dist/`** — read
 them for exact signatures (`cat node_modules/lemma-sdk/dist/react/useRecords.d.ts`).
 
+## Addresses — a record's page, and other apps
+
+Inside a Lemma an app is framed: it has no address bar or history of its own.
+Keep the record that is open in Lemma's address, so a copied link lands on it and
+Back steps out of it. All of these come from `lemma-sdk` (and `window.LemmaClient`
+in the HTML bundle):
+
+- `currentAppPath()`: where the app was opened (`/`, or `/1042` for a record).
+  Read it at start-up to pick the first screen.
+- `moveAppTo("/1042")` when the person opens a record, `moveAppTo("/")` when they
+  go back to the list. Lemma writes `…/apps/<name>/1042` and makes it a step of
+  Back.
+- `watchAppPath(path => …)` for Back, Forward, or an address followed in Lemma.
+  It is never called for the app's own `moveAppTo`, so route from it without a
+  guard.
+- `client.apps.open("people", "/1042")` to open another app of the same Lemma at
+  a record. Inside Lemma, Lemma switches; on its own in a tab, the page goes to
+  that app's address; inside an AI tool's conversation it resolves `false` and
+  does nothing.
+
+On its own in a tab the same calls use the page's own address and history, so one
+routing path serves both. Don't `history.pushState` inside a frame: Back would
+undo a step the address above never showed.
+
 ## Calling the API well — fetch once, subscribe, don't re-render the world
 
 Most app bugs are API-call discipline, not logic. Four rules:
