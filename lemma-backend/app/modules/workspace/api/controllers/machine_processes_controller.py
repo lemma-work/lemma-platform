@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
+from app.modules.workspace.api.controllers.machine_failures import MachineFailureRoute
 from app.modules.workspace.api.controllers.machine_dependencies import (
     UowFactoryDep,
     UseMachine,
@@ -50,7 +51,11 @@ from sandbox_runtime.protocol import ProcessState, TerminalSize
 
 logger = get_logger(__name__)
 
-router = APIRouter(tags=["Machine Processes"], dependencies=[Depends(machines_enabled)])
+router = APIRouter(
+    tags=["Machine Processes"],
+    dependencies=[Depends(machines_enabled)],
+    route_class=MachineFailureRoute,
+)
 
 
 def machine_processes() -> MachineProcesses:

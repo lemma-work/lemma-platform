@@ -4,13 +4,14 @@ A machine is addressed by a *ref*, never a bare name, because the same name can
 mean a pod's machine or one of your own:
 
 - ``me`` -- your default machine, created the first time it is named;
-- ``pod:<pod-id>/<name>`` -- a pod's machine (``pod:<name>`` for the pod this
-  client is bound to);
+- ``pod:<pod>:<name>`` -- a pod's machine, the pod by id or by name
+  (``pod:<name>`` for the pod this client is bound to);
 - ``mine:<name>`` -- another machine of yours, such as a connected Mac;
 - the machine's id.
 
-Refs travel in one URL path segment, where a ``/`` cannot, so they are sent in
-the colon form the server also accepts (``pod:<pod-id>:<name>``).
+Refs travel in one URL path segment, which is why the pod and the name are
+separated by ``:``. The older ``pod:<pod>/<name>`` is still accepted and sent
+in the colon form.
 """
 
 from __future__ import annotations
@@ -141,7 +142,7 @@ _POLL_WAIT_SECONDS = 25.0
 def machine_ref(ref: str, *, pod_id: str | UUID | None = None) -> str:
     """The ref as the server wants it in a URL path segment.
 
-    ``pod:<pod>/<name>`` becomes ``pod:<pod>:<name>``, and ``pod:<name>``
+    The older ``pod:<pod>/<name>`` becomes ``pod:<pod>:<name>``, and ``pod:<name>``
     gains ``pod_id`` when one is given, so a client bound to a pod can name its
     machines without repeating the pod.
     """

@@ -147,6 +147,32 @@ async def pod_name(session, pod_id: UUID) -> str | None:
     ).scalar_one_or_none()
 
 
+async def member_pods_named(uow, *, user_id: UUID, name: str) -> list[UUID]:
+    """The live pods this person is a member of whose name is ``name``,
+    compared without case. More than one is possible: a pod's name is not
+    unique, even within one organization."""
+    found = await uow.session.scalars(
+        select(Pod.id)
+        .join(PodMember, PodMember.pod_id == Pod.id)
+        .join(
+            OrganizationMember,
+            OrganizationMember.id == PodMember.organization_member_id,
+        )
+        .where(
+            OrganizationMember.user_id == user_id,
+            func.lower(Pod.name) == name.strip().lower(),
+            Pod.is_deleted.is_(False),
+        )
+        .order_by(Pod.id)
+        .limit(_NAMED_POD_LIMIT)
+    )
+    return list(found)
+
+
+#: Enough to tell one pod from several; a caller told "several" names the id.
+_NAMED_POD_LIMIT = 10
+
+
 @dataclass(frozen=True, slots=True)
 class PodProfile:
     """The pod as its own agent needs to describe itself.
@@ -300,6 +326,7 @@ async def refuse_pod_role_beyond_inviter(
 
 __all__ = [
     "add_pod_member",
+    "member_pods_named",
     "pod_invitation_details",
     "pod_member_count",
     "pod_member_id",

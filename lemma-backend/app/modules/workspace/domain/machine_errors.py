@@ -8,9 +8,10 @@ from app.core.domain.errors import DomainError
 class MachineNotFound(DomainError):
     """No such machine -- or one this caller may not know about."""
 
-    def __init__(self, ref: str) -> None:
+    def __init__(self, ref: str, *, hint: str | None = None) -> None:
+        message = f"There is no machine '{ref}' you can use."
         super().__init__(
-            f"There is no machine '{ref}' you can use.",
+            f"{message} {hint}" if hint else message,
             code="MACHINE_NOT_FOUND",
             status_code=404,
         )

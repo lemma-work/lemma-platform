@@ -30,6 +30,9 @@ def _routers():
     from app.modules.workspace.api.controllers.port_proxy_controller import (
         router as port_proxy,
     )
+    from app.modules.workspace.api.controllers.retired_workspace_routes import (
+        router as retired,
+    )
 
     # `previews` before `machines`: its literal paths must be matched before
     # `/machines/{ref}` reads them as a ref.
@@ -42,6 +45,7 @@ def _routers():
         browser_view,
         preview_proxy,
         port_proxy,
+        retired,
     ]
 
 

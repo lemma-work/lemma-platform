@@ -81,6 +81,54 @@ async def pod_machine_id(
     return machine.id if machine is not None else None
 
 
+@dataclass(frozen=True, slots=True)
+class BundledMachine:
+    """What a bundle asks a machine to be, as the importer will ask for it."""
+
+    name: str
+    template: str
+    size: str | None
+
+
+async def pod_machine_refusals(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, machines: list[BundledMachine]
+) -> list[str]:
+    """Why :func:`upsert_pod_machine` would refuse each of these, read before
+    anything is applied: the plan's policy on this deployment, which a
+    bundle's literal template name cannot know -- `workspace-docker` is a
+    valid template that only an E2B deployment can build.
+
+    Checked as the upsert will act: an existing machine keeps its own
+    template, so only a size it changes to is asked about. The person's
+    editor role and the organization's machine count are the apply's to
+    refuse; they say nothing about the bundle.
+    """
+    from app.modules.workspace.config import workspace_settings
+    from app.modules.workspace.infrastructure.machine_repository import (
+        MachineRepository,
+    )
+    from app.modules.workspace.services.pod_machines import (
+        bundle_refusals,
+        pod_policy,
+    )
+
+    if not machines:
+        return []
+    if not workspace_settings.pod_machines_enabled:
+        return ["Pod machines are not available on this deployment."]
+    repository = MachineRepository(uow)
+    existing = {
+        wanted.name: found
+        for wanted in machines
+        if (found := await repository.pod_machine(pod_id, wanted.name)) is not None
+    }
+    return bundle_refusals(
+        await pod_policy(uow, pod_id),
+        [(m.name, m.template, m.size) for m in machines],
+        existing,
+    )
+
+
 async def upsert_pod_machine(
     uow: SqlAlchemyUnitOfWork,
     *,
@@ -143,7 +191,9 @@ async def upsert_pod_machine(
 
 
 __all__ = [
+    "BundledMachine",
     "PodMachineSpec",
+    "pod_machine_refusals",
     "list_pod_machine_names",
     "list_pod_machines",
     "pod_machine_id",

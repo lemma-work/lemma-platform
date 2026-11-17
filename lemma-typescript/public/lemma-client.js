@@ -22098,10 +22098,13 @@ var LemmaClient = (() => {
   };
 
   // src/namespaces/machines.ts
-  function machinePathRef(ref) {
+  function machinePathRef(ref, podId) {
     const trimmed = ref.trim();
     if (!trimmed) throw new Error("A machine ref is required.");
-    const pathForm = trimmed.replace(/^pod:([^/:]+)\/(.+)$/, "pod:$1:$2");
+    let pathForm = trimmed.replace(/^pod:([^/:]+)\/(.+)$/, "pod:$1:$2");
+    if (podId && /^pod:[^:]+$/.test(pathForm)) {
+      pathForm = `pod:${podId}:${pathForm.slice("pod:".length)}`;
+    }
     return pathForm.split(":").map(encodeURIComponent).join(":");
   }
   var MAX_READ_BYTES = 8 * 1024 * 1024;
@@ -22247,14 +22250,20 @@ var LemmaClient = (() => {
       __publicField(this, "files");
       __publicField(this, "previews");
       __publicField(this, "browser");
-      __publicField(this, "pod");
       var _a;
       this.pollWaitSeconds = (_a = options.pollWaitSeconds) != null ? _a : 20;
       this.processes = new MachineProcessesApi(this);
       this.files = new MachineFilesApi(this);
       this.previews = new MachinePreviewsApi(this);
       this.browser = new MachineBrowserApi(this);
-      this.pod = new PodMachinesApi(this);
+    }
+    podMachines(podId) {
+      var _a, _b;
+      const chosen = podId != null ? podId : (_b = (_a = this.options).podId) == null ? void 0 : _b.call(_a);
+      if (!chosen) {
+        throw new Error("podId is required for a pod's machines: pass it, or bind the client to a pod.");
+      }
+      return `/pods/${encodeURIComponent(chosen)}/machines`;
     }
     /** @internal A request. */
     call(method, path, options = {}) {
@@ -22334,6 +22343,75 @@ var LemmaClient = (() => {
     async exec(ref, options) {
       const process2 = await this.processes.start(ref, options);
       return new MachineExecution(this, ref, process2);
+    }
+    /**
+     * Run a command to the end and return its exit code and output -- the
+     * Python SDK's `machines.run`.
+     *
+     *     const result = await client.machines.run("me", { command: "python --version" });
+     *     console.log(result.exitCode, result.output);
+     */
+    async run(ref, options) {
+      const execution = await this.exec(ref, options);
+      const events = [];
+      let state = "";
+      let exitCode = null;
+      for await (const event of execution) {
+        if (event.type === "output") {
+          events.push(event);
+        } else {
+          state = event.state;
+          exitCode = event.exit_code;
+        }
+      }
+      const written = (keep) => events.filter((event) => keep(event.channel)).map((event) => event.data).join("");
+      return {
+        exitCode,
+        state,
+        events,
+        output: written(() => true),
+        stdout: written((channel) => channel !== "stderr"),
+        stderr: written((channel) => channel === "stderr"),
+        ok: exitCode === 0
+      };
+    }
+    // -- a pod's machines: the client's pod unless `podId` says otherwise -------
+    /** Create a machine for a pod. */
+    create(options) {
+      const body = {
+        name: options.name,
+        display_name: options.displayName,
+        template: options.template,
+        size: options.size,
+        run_slots: options.runSlots
+      };
+      return this.call("POST", this.podMachines(options.podId), { body });
+    }
+    /** Change a pod machine's display name, size or run slots. */
+    update(name, changes, options = {}) {
+      const body = {};
+      if (changes.displayName !== void 0) body.display_name = changes.displayName;
+      if (changes.size !== void 0) body.size = changes.size;
+      if (changes.runSlots !== void 0) body.run_slots = changes.runSlots;
+      return this.call("PATCH", `${this.podMachines(options.podId)}/${encodeURIComponent(name)}`, {
+        body
+      });
+    }
+    delete(name, options = {}) {
+      return this.call("DELETE", `${this.podMachines(options.podId)}/${encodeURIComponent(name)}`);
+    }
+    /** Which agents and functions may use a pod machine. */
+    grants(name, options = {}) {
+      return this.call("GET", `${this.podMachines(options.podId)}/${encodeURIComponent(name)}/grants`);
+    }
+    /** Replace which agents and functions may use a pod machine. People need
+     *  no grant: their pod role decides. */
+    setGrants(name, grants, options = {}) {
+      return this.call(
+        "PUT",
+        `${this.podMachines(options.podId)}/${encodeURIComponent(name)}/grants`,
+        { body: grants }
+      );
     }
   };
   function machinePath(ref) {
@@ -22483,7 +22561,7 @@ var LemmaClient = (() => {
     }
     /** Write a file, replacing whatever was there. */
     write(ref, path, content) {
-      return this.machines.call("PUT", `${machinePath(ref)}/files/content`, {
+      return this.machines.call("PUT", `${machinePath(ref)}/files:content`, {
         params: { path },
         rawBody: content,
         headers: { "Content-Type": "application/octet-stream" }
@@ -22599,49 +22677,6 @@ var LemmaClient = (() => {
       );
     }
   };
-  var PodMachinesApi = class {
-    constructor(machines) {
-      __publicField(this, "machines", machines);
-    }
-    create(podId, options) {
-      const body = {
-        name: options.name,
-        display_name: options.displayName,
-        template: options.template,
-        size: options.size,
-        run_slots: options.runSlots
-      };
-      return this.machines.call("POST", podMachinesPath(podId), { body });
-    }
-    update(podId, name, changes) {
-      const body = {};
-      if (changes.displayName !== void 0) body.display_name = changes.displayName;
-      if (changes.size !== void 0) body.size = changes.size;
-      if (changes.runSlots !== void 0) body.run_slots = changes.runSlots;
-      return this.machines.call("PATCH", `${podMachinesPath(podId)}/${encodeURIComponent(name)}`, {
-        body
-      });
-    }
-    delete(podId, name) {
-      return this.machines.call("DELETE", `${podMachinesPath(podId)}/${encodeURIComponent(name)}`);
-    }
-    grants(podId, name) {
-      return this.machines.call(
-        "GET",
-        `${podMachinesPath(podId)}/${encodeURIComponent(name)}/grants`
-      );
-    }
-    setGrants(podId, name, grants) {
-      return this.machines.call(
-        "PUT",
-        `${podMachinesPath(podId)}/${encodeURIComponent(name)}/grants`,
-        { body: grants }
-      );
-    }
-  };
-  function podMachinesPath(podId) {
-    return `/pods/${encodeURIComponent(podId)}/machines`;
-  }
 
   // src/namespaces/web-logins.ts
   var WebLoginsNamespace = class {
@@ -23275,7 +23310,8 @@ var LemmaClient = (() => {
       this.apps = new AppsNamespace(this._generated, this._http, podIdFn);
       this.widgets = new WidgetsNamespace(this._http, podIdFn);
       this.machines = new MachinesNamespace(this._http, {
-        bearerToken: () => this.auth.getBearerToken()
+        bearerToken: () => this.auth.getBearerToken(),
+        podId: () => this._currentPodId
       });
       this.webLogins = new WebLoginsNamespace(this._http);
       this.connectors = new ConnectorsNamespace(this._generated, this._http, podIdFn);

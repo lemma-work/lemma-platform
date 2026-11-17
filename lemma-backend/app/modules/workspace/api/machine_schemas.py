@@ -34,8 +34,9 @@ class MachineResponse(BaseModel):
     id: UUID
     ref: str = Field(
         description=(
-            "How to name this machine in a call: `me`, `pod:<pod-id>/<name>` "
-            "or `mine:<name>`. In a URL path use `:` for the slash."
+            "How to name this machine in a call: `me`, `pod:<pod-id>:<name>` "
+            "or `mine:<name>`. Use it as it is in a URL path. The pod may also "
+            "be named by its name, and `pod:<name>` means the pod in context."
         )
     )
     kind: MachineKindName

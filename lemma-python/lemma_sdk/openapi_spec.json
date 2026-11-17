@@ -14117,7 +14117,7 @@
             "title": "Pod Id"
           },
           "ref": {
-            "description": "How to name this machine in a call: `me`, `pod:<pod-id>/<name>` or `mine:<name>`. In a URL path use `:` for the slash.",
+            "description": "How to name this machine in a call: `me`, `pod:<pod-id>:<name>` or `mine:<name>`. Use it as it is in a URL path. The pod may also be named by its name, and `pod:<name>` means the pod in context.",
             "title": "Ref",
             "type": "string"
           },
@@ -30539,7 +30539,8 @@
     },
     "/machines/{ref}/files/content": {
       "put": {
-        "operationId": "machine.files.write",
+        "deprecated": true,
+        "operationId": "machine.files.write_legacy",
         "parameters": [
           {
             "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
@@ -30587,7 +30588,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Write a file on a machine",
+        "summary": "Write a file on a machine (deprecated: use PUT files:content)",
         "tags": [
           "Machine Files"
         ],
@@ -30599,7 +30600,7 @@
           "paginates": false,
           "resource": "machine.files",
           "result": "entity",
-          "verb": "write"
+          "verb": "write_legacy"
         }
       }
     },
@@ -30717,6 +30718,70 @@
           "resource": "machine.files",
           "result": "entity",
           "verb": "content"
+        }
+      },
+      "put": {
+        "operationId": "machine.files.write",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineFileEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Write a file on a machine",
+        "tags": [
+          "Machine Files"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.files"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.files",
+          "result": "entity",
+          "verb": "write"
         }
       }
     },

@@ -145,6 +145,7 @@ export class LemmaClient {
     this.widgets = new WidgetsNamespace(this._http, podIdFn);
     this.machines = new MachinesNamespace(this._http, {
       bearerToken: () => this.auth.getBearerToken(),
+      podId: () => this._currentPodId,
     });
     this.webLogins = new WebLoginsNamespace(this._http);
     this.connectors = new ConnectorsNamespace(this._generated, this._http, podIdFn);

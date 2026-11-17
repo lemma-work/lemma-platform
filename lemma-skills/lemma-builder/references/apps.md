@@ -212,7 +212,7 @@ them for exact signatures (`cat node_modules/lemma-sdk/dist/react/useRecords.d.t
 
 **Running code from an app: `client.machines`.** An app that runs a command,
 reads a file or opens a preview does it on a machine of **its own pod**, named
-by a ref: `"pod:<name>"` (or `"pod:<pod-id>/<name>"`).
+by a ref: `"pod:<name>"` (or `"pod:<pod-id>:<name>"`).
 
 ```ts
 const run = await client.machines.exec("pod:report", { command: "python report.py", cwd: "~/lemma/report" });

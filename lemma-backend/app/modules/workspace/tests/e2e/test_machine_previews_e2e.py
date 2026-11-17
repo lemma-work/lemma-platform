@@ -95,7 +95,7 @@ async def previews(
     await asyncio.sleep(1)
     for name, body in (("server.js", DEV_SERVER), ("index.html", "<h1>v1</h1>")):
         written = await authenticated_client.put(
-            "/machines/me/files/content",
+            "/machines/me/files:content",
             params={"path": f"{folder}/{name}"},
             content=body.encode(),
         )
@@ -156,7 +156,7 @@ async def test_a_link_preview_shows_the_page_and_its_live_reload(previews) -> No
         assert await asyncio.wait_for(socket.recv(), 10) == "echo:ping"
 
         edited = await previews["client"].put(
-            "/machines/me/files/content",
+            "/machines/me/files:content",
             params={"path": previews["page"]},
             content=b"<h1>v2</h1>",
         )

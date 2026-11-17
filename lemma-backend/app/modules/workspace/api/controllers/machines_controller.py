@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from app.core.api.actor_policy import require_person
 from app.core.log.log import get_logger
+from app.modules.workspace.api.controllers.machine_failures import MachineFailureRoute
 from app.modules.workspace.api.controllers.machine_dependencies import (
     ManageMachine,
     SeeMachine,
@@ -75,7 +76,11 @@ def machines_enabled() -> None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
 
-router = APIRouter(tags=["Machines"], dependencies=[Depends(machines_enabled)])
+router = APIRouter(
+    tags=["Machines"],
+    dependencies=[Depends(machines_enabled)],
+    route_class=MachineFailureRoute,
+)
 
 
 async def _units(uow_factory, machine_ids: list[UUID]) -> dict[UUID, float]:

@@ -37,14 +37,19 @@ export type {
 /**
  * A machine ref as it goes in a URL path.
  *
- * Refs are written `pod:<pod-id>/<name>` for people, but a slash cannot sit in
- * one path segment, so the path form is `pod:<pod-id>:<name>`. Each part is
- * then escaped on its own, keeping the colons that separate them literal.
+ * A pod machine is `pod:<pod>:<name>`, the pod by id or by name: the form
+ * that fits in one path segment. The older `pod:<pod>/<name>` is still
+ * accepted and sent in the colon form. `pod:<name>` gains `podId` when one is
+ * given, so a client bound to a pod can name its machines without repeating
+ * it. Each part is escaped on its own, keeping the separating colons literal.
  */
-export function machinePathRef(ref: string): string {
+export function machinePathRef(ref: string, podId?: string): string {
   const trimmed = ref.trim();
   if (!trimmed) throw new Error("A machine ref is required.");
-  const pathForm = trimmed.replace(/^pod:([^/:]+)\/(.+)$/, "pod:$1:$2");
+  let pathForm = trimmed.replace(/^pod:([^/:]+)\/(.+)$/, "pod:$1:$2");
+  if (podId && /^pod:[^:]+$/.test(pathForm)) {
+    pathForm = `pod:${podId}:${pathForm.slice("pod:".length)}`;
+  }
   return pathForm.split(":").map(encodeURIComponent).join(":");
 }
 
@@ -114,6 +119,22 @@ export interface MachinesOptions {
   WebSocket?: WebSocketFactory | null;
   /** How long one output poll waits on the server for something new. */
   pollWaitSeconds?: number;
+  /** The client's pod: the default for creating and changing pod machines. */
+  podId?: () => string | undefined;
+}
+
+/** What `run` returns: how the command ended, and everything it wrote. */
+export interface MachineRunResult {
+  exitCode: number | null;
+  state: string;
+  events: Array<Extract<MachineProcessEvent, { type: "output" }>>;
+  /** Everything written, in order, whatever the channel. */
+  output: string;
+  /** stdout and terminal output. */
+  stdout: string;
+  stderr: string;
+  /** Exited 0. */
+  ok: boolean;
 }
 
 /**
@@ -255,7 +276,7 @@ export class MachineExecution implements AsyncIterable<MachineProcessEvent> {
 
 /**
  * The machines a person can use: their own default one (`me`), the ones a pod
- * keeps (`pod:<pod-id>/<name>`), and the ones they connected (`mine:<name>`).
+ * keeps (`pod:<pod>:<name>`), and the ones they connected (`mine:<name>`).
  *
  * Hand-written rather than generated because a ref is not a plain path
  * parameter -- see `machinePathRef`. An app's page reaches the machines of its
@@ -267,7 +288,6 @@ export class MachinesNamespace {
   readonly files: MachineFilesApi;
   readonly previews: MachinePreviewsApi;
   readonly browser: MachineBrowserApi;
-  readonly pod: PodMachinesApi;
 
   constructor(
     private readonly http: HttpClient,
@@ -278,7 +298,14 @@ export class MachinesNamespace {
     this.files = new MachineFilesApi(this);
     this.previews = new MachinePreviewsApi(this);
     this.browser = new MachineBrowserApi(this);
-    this.pod = new PodMachinesApi(this);
+  }
+
+  private podMachines(podId: string | undefined): string {
+    const chosen = podId ?? this.options.podId?.();
+    if (!chosen) {
+      throw new Error("podId is required for a pod's machines: pass it, or bind the client to a pod.");
+    }
+    return `/pods/${encodeURIComponent(chosen)}/machines`;
   }
 
   /** @internal A request. */
@@ -386,6 +413,105 @@ export class MachinesNamespace {
   async exec(ref: string, options: ExecOptions): Promise<MachineExecution> {
     const process = await this.processes.start(ref, options);
     return new MachineExecution(this, ref, process);
+  }
+
+  /**
+   * Run a command to the end and return its exit code and output -- the
+   * Python SDK's `machines.run`.
+   *
+   *     const result = await client.machines.run("me", { command: "python --version" });
+   *     console.log(result.exitCode, result.output);
+   */
+  async run(ref: string, options: ExecOptions): Promise<MachineRunResult> {
+    const execution = await this.exec(ref, options);
+    const events: MachineRunResult["events"] = [];
+    let state = "";
+    let exitCode: number | null = null;
+    for await (const event of execution) {
+      if (event.type === "output") {
+        events.push(event);
+      } else {
+        state = event.state;
+        exitCode = event.exit_code;
+      }
+    }
+    const written = (keep: (channel: string) => boolean) =>
+      events
+        .filter((event) => keep(event.channel))
+        .map((event) => event.data)
+        .join("");
+    return {
+      exitCode,
+      state,
+      events,
+      output: written(() => true),
+      stdout: written((channel) => channel !== "stderr"),
+      stderr: written((channel) => channel === "stderr"),
+      ok: exitCode === 0,
+    };
+  }
+
+  // -- a pod's machines: the client's pod unless `podId` says otherwise -------
+
+  /** Create a machine for a pod. */
+  create(options: {
+    name: string;
+    podId?: string;
+    displayName?: string;
+    template?: "workspace" | "workspace-docker";
+    size?: string;
+    runSlots?: number;
+  }): Promise<MachineResponse> {
+    const body: Partial<Record<keyof CreatePodMachineRequest, unknown>> = {
+      name: options.name,
+      display_name: options.displayName,
+      template: options.template,
+      size: options.size,
+      run_slots: options.runSlots,
+    };
+    return this.call("POST", this.podMachines(options.podId), { body });
+  }
+
+  /** Change a pod machine's display name, size or run slots. */
+  update(
+    name: string,
+    changes: {
+      displayName?: string | null;
+      size?: string | null;
+      runSlots?: number | null;
+    },
+    options: { podId?: string } = {},
+  ): Promise<MachineResponse> {
+    const body: Partial<Record<keyof UpdatePodMachineRequest, unknown>> = {};
+    if (changes.displayName !== undefined) body.display_name = changes.displayName;
+    if (changes.size !== undefined) body.size = changes.size;
+    if (changes.runSlots !== undefined) body.run_slots = changes.runSlots;
+    return this.call("PATCH", `${this.podMachines(options.podId)}/${encodeURIComponent(name)}`, {
+      body,
+    });
+  }
+
+  delete(name: string, options: { podId?: string } = {}): Promise<void> {
+    return this.call("DELETE", `${this.podMachines(options.podId)}/${encodeURIComponent(name)}`);
+  }
+
+  /** Which agents and functions may use a pod machine. */
+  grants(name: string, options: { podId?: string } = {}): Promise<MachineGrantsModel> {
+    return this.call("GET", `${this.podMachines(options.podId)}/${encodeURIComponent(name)}/grants`);
+  }
+
+  /** Replace which agents and functions may use a pod machine. People need
+   *  no grant: their pod role decides. */
+  setGrants(
+    name: string,
+    grants: MachineGrantsModel,
+    options: { podId?: string } = {},
+  ): Promise<MachineGrantsModel> {
+    return this.call(
+      "PUT",
+      `${this.podMachines(options.podId)}/${encodeURIComponent(name)}/grants`,
+      { body: grants },
+    );
   }
 }
 
@@ -585,7 +711,7 @@ export class MachineFilesApi {
     path: string,
     content: Blob | ArrayBuffer | Uint8Array | string,
   ): Promise<MachineFileEntry> {
-    return this.machines.call("PUT", `${machinePath(ref)}/files/content`, {
+    return this.machines.call("PUT", `${machinePath(ref)}/files:content`, {
       params: { path },
       rawBody: content as BodyInit,
       headers: { "Content-Type": "application/octet-stream" },
@@ -731,68 +857,3 @@ export class MachineBrowserApi {
   }
 }
 
-/** The machines a pod keeps, and which agents and functions may use each. */
-export class PodMachinesApi {
-  constructor(private readonly machines: MachinesNamespace) {}
-
-  create(
-    podId: string,
-    options: {
-      name: string;
-      displayName?: string;
-      template?: "workspace" | "workspace-docker";
-      size?: string;
-      runSlots?: number;
-    },
-  ): Promise<MachineResponse> {
-    const body: Partial<Record<keyof CreatePodMachineRequest, unknown>> = {
-      name: options.name,
-      display_name: options.displayName,
-      template: options.template,
-      size: options.size,
-      run_slots: options.runSlots,
-    };
-    return this.machines.call("POST", podMachinesPath(podId), { body });
-  }
-
-  update(
-    podId: string,
-    name: string,
-    changes: {
-      displayName?: string | null;
-      size?: string | null;
-      runSlots?: number | null;
-    },
-  ): Promise<MachineResponse> {
-    const body: Partial<Record<keyof UpdatePodMachineRequest, unknown>> = {};
-    if (changes.displayName !== undefined) body.display_name = changes.displayName;
-    if (changes.size !== undefined) body.size = changes.size;
-    if (changes.runSlots !== undefined) body.run_slots = changes.runSlots;
-    return this.machines.call("PATCH", `${podMachinesPath(podId)}/${encodeURIComponent(name)}`, {
-      body,
-    });
-  }
-
-  delete(podId: string, name: string): Promise<void> {
-    return this.machines.call("DELETE", `${podMachinesPath(podId)}/${encodeURIComponent(name)}`);
-  }
-
-  grants(podId: string, name: string): Promise<MachineGrantsModel> {
-    return this.machines.call(
-      "GET",
-      `${podMachinesPath(podId)}/${encodeURIComponent(name)}/grants`,
-    );
-  }
-
-  setGrants(podId: string, name: string, grants: MachineGrantsModel): Promise<MachineGrantsModel> {
-    return this.machines.call(
-      "PUT",
-      `${podMachinesPath(podId)}/${encodeURIComponent(name)}/grants`,
-      { body: grants },
-    );
-  }
-}
-
-function podMachinesPath(podId: string): string {
-  return `/pods/${encodeURIComponent(podId)}/machines`;
-}

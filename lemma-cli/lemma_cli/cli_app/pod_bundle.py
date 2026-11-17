@@ -113,6 +113,7 @@ from lemma_pod_bundle.apply_fields import (
 from lemma_sdk import Lemma
 
 from .pod_bundle_outcome import bundle_outcome, carry_outcome, plan_outcome
+from .pod_bundle_machines import check_machines_against_policy
 from .pod_bundle_connectors import (
     declare_pod_connectors,
     export_pod_connectors,
@@ -1452,11 +1453,16 @@ def _build_import_plan(
             summary["tables"].append(f"created:{table_name}")
 
     machine_dirs = _resource_dirs(source_dir, "machines")
-    existing_machines = (
-        {str(item.get("name")) for item in _pod_machines(client, pod_id)}
+    pod_machines = (
+        {str(item.get("name")): item for item in _pod_machines(client, pod_id)}
         if machine_dirs
-        else set()
+        else {}
     )
+    existing_machines = set(pod_machines)
+    refused, could_not_ask = check_machines_against_policy(
+        client, pod_id, machine_dirs, pod_machines
+    )
+    issues.extend(refused)
     for resource_dir in machine_dirs:
         machine_name = resource_dir.name
         if machine_name in existing_machines:
@@ -1662,7 +1668,8 @@ def _build_import_plan(
     return (
         summary,
         issues,
-        _collect_grant_advisories(source_dir, created_names=created_names),
+        could_not_ask
+        + _collect_grant_advisories(source_dir, created_names=created_names),
     )
 
 
@@ -2679,11 +2686,16 @@ def import_pod_bundle(
 
     # Machines before the agents that run on one and the grants that name one.
     machine_dirs = _resource_dirs(source_dir, "machines")
-    existing_machines = (
-        {str(item.get("name")) for item in _pod_machines(client, pod_id)}
+    pod_machines = (
+        {str(item.get("name")): item for item in _pod_machines(client, pod_id)}
         if machine_dirs
-        else set()
+        else {}
     )
+    existing_machines = set(pod_machines)
+    refused, could_not_ask = check_machines_against_policy(
+        client, pod_id, machine_dirs, pod_machines
+    )
+    issues.extend(refused)
     for resource_dir in machine_dirs:
         machine_name = resource_dir.name
         payload = apply_variables(

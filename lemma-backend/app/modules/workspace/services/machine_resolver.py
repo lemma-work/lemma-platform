@@ -60,6 +60,8 @@ class FactsSource(Protocol):
         self, caller: MachineCaller, machine: Machine
     ) -> PodAccess: ...
 
+    async def pods_named(self, caller: MachineCaller, name: str) -> list[UUID]: ...
+
 
 @dataclass(frozen=True, slots=True)
 class ResolvedMachine:
@@ -159,21 +161,32 @@ class MachineResolver:
         return None
 
     async def _pod_of(self, ref: MachineRef, caller: MachineCaller) -> UUID | None:
-        """``pod:<name>`` is the caller's own pod; ``pod:<pod>/<name>`` takes a
-        pod id, or the name of the caller's pod."""
+        """``pod:<name>`` is the caller's own pod; ``pod:<pod>:<name>`` takes a
+        pod id, or the name of a pod the caller is in.
+
+        A name two of the caller's pods share is not guessed between -- unless
+        one is the pod the call is made in -- and is refused as not found, with
+        the way out: the id.
+        """
         if ref.pod is None:
             return caller.pod_id
         try:
             return UUID(ref.pod)
         except ValueError:
             pass
-        if caller.pod_id is None:
-            return None
-        from app.modules.pod.contracts.members import pod_name
-
-        name = await pod_name(self._uow.session, caller.pod_id)
-        if name is not None and name.strip().lower() == ref.pod.strip().lower():
+        named = await self._facts.pods_named(caller, ref.pod)
+        if len(named) == 1:
+            return named[0]
+        if caller.pod_id is not None and caller.pod_id in named:
             return caller.pod_id
+        if named:
+            raise MachineNotFound(
+                str(ref),
+                hint=(
+                    f"More than one of your pods is called '{ref.pod}'; name "
+                    f"the pod by its id: pod:<pod-id>:{ref.name}."
+                ),
+            )
         return None
 
     async def _default_for(self, user_id: UUID) -> Machine:

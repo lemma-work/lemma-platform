@@ -88,9 +88,9 @@ export interface ResetResult {
 
 /** The path segment for a machine's `ref`.
  *
- *  The server names a pod machine `pod:<pod>/<name>` and asks for `:` in place
- *  of the slash in a URL path — a slash there would be read as the next
- *  segment. Only the first, because the name after it is the machine's own. */
+ *  The server names a pod machine `pod:<pod>:<name>`. An older `pod:<pod>/<name>`
+ *  still gets `:` for its slash, since a slash in a URL path would be read as
+ *  the next segment. Only the first, because the name after it is the machine's own. */
 export function pathRef(ref: string): string {
     return encodeURIComponent(ref.replace("/", ":"));
 }
