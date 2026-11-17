@@ -643,6 +643,43 @@ def os_user() -> str:
 # ------------------------------------------------------------- the two verbs
 
 
+def require_host_tools() -> None:
+    """What host mode needs, checked before anything is paired: a pairing
+    that then fails here leaves a machine nobody can serve."""
+    if shutil.which("uv") is None:
+        raise SetupError(
+            "Host mode needs uv: https://docs.astral.sh/uv/getting-started/installation/"
+        )
+
+
+def previous_pairing(root: Path, mode: str) -> Paired | None:
+    """The machine this ``--root`` was already joined as, in this mode.
+
+    Running ``connect`` again -- after Ctrl-C, a reboot, an upgrade -- serves
+    that machine again instead of pairing a new one each time. ``disconnect``
+    is how to start over.
+    """
+    state = state_directory(root)
+    config_file, secret_file = state / CONFIG_NAME, state / SECRET_NAME
+    if not (config_file.exists() and secret_file.exists()):
+        return None
+    try:
+        config = json.loads(config_file.read_text(encoding="utf-8"))
+        secret = secret_file.read_text(encoding="utf-8").strip()
+    except OSError, ValueError:
+        return None
+    if config.get("mode") != mode or not secret or not config.get("connection_id"):
+        return None
+    return Paired(
+        connection_id=str(config["connection_id"]),
+        # Not kept in machine.json, whose keys the agent reads strictly; nothing
+        # after pairing reads it.
+        user_id="",
+        name=str(config["name"]),
+        machine_secret=secret,
+    )
+
+
 def remove_container(name: str) -> None:
     subprocess.run(
         ["docker", "rm", "-f", container_name(name)], capture_output=True, check=False
@@ -663,6 +700,7 @@ class Steps:
     remove_service: Callable[[str], None] = remove_service
     remove_container: Callable[[str], None] = remove_container
     free_port: Callable[[], int] = free_port
+    require_host_tools: Callable[[], None] = require_host_tools
 
 
 @dataclass(frozen=True)
@@ -691,19 +729,32 @@ class Connected:
 def connect(
     options: ConnectOptions, *, announce, progress, steps: Steps = Steps()
 ) -> Connected:
-    """Pair, then set the machine up to serve: everything after consent."""
+    """Pair, then set the machine up to serve: everything after consent.
+
+    A ``--root`` already joined in this mode serves that machine again rather
+    than pairing another one."""
     root = options.root
+    mode = "image" if options.image else "host"
+    if not options.image:
+        steps.require_host_tools()
     installation = installation_id(root)
-    paired = steps.pair(
-        options.api_url,
-        display_name=display_name(),
-        mode="image" if options.image else "host",
-        installation_id=installation,
-        pod=options.pod,
-        announce=announce,
-        open_browser=options.open_browser,
-    )
-    progress(f"Approved as {paired.name}.")
+    paired = previous_pairing(root, mode)
+    if paired is not None:
+        progress(
+            f"Serving {paired.name} again (joined from {root}); "
+            "`lemma machine disconnect` starts over."
+        )
+    else:
+        paired = steps.pair(
+            options.api_url,
+            display_name=display_name(),
+            mode=mode,
+            installation_id=installation,
+            pod=options.pod,
+            announce=announce,
+            open_browser=options.open_browser,
+        )
+        progress(f"Approved as {paired.name}.")
     state = state_directory(root)
     secret_file = state / SECRET_NAME
     write_private(secret_file, paired.machine_secret + "\n")

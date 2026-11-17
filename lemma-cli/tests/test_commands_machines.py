@@ -69,6 +69,7 @@ def _steps(seen: dict[str, object], **overrides) -> setup.Steps:
         "remove_service": lambda name: seen.__setitem__("unit_removed", name),
         "remove_container": lambda name: seen.__setitem__("container_removed", name),
         "free_port": lambda: 18123,
+        "require_host_tools": lambda: None,
     }
     return setup.Steps(**{**defaults, **overrides})
 
@@ -337,3 +338,47 @@ def test_service_units_restart_crashes_but_not_a_revoked_machine(tmp_path):
     assert "<key>SuccessfulExit</key><false/>" in plist
     assert "<string>--config</string>" in plist
     assert "work.lemma.machine.laptop" in plist
+
+
+def test_connecting_again_serves_the_same_machine(tmp_path):
+    """QA: Ctrl-C and `connect` again paired a new machine every time, so a
+    person's list filled with dead copies of one computer."""
+    first: dict[str, object] = {}
+    setup.connect(
+        setup.ConnectOptions(api_url="https://api.example.test", root=tmp_path),
+        announce=_quiet,
+        progress=_quiet,
+        steps=_steps(first),
+    )
+    again: dict[str, object] = {}
+
+    def pair_again(api_url, **kwargs):
+        raise AssertionError("a machine already joined must not pair again")
+
+    connected = setup.connect(
+        setup.ConnectOptions(api_url="https://api.example.test", root=tmp_path),
+        announce=_quiet,
+        progress=_quiet,
+        steps=_steps(again, pair=pair_again),
+    )
+
+    assert connected.name == "laptop"
+    assert again["provisioned"][1] == "s3cret"
+
+
+def test_a_missing_tool_is_said_before_anything_is_paired(tmp_path):
+    """QA: host mode found uv missing after the person had approved it, and
+    left a machine that could never be served."""
+    seen: dict[str, object] = {}
+
+    def no_uv() -> None:
+        raise setup.SetupError("Host mode needs uv")
+
+    with pytest.raises(setup.SetupError, match="uv"):
+        setup.connect(
+            setup.ConnectOptions(api_url="https://api.example.test", root=tmp_path),
+            announce=_quiet,
+            progress=_quiet,
+            steps=_steps(seen, require_host_tools=no_uv),
+        )
+    assert "pair" not in seen
