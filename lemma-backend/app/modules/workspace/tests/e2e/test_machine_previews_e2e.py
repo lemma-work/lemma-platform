@@ -173,10 +173,16 @@ async def test_a_link_preview_shows_the_page_and_its_live_reload(previews) -> No
 
 
 @pytest.fixture
-async def preview_rows(monkeypatch, backend_server, authenticated_client):
+async def preview_rows(
+    monkeypatch,
+    local_sandbox_server,
+    backend_server,
+    configure_workspace_api_url,
+    authenticated_client,
+):
     """Previews switched on, with no machine started: creating, listing and
     revoking a preview are rows, and these tests are about the rows."""
-    del backend_server
+    del local_sandbox_server, backend_server, configure_workspace_api_url
     monkeypatch.setattr(workspace_settings, "machine_preview_domain", "preview.test")
     monkeypatch.setattr(workspace_settings, "machine_preview_scheme", "http")
     return authenticated_client
