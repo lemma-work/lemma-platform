@@ -21,7 +21,8 @@ The table below is generated from the committed OpenAPI specification by `script
 | `machine.files.move` | POST | `/machines/{ref}/files:move` | Move or rename a path on a machine |
 | `machine.files.stat` | GET | `/machines/{ref}/files:stat` | Stat one path on a machine |
 | `machine.files.sync` | POST | `/machines/{ref}/files:sync` | Copy files between a machine and pod files |
-| `machine.files.write` | PUT | `/machines/{ref}/files/content` | Write a file on a machine |
+| `machine.files.write` | PUT | `/machines/{ref}/files:content` | Write a file on a machine |
+| `machine.files.write_legacy` | PUT | `/machines/{ref}/files/content` | Write a file on a machine (deprecated: use PUT files:content) |
 | `machine.get` | GET | `/machines/{ref}` | Get one machine |
 | `machine.list` | GET | `/machines` | List the machines you can see |
 | `machine.pod.create` | POST | `/pods/{pod_id}/machines` | Create a machine the pod's agents share |

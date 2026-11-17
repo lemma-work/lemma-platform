@@ -13,13 +13,16 @@ from dataclasses import asdict
 from pathlib import Path
 from uuid import UUID
 
+from lemma_pod_bundle import load_resource_payload
 from lemma_pod_bundle.layout import _write_json
 from lemma_pod_bundle.normalize import _normalize_machine_payload
 
+from app.modules.pod_bundle.domain.errors import BundleInvalidError
 from app.modules.pod_bundle.domain.state import PlanStep, StepAction, StepKind
 
 if TYPE_CHECKING:
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.workspace.contracts.pod_machines import BundledMachine
 
 
 async def export_machines(
@@ -44,9 +47,12 @@ async def export_machines(
 
 
 class MachineNames(Protocol):
-    """The pod's machines, by name: what the plan diffs a bundle against."""
+    """The pod's machines, by name: what the plan diffs a bundle against --
+    and why the target would refuse a bundled one."""
 
     async def machine_names(self) -> set[str]: ...
+
+    async def machine_refusals(self, machines: list[BundledMachine]) -> list[str]: ...
 
 
 async def machine_steps(bundle_root: Path, pod: MachineNames) -> list[PlanStep]:
@@ -54,10 +60,25 @@ async def machine_steps(bundle_root: Path, pod: MachineNames) -> list[PlanStep]:
 
     The plan puts these before the agents that name a machine as theirs and
     before every grants step, since a `machine.use` grant names the machine.
+
+    A machine the target cannot build -- a template its deployment does not
+    offer (`workspace-docker` is E2B-only), a size its plan does not allow --
+    fails the plan, naming each one. Found at apply, it failed partway, with
+    every step before it already written.
     """
     type_dir = bundle_root / "machines"
     if not type_dir.is_dir():
         return []
+    dirs = sorted((d for d in type_dir.iterdir() if d.is_dir()), key=lambda p: p.name)
+    refusals = await pod.machine_refusals([_bundled(d) for d in dirs])
+    if refusals:
+        raise BundleInvalidError(
+            "This pod cannot have the bundle's machines as they are: "
+            + " ".join(refusals)
+            + " Change them in the bundle, or import into a pod whose plan "
+            "allows them.",
+            details={"machines": refusals},
+        )
     existing = await pod.machine_names()
     return [
         PlanStep(
@@ -66,13 +87,27 @@ async def machine_steps(bundle_root: Path, pod: MachineNames) -> list[PlanStep]:
             name=d.name,
             action=StepAction.UPDATE if d.name in existing else StepAction.CREATE,
         )
-        for d in sorted(type_dir.iterdir(), key=lambda p: p.name)
-        if d.is_dir()
+        for d in dirs
     ]
 
 
+def _bundled(machine_dir: Path) -> BundledMachine:
+    """The machine as `apply_machine` will ask for it."""
+    from app.modules.workspace.contracts.pod_machines import BundledMachine
+
+    payload = load_resource_payload(
+        machine_dir, machine_dir.name, resource_type="machines"
+    )
+    size = payload.get("size")
+    return BundledMachine(
+        name=machine_dir.name,
+        template=str(payload.get("template") or "workspace"),
+        size=str(size) if size else None,
+    )
+
+
 class PodMachineNames:
-    """:class:`MachineNames` over a pod's UoW, for the production lookup."""
+    """:class:`MachineNames` over a pod's UoW, for the production lookups."""
 
     _uow: SqlAlchemyUnitOfWork
     _pod_id: UUID
@@ -83,3 +118,12 @@ class PodMachineNames:
         )
 
         return await list_pod_machine_names(self._uow, pod_id=self._pod_id)
+
+    async def machine_refusals(self, machines: list[BundledMachine]) -> list[str]:
+        from app.modules.workspace.contracts.pod_machines import (
+            pod_machine_refusals,
+        )
+
+        return await pod_machine_refusals(
+            self._uow, pod_id=self._pod_id, machines=machines
+        )

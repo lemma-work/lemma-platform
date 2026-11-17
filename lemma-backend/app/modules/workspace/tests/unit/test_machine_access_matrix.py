@@ -232,6 +232,10 @@ class _Facts:
         self.asked.append("authorizer")
         return self.pod
 
+    async def pods_named(self, caller: MachineCaller, name: str) -> list:
+        self.asked.append("pod names")
+        return []
+
 
 class _NoDatabase:
     """``decide`` reads no rows: anything touching the session fails the test."""

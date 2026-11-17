@@ -22,7 +22,7 @@ export type MachineResponse = {
     name: string;
     pod_id?: (string | null);
     /**
-     * How to name this machine in a call: `me`, `pod:<pod-id>/<name>` or `mine:<name>`. In a URL path use `:` for the slash.
+     * How to name this machine in a call: `me`, `pod:<pod-id>:<name>` or `mine:<name>`. Use it as it is in a URL path. The pod may also be named by its name, and `pod:<name>` means the pod in context.
      */
     ref: string;
     run_slots: number;

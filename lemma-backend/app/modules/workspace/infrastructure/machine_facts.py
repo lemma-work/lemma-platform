@@ -81,6 +81,22 @@ class DatabaseMachineFacts:
         )
         return PodAccess(manage=manage, use=use, see=see)
 
+    async def pods_named(self, caller: MachineCaller, name: str) -> list[UUID]:
+        """The pods ``pod:<name>:...`` could mean to this caller: a person's
+        by their memberships, a workload's or an app's only its own pod."""
+        if caller.kind is CallerKind.USER and caller.user_id is not None:
+            from app.modules.pod.contracts.members import member_pods_named
+
+            return await member_pods_named(self._uow, user_id=caller.user_id, name=name)
+        if caller.pod_id is None:
+            return []
+        from app.modules.pod.contracts.members import pod_name
+
+        own = await pod_name(self._uow.session, caller.pod_id)
+        if own is not None and own.strip().lower() == name.strip().lower():
+            return [caller.pod_id]
+        return []
+
     async def context(self, caller: MachineCaller, pod_id: UUID) -> Context | None:
         """The caller's authorization context in ``pod_id``, or None when it
         has none there at all."""

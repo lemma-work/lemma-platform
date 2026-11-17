@@ -399,11 +399,19 @@ async def _relay(proxied: httpx.Response) -> AsyncIterator[bytes]:
         await proxied.aclose()
 
 
-# Two paths, one handler: the grant's own URL ends at the token with a trailing
-# slash and no path at all, which `/{token}/{path:path}` does not match.
+#: Where grants pointed before machines, served by the same handlers until
+#: the `/workspace-ports` date in `app.core.auth_exemptions.LEGACY_ALIASES`:
+#: a grant already handed out keeps working for the hour it lives. Both go
+#: together on that day.
+LEGACY_PORT_PROXY_PREFIXES = ("/public/workspace-ports", "/workspace-ports")
+
+# Two paths per prefix, one handler: the grant's own URL ends at the token with
+# a trailing slash and no path at all, which `/{token}/{path:path}` does not
+# match.
 for _path in (
-    PORT_PROXY_PREFIX + "/{token}",
-    PORT_PROXY_PREFIX + "/{token}/{path:path}",
+    f"{_prefix}{_tail}"
+    for _prefix in (PORT_PROXY_PREFIX, *LEGACY_PORT_PROXY_PREFIXES)
+    for _tail in ("/{token}", "/{token}/{path:path}")
 ):
     router.add_api_websocket_route(_path, proxy_sandbox_websocket)
     router.add_api_route(

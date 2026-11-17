@@ -25,7 +25,7 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "put",
-        "url": "/machines/{ref}/files/content".format(
+        "url": "/machines/{ref}/files:content".format(
             ref=quote(str(ref), safe=""),
         ),
         "params": params,

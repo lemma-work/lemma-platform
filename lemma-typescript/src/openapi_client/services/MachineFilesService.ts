@@ -71,13 +71,14 @@ export class MachineFilesService {
         });
     }
     /**
-     * Write a file on a machine
+     * @deprecated
+     * Write a file on a machine (deprecated: use PUT files:content)
      * @param ref Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.
      * @param path
      * @returns MachineFileEntry Successful Response
      * @throws ApiError
      */
-    public static machineFilesWrite(
+    public static machineFilesWriteLegacy(
         ref: string,
         path: string,
     ): CancelablePromise<MachineFileEntry> {
@@ -128,6 +129,31 @@ export class MachineFilesService {
                 'path': path,
                 'offset': offset,
                 'length': length,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Write a file on a machine
+     * @param ref Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.
+     * @param path
+     * @returns MachineFileEntry Successful Response
+     * @throws ApiError
+     */
+    public static machineFilesWrite(
+        ref: string,
+        path: string,
+    ): CancelablePromise<MachineFileEntry> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/machines/{ref}/files:content',
+            path: {
+                'ref': ref,
+            },
+            query: {
+                'path': path,
             },
             errors: {
                 422: `Validation Error`,

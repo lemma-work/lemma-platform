@@ -29,12 +29,17 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.core.log.log import get_logger
 from app.modules.workspace.api.controllers.machine_dependencies import (
     SeeMachine,
     UowFactoryDep,
     UseMachine,
     acting_user,
+)
+from app.modules.workspace.api.controllers.machine_failures import (
+    MACHINE_FAILURES,
+    MachineFailureRoute,
+    is_missing_path,
+    machine_call_failed,
 )
 from app.modules.workspace.api.controllers.machines_controller import machines_enabled
 from app.modules.workspace.api.controllers.workspace_file_ranges import (
@@ -42,8 +47,6 @@ from app.modules.workspace.api.controllers.workspace_file_ranges import (
     matches_etag,
     requested_range,
 )
-from app.modules.workspace.providers.runtime_client import WorkspaceRuntimeError
-from app.modules.workspace.session_support import sandbox_failure_types
 from sandbox_runtime.paths import (
     HOME_ROOT,
     WORKSPACE_ROOT,
@@ -53,9 +56,12 @@ from sandbox_runtime.paths import (
 )
 from sandbox_runtime.protocol import FileKind
 
-logger = get_logger(__name__)
 
-router = APIRouter(tags=["Machine Files"], dependencies=[Depends(machines_enabled)])
+router = APIRouter(
+    tags=["Machine Files"],
+    dependencies=[Depends(machines_enabled)],
+    route_class=MachineFailureRoute,
+)
 
 _MAX_ENTRIES = 1000
 _MAX_CONTENT_BYTES = 8 * 1024 * 1024
@@ -63,10 +69,7 @@ _MAX_WRITE_BYTES = 64 * 1024 * 1024
 _MAX_SYNC_FILES = 500
 _MAX_SYNC_BYTES = 256 * 1024 * 1024
 
-_FAILURES: tuple[type[BaseException], ...] = (
-    *sandbox_failure_types(),
-    WorkspaceRuntimeError,
-)
+_FAILURES = MACHINE_FAILURES
 
 
 class MachineFileEntry(BaseModel):
@@ -265,35 +268,6 @@ def _deadline(seconds: int = 120) -> datetime:
     return datetime.now(timezone.utc) + timedelta(seconds=seconds)
 
 
-def _as_http_error(exc: BaseException, path: str) -> HTTPException:
-    name = type(exc).__name__
-    if "Unauthorized" in name:
-        logger.warning(
-            "workspace.machine_files.runtime_unauthorized.failed", exc_info=exc
-        )
-        return HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Lemma could not authenticate to the machine.",
-        )
-    if "NotFound" in name:
-        return HTTPException(status.HTTP_404_NOT_FOUND, f"No such path: {path}")
-    if "TooLarge" in name or "Rejected" in name:
-        return HTTPException(
-            status.HTTP_413_CONTENT_TOO_LARGE,
-            "File is larger than this endpoint will serve; read a range.",
-        )
-    if "Unavailable" in name:
-        logger.warning("workspace.machine_files.not_ready.degraded", exc_info=exc)
-        return HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "The machine is still starting. Try again in a moment.",
-        )
-    logger.warning("workspace.machine_files.failed.degraded", exc_info=exc)
-    return HTTPException(
-        status.HTTP_503_SERVICE_UNAVAILABLE, "The machine is not reachable right now."
-    )
-
-
 @router.get(
     "/machines/{ref}/files",
     response_model=MachineFileListResponse,
@@ -320,9 +294,9 @@ async def list_files(
     except HTTPException:
         raise
     except _FAILURES as exc:
-        if "NotFound" in type(exc).__name__:
+        if is_missing_path(exc):
             return MachineFileListResponse(path=target, exists=False)
-        raise _as_http_error(exc, target)
+        raise machine_call_failed(exc, path=target)
     ordered = sorted(stats, key=lambda stat: str(getattr(stat, "path", "")))
     if after:
         ordered = [stat for stat in ordered if str(getattr(stat, "path", "")) > after]
@@ -353,7 +327,7 @@ async def stat_file(
             resolved.machine.id, target, deadline_at=_deadline()
         )
     except _FAILURES as exc:
-        raise _as_http_error(exc, target)
+        raise machine_call_failed(exc, path=target)
     _inside_home(stat)
     return _entry(stat)
 
@@ -404,7 +378,7 @@ async def read_file(
     except HTTPException:
         raise
     except _FAILURES as exc:
-        raise _as_http_error(exc, target)
+        raise machine_call_failed(exc, path=target)
 
     async def body() -> AsyncIterator[bytes]:
         yield content
@@ -431,7 +405,7 @@ async def read_file(
 
 
 @router.put(
-    "/machines/{ref}/files/content",
+    "/machines/{ref}/files:content",
     response_model=MachineFileEntry,
     operation_id="machine.files.write",
     summary="Write a file on a machine",
@@ -466,8 +440,22 @@ async def write_file(
             resolved.machine.id, target, chunks(), deadline_at=_deadline(600)
         )
     except _FAILURES as exc:
-        raise _as_http_error(exc, target)
+        raise machine_call_failed(exc, path=target)
     return _entry(stat)
+
+
+# The route's first spelling, before it matched `GET files:content`. Kept for
+# one release so a client built against it keeps writing; first-party clients
+# all use the colon form.
+router.add_api_route(
+    "/machines/{ref}/files/content",
+    write_file,
+    methods=["PUT"],
+    response_model=MachineFileEntry,
+    operation_id="machine.files.write_legacy",
+    summary="Write a file on a machine (deprecated: use PUT files:content)",
+    deprecated=True,
+)
 
 
 @router.delete(
@@ -493,7 +481,7 @@ async def delete_file(
             resolved.machine.id, target, recursive=recursive, deadline_at=_deadline()
         )
     except _FAILURES as exc:
-        raise _as_http_error(exc, target)
+        raise machine_call_failed(exc, path=target)
 
 
 @router.post(
@@ -518,7 +506,7 @@ async def move_file(
             resolved.machine.id, destination, deadline_at=_deadline()
         )
     except _FAILURES as exc:
-        raise _as_http_error(exc, source)
+        raise machine_call_failed(exc, path=source)
     return _entry(stat)
 
 

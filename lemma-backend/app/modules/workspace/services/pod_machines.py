@@ -103,13 +103,7 @@ async def create_pod_machine(
     except ValueError as exc:
         raise MachineConflict(str(exc), code="MACHINE_NAME_INVALID") from None
     policy = await pod_policy(uow, pod_id)
-    chosen = size or (
-        policy.default_size
-        if template is MachineTemplate.WORKSPACE
-        else policy.sizes_for(template)[0]
-        if policy.sizes_for(template)
-        else policy.default_size
-    )
+    chosen = size_to_create(policy, template, size)
     policy.check(template, chosen)
     await _check_count(uow, pod_id, policy)
     repository = MachineRepository(uow)
@@ -128,6 +122,19 @@ async def create_pod_machine(
             code="MACHINE_NAME_TAKEN",
         )
     return machine
+
+
+def size_to_create(
+    policy: EffectivePolicy, template: MachineTemplate, size: MachineSize | None
+) -> MachineSize:
+    """The size a new machine gets: the one asked for, else the plan's default
+    for a plain workspace, else the template's smallest the plan offers."""
+    if size is not None:
+        return size
+    offered = policy.sizes_for(template)
+    if template is MachineTemplate.WORKSPACE or not offered:
+        return policy.default_size
+    return offered[0]
 
 
 async def _check_count(

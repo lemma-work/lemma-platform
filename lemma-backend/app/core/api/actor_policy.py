@@ -56,6 +56,8 @@ MACHINE_WORK_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("GET", f"{_MACHINE}/files"),
         ("GET", f"{_MACHINE}/files:stat"),
         ("GET", f"{_MACHINE}/files:content"),
+        ("PUT", f"{_MACHINE}/files:content"),
+        # The write's first spelling, deprecated for one release.
         ("PUT", f"{_MACHINE}/files/content"),
         ("DELETE", f"{_MACHINE}/files"),
         ("POST", f"{_MACHINE}/files:move"),

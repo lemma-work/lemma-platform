@@ -516,5 +516,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/machines/{ref}:reset` | `machine.reset` | Clean a machine by scope |
 | POST | `/machines/{ref}:restart` | `machine.restart` | Stop a machine and start it again |
 | POST | `/pods/{pod_id}/machines` | `machine.pod.create` | Create a machine the pod's agents share |
-| PUT | `/machines/{ref}/files/content` | `machine.files.write` | Write a file on a machine |
+| PUT | `/machines/{ref}/files/content` | `machine.files.write_legacy` | Write a file on a machine (deprecated: use PUT files:content) |
+| PUT | `/machines/{ref}/files:content` | `machine.files.write` | Write a file on a machine |
 | PUT | `/pods/{pod_id}/machines/{name}/grants` | `machine.pod.grants.set` | Replace which agents and functions are granted a pod machine |

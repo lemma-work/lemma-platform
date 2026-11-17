@@ -181,7 +181,7 @@ async def test_files_are_written_read_moved_and_deleted(machine) -> None:
     await asyncio.sleep(1)
 
     written = await client.put(
-        "/machines/me/files/content", params={"path": path}, content=b"first draft"
+        "/machines/me/files:content", params={"path": path}, content=b"first draft"
     )
     assert written.status_code == status.HTTP_200_OK, written.text
 
@@ -212,7 +212,7 @@ async def test_the_browser_profile_cannot_be_read_deleted_or_overwritten(
         "/machines/me/files", params={"path": f"{HOME_ROOT}/.lemma", "recursive": True}
     )
     overwritten = await client.put(
-        "/machines/me/files/content", params={"path": profile}, content=b"x"
+        "/machines/me/files:content", params={"path": profile}, content=b"x"
     )
     moved = await client.post(
         "/machines/me/files:move",

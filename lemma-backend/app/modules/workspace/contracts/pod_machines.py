@@ -81,6 +81,60 @@ async def pod_machine_id(
     return machine.id if machine is not None else None
 
 
+@dataclass(frozen=True, slots=True)
+class BundledMachine:
+    """What a bundle asks a machine to be, as the importer will ask for it."""
+
+    name: str
+    template: str
+    size: str | None
+
+
+async def pod_machine_refusals(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, machines: list[BundledMachine]
+) -> list[str]:
+    """Why :func:`upsert_pod_machine` would refuse each of these, read before
+    anything is applied: the plan's policy on this deployment, which a
+    bundle's literal template name cannot know -- `workspace-docker` is a
+    valid template that only an E2B deployment can build.
+
+    Checked as the upsert will act: an existing machine keeps its own
+    template, so only a size it changes to is asked about. The person's
+    editor role and the organization's machine count are the apply's to
+    refuse; they say nothing about the bundle.
+    """
+    from app.modules.workspace.config import workspace_settings
+    from app.modules.workspace.domain.machine import MachineSize, MachineTemplate
+    from app.modules.workspace.domain.machine_errors import MachinePolicyRefused
+    from app.modules.workspace.infrastructure.machine_repository import (
+        MachineRepository,
+    )
+    from app.modules.workspace.services.pod_machines import (
+        pod_policy,
+        size_to_create,
+    )
+
+    if not machines:
+        return []
+    if not workspace_settings.pod_machines_enabled:
+        return ["Pod machines are not available on this deployment."]
+    policy = await pod_policy(uow, pod_id)
+    repository = MachineRepository(uow)
+    refusals: list[str] = []
+    for wanted in machines:
+        existing = await repository.pod_machine(pod_id, wanted.name)
+        try:
+            size = MachineSize.parse(wanted.size) if wanted.size else None
+            if existing is None:
+                template = MachineTemplate(wanted.template)
+                policy.check(template, size_to_create(policy, template, size))
+            elif size is not None and size != existing.size:
+                policy.check(existing.template, size)
+        except (ValueError, MachinePolicyRefused) as exc:
+            refusals.append(f"Machine '{wanted.name}': {exc}")
+    return refusals
+
+
 async def upsert_pod_machine(
     uow: SqlAlchemyUnitOfWork,
     *,
@@ -143,7 +197,9 @@ async def upsert_pod_machine(
 
 
 __all__ = [
+    "BundledMachine",
     "PodMachineSpec",
+    "pod_machine_refusals",
     "list_pod_machine_names",
     "list_pod_machines",
     "pod_machine_id",

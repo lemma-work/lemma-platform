@@ -13,9 +13,10 @@ Three kinds, and the difference is ownership, not machinery:
   whole pod or only to those granted it;
 - **connected machines**, a person's own laptop or VM joined over a link.
 
-Refs are how every caller names one: ``me``, ``pod:<pod>/<name>``,
-``mine:<name>`` or the row id. ``services/machine_resolver.py`` is the only
-thing that turns a ref into a row.
+Refs are how every caller names one: ``me``, ``pod:<pod>:<name>`` (the pod
+by id or name; ``pod:<name>`` inside the pod), ``mine:<name>`` or the row
+id. ``services/machine_resolver.py`` is the only thing that turns a ref into
+a row.
 """
 
 from __future__ import annotations
@@ -222,9 +223,11 @@ class MachineRefKind(StrEnum):
 class MachineRef:
     """A parsed ref. Parsing never touches the database.
 
-    ``pod:<pod>/<name>`` also accepts ``pod:<pod>:<name>``, because a slash
-    cannot travel inside one URL path segment; the SDKs and the CLI send the
-    colon form. ``pod:<name>`` means "this pod" and needs a pod in context.
+    One grammar, written one way: ``pod:<pod>:<name>``, where ``<pod>`` is the
+    pod's id or its name, because that is the form that fits in one URL path
+    segment. ``pod:<pod>/<name>`` is still read -- older docs and clients
+    wrote it -- but never written. ``pod:<name>`` means "this pod" and needs a
+    pod in context.
     """
 
     kind: MachineRefKind
@@ -253,15 +256,15 @@ class MachineRef:
             return cls(MachineRefKind.ID, machine_id=UUID(text))
         except ValueError:
             raise ValueError(
-                f"'{raw}' is not a machine ref; use me, pod:<pod>/<name>, "
-                "mine:<name> or a machine id"
+                f"'{raw}' is not a machine ref; use me, pod:<pod>:<name>, "
+                "pod:<name>, mine:<name> or a machine id"
             ) from None
 
     def __str__(self) -> str:
         if self.kind is MachineRefKind.ME:
             return "me"
         if self.kind is MachineRefKind.POD:
-            return f"pod:{self.pod}/{self.name}" if self.pod else f"pod:{self.name}"
+            return f"pod:{self.pod}:{self.name}" if self.pod else f"pod:{self.name}"
         if self.kind is MachineRefKind.MINE:
             return f"mine:{self.name}"
         return str(self.machine_id)
@@ -309,10 +312,10 @@ class Machine:
     def ref(self) -> str:
         """How to name this machine, in a URL path as much as anywhere.
 
-        `pod:<pod>:<name>`, not `pod:<pod>/<name>`. Both parse, but this is
-        what the API hands out, and the slash form cannot sit in a path
+        The canonical `pod:<pod-id>:<name>`, the same spelling
+        `MachineRef.__str__` gives. The slash form cannot sit in a path
         segment: encoded or not, `/machines/pod:<pod>/qa` reaches no route,
-        so a client using the `ref` it was just given got a 404.
+        so a client using a slash `ref` it was just given got a 404.
         """
         if self.kind is MachineKind.DEFAULT:
             return "me"
