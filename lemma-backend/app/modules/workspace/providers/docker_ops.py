@@ -56,6 +56,7 @@ from app.modules.workspace.providers.runtime_errors import (
     WorkspaceRuntimeFileConflict,
     WorkspaceRuntimeFileNotFound,
     WorkspaceRuntimeFileRejected,
+    WorkspaceRuntimePathProtected,
     WorkspaceRuntimeProcessGone,
     WorkspaceRuntimeUnauthorized,
 )
@@ -273,6 +274,7 @@ class DockerOpsMixin:
     ) -> AsyncIterator[WorkspaceRuntimeClient]:
         from sandbox_runtime.errors import (
             SandboxPathConflict,
+            SandboxPathProtected,
             SandboxPathNotFound,
             SandboxProcessNotFound,
             SandboxRejected,
@@ -290,6 +292,8 @@ class DockerOpsMixin:
             raise SandboxPathNotFound(str(exc)) from exc
         except WorkspaceRuntimeFileConflict as exc:
             raise SandboxPathConflict(str(exc)) from exc
+        except WorkspaceRuntimePathProtected as exc:
+            raise SandboxPathProtected(str(exc)) from exc
         except WorkspaceRuntimeFileRejected as exc:
             raise SandboxRejected(str(exc)) from exc
         except WorkspaceRuntimeProcessGone as exc:

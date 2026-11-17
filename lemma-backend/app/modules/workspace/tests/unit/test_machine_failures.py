@@ -18,6 +18,7 @@ from app.modules.workspace.providers.runtime_errors import (
     WorkspaceRuntimeFileConflict,
     WorkspaceRuntimeFileNotFound,
     WorkspaceRuntimeFileRejected,
+    WorkspaceRuntimePathProtected,
     WorkspaceRuntimeProcessGone,
     WorkspaceRuntimeUnauthorized,
 )
@@ -28,6 +29,7 @@ from sandbox_runtime.errors import (
     SandboxNotReady,
     SandboxPathConflict,
     SandboxPathNotFound,
+    SandboxPathProtected,
     SandboxProcessNotFound,
     SandboxRejected,
     SandboxUnauthorized,
@@ -57,6 +59,10 @@ pytestmark = pytest.mark.unit
             "MACHINE_FILE_REJECTED",
         ),
         (SandboxRejected("big"), 413, "MACHINE_FILE_REJECTED"),
+        # QA: a write through a link into the profile was refused, but answered
+        # as a file too large. Both fabrics now say what it is.
+        (SandboxPathProtected("profile"), 403, "MACHINE_PATH_PROTECTED"),
+        (WorkspaceRuntimePathProtected("profile"), 403, "MACHINE_PATH_PROTECTED"),
         (SandboxUnavailable("paused"), 503, "MACHINE_NOT_READY"),
         (SandboxNotReady("booting"), 503, "MACHINE_NOT_READY"),
         (

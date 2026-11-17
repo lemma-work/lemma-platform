@@ -20,7 +20,7 @@ import shlex
 from app.core.log.log import get_logger
 from sandbox_runtime.errors import (
     SandboxPathNotFound,
-    SandboxRejected,
+    SandboxPathProtected,
     SandboxUnavailable,
 )
 from sandbox_runtime.paths import is_protected
@@ -105,7 +105,7 @@ async def refuse_protected(sandbox, path: str, *, follow_last: bool) -> None:
         real_parent, _ = await resolve_real_path(sandbox, parent or "/")
         resolved = posixpath.join(real_parent, name)
     if is_protected(path) or is_protected(resolved):
-        raise SandboxRejected(
+        raise SandboxPathProtected(
             "That path is the browser's profile, which holds the machine's "
             "logins; it is not changed through the file API."
         )

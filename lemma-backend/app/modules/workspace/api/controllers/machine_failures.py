@@ -24,6 +24,7 @@ from app.core.log.log import get_logger
 from app.modules.workspace.providers.runtime_errors import (
     WorkspaceRuntimeError,
     WorkspaceRuntimeFileConflict,
+    WorkspaceRuntimePathProtected,
     WorkspaceRuntimeFileNotFound,
     WorkspaceRuntimeFileRejected,
     WorkspaceRuntimeProcessGone,
@@ -33,6 +34,7 @@ from sandbox_runtime.errors import (
     SandboxCapabilityUnsupported,
     SandboxError,
     SandboxPathConflict,
+    SandboxPathProtected,
     SandboxPathNotFound,
     SandboxProcessNotFound,
     SandboxRejected,
@@ -108,6 +110,13 @@ _TABLE: tuple[_Row, ...] = (
         409,
         "MACHINE_CAPABILITY_MISSING",
         "This machine cannot do that.",
+    ),
+    _Row(
+        (SandboxPathProtected, WorkspaceRuntimePathProtected),
+        403,
+        "MACHINE_PATH_PROTECTED",
+        "That would change the browser's profile, which holds the machine's "
+        "logins. Forget a login explicitly instead.",
     ),
     _Row(
         # The fabric ops turn the runtime's 413/422/507 file refusals into a
