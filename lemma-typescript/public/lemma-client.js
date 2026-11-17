@@ -22115,6 +22115,11 @@ var LemmaClient = (() => {
     }
     return status === 206;
   }
+  function cutShort(status, contentRange, received) {
+    if (status !== 206 || !contentRange) return false;
+    const match = /^bytes (\d+)-\d+\/(\d+)$/.exec(contentRange.trim());
+    return match !== null && Number(match[1]) + received < Number(match[2]);
+  }
   var STOPPED_STATES = /* @__PURE__ */ new Set(["succeeded", "failed", "cancelled", "timed_out"]);
   var MachineExecution = class {
     constructor(machines, ref, process2) {
@@ -22409,13 +22414,23 @@ var LemmaClient = (() => {
      * A file, or a slice of one. `range` sends an HTTP `Range` and gets a 206
      * back, which is how a file past the server's single-read ceiling is
      * reachable at all; `readWhole` does that for you.
+     *
+     * Without a slice asked for, this is the whole file: a file past the
+     * ceiling comes back as a 206 naming its total, and the rest is read in
+     * ranges and stitched on, rather than handing back the first 8 MiB as if
+     * it were all of it.
      */
     async read(ref, path, options = {}) {
       const answer = await this.machines.bytes(
         contentPath(ref, path, options),
         options.range ? rangeHeader(options.range) : void 0
       );
-      return answer.blob;
+      const asked2 = options.range !== void 0 || options.offset !== void 0 || options.length !== void 0;
+      if (asked2 || !cutShort(answer.status, answer.contentRange, answer.blob.size)) {
+        return answer.blob;
+      }
+      const rest = await this.readFrom(ref, path, answer.blob.size, MAX_READ_BYTES);
+      return new Blob([answer.blob, rest]);
     }
     /**
      * A whole file, however big, in as many requests as that takes.
@@ -22429,14 +22444,16 @@ var LemmaClient = (() => {
      */
     async readWhole(ref, path, sizeBytes = 0, chunk = MAX_READ_BYTES) {
       const step = Math.min(Math.max(Math.floor(chunk), 1), MAX_READ_BYTES);
-      const parts = [];
-      let start = 0;
       if (sizeBytes > 0 && sizeBytes <= step) {
         const only = await this.read(ref, path);
-        if (only.size < MAX_READ_BYTES) return only;
-        parts.push(only);
-        start = only.size;
+        if (only.size !== MAX_READ_BYTES) return only;
+        return new Blob([only, await this.readFrom(ref, path, only.size, step)]);
       }
+      return this.readFrom(ref, path, 0, step);
+    }
+    /** Everything from byte `start` on, in ranges of `step`. */
+    async readFrom(ref, path, start, step) {
+      const parts = [];
       for (; ; ) {
         let part;
         let honoured;

@@ -1,13 +1,13 @@
 {
  "agent_host_mcp": {
   "call_coordinator": [
-   "tool:lemma_exec_command@8185a77a3b58",
+   "tool:lemma_exec_command@01b8f5f94e27",
    "tool:lemma_manage_process@0f1edfa31d99",
    "tool:lemma_execute_python@a12ebe7e5b83",
    "tool:lemma_list_machines@e75118ea5fda",
    "tool:lemma_expose_port@b0f56de5fcff",
    "tool:lemma_sync_files@b46d395a8a52",
-   "tool:lemma_reset_machine@cbbb69493969",
+   "tool:lemma_reset_machine@06962309c34d",
    "tool:lemma_browser_sign_in@638e3c1fda31",
    "tool:lemma_pod_tables@bda61143b43f",
    "tool:lemma_pod_get_records@db1c8817ce5b",
@@ -62,13 +62,13 @@
    "tool:lemma_fill_form@d6c1b4d0beb7"
   ],
   "named_agent_chat": [
-   "tool:lemma_exec_command@8185a77a3b58",
+   "tool:lemma_exec_command@01b8f5f94e27",
    "tool:lemma_manage_process@0f1edfa31d99",
    "tool:lemma_execute_python@a12ebe7e5b83",
    "tool:lemma_list_machines@e75118ea5fda",
    "tool:lemma_expose_port@b0f56de5fcff",
    "tool:lemma_sync_files@b46d395a8a52",
-   "tool:lemma_reset_machine@cbbb69493969",
+   "tool:lemma_reset_machine@06962309c34d",
    "tool:lemma_web_search@6dedcfcdeb18",
    "tool:lemma_web_fetch@755074afe647",
    "tool:lemma_browser_sign_in@638e3c1fda31",
@@ -117,7 +117,7 @@
    "tool:lemma_list_machines@e75118ea5fda",
    "tool:lemma_expose_port@b0f56de5fcff",
    "tool:lemma_sync_files@b46d395a8a52",
-   "tool:lemma_reset_machine@cbbb69493969",
+   "tool:lemma_reset_machine@06962309c34d",
    "tool:lemma_web_search@6dedcfcdeb18",
    "tool:lemma_web_fetch@755074afe647",
    "tool:lemma_browser_sign_in@638e3c1fda31",
@@ -161,13 +161,13 @@
    "tool:lemma_answer_question@ef3a9a70e33d"
   ],
   "pod_default_chat": [
-   "tool:lemma_exec_command@8185a77a3b58",
+   "tool:lemma_exec_command@01b8f5f94e27",
    "tool:lemma_manage_process@0f1edfa31d99",
    "tool:lemma_execute_python@a12ebe7e5b83",
    "tool:lemma_list_machines@e75118ea5fda",
    "tool:lemma_expose_port@b0f56de5fcff",
    "tool:lemma_sync_files@b46d395a8a52",
-   "tool:lemma_reset_machine@cbbb69493969",
+   "tool:lemma_reset_machine@06962309c34d",
    "tool:lemma_browser_sign_in@638e3c1fda31",
    "tool:lemma_pod_tables@bda61143b43f",
    "tool:lemma_pod_get_records@db1c8817ce5b",
@@ -207,13 +207,13 @@
    "tool:lemma_answer_question@ef3a9a70e33d"
   ],
   "pod_default_task": [
-   "tool:lemma_exec_command@8185a77a3b58",
+   "tool:lemma_exec_command@01b8f5f94e27",
    "tool:lemma_manage_process@0f1edfa31d99",
    "tool:lemma_execute_python@a12ebe7e5b83",
    "tool:lemma_list_machines@e75118ea5fda",
    "tool:lemma_expose_port@b0f56de5fcff",
    "tool:lemma_sync_files@b46d395a8a52",
-   "tool:lemma_reset_machine@cbbb69493969",
+   "tool:lemma_reset_machine@06962309c34d",
    "tool:lemma_browser_sign_in@638e3c1fda31",
    "tool:lemma_pod_tables@bda61143b43f",
    "tool:lemma_pod_get_records@db1c8817ce5b",
@@ -253,13 +253,13 @@
    "tool:lemma_answer_question@ef3a9a70e33d"
   ],
   "sub_agent_child": [
-   "tool:lemma_exec_command@8185a77a3b58",
+   "tool:lemma_exec_command@01b8f5f94e27",
    "tool:lemma_manage_process@0f1edfa31d99",
    "tool:lemma_execute_python@a12ebe7e5b83",
    "tool:lemma_list_machines@e75118ea5fda",
    "tool:lemma_expose_port@b0f56de5fcff",
    "tool:lemma_sync_files@b46d395a8a52",
-   "tool:lemma_reset_machine@cbbb69493969",
+   "tool:lemma_reset_machine@06962309c34d",
    "tool:lemma_web_search@6dedcfcdeb18",
    "tool:lemma_web_fetch@755074afe647",
    "tool:lemma_browser_sign_in@638e3c1fda31",
@@ -296,7 +296,7 @@
  "in_process": {
   "call_coordinator": {
    "function_tools": [
-    "tool:exec_command@5e9bfdf11952",
+    "tool:exec_command@88a3dbb85de6",
     "tool:manage_process@ea0ac32406c6",
     "tool:execute_python@283430dec3bb",
     "tool:pod_tables@7a32f8bd156d",
@@ -324,7 +324,7 @@
     "tool:list_machines@bea665f5bf68",
     "tool:expose_port@7bc5845fad49",
     "tool:sync_files@e27fe0ac965e",
-    "tool:reset_machine@2dfb8364ce56",
+    "tool:reset_machine@cafcc6d3eb83",
     "tool:browser_sign_in@01520ed502f0",
     "tool:spawn_subagent@5d55a754508a",
     "tool:interact_subagent@6848ea08a9ba",
@@ -426,13 +426,13 @@
   },
   "named_agent_chat": {
    "function_tools": [
-    "tool:exec_command@5e9bfdf11952",
+    "tool:exec_command@88a3dbb85de6",
     "tool:manage_process@ea0ac32406c6",
     "tool:execute_python@283430dec3bb",
     "tool:list_machines@ec2dcdbe5340",
     "tool:expose_port@ec4c93847afc",
     "tool:sync_files@702d3be75191",
-    "tool:reset_machine@59e6756a4a48",
+    "tool:reset_machine@166ff47e9737",
     "tool:web_search@b4eb369278ca",
     "tool:web_fetch@08d38e754e9a",
     "tool:browser_sign_in@96dd9bfbce9f",
@@ -534,13 +534,13 @@
   },
   "named_agent_task_on_slack_on_the_mac": {
    "function_tools": [
-    "tool:exec_command@5e9bfdf11952",
+    "tool:exec_command@88a3dbb85de6",
     "tool:manage_process@ea0ac32406c6",
     "tool:execute_python@283430dec3bb",
     "tool:list_machines@ec2dcdbe5340",
     "tool:expose_port@ec4c93847afc",
     "tool:sync_files@702d3be75191",
-    "tool:reset_machine@59e6756a4a48",
+    "tool:reset_machine@166ff47e9737",
     "tool:web_search@b4eb369278ca",
     "tool:web_fetch@08d38e754e9a",
     "tool:browser_sign_in@96dd9bfbce9f",
@@ -638,7 +638,7 @@
   },
   "pod_default_chat": {
    "function_tools": [
-    "tool:exec_command@5e9bfdf11952",
+    "tool:exec_command@88a3dbb85de6",
     "tool:manage_process@ea0ac32406c6",
     "tool:execute_python@283430dec3bb",
     "tool:pod_tables@7a32f8bd156d",
@@ -666,7 +666,7 @@
     "tool:list_machines@bea665f5bf68",
     "tool:expose_port@7bc5845fad49",
     "tool:sync_files@e27fe0ac965e",
-    "tool:reset_machine@2dfb8364ce56",
+    "tool:reset_machine@cafcc6d3eb83",
     "tool:browser_sign_in@01520ed502f0",
     "tool:spawn_subagent@5d55a754508a",
     "tool:interact_subagent@6848ea08a9ba",
@@ -734,7 +734,7 @@
   },
   "pod_default_task": {
    "function_tools": [
-    "tool:exec_command@5e9bfdf11952",
+    "tool:exec_command@88a3dbb85de6",
     "tool:manage_process@ea0ac32406c6",
     "tool:execute_python@283430dec3bb",
     "tool:pod_tables@7a32f8bd156d",
@@ -761,7 +761,7 @@
     "tool:list_machines@bea665f5bf68",
     "tool:expose_port@7bc5845fad49",
     "tool:sync_files@e27fe0ac965e",
-    "tool:reset_machine@2dfb8364ce56",
+    "tool:reset_machine@cafcc6d3eb83",
     "tool:browser_sign_in@01520ed502f0",
     "tool:spawn_subagent@5d55a754508a",
     "tool:interact_subagent@6848ea08a9ba",
@@ -830,13 +830,13 @@
   },
   "sub_agent_child": {
    "function_tools": [
-    "tool:exec_command@5e9bfdf11952",
+    "tool:exec_command@88a3dbb85de6",
     "tool:manage_process@ea0ac32406c6",
     "tool:execute_python@283430dec3bb",
     "tool:list_machines@ec2dcdbe5340",
     "tool:expose_port@ec4c93847afc",
     "tool:sync_files@702d3be75191",
-    "tool:reset_machine@59e6756a4a48",
+    "tool:reset_machine@166ff47e9737",
     "tool:web_search@b4eb369278ca",
     "tool:web_fetch@08d38e754e9a",
     "tool:browser_sign_in@96dd9bfbce9f",
@@ -2254,9 +2254,9 @@
    "unless_tool_kind": null,
    "with_native": null
   },
-  "tool:exec_command@5e9bfdf11952": {
+  "tool:exec_command@88a3dbb85de6": {
    "defer_loading": false,
-   "description": "Run a shell command on your machine, in this conversation's directory.\n\nUse it for repo inspection, builds, tests, file edits, and `lemma` CLI calls\n(pod credentials are pre-injected). `localhost` is the machine, not the\nLemma backend. Name `machine` to run on another one you may use (see\n`list_machines`); on a pod machine each run gets its own directory.\n\nDefault (`tty=false`) returns after a short wait; a command still running\nreturns a `process_id` instead of blocking. `tty=true` starts a real terminal\nfor interactive commands. Either way, drive the process afterwards with\n`manage_process` \u2014 send input or read new output with `action=\"input\"`, stop\nit with `action=\"kill\"`, and use `action=\"list\"` to find processes started\nearlier. To wait for one to finish, use `wait_for`.\n\nLong commands (installs, builds, test suites) are normal and supported. When\none outlives the wait window you get `completed: false` plus a `process_id`,\nand the command carries on running \u2014 nothing was cancelled and no output is\nlost. Hand that id to `wait_for` and stop:\n\n    exec_command(cmd=\"npm ci && npm run build\")\n    -> completed: false, process_id: \"abc\"\n    wait_for(reason=\"the build\", process_id=\"abc\")\n    -> woke_because: \"TARGET_FINISHED\", exit_code: 0\n\n`wait_for` ends your turn and gives you a new one when the process exits, so\na ten-minute build costs one model call rather than twenty. Use\n`manage_process` to send input to a process, to stop one, or to look at a\nrunning one \u2014 not to wait for it.\n\nNever re-run a command because it did not finish \u2014 that starts a second\nbuild alongside the first. If you lose a `process_id`, `action=\"list\"`\nrecovers it.",
+   "description": "Run a shell command on your machine, in this conversation's directory.\n\nUse it for repo inspection, builds, tests, file edits, and `lemma` CLI calls\n(pod credentials are pre-injected). `localhost` is the machine, not the\nLemma backend. Name `machine` to run on another one you may use (see\n`list_machines`); on a pod machine each run gets its own directory.\n\nDefault (`tty=false`) returns after a short wait; a command still running\nreturns a `process_id` instead of blocking. `tty=true` starts a real terminal\nfor interactive commands. Either way, drive the process afterwards with\n`manage_process` \u2014 send input or read new output with `action=\"input\"`, stop\nit with `action=\"kill\"`, and use `action=\"list\"` to find processes started\nearlier. To wait for one to finish, use `wait_for`.\n\nLong commands (installs, builds, test suites) are normal and supported. When\none outlives the wait window you get `completed: false` plus a `process_id`,\nand the command carries on running \u2014 nothing was cancelled and no output is\nlost. Hand that id to `wait_for` and stop:\n\n    exec_command(cmd=\"npm ci && npm run build\")\n    -> completed: false, process_id: \"abc\"\n    wait_for(reason=\"the build\", process_id=\"abc\")\n    -> woke_because: \"TARGET_FINISHED\", exit_code: 0\n\nA dev server a preview points at should outlive your run: start it with\n`service=\"web\"` (any name). It is not stopped when the run ends, and it\ncomes back after the machine sleeps.\n\n`wait_for` ends your turn and gives you a new one when the process exits, so\na ten-minute build costs one model call rather than twenty. Use\n`manage_process` to send input to a process, to stop one, or to look at a\nrunning one \u2014 not to wait for it.\n\nNever re-run a command because it did not finish \u2014 that starts a second\nbuild alongside the first. If you lose a `process_id`, `action=\"list\"`\nrecovers it.",
    "include_return_schema": null,
    "kind": "function",
    "metadata": null,
@@ -2310,6 +2310,20 @@
       "maximum": 200,
       "minimum": 5,
       "type": "integer"
+     },
+     "service": {
+      "anyOf": [
+       {
+        "maxLength": 64,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Start the command as a named service (a dev server behind a preview): it outlives this run, comes back after the machine sleeps, and keeps the machine awake only while it writes output. Returns its `process_id` at once. One service per name."
      },
      "timeout_seconds": {
       "anyOf": [
@@ -3719,8 +3733,8 @@
    },
    "name": "lemma_display_resource"
   },
-  "tool:lemma_exec_command@8185a77a3b58": {
-   "description": "Run a shell command on your machine, in this conversation's directory.\n\nUse it for repo inspection, builds, tests, file edits, and `lemma` CLI calls\n(pod credentials are pre-injected). `localhost` is the machine, not the\nLemma backend. Name `machine` to run on another one you may use (see\n`list_machines`); on a pod machine each run gets its own directory.\n\nDefault (`tty=false`) returns after a short wait; a command still running\nreturns a `process_id` instead of blocking. `tty=true` starts a real terminal\nfor interactive commands. Either way, drive the process afterwards with\n`manage_process` \u2014 send input or read new output with `action=\"input\"`, stop\nit with `action=\"kill\"`, and use `action=\"list\"` to find processes started\nearlier. To wait for one to finish, use `wait_for`.\n\nLong commands (installs, builds, test suites) are normal and supported. When\none outlives the wait window you get `completed: false` plus a `process_id`,\nand the command carries on running \u2014 nothing was cancelled and no output is\nlost. Hand that id to `wait_for` and stop:\n\n    exec_command(cmd=\"npm ci && npm run build\")\n    -> completed: false, process_id: \"abc\"\n    wait_for(reason=\"the build\", process_id=\"abc\")\n    -> woke_because: \"TARGET_FINISHED\", exit_code: 0\n\n`wait_for` ends your turn and gives you a new one when the process exits, so\na ten-minute build costs one model call rather than twenty. Use\n`manage_process` to send input to a process, to stop one, or to look at a\nrunning one \u2014 not to wait for it.\n\nNever re-run a command because it did not finish \u2014 that starts a second\nbuild alongside the first. If you lose a `process_id`, `action=\"list\"`\nrecovers it.",
+  "tool:lemma_exec_command@01b8f5f94e27": {
+   "description": "Run a shell command on your machine, in this conversation's directory.\n\nUse it for repo inspection, builds, tests, file edits, and `lemma` CLI calls\n(pod credentials are pre-injected). `localhost` is the machine, not the\nLemma backend. Name `machine` to run on another one you may use (see\n`list_machines`); on a pod machine each run gets its own directory.\n\nDefault (`tty=false`) returns after a short wait; a command still running\nreturns a `process_id` instead of blocking. `tty=true` starts a real terminal\nfor interactive commands. Either way, drive the process afterwards with\n`manage_process` \u2014 send input or read new output with `action=\"input\"`, stop\nit with `action=\"kill\"`, and use `action=\"list\"` to find processes started\nearlier. To wait for one to finish, use `wait_for`.\n\nLong commands (installs, builds, test suites) are normal and supported. When\none outlives the wait window you get `completed: false` plus a `process_id`,\nand the command carries on running \u2014 nothing was cancelled and no output is\nlost. Hand that id to `wait_for` and stop:\n\n    exec_command(cmd=\"npm ci && npm run build\")\n    -> completed: false, process_id: \"abc\"\n    wait_for(reason=\"the build\", process_id=\"abc\")\n    -> woke_because: \"TARGET_FINISHED\", exit_code: 0\n\nA dev server a preview points at should outlive your run: start it with\n`service=\"web\"` (any name). It is not stopped when the run ends, and it\ncomes back after the machine sleeps.\n\n`wait_for` ends your turn and gives you a new one when the process exits, so\na ten-minute build costs one model call rather than twenty. Use\n`manage_process` to send input to a process, to stop one, or to look at a\nrunning one \u2014 not to wait for it.\n\nNever re-run a command because it did not finish \u2014 that starts a second\nbuild alongside the first. If you lose a `process_id`, `action=\"list\"`\nrecovers it.",
    "input_schema": {
     "properties": {
      "cmd": {
@@ -3769,6 +3783,20 @@
       "maximum": 200,
       "minimum": 5,
       "type": "integer"
+     },
+     "service": {
+      "anyOf": [
+       {
+        "maxLength": 64,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Start the command as a named service (a dev server behind a preview): it outlives this run, comes back after the machine sleeps, and keeps the machine awake only while it writes output. Returns its `process_id` at once. One service per name."
      },
      "timeout_seconds": {
       "anyOf": [
@@ -5878,7 +5906,7 @@
    },
    "name": "lemma_request_approval"
   },
-  "tool:lemma_reset_machine@cbbb69493969": {
+  "tool:lemma_reset_machine@06962309c34d": {
    "description": "Free a machine's disk or stop stray work: `processes`, `runs` (finished\nruns' folders), `caches`, `docker`. Says how much space came back. Logins\nand services are never touched; only a person can reset a machine's home.",
    "input_schema": {
     "properties": {
@@ -5907,13 +5935,12 @@
       "description": "Which machine: `me`, `pod:<name>`, or one from `list_machines`. Omit for your usual one."
      },
      "scopes": {
-      "description": "What to clean: `processes` (stops everything but services), `runs` (finished runs' folders), `caches` (package caches), `docker` (unused images, build cache, stopped containers). Logins are never touched.",
+      "description": "What to clean: `processes` (stops the processes this run started, services excepted), `runs` (finished runs' folders; live runs are kept), `caches` (package caches). Logins are never touched; pruning Docker is for the machine's managers.",
       "items": {
        "enum": [
         "processes",
         "runs",
-        "caches",
-        "docker"
+        "caches"
        ],
        "type": "string"
       },
@@ -8302,72 +8329,7 @@
    "unless_tool_kind": null,
    "with_native": null
   },
-  "tool:reset_machine@2dfb8364ce56": {
-   "defer_loading": true,
-   "description": "Free a machine's disk or stop stray work: `processes`, `runs` (finished\nruns' folders), `caches`, `docker`. Says how much space came back. Logins\nand services are never touched; only a person can reset a machine's home.",
-   "include_return_schema": null,
-   "kind": "function",
-   "metadata": null,
-   "name": "reset_machine",
-   "outer_typed_dict_key": null,
-   "parameters_json_schema": {
-    "properties": {
-     "comment": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "default": null,
-      "description": "One-line statement of intent, shown to the user."
-     },
-     "machine": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "default": null,
-      "description": "Which machine: `me`, `pod:<name>`, or one from `list_machines`. Omit for your usual one."
-     },
-     "scopes": {
-      "description": "What to clean: `processes` (stops everything but services), `runs` (finished runs' folders), `caches` (package caches), `docker` (unused images, build cache, stopped containers). Logins are never touched.",
-      "items": {
-       "enum": [
-        "processes",
-        "runs",
-        "caches",
-        "docker"
-       ],
-       "type": "string"
-      },
-      "minItems": 1,
-      "type": "array"
-     }
-    },
-    "required": [
-     "scopes"
-    ],
-    "title": "ResetMachineRequest",
-    "type": "object"
-   },
-   "return_schema": null,
-   "sequential": false,
-   "strict": null,
-   "timeout": null,
-   "tool_kind": null,
-   "toolset_id": null,
-   "unless_native": null,
-   "unless_tool_kind": null,
-   "with_native": "tool_search"
-  },
-  "tool:reset_machine@59e6756a4a48": {
+  "tool:reset_machine@166ff47e9737": {
    "defer_loading": false,
    "description": "Free a machine's disk or stop stray work: `processes`, `runs` (finished\nruns' folders), `caches`, `docker`. Says how much space came back. Logins\nand services are never touched; only a person can reset a machine's home.",
    "include_return_schema": null,
@@ -8402,13 +8364,12 @@
       "description": "Which machine: `me`, `pod:<name>`, or one from `list_machines`. Omit for your usual one."
      },
      "scopes": {
-      "description": "What to clean: `processes` (stops everything but services), `runs` (finished runs' folders), `caches` (package caches), `docker` (unused images, build cache, stopped containers). Logins are never touched.",
+      "description": "What to clean: `processes` (stops the processes this run started, services excepted), `runs` (finished runs' folders; live runs are kept), `caches` (package caches). Logins are never touched; pruning Docker is for the machine's managers.",
       "items": {
        "enum": [
         "processes",
         "runs",
-        "caches",
-        "docker"
+        "caches"
        ],
        "type": "string"
       },
@@ -8431,6 +8392,70 @@
    "unless_native": null,
    "unless_tool_kind": null,
    "with_native": null
+  },
+  "tool:reset_machine@cafcc6d3eb83": {
+   "defer_loading": true,
+   "description": "Free a machine's disk or stop stray work: `processes`, `runs` (finished\nruns' folders), `caches`, `docker`. Says how much space came back. Logins\nand services are never touched; only a person can reset a machine's home.",
+   "include_return_schema": null,
+   "kind": "function",
+   "metadata": null,
+   "name": "reset_machine",
+   "outer_typed_dict_key": null,
+   "parameters_json_schema": {
+    "properties": {
+     "comment": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "One-line statement of intent, shown to the user."
+     },
+     "machine": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Which machine: `me`, `pod:<name>`, or one from `list_machines`. Omit for your usual one."
+     },
+     "scopes": {
+      "description": "What to clean: `processes` (stops the processes this run started, services excepted), `runs` (finished runs' folders; live runs are kept), `caches` (package caches). Logins are never touched; pruning Docker is for the machine's managers.",
+      "items": {
+       "enum": [
+        "processes",
+        "runs",
+        "caches"
+       ],
+       "type": "string"
+      },
+      "minItems": 1,
+      "type": "array"
+     }
+    },
+    "required": [
+     "scopes"
+    ],
+    "title": "ResetMachineRequest",
+    "type": "object"
+   },
+   "return_schema": null,
+   "sequential": false,
+   "strict": null,
+   "timeout": null,
+   "tool_kind": null,
+   "toolset_id": null,
+   "unless_native": null,
+   "unless_tool_kind": null,
+   "with_native": "tool_search"
   },
   "tool:run_connector_operation@307d2959e13b": {
    "defer_loading": false,

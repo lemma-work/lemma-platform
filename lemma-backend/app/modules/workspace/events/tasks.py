@@ -29,40 +29,48 @@ logger = get_logger(__name__)
     cls=WorkClass.AUTOMATION,
 )
 async def sweep_workspace_sandboxes_task() -> None:
+    from app.modules.workspace.services import machine_housekeeping
+    from app.modules.workspace.services.machine_sweep import run_steps, sweep_steps
     from app.modules.workspace.services.sandbox_composition import get_sandbox_service
     from app.modules.workspace.services.sandbox_sweeper import SandboxSweeper
 
-    from app.modules.workspace.services import compute_meter, machine_housekeeping
-
     uow_factory = SessionUnitOfWorkFactory(async_session_maker)
+    service = get_sandbox_service()
     sweeper = SandboxSweeper(
-        service=get_sandbox_service(),
+        service=service,
         uow_factory=uow_factory,
         release=machine_housekeeping.machine_release(uow_factory),
         held=machine_housekeeping.slot_held,
+        idle_service=machine_housekeeping.service_idle(uow_factory),
     )
+    await run_steps(sweep_steps(uow_factory, service=service, sweeper=sweeper))
 
-    # Metering before release, so a machine released this tick has its last
-    # slice written by the release rather than skipped by both.
-    tick = await compute_meter.meter_running(uow_factory)
-    if tick.resumed:
-        await machine_housekeeping.after_resume(uow_factory, tick.resumed)
-    await compute_meter.enforce(uow_factory)
 
-    idle_after = workspace_settings.idle_release_seconds
-    if idle_after > 0:
-        released = await sweeper.release_idle(idle_after_seconds=idle_after)
-        if released:
-            logger.info(
-                "workspace.sandbox_sweeper.released_idle_sandboxes.observed",
-                released_count=released,
-            )
+# Off the agent's command path: a run's first command only measures the disk,
+# and pruning -- up to three scopes of ten minutes each -- happens here.
+@periodic_job(
+    "workspace.machine_disk_janitor",
+    every=timedelta(minutes=10),
+    cls=WorkClass.AUTOMATION,
+    max_runtime=timedelta(minutes=45),
+)
+async def machine_disk_janitor_task() -> None:
+    from app.modules.workspace.services.disk_janitor import janitor_pass
 
-    await machine_housekeeping.daily_login_copies(uow_factory, tick.running)
+    await janitor_pass(SessionUnitOfWorkFactory(async_session_maker))
 
-    reclaimed = await sweeper.reclaim_orphans()
-    if reclaimed:
-        logger.info(
-            "workspace.sandbox_sweeper.reclaimed_orphaned_objects.observed",
-            reclaimed_count=len(reclaimed),
-        )
+
+# Its own job, not a step of the sweep: one move can take three hours, and
+# each step is resumed from the state on the machine row.
+@periodic_job(
+    "workspace.machine_size_migrations",
+    every=timedelta(minutes=10),
+    cls=WorkClass.AUTOMATION,
+    max_runtime=timedelta(hours=4, minutes=15),
+)
+async def machine_size_migrations_task() -> None:
+    if not workspace_settings.machine_size_migration_enabled:
+        return
+    from app.modules.workspace.services.size_migration import run_pending_moves
+
+    await run_pending_moves(SessionUnitOfWorkFactory(async_session_maker))

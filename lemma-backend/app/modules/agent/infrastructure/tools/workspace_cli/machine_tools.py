@@ -99,12 +99,13 @@ class SyncFilesResult(BaseModel):
 
 
 class ResetMachineRequest(BaseModel):
-    scopes: list[Literal["processes", "runs", "caches", "docker"]] = Field(
+    scopes: list[Literal["processes", "runs", "caches"]] = Field(
         min_length=1,
         description=(
-            "What to clean: `processes` (stops everything but services), `runs` "
-            "(finished runs' folders), `caches` (package caches), `docker` "
-            "(unused images, build cache, stopped containers). Logins are never touched."
+            "What to clean: `processes` (stops the processes this run started, "
+            "services excepted), `runs` (finished runs' folders; live runs are "
+            "kept), `caches` (package caches). Logins are never touched; "
+            "pruning Docker is for the machine's managers."
         ),
     )
     machine: Optional[str] = Field(default=None, description=_MACHINE_DESC)
@@ -217,7 +218,10 @@ async def reset_machine_internal(
         refuse_owner_workspace(ctx)
         target = await resolve_run_machine(ctx, request.machine)
         freed, details = await reset_for_agent(
-            target, scopes=list(request.scopes), acting_user=ctx.user_id
+            target,
+            scopes=list(request.scopes),
+            acting_user=ctx.user_id,
+            run_id=ctx.conversation_id,
         )
     except _tool_failures() as exc:
         logger.warning("agent.machine_tools.reset_failed.degraded", exc_info=True)

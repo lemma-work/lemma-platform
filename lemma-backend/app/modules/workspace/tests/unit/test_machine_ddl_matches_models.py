@@ -82,3 +82,20 @@ def test_the_agent_column_is_the_models():
     assert _normal(_migration().AGENT_COLUMN) == _normal(
         _column_ddl("agents", "machine")
     )
+
+
+@pytest.mark.parametrize("table", list(_migration().LIFECYCLE_TABLES))
+def test_the_lifecycle_tables_are_the_models(table: str) -> None:
+    created = {_normal(statement) for statement in _migration().LIFECYCLE_TABLES[table]}
+
+    assert created == _from_models(table)
+
+
+def test_the_lifecycle_sandbox_columns_are_the_models():
+    added = {_normal(column) for column in _migration().LIFECYCLE_SANDBOX_COLUMNS}
+    declared = {
+        _normal(_column_ddl("sandboxes", column.split()[0]))
+        for column in _migration().LIFECYCLE_SANDBOX_COLUMNS
+    }
+
+    assert added == declared

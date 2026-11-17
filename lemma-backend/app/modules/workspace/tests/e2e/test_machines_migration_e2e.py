@@ -28,6 +28,7 @@ TABLES = (
     "machine_previews",
     "machine_sessions",
     "machine_login_backups",
+    "machine_services",
 )
 
 

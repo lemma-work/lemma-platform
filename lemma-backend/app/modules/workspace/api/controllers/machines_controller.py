@@ -55,6 +55,7 @@ from app.modules.workspace.services.machine_lifecycle import (
 )
 from app.modules.workspace.services.machine_policy import policy_for_user
 from app.modules.workspace.services.machine_resolver import MachineResolver
+from app.modules.workspace.domain.machine_access import MachineCaller
 from app.modules.workspace.services.pod_machines import (
     MachineGrants,
     create_pod_machine,
@@ -209,9 +210,10 @@ async def reset_machine(
         resolve_for_request,
     )
 
-    # Agents may clean the machine they use, within the scopes that cannot
-    # cost anybody anything they did not make; everything else is the
-    # machine's managers'.
+    # Agents may clean the machine they use, within the scopes that touch
+    # nothing another run is using (`AGENT_SCOPES`): their own run's
+    # processes, finished runs, caches. Docker's prune and everything else
+    # is the machine's managers'.
     caller_kind = await _caller_kind(request, uow_factory)
     agent_only = set(body.scopes) <= AGENT_SCOPES
     need = (
@@ -229,6 +231,7 @@ async def reset_machine(
         acting_user=acting_user(request, resolved),
         confirm=body.confirm,
         forget_logins=body.forget_logins,
+        run_id=_agent_run(_caller),
     )
     return ResetResponse(
         results=[
@@ -240,6 +243,14 @@ async def reset_machine(
             for o in outcomes
         ]
     )
+
+
+def _agent_run(caller: MachineCaller) -> str | None:
+    """An agent's reset of ``processes`` is its own run's: the conversation.
+    An agent with no conversation owns no processes -- "" matches none."""
+    if caller.kind is not CallerKind.AGENT:
+        return None
+    return str(caller.conversation_id) if caller.conversation_id else ""
 
 
 async def _caller_kind(request: Request, uow_factory) -> CallerKind:

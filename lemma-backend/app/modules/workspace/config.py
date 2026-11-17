@@ -214,6 +214,16 @@ class WorkspaceSettings(BaseSettings):
         validation_alias=AliasChoices("MACHINE_DISK_REFUSE_FRACTION"),
         description="Disk use at which a shared machine refuses new runs.",
     )
+    machine_service_idle_seconds: int = Field(
+        default=4 * 3600,
+        ge=60,
+        validation_alias=AliasChoices("MACHINE_SERVICE_IDLE_SECONDS"),
+        description=(
+            "How long a running service keeps its machine awake without "
+            "writing any output. Past it the idle sweep may release the "
+            "machine; the service starts again when the machine does."
+        ),
+    )
     idle_release_seconds: int = Field(
         default=900,
         validation_alias=AliasChoices("WORKSPACE_IDLE_RELEASE_SECONDS"),

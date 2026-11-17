@@ -45,6 +45,7 @@ from app.modules.workspace.services.machine_processes import (
     ProcessView,
     StartProcess,
 )
+from app.modules.workspace.services.machine_services import TokenClaims
 from sandbox_runtime.paths import HOME_ROOT, WORKSPACE_ROOT
 from sandbox_runtime.protocol import ProcessState, TerminalSize
 
@@ -87,8 +88,9 @@ class StartProcessRequest(BaseModel):
         default=None,
         max_length=64,
         description=(
-            "Run as a named service: no lifetime cap, not stopped when the run "
-            "that started it ends, listed under Processes as a service."
+            "Run as a named service: not stopped when the run that started it "
+            "ends, listed under Processes as a service. It keeps the machine "
+            "awake only while it produces output (MACHINE_SERVICE_IDLE_SECONDS)."
         ),
     )
     restart_on_resume: bool = Field(
@@ -261,6 +263,9 @@ async def start_process(
             restart_on_resume=body.restart_on_resume,
             run_id=body.run_id,
             started_by=user_id,
+            # What `_ready_machine_for` minted the token for: a service's
+            # restart mints the same afresh.
+            claims=TokenClaims(user_id=user_id, pod_id=machine.pod_id),
         ),
         base_env=base_env,
     )

@@ -9,7 +9,7 @@ connected machine by share and grant.
 
 A pod machine is shared, so work on one also gets what sharing needs: a slot
 (``run_slots`` at a time), its own working directory under
-``~/lemma/runs/<agent>/<conversation>``, the disk janitor before it starts,
+``~/lemma/runs/<agent>/<conversation>``, a disk check before it starts,
 and -- when it is over -- its leftover processes stopped and its slot freed.
 
 "A run" here is a conversation's work, not one agent run: a conversation
@@ -98,17 +98,18 @@ async def resolve_agent_machine(
 
 
 async def begin_run(machine: AgentMachine, *, run_id: UUID, acting_user: UUID) -> None:
-    """Take a slot and make room, once per run per shared machine; renew the
-    slot on every later command."""
+    """Take a slot, once per run per shared machine, after one look at the
+    disk; renew the slot on every later command. Pruning a full disk is the
+    janitor's, in the background -- never this command's wait."""
     if not machine.shared:
         return
-    from app.modules.workspace.services.disk_janitor import keep_room
+    from app.modules.workspace.services.disk_janitor import refuse_if_full
     from app.modules.workspace.services.run_slots import RunSlots
 
     slots = RunSlots()
     already = str(run_id) in await slots.holders(machine.machine_id)
     if not already:
-        await keep_room(machine.machine_id, acting_user=acting_user)
+        await refuse_if_full(machine.machine_id, acting_user=acting_user)
     await slots.acquire(machine.machine_id, run_id, slots=machine.machine.run_slots)
 
 
@@ -157,6 +158,14 @@ async def end_run(run_id: UUID) -> list[str]:
         await slots.release(machine_id, run_id)
     await slots.forget_run(run_id)
     return stopped
+
+
+async def park_run(run_id: UUID) -> None:
+    """Keep a WAITING conversation's slots past the ordinary lease: what it
+    waits on runs there, and the run that resumes it needs the same slot."""
+    from app.modules.workspace.services.run_slots import RunSlots
+
+    await RunSlots().park(run_id)
 
 
 async def machines_for_agent(
@@ -284,10 +293,15 @@ async def sync_files(
 
 
 async def reset_for_agent(
-    machine: AgentMachine, *, scopes: list[str], acting_user: UUID
+    machine: AgentMachine,
+    *,
+    scopes: list[str],
+    acting_user: UUID,
+    run_id: UUID | None,
 ) -> tuple[int, list[str]]:
     """The scopes an agent may clean: nothing that costs a person a login or
-    a disk."""
+    a disk, and nothing another run is using -- ``processes`` stops only
+    this run's (``run_id``, the conversation)."""
     from app.core.api.dependencies import get_uow_factory
     from app.modules.workspace.domain.machine_errors import MachineAccessDenied
     from app.modules.workspace.services.machine_lifecycle import (
@@ -298,7 +312,10 @@ async def reset_for_agent(
     if not set(scopes) <= AGENT_SCOPES:
         raise MachineAccessDenied(machine.ref, "reset that scope of")
     outcomes = await MachineLifecycle(get_uow_factory()).reset(
-        machine.machine, scopes, acting_user=acting_user
+        machine.machine,
+        scopes,
+        acting_user=acting_user,
+        run_id=str(run_id) if run_id is not None else "",
     )
     freed = sum(outcome.freed_bytes or 0 for outcome in outcomes)
     details = [
@@ -391,6 +408,7 @@ __all__ = [
     "AgentMachine",
     "begin_run",
     "end_run",
+    "park_run",
     "resolve_agent_machine",
     "run_workdir",
     "tag_run_process",

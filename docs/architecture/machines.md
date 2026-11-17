@@ -107,16 +107,23 @@ flowchart TD
 
 - Each run works in its own directory, and the processes it starts are tagged
   with it and stopped when the run ends.
-- A **service** is the exception: named, exempt from the process lifetime cap,
-  not stopped at run end, and restarted when the machine resumes.
+- A **service** is the exception: named (`exec_command` with `service`, or the
+  processes API), not stopped at run end, and restarted when the machine
+  resumes. Its definition is kept in the database with the caller's variables
+  encrypted and the claims its token was minted for, so the restart gets a
+  fresh token with the same reach.
 - Repositories are kept as mirrors and checked out as worktrees at any ref, so
   concurrent runs on one repository do not clone it again or share a tree.
-- A **disk janitor** watches the fixed-size disk: from
+- A **disk janitor**, a background job, watches the fixed-size disk: from
   `MACHINE_DISK_PRUNE_FRACTION` it prunes finished runs, then Docker images and
-  build cache; from `MACHINE_DISK_REFUSE_FRACTION` the machine refuses new runs.
-  It never touches a protected path or a running service.
-- A machine with a run slot taken or a service running is busy, and the idle
-  sweep leaves it alone.
+  build cache. A run's first command only measures the disk, and from
+  `MACHINE_DISK_REFUSE_FRACTION` the machine refuses new runs. It never touches
+  a protected path, a running service or a live run.
+- A machine with a run slot taken is busy, and the idle sweep leaves it alone.
+  A running service keeps it busy only while it writes output within
+  `MACHINE_SERVICE_IDLE_SECONDS`. A run waiting on its own work keeps its slot.
+  A run that finds no slot free polls for a minute and is told the machine is
+  busy; there is no queue.
 
 ## Previews
 
@@ -150,10 +157,10 @@ or the Environments screen, apps and functions through the SDK.
 
 | Scope | What it does | Who may |
 |---|---|---|
-| `processes` | Stops every process except services | Anyone with use, agents included |
-| `runs` | Deletes finished runs' directories | Anyone with use, agents included |
+| `processes` | Stops every process except services; an agent stops only its own run's | Anyone with use, agents included |
+| `runs` | Deletes finished runs' directories: never one a live run holds a slot for, never one written in the last hour | Anyone with use, agents included |
 | `caches` | Clears package-manager and tool caches | Anyone with use, agents included |
-| `docker` | Removes unused images, build cache and stopped containers | Anyone with use, agents included |
+| `docker` | Removes unused images, build cache and stopped containers — every run's | The machine's managers |
 | `browser-session` | Closes the browser's tabs; logins stay | A person |
 | `home` | A fresh disk. Needs `confirm`; logins are restored unless `forget_logins` | A person, never an app |
 
@@ -175,13 +182,31 @@ it means asking them again for something an agent cannot explain. So:
   new size, and a machine that starts holding no login at all because its
   provider lost the disk. That last restore runs in the sweep that sees the
   machine start, and never over a profile that holds anything, since a login
-  made since the last copy is newer than the copy.
+  made since the last copy is newer than the copy;
+- a copy is **stored** (read back intact before older copies are pruned),
+  **nothing** to copy, or **failed**; a `home` reset or a size move that cannot
+  close the browser cleanly or store its copy stops, with the disk as it was.
+
+## Moving a machine to a new size
+
+Behind `MACHINE_SIZE_MIGRATION_ENABLED`. The sweep only marks an idle default
+machine at the legacy size; the `workspace.machine_size_migrations` job does
+the move, as states on the machine row written before each step's effects can
+be lost: `started` (logins copied, home packed and uploaded, its object key
+written), `packed` (old machine destroyed, row resized), `resized` (new machine
+started, home unpacked, logins restored, state cleared, carried copy deleted).
+A failed step is resumed from its state on the job's next run.
 
 ## Compute
 
-Machine time is metered in **compute units**: one CU is an hour of a 2 vCPU /
-4 GB machine, and other sizes scale with their vCPUs (a default 1 vCPU machine
-uses half a CU an hour). Running time is sliced
+Machine time is metered in **compute units**, one open session per running
+machine (the database enforces it). A session ends however the machine
+stopped: a release, reset or delete ends it at once; any other stop — the
+provider pausing a sandbox on its own timeout, a give-up in the sweep — is
+found by the next sweep, which ends it where it was last metered, so stopped
+time is never billed. One CU is an hour of a 2 vCPU / 4 GB machine, and other
+sizes scale with their vCPUs (a default 1 vCPU machine uses half a CU an
+hour). Running time is sliced
 into the usage ledger as it accrues — a default machine's against its person, a
 pod machine's against the organization — and, with a price set, counts in the
 same spend limits as model calls. Allowances and prices come from the plan, or

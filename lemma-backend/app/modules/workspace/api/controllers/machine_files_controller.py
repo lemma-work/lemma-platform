@@ -392,6 +392,7 @@ async def read_file(
                 f"That range is outside a {total}-byte file",
                 headers={"Content-Range": f"bytes */{total}"},
             )
+        asked = wanted is not None or offset > 0 or length is not None
         if wanted is not None:
             offset, length = wanted
         content = await client.read_file(
@@ -406,6 +407,19 @@ async def read_file(
     except _FAILURES as exc:
         raise _as_http_error(exc, target)
 
+    return _content_response(
+        content, offset=offset, total=total, etag=etag, asked=asked
+    )
+
+
+def _content_response(
+    content: bytes, *, offset: int, total: int, etag: str | None, asked: bool
+) -> StreamingResponse:
+    """Anything short of the whole file is a 206 naming the slice and the
+    total, never a 200 that reads as the whole file. A slice the caller did
+    not ask for -- the ceiling cut it short -- carries no ETag: the file's
+    would describe bytes this body does not hold."""
+
     async def body() -> AsyncIterator[bytes]:
         yield content
 
@@ -416,15 +430,14 @@ async def read_file(
         "X-Content-Type-Options": "nosniff",
         "Accept-Ranges": "bytes",
     }
-    if etag:
+    partial = (asked or len(content) < total) and bool(content)
+    if etag and (asked or not partial):
         headers["ETag"] = etag
-    if wanted is not None:
+    if partial:
         headers["Content-Range"] = f"bytes {offset}-{offset + len(content) - 1}/{total}"
     return StreamingResponse(
         body(),
-        status_code=status.HTTP_206_PARTIAL_CONTENT
-        if wanted is not None
-        else status.HTTP_200_OK,
+        status_code=status.HTTP_206_PARTIAL_CONTENT if partial else status.HTTP_200_OK,
         media_type="application/octet-stream",
         headers=headers,
     )

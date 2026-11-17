@@ -173,6 +173,29 @@ def test_a_write_sends_raw_bytes_and_a_read_returns_them() -> None:
     assert files.read("me", "/home/user/lemma/a.txt") == "héllo".encode()
 
 
+def test_a_file_past_one_page_is_read_whole_from_206_pages() -> None:
+    """The server answers a slice with 206 and a ``Content-Range``; ``read``
+    pages through to the end rather than stopping at the first slice."""
+    from lemma_sdk.resources.machines import MAX_READ_BYTES
+
+    total = MAX_READ_BYTES + 10
+    content = bytes(range(256)) * (total // 256) + bytes(total % 256)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        offset = int(request.url.params.get("offset", 0))
+        length = int(request.url.params.get("length", MAX_READ_BYTES))
+        page = content[offset : offset + min(length, MAX_READ_BYTES)]
+        return httpx.Response(
+            206,
+            content=page,
+            headers={
+                "Content-Range": f"bytes {offset}-{offset + len(page) - 1}/{total}"
+            },
+        )
+
+    assert Machines(_wired(handler)).files.read("me", "/home/user/big") == content
+
+
 def test_a_failed_write_raises_the_typed_error() -> None:
     from lemma_sdk.errors import LemmaAPIError
 
