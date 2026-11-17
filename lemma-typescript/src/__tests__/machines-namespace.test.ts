@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { LemmaClient } from "../client.js";
 import type { HttpClient } from "../http.js";
 import {
   MachinesNamespace,
