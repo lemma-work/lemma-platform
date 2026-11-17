@@ -104,35 +104,29 @@ async def pod_machine_refusals(
     refuse; they say nothing about the bundle.
     """
     from app.modules.workspace.config import workspace_settings
-    from app.modules.workspace.domain.machine import MachineSize, MachineTemplate
-    from app.modules.workspace.domain.machine_errors import MachinePolicyRefused
     from app.modules.workspace.infrastructure.machine_repository import (
         MachineRepository,
     )
     from app.modules.workspace.services.pod_machines import (
+        bundle_refusals,
         pod_policy,
-        size_to_create,
     )
 
     if not machines:
         return []
     if not workspace_settings.pod_machines_enabled:
         return ["Pod machines are not available on this deployment."]
-    policy = await pod_policy(uow, pod_id)
     repository = MachineRepository(uow)
-    refusals: list[str] = []
-    for wanted in machines:
-        existing = await repository.pod_machine(pod_id, wanted.name)
-        try:
-            size = MachineSize.parse(wanted.size) if wanted.size else None
-            if existing is None:
-                template = MachineTemplate(wanted.template)
-                policy.check(template, size_to_create(policy, template, size))
-            elif size is not None and size != existing.size:
-                policy.check(existing.template, size)
-        except (ValueError, MachinePolicyRefused) as exc:
-            refusals.append(f"Machine '{wanted.name}': {exc}")
-    return refusals
+    existing = {
+        wanted.name: found
+        for wanted in machines
+        if (found := await repository.pod_machine(pod_id, wanted.name)) is not None
+    }
+    return bundle_refusals(
+        await pod_policy(uow, pod_id),
+        [(m.name, m.template, m.size) for m in machines],
+        existing,
+    )
 
 
 async def upsert_pod_machine(

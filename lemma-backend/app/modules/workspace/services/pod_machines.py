@@ -137,6 +137,30 @@ def size_to_create(
     return offered[0]
 
 
+def bundle_refusals(
+    policy: EffectivePolicy,
+    machines: list[tuple[str, str, str | None]],
+    existing: dict[str, Machine],
+) -> list[str]:
+    """Why creating or updating each ``(name, template, size)`` would be
+    refused under ``policy``, as the upsert will act: a new machine gets
+    :func:`size_to_create`; an existing one keeps its own template, so only a
+    size it changes to is asked about."""
+    refusals: list[str] = []
+    for name, template_name, size_label in machines:
+        found = existing.get(name)
+        try:
+            size = MachineSize.parse(size_label) if size_label else None
+            if found is None:
+                template = MachineTemplate(template_name)
+                policy.check(template, size_to_create(policy, template, size))
+            elif size is not None and size != found.size:
+                policy.check(found.template, size)
+        except (ValueError, MachinePolicyRefused) as exc:
+            refusals.append(f"Machine '{name}': {exc}")
+    return refusals
+
+
 async def _check_count(
     uow: SqlAlchemyUnitOfWork, pod_id: UUID, policy: EffectivePolicy
 ) -> None:

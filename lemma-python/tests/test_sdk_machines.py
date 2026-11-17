@@ -150,7 +150,7 @@ def test_a_write_sends_raw_bytes_and_a_read_returns_them() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.params["path"]
         if request.method == "PUT":
-            assert request.url.path == "/machines/me/files/content"
+            assert request.url.path == "/machines/me/files:content"
             stored[path] = request.read()
             return httpx.Response(
                 200,
