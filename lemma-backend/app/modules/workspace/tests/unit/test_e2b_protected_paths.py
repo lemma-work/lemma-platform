@@ -76,3 +76,12 @@ async def test_an_ordinary_file_is_untouched_by_the_rule() -> None:
     machine = _Machine({LINK: BROWSER_PROFILE_ROOT})
 
     await refuse_protected(machine, f"{HOME_ROOT}/lemma/notes.txt", follow_last=True)
+
+
+@pytest.mark.parametrize("home", [HOME_ROOT, f"{HOME_ROOT}/.lemma"])
+async def test_making_the_home_that_holds_the_profile_is_allowed(home: str) -> None:
+    """QA: a session makes ``/home/user`` (``mkdir -p``) before every command,
+    and refusing what *contains* the profile refused every command on E2B."""
+    machine = _Machine({})
+
+    await refuse_protected(machine, home, follow_last=True)
