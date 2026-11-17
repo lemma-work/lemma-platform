@@ -16,7 +16,7 @@ machine come from `lemma-backend/sandbox_runtime/paths.py` and nowhere else.
 | Kind | What it is | Ref | Owner | Compute counts against |
 |---|---|---|---|---|
 | Default machine | One per person, created on first use, 1 vCPU / 2 GB by default (a plan may choose another size) | `me` | The person | The person |
-| Pod machine | Shared by a pod's agents; created by its editors and admins within the plan's policy; templates `workspace` and `workspace-docker` (has Docker; E2B only) | `pod:<name>` in the pod, `pod:<pod>/<name>` or `pod:<pod>:<name>` from outside | The pod — it outlives whoever created it | The organization |
+| Pod machine | Shared by a pod's agents; created by its editors and admins within the plan's policy; templates `workspace` and `workspace-docker` (has Docker; E2B only) | `pod:<name>` in the pod, `pod:<pod>:<name>` from outside (the pod by id or name; the older `pod:<pod>/<name>` is still read) | The pod — it outlives whoever created it | The organization |
 | Connected machine | A person's own laptop or VM joined with the CLI | `mine:<name>` | The person | — |
 
 The API's `ref` field uses the colon form, `pod:<pod>:<name>`, because a

@@ -52,6 +52,7 @@ export {
 } from "./namespaces/machines.js";
 export type {
   ExecOptions,
+  MachineRunResult,
   Machine,
   MachineBrowserAccess,
   MachineBrowserStatus,

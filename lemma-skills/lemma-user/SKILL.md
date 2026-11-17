@@ -351,7 +351,8 @@ rather than named is refused without `--yes`.
 ## Machines
 
 Every person has a default machine (`me`); a pod can have shared machines
-(`pod:<name>`, or `pod:<pod>/<name>` from outside it), some with Docker. An
+(`pod:<name>`, or `pod:<pod>:<name>` from outside it, the pod by id or
+name), some with Docker. An
 agent runs on the machine its definition names, else on the default machine of
 whoever the run acts for.
 
@@ -364,6 +365,11 @@ lemma machine cp ./data.csv me:/home/user/lemma/data.csv
 lemma machine preview create me --port 5173     # a URL for a server on the machine
 lemma machine reset me -s caches -s runs        # free disk; home needs --confirm
 lemma machine logins list me                    # sites the browser is signed in to
+lemma machine create pod:ci --template workspace --size 2x4   # pod editors
+lemma machine update pod:ci --size 4x8          # takes effect when it next starts
+lemma machine grants set pod:ci --agent builder -y   # agents/functions that may use it
+lemma machine grants list pod:ci
+lemma machine delete pod:ci -y                  # deletes its disk too
 ```
 
 - Keep one interactive session for long-running processes; one-shot commands
