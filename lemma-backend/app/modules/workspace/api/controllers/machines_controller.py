@@ -11,7 +11,9 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
+from app.core.api.actor_policy import require_person
 from app.core.log.log import get_logger
+from app.modules.workspace.api.controllers.machine_failures import MachineFailureRoute
 from app.modules.workspace.api.controllers.machine_dependencies import (
     ManageMachine,
     SeeMachine,
@@ -38,12 +40,10 @@ from app.modules.workspace.domain.machine import (
     MachineKind,
     MachineSize,
     MachineTemplate,
-    MachineVisibility,
 )
 from app.modules.workspace.domain.machine_access import (
     CallerKind,
     MachineAccess,
-    PodStanding,
 )
 from app.modules.workspace.domain.machine_errors import (
     MachineAccessDenied,
@@ -56,12 +56,13 @@ from app.modules.workspace.services.machine_lifecycle import (
 )
 from app.modules.workspace.services.machine_policy import policy_for_user
 from app.modules.workspace.services.machine_resolver import MachineResolver
+from app.modules.workspace.domain.machine_access import MachineCaller
 from app.modules.workspace.services.pod_machines import (
     MachineGrants,
     create_pod_machine,
     pod_policy,
     read_grants,
-    require_pod_role,
+    require_in_pod,
     set_grants,
     update_pod_machine,
 )
@@ -75,7 +76,11 @@ def machines_enabled() -> None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
 
-router = APIRouter(tags=["Machines"], dependencies=[Depends(machines_enabled)])
+router = APIRouter(
+    tags=["Machines"],
+    dependencies=[Depends(machines_enabled)],
+    route_class=MachineFailureRoute,
+)
 
 
 async def _units(uow_factory, machine_ids: list[UUID]) -> dict[UUID, float]:
@@ -210,9 +215,10 @@ async def reset_machine(
         resolve_for_request,
     )
 
-    # Agents may clean the machine they use, within the scopes that cannot
-    # cost anybody anything they did not make; everything else is the
-    # machine's managers'.
+    # Agents may clean the machine they use, within the scopes that touch
+    # nothing another run is using (`AGENT_SCOPES`): their own run's
+    # processes, finished runs, caches. Docker's prune and everything else
+    # is the machine's managers'.
     caller_kind = await _caller_kind(request, uow_factory)
     agent_only = set(body.scopes) <= AGENT_SCOPES
     need = (
@@ -230,6 +236,7 @@ async def reset_machine(
         acting_user=acting_user(request, resolved),
         confirm=body.confirm,
         forget_logins=body.forget_logins,
+        run_id=_agent_run(_caller),
     )
     return ResetResponse(
         results=[
@@ -241,6 +248,14 @@ async def reset_machine(
             for o in outcomes
         ]
     )
+
+
+def _agent_run(caller: MachineCaller) -> str | None:
+    """An agent's reset of ``processes`` is its own run's: the conversation.
+    An agent with no conversation owns no processes -- "" matches none."""
+    if caller.kind is not CallerKind.AGENT:
+        return None
+    return str(caller.conversation_id) if caller.conversation_id else ""
 
 
 async def _caller_kind(request: Request, uow_factory) -> CallerKind:
@@ -281,7 +296,7 @@ async def machine_policy(
         if pod_id is not None:
             if caller.user_id is None:
                 raise MachineNotFound(f"pod:{pod_id}")
-            await require_pod_role(uow, pod_id, caller.user_id, PodStanding.VIEWER)
+            await require_in_pod(uow, pod_id, caller.user_id, manage=False)
             policy = await pod_policy(uow, pod_id)
         elif caller.user_id is not None:
             policy = await policy_for_user(uow, caller.user_id)
@@ -305,6 +320,10 @@ async def machine_policy(
 
 # --- pod machines --------------------------------------------------------------
 
+#: Pod routes are open to workloads and to apps' pages by default. Changing a
+#: pod's machines -- and who may use them -- is a person's own act.
+_PERSON_MANAGES = require_person("create, change or grant the pod's machines")
+
 
 def _size(label: str | None) -> MachineSize | None:
     if label is None:
@@ -321,6 +340,7 @@ def _size(label: str | None) -> MachineSize | None:
     status_code=status.HTTP_201_CREATED,
     operation_id="machine.pod.create",
     summary="Create a machine the pod's agents share",
+    dependencies=[_PERSON_MANAGES],
 )
 async def create_machine(
     pod_id: UUID,
@@ -343,7 +363,6 @@ async def create_machine(
             display_name=body.display_name,
             template=MachineTemplate(body.template),
             size=_size(body.size),
-            visibility=MachineVisibility(body.visibility),
             run_slots=body.run_slots,
         )
         await uow.commit()
@@ -364,7 +383,8 @@ async def _pod_machine(request: Request, uow, pod_id: UUID, name: str):
     "/pods/{pod_id}/machines/{name}",
     response_model=MachineResponse,
     operation_id="machine.pod.update",
-    summary="Rename, resize or change who sees a pod machine",
+    summary="Rename or resize a pod machine",
+    dependencies=[_PERSON_MANAGES],
 )
 async def update_machine(
     pod_id: UUID,
@@ -382,7 +402,6 @@ async def update_machine(
             user_id=caller.user_id,
             display_name=body.display_name,
             size=_size(body.size),
-            visibility=MachineVisibility(body.visibility) if body.visibility else None,
             run_slots=body.run_slots,
         )
         await uow.commit()
@@ -394,6 +413,7 @@ async def update_machine(
     status_code=status.HTTP_204_NO_CONTENT,
     operation_id="machine.pod.delete",
     summary="Delete a pod machine and its disk",
+    dependencies=[_PERSON_MANAGES],
 )
 async def delete_machine(
     pod_id: UUID, name: str, request: Request, uow_factory: UowFactoryDep
@@ -408,7 +428,8 @@ async def delete_machine(
     "/pods/{pod_id}/machines/{name}/grants",
     response_model=MachineGrantsModel,
     operation_id="machine.pod.grants.get",
-    summary="Who is granted a pod machine",
+    summary="Which agents and functions are granted a pod machine",
+    dependencies=[_PERSON_MANAGES],
 )
 async def get_machine_grants(
     pod_id: UUID, name: str, request: Request, uow_factory: UowFactoryDep
@@ -419,7 +440,6 @@ async def get_machine_grants(
     return MachineGrantsModel(
         agents=list(grants.agents),
         functions=list(grants.functions),
-        members=list(grants.members),
     )
 
 
@@ -427,7 +447,8 @@ async def get_machine_grants(
     "/pods/{pod_id}/machines/{name}/grants",
     response_model=MachineGrantsModel,
     operation_id="machine.pod.grants.set",
-    summary="Replace who is granted a pod machine",
+    summary="Replace which agents and functions are granted a pod machine",
+    dependencies=[_PERSON_MANAGES],
 )
 async def set_machine_grants(
     pod_id: UUID,
@@ -445,7 +466,6 @@ async def set_machine_grants(
             MachineGrants(
                 agents=tuple(body.agents),
                 functions=tuple(body.functions),
-                members=tuple(body.members),
             ),
             created_by=caller.user_id,
         )
@@ -453,5 +473,4 @@ async def set_machine_grants(
     return MachineGrantsModel(
         agents=list(grants.agents),
         functions=list(grants.functions),
-        members=list(grants.members),
     )

@@ -6,5 +6,4 @@ export type UpdatePodMachineRequest = {
     display_name?: (string | null);
     run_slots?: (number | null);
     size?: (string | null);
-    visibility?: ('pod' | 'restricted' | null);
 };

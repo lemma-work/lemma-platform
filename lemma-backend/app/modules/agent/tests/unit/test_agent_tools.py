@@ -9,7 +9,6 @@ from app.modules.agent.infrastructure.harness.lemma.run_options import (
 )
 import pytest
 
-import app.modules.agent.infrastructure.tools.user_interaction.tools as user_interaction_adapter
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
@@ -367,64 +366,6 @@ async def test_display_resource_no_surface_does_not_deliver(monkeypatch):
 
     assert response.success is True
     assert calls == []
-
-
-@pytest.mark.asyncio
-async def test_display_resource_returns_browser_access_url(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    user_id = uuid4()
-    calls: list[tuple[str, object]] = []
-
-    class FakeWorkspaceSandboxService:
-        async def create_browser_access(
-            self,
-            requested_user_id: UUID,
-            *,
-            ttl_seconds: int,
-            pod_id: UUID,
-            actor_id: UUID | None,
-        ):
-            calls.append(
-                (
-                    "create_browser_access",
-                    (requested_user_id, ttl_seconds, pod_id, actor_id),
-                )
-            )
-            return SimpleNamespace(
-                url="https://browser.example/access-token",
-                expires_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
-            )
-
-        async def close(self):
-            calls.append(("close", None))
-
-    monkeypatch.setattr(
-        user_interaction_adapter,
-        "WorkspaceSandboxService",
-        FakeWorkspaceSandboxService,
-    )
-
-    pod_id = uuid4()
-    agent_id = uuid4()
-    ctx = SimpleNamespace(user_id=user_id, pod_id=pod_id, workload_id=agent_id)
-
-    response = await display_resource(
-        ctx,
-        DisplayResourceRequest(type="browser"),
-    )
-
-    assert response.success is True
-    assert response.message == "BROWSER resource ready for display."
-    assert response.app == "browser"
-    assert response.url == "https://browser.example/access-token"
-    assert response.expires_at == datetime(2030, 1, 1, tzinfo=timezone.utc)
-    assert calls == [
-        # The browser in the run's own pod workspace, beside its shell.
-        # The browser of the agent that asked, not the pod assistant's.
-        ("create_browser_access", (user_id, 1800, pod_id, agent_id)),
-        ("close", None),
-    ]
 
 
 def _payload_error(**kwargs) -> str:

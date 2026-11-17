@@ -35,11 +35,12 @@ _MACHINE = "/machines/{ref}"
 #: A machine's work: its processes, its files, its previews, and how it is.
 #: Open to workloads and to apps' pages because every one of these resolves
 #: the machine through the workspace module's machine resolver, which applies
-#: the caller's own rule -- a run reaches its person's machine only when they
-#: started it in Lemma, a pod machine only by visibility or grant, an app its
-#: viewer's machine only after that viewer said yes to that app. The browser,
-#: its logins, the consents, creating and deleting machines, and resetting a
-#: machine's home are none of these: those stay a person's.
+#: the caller's own rule -- a run reaches its person's machine when it answers
+#: a member, a pod machine as a pod resource (role, or grant intersected with
+#: the person), and an app's page a pod machine as its viewer in its own pod
+#: and nobody's own machine. The browser, its logins, creating, changing and
+#: deleting machines, their grants, and resetting a machine's home are none
+#: of these: those stay a person's.
 MACHINE_WORK_ROUTES: frozenset[tuple[str, str]] = frozenset(
     {
         ("GET", "/machines"),
@@ -55,6 +56,8 @@ MACHINE_WORK_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("GET", f"{_MACHINE}/files"),
         ("GET", f"{_MACHINE}/files:stat"),
         ("GET", f"{_MACHINE}/files:content"),
+        ("PUT", f"{_MACHINE}/files:content"),
+        # The write's first spelling, deprecated for one release.
         ("PUT", f"{_MACHINE}/files/content"),
         ("DELETE", f"{_MACHINE}/files"),
         ("POST", f"{_MACHINE}/files:move"),
@@ -234,8 +237,8 @@ APP_ROUTES: frozenset[tuple[str, str]] = frozenset(
             "GET",
             f"{_ORG_CONNECTORS}/{{auth_config_name}}/triggers/{{trigger_name}}",
         ),
-        # Running code for its viewer: their own machine only after they said
-        # yes to this app, a pod machine only in the app's own pod.
+        # Running code as its viewer on a machine of the app's own pod. Never
+        # the viewer's own machine: that is not the pod's to offer.
         *MACHINE_WORK_ROUTES,
     }
 )

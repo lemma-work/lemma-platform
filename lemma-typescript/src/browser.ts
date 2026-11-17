@@ -27,7 +27,6 @@ import {
   setTestingToken,
 } from "./auth.js";
 import { ApiError, ConnectionRequiredError, isConnectionRequiredError } from "./http.js";
-import { MACHINE_CONSENT_MESSAGE_TYPE, MachineConsentRequiredError } from "./namespaces/machines.js";
 import { POD_DEFAULT_AGENT_SELECTOR } from "./namespaces/conversations.js";
 import {
   LEMMA_APP_THEME_MESSAGE_TYPE,
@@ -57,8 +56,6 @@ export {
   ApiError,
   ConnectionRequiredError,
   isConnectionRequiredError,
-  MACHINE_CONSENT_MESSAGE_TYPE,
-  MachineConsentRequiredError,
   POD_DEFAULT_AGENT_SELECTOR,
   LEMMA_APP_THEME_MESSAGE_TYPE,
   LEMMA_THEME_EVENT,
@@ -92,8 +89,6 @@ if (typeof globalThis !== "undefined") {
     ApiError,
     ConnectionRequiredError,
     isConnectionRequiredError,
-    MACHINE_CONSENT_MESSAGE_TYPE,
-    MachineConsentRequiredError,
     POD_DEFAULT_AGENT_SELECTOR,
     LEMMA_APP_THEME_MESSAGE_TYPE,
     LEMMA_THEME_EVENT,

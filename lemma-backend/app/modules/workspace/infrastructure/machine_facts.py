@@ -1,135 +1,130 @@
-"""The facts the machine authorization matrix decides on, read from the database.
+"""What a machine decision reads: the core authorizer, and whom a run answers.
 
-Each answer is one narrow query, asked only when the matrix needs it for this
-caller and this machine: a person's own default machine never reads a pod
-role, and a person's request never reads a workload grant.
+A pod machine is a pod resource, so whether a caller may see, use or manage
+one is asked of the core authorizer with the caller's own context -- built
+the way every request builds it: a person's for a person and an app's
+viewer, the delegated workload's (grant intersected with its person) for an
+agent or a function, the person's own for the pod's default agent, the
+function's grants alone for a function run with nobody behind it.
+
+The ref handed to the authorizer is already hydrated from the machine row
+the resolver read, so the core needs nothing of this module's tables.
 """
 
 from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
-
-from app.core.authorization.context import ResourceType
-from app.core.authorization.models import ResourcePermissionGrantModel
+from app.core.authorization.context import (
+    Context,
+    ResourceRef,
+    ResourceType,
+    ResourceVisibility,
+)
+from app.core.authorization.delegation import is_pod_default_agent
+from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.workspace.domain.machine import Machine, MachineKind
+from app.modules.workspace.domain.machine import Machine
 from app.modules.workspace.domain.machine_access import (
     CallerKind,
     MachineCaller,
-    MachineFacts,
-    PodStanding,
-)
-from app.modules.workspace.infrastructure.machine_models import (
-    AppMachineConsentModel,
+    PodAccess,
 )
 
-_WORKLOAD_GRANTEE = {CallerKind.AGENT: "AGENT", CallerKind.FUNCTION: "FUNCTION"}
+
+def machine_resource(machine: Machine, pod_id: UUID) -> ResourceRef:
+    """The machine as the authorizer sees it: a pod resource every member's
+    role reaches, with no owner -- a pod machine is the pod's, not whoever
+    made it."""
+    return ResourceRef(
+        resource_type=ResourceType.MACHINE,
+        resource_id=machine.id,
+        pod_id=pod_id,
+        organization_id=machine.organization_id,
+        visibility=ResourceVisibility.POD,
+    )
 
 
 class DatabaseMachineFacts:
     def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
         self._uow = uow
 
-    async def gather(self, caller: MachineCaller, machine: Machine) -> MachineFacts:
-        if machine.kind is MachineKind.DEFAULT:
-            return MachineFacts(
-                app_consented=(
-                    caller.kind is CallerKind.APP
-                    and caller.user_id is not None
-                    and caller.app_id is not None
-                    and await self.app_consented(caller.user_id, caller.app_id)
-                ),
-                run_started_in_lemma=(
-                    caller.kind is CallerKind.AGENT
-                    and await self._run_started_in_lemma(caller)
-                ),
-            )
+    async def answers_member(self, caller: MachineCaller) -> bool:
+        """Whether the agent run's conversation answers a member, not a contact
+        or another pod. No conversation reads as no: fail closed."""
+        if caller.conversation_id is None:
+            return False
+        from app.modules.agent.contracts.run_audience import (
+            conversation_answers_member,
+        )
+
+        return await conversation_answers_member(
+            self._uow, conversation_id=caller.conversation_id
+        )
+
+    async def pod_access(self, caller: MachineCaller, machine: Machine) -> PodAccess:
         pod_id = machine.pod_id
         if pod_id is None:
-            return MachineFacts()
-        if caller.kind in _WORKLOAD_GRANTEE:
-            return MachineFacts(
-                workload_granted=await self._workload_granted(caller, machine)
+            return PodAccess()
+        ctx = await self.context(caller, pod_id)
+        if ctx is None:
+            return PodAccess()
+        resource = machine_resource(machine, pod_id)
+        manage = await ctx.can(Permissions.MACHINE_MANAGE, resource)
+        use = manage or await ctx.can(Permissions.MACHINE_USE, resource)
+        # Seeing a machine is reading the pod it is in -- for people. A
+        # workload sees what it may use and nothing else.
+        see = use or (
+            caller.kind in (CallerKind.USER, CallerKind.APP)
+            and await ctx.can(Permissions.POD_READ, ResourceRef.pod(pod_id))
+        )
+        return PodAccess(manage=manage, use=use, see=see)
+
+    async def pods_named(self, caller: MachineCaller, name: str) -> list[UUID]:
+        """The pods ``pod:<name>:...`` could mean to this caller: a person's
+        by their memberships, a workload's or an app's only its own pod."""
+        if caller.kind is CallerKind.USER and caller.user_id is not None:
+            from app.modules.pod.contracts.members import member_pods_named
+
+            return await member_pods_named(self._uow, user_id=caller.user_id, name=name)
+        if caller.pod_id is None:
+            return []
+        from app.modules.pod.contracts.members import pod_name
+
+        own = await pod_name(self._uow.session, caller.pod_id)
+        if own is not None and own.strip().lower() == name.strip().lower():
+            return [caller.pod_id]
+        return []
+
+    async def context(self, caller: MachineCaller, pod_id: UUID) -> Context | None:
+        """The caller's authorization context in ``pod_id``, or None when it
+        has none there at all."""
+        service = create_authorization_data_service(self._uow)
+        if caller.kind in (CallerKind.USER, CallerKind.APP):
+            if caller.user_id is None:
+                return None
+            return await service.build_user_context(
+                user_id=caller.user_id, pod_id=pod_id
             )
+        if caller.workload_id is None or caller.pod_id != pod_id:
+            # A workload acts only in its own pod.
+            return None
+        principal_type = "AGENT" if caller.kind is CallerKind.AGENT else "FUNCTION"
         if caller.user_id is None:
-            return MachineFacts()
-        return MachineFacts(
-            standing=await pod_standing(self._uow, pod_id, caller.user_id),
-            member_granted=await self._member_granted(pod_id, caller.user_id, machine),
-        )
-
-    async def app_consented(self, user_id: UUID, app_id: UUID) -> bool:
-        found = await self._uow.session.scalar(
-            select(AppMachineConsentModel.id).where(
-                AppMachineConsentModel.user_id == user_id,
-                AppMachineConsentModel.app_id == app_id,
-                AppMachineConsentModel.revoked_at.is_(None),
+            return await service.build_workload_context(
+                principal_type=principal_type,
+                principal_id=caller.workload_id,
+                pod_id=pod_id,
             )
-        )
-        return found is not None
-
-    async def _run_started_in_lemma(self, caller: MachineCaller) -> bool:
-        if caller.conversation_id is None or caller.user_id is None:
-            return False
-        from app.modules.agent.contracts.run_origin import (
-            conversation_started_in_lemma,
-        )
-
-        return await conversation_started_in_lemma(
-            self._uow,
-            conversation_id=caller.conversation_id,
+        return await service.build_delegated_workload_context(
             user_id=caller.user_id,
+            principal_type=principal_type,
+            principal_id=caller.workload_id,
+            pod_id=pod_id,
+            is_default_pod_agent=caller.kind is CallerKind.AGENT
+            and is_pod_default_agent(caller.workload_id, pod_id=pod_id),
         )
 
-    async def _workload_granted(self, caller: MachineCaller, machine: Machine) -> bool:
-        if caller.workload_id is None:
-            return False
-        return await self._granted(
-            machine,
-            grantee_type=_WORKLOAD_GRANTEE[caller.kind],
-            grantee_id=caller.workload_id,
-        )
 
-    async def _member_granted(
-        self, pod_id: UUID, user_id: UUID, machine: Machine
-    ) -> bool:
-        from app.modules.pod.contracts.members import pod_member_id
-
-        member_id = await pod_member_id(self._uow, pod_id, user_id)
-        if member_id is None:
-            return False
-        return await self._granted(
-            machine, grantee_type="POD_MEMBER", grantee_id=member_id
-        )
-
-    async def _granted(
-        self, machine: Machine, *, grantee_type: str, grantee_id: UUID
-    ) -> bool:
-        found = await self._uow.session.scalar(
-            select(ResourcePermissionGrantModel.id).where(
-                ResourcePermissionGrantModel.resource_type
-                == ResourceType.MACHINE.value,
-                ResourcePermissionGrantModel.resource_id == machine.id,
-                ResourcePermissionGrantModel.grantee_type == grantee_type,
-                ResourcePermissionGrantModel.grantee_id == grantee_id,
-                ResourcePermissionGrantModel.permission_id == Permissions.MACHINE_USE,
-            )
-        )
-        return found is not None
-
-
-async def pod_standing(
-    uow: SqlAlchemyUnitOfWork, pod_id: UUID, user_id: UUID
-) -> PodStanding:
-    from app.modules.pod.contracts.members import pod_member_holds
-
-    if await pod_member_holds(uow, pod_id, user_id, Permissions.POD_MEMBER_MANAGE):
-        return PodStanding.ADMIN
-    if await pod_member_holds(uow, pod_id, user_id, Permissions.MACHINE_MANAGE):
-        return PodStanding.EDITOR
-    if await pod_member_holds(uow, pod_id, user_id, Permissions.POD_READ):
-        return PodStanding.VIEWER
-    return PodStanding.NONE
+__all__ = ["DatabaseMachineFacts", "machine_resource"]

@@ -64,7 +64,6 @@ export const ROUTE_TEMPLATES: readonly string[] = [
     "/chats",
     "/connect",
     "/connectors",
-    "/consent/machine",
     "/contact",
     "/create-pod",
     "/d/[code]",

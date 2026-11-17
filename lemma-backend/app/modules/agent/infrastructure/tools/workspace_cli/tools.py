@@ -62,6 +62,10 @@ async def exec_command(
         wait_for(reason="the build", process_id="abc")
         -> woke_because: "TARGET_FINISHED", exit_code: 0
 
+    A dev server a preview points at should outlive your run: start it with
+    `service="web"` (any name). It is not stopped when the run ends, and it
+    comes back after the machine sleeps.
+
     `wait_for` ends your turn and gives you a new one when the process exits, so
     a ten-minute build costs one model call rather than twenty. Use
     `manage_process` to send input to a process, to stop one, or to look at a

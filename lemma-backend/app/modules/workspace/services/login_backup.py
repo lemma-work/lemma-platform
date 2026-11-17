@@ -15,6 +15,13 @@ and the data key is stored on the row under the deployment's secret cipher.
 A bucket alone opens nothing. Chrome on Linux runs with the basic password
 store, whose cookie key is the same on every machine, which is what makes a
 copy taken on one disk usable on another -- the survival matrix holds that.
+
+A copy has three outcomes, and a caller about to destroy a disk must tell
+them apart: **stored** (verified in the object store, and only then are older
+copies pruned), **nothing** to copy (a profile that never signed in), or
+**failed**. A disk is never replaced on a failed copy: the reset or the move
+stops and says so. A partial archive is a failure -- ``tar``'s exit status is
+the command's, not ``chmod``'s -- and never displaces a good copy.
 """
 
 from __future__ import annotations
@@ -25,6 +32,8 @@ import os
 import shlex
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from enum import StrEnum
+from collections.abc import Awaitable, Callable
 from uuid import UUID, uuid7
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -36,7 +45,7 @@ from app.core.object_storage import build_object_store, local_object_storage_pat
 from app.modules.workspace.infrastructure.machine_models import (
     MachineLoginBackupModel,
 )
-from app.modules.workspace.services.machine_shell import run_on_machine
+from app.modules.workspace.services.machine_shell import Shell, run_on_machine
 from sandbox_runtime.paths import BROWSER_PROFILE_ROOT, sandbox_command
 
 logger = get_logger(__name__)
@@ -63,6 +72,13 @@ _RESTORE = "/tmp/lemma-login-restore.tgz"
 _PREFIX = "machine-login-backups"
 
 
+class BackupOutcome(StrEnum):
+    STORED = "stored"
+    NOTHING = "nothing"
+    NOT_DUE = "not_due"
+    FAILED = "failed"
+
+
 @dataclass(frozen=True, slots=True)
 class LoginBackup:
     id: UUID
@@ -70,6 +86,26 @@ class LoginBackup:
     created_at: datetime
     size_bytes: int
     reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class BackupResult:
+    outcome: BackupOutcome
+    backup: LoginBackup | None = None
+    #: Why, when it failed.
+    detail: str | None = None
+
+    @property
+    def failed(self) -> bool:
+        return self.outcome is BackupOutcome.FAILED
+
+    @property
+    def stored(self) -> bool:
+        return self.outcome is BackupOutcome.STORED
+
+
+class LoginBackupFailed(Exception):
+    """The logins could not be copied off a machine whose disk is about to go."""
 
 
 def _store():
@@ -84,26 +120,57 @@ def _cipher():
     return get_secret_cipher()
 
 
-def close_browser_command() -> str:
-    """A clean close: agent-browser copies the profile back only on one."""
-    return f"{shlex.quote(sandbox_command('agent-browser'))} close --all >/dev/null 2>&1 || true"
+#: How long a clean close may take to let go of the profile.
+_CLOSE_WAIT_SECONDS = 10
+
+
+def close_browser_command(wait_seconds: int = _CLOSE_WAIT_SECONDS) -> str:
+    """A clean close: agent-browser copies the profile back only on one.
+
+    Its own exit status is not the answer -- with no browser open it fails,
+    and that is a closed browser. What is: the profile's ``SingletonLock``
+    gone, or naming a process that is no longer alive (a browser the memory
+    guard killed). Exits 4 when a live Chrome still holds the profile after
+    ``_CLOSE_WAIT_SECONDS``.
+    """
+    lock = shlex.quote(f"{BROWSER_PROFILE_ROOT}/profile/SingletonLock")
+    return (
+        f"{shlex.quote(sandbox_command('agent-browser'))} close --all >/dev/null 2>&1; "
+        f"i=0; while [ $i -lt {wait_seconds} ]; do "
+        f"t=$(readlink {lock} 2>/dev/null) || exit 0; "
+        'kill -0 "${t##*-}" 2>/dev/null || exit 0; '
+        "i=$((i+1)); sleep 1; done; exit 4"
+    )
 
 
 def _tar_command() -> str:
+    """Exit 3 for nothing to copy; any other failure is tar's own status.
+    The archive is checked before it counts: a truncated one fails here."""
     parts = " ".join(shlex.quote(part) for part in LOGIN_PARTS)
     root = shlex.quote(BROWSER_PROFILE_ROOT)
     return (
         f"cd {root} 2>/dev/null || exit 3; "
         f'present=\'\'; for p in {parts}; do [ -e "$p" ] && present="$present\n$p"; done; '
         '[ -n "$present" ] || exit 3; '
-        f'printf "%b" "$present" | sed "/^$/d" | tar czf {_STAGE} -T - 2>/dev/null; '
-        f"chmod 600 {_STAGE}"
+        f"rm -f {_STAGE}; "
+        f'printf "%b" "$present" | sed "/^$/d" | tar czf {_STAGE} -T - '
+        f"&& tar tzf {_STAGE} >/dev/null && chmod 600 {_STAGE}"
     )
 
 
 class LoginBackups:
-    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+    def __init__(
+        self,
+        uow_factory: UnitOfWorkFactory,
+        *,
+        shell: Shell | None = None,
+        read_staged: Callable[[UUID], Awaitable[bytes]] | None = None,
+    ) -> None:
         self._uow_factory = uow_factory
+        # How a command reaches the machine, and how the staged archive is
+        # read off it: the machine's runtime unless a caller hands in another.
+        self._shell: Shell = shell or run_on_machine
+        self._read_staged = read_staged or _read_staged
 
     async def latest(self, sandbox_id: UUID) -> LoginBackup | None:
         async with self._uow_factory() as uow:
@@ -129,45 +196,89 @@ class LoginBackups:
         acting_user: UUID,
         reason: str,
         force: bool = False,
-    ) -> LoginBackup | None:
-        """Copy the logins off the machine. None when there is nothing to copy,
-        or a copy is not due yet. Expects the browser closed (a clean close
-        is what writes the profile back)."""
+    ) -> BackupResult:
+        """Copy the logins off the machine. Expects the browser closed (a
+        clean close is what writes the profile back)."""
         if not force and not await self.due(sandbox_id, reason=reason):
-            return None
-        staged = await run_on_machine(
+            return BackupResult(BackupOutcome.NOT_DUE)
+        staged = await self._shell(
             sandbox_id,
             acting_user=acting_user,
             command=_tar_command(),
             timeout_seconds=120,
         )
         if staged.exit_code == 3:
-            return None
+            return BackupResult(BackupOutcome.NOTHING)
         if not staged.ok:
             logger.warning(
                 "workspace.login_backup.stage_failed.degraded",
                 sandbox_id=str(sandbox_id),
                 exit_code=staged.exit_code,
             )
-            return None
-        plain = await _read_staged(sandbox_id)
-        await run_on_machine(
+            return BackupResult(
+                BackupOutcome.FAILED,
+                detail=f"packing the browser profile exited {staged.exit_code}",
+            )
+        plain = await self._read_staged(sandbox_id)
+        await self._shell(
             sandbox_id,
             acting_user=acting_user,
             command=f"rm -f {_STAGE}",
             timeout_seconds=30,
         )
-        return await self._store_backup(sandbox_id, plain, reason=reason)
+        backup = await self._store_backup(sandbox_id, plain, reason=reason)
+        if backup is None:
+            return BackupResult(
+                BackupOutcome.FAILED,
+                detail="the copy did not read back from object storage intact",
+            )
+        return BackupResult(BackupOutcome.STORED, backup=backup)
+
+    async def require_back_up(
+        self, sandbox_id: UUID, *, acting_user: UUID, reason: str
+    ) -> BackupResult:
+        """A copy before a disk is replaced: the browser closed cleanly and the
+        copy stored, or nothing to copy -- otherwise ``LoginBackupFailed``,
+        and the caller keeps the disk."""
+        closed = await self._shell(
+            sandbox_id,
+            acting_user=acting_user,
+            command=close_browser_command(),
+            timeout_seconds=_CLOSE_WAIT_SECONDS + 30,
+        )
+        if not closed.ok:
+            raise LoginBackupFailed(
+                "The browser would not close cleanly, so its logins could not be "
+                "copied off. The disk was left as it was."
+            )
+        result = await self.back_up(
+            sandbox_id, acting_user=acting_user, reason=reason, force=True
+        )
+        if result.failed:
+            raise LoginBackupFailed(
+                f"The browser's logins could not be copied off ({result.detail}). "
+                "The disk was left as it was."
+            )
+        return result
 
     async def _store_backup(
         self, sandbox_id: UUID, plain: bytes, *, reason: str
-    ) -> LoginBackup:
+    ) -> LoginBackup | None:
+        """Stored and verified, then recorded -- and only then are the older
+        copies pruned. None when the object did not read back intact."""
         key = AESGCM.generate_key(bit_length=256)
         nonce = os.urandom(12)
         sealed = nonce + AESGCM(key).encrypt(nonce, plain, sandbox_id.bytes)
         backup_id = uuid7()
         object_key = f"{sandbox_id}/{backup_id}.bin"
         await _store().put_async(object_key, sealed)
+        if not await _stored_intact(object_key, sealed):
+            logger.warning(
+                "workspace.login_backup.verify_failed.degraded",
+                sandbox_id=str(sandbox_id),
+            )
+            await _forget_object(object_key)
+            return None
         wrapped = _cipher().encrypt_str(base64.b64encode(key).decode())
         async with self._uow_factory() as uow:
             row = MachineLoginBackupModel(
@@ -228,11 +339,11 @@ class LoginBackups:
         plain = await self._open(sandbox_id, row)
         await _write_staged(sandbox_id, plain)
         root = shlex.quote(BROWSER_PROFILE_ROOT)
-        outcome = await run_on_machine(
+        outcome = await self._shell(
             sandbox_id,
             acting_user=acting_user,
             command=(
-                f"{close_browser_command()}; mkdir -p {root} && "
+                f"( {close_browser_command()} ) && mkdir -p {root} && "
                 f"tar xzf {_RESTORE} -C {root} && rm -f {_RESTORE}"
             ),
             timeout_seconds=120,
@@ -256,7 +367,7 @@ class LoginBackups:
             return False
         parts = " ".join(shlex.quote(part) for part in LOGIN_PARTS)
         root = shlex.quote(BROWSER_PROFILE_ROOT)
-        held = await run_on_machine(
+        held = await self._shell(
             sandbox_id,
             acting_user=acting_user,
             command=(
@@ -312,6 +423,17 @@ async def _write_staged(sandbox_id: UUID, data: bytes) -> None:
     await build_local_client().write_file(
         sandbox_id, _RESTORE, data, deadline_at=deadline
     )
+
+
+async def _stored_intact(object_key: str, sealed: bytes) -> bool:
+    """Read the object back: a put that returned is not a copy that exists."""
+    try:
+        result = await _store().get_async(object_key)
+        stored = (await result.bytes_async()).to_bytes()
+    except FileNotFoundError, OSError:
+        logger.warning("workspace.login_backup.read_back.degraded", exc_info=True)
+        return False
+    return hashlib.sha256(stored).digest() == hashlib.sha256(sealed).digest()
 
 
 async def _forget_object(object_key: str) -> None:

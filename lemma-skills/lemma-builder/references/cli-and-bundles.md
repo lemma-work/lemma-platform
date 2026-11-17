@@ -129,10 +129,11 @@ Rules:
 // optional: "visibility": "RESTRICTED" (default POD)
 // machines/builder/builder.json — a machine the pod's agents share. Billed to the
 // org, and it outlives whoever created it. Only `name` and `template` are required.
+// Who may use it: editors by role, an agent by naming it as its `machine` (which
+// grants it), or by a `machine.use` grant in an agent's or function's permissions.
 { "name": "builder", "display_name": "Builder",
   "template": "workspace-docker",   // workspace | workspace-docker (has Docker)
   "size": "4x8",                    // vCPU x GB; omit for the plan's default
-  "visibility": "pod",              // pod: every pod agent may use it | restricted: only with a machine.use grant
   "run_slots": 2 }                  // runs at once; later runs queue
 
 // apps/ops-app/ops-app.json

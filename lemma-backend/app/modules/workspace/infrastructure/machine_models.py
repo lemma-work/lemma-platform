@@ -1,5 +1,5 @@
-"""Persistence for what machines add to sandboxes: previews, app consents,
-metered sessions and login backups."""
+"""Persistence for what machines add to sandboxes: previews, metered
+sessions and login backups."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     Float,
@@ -60,30 +61,6 @@ class MachinePreviewModel(UUIDAuditBase):
     )
 
 
-class AppMachineConsentModel(UUIDAuditBase):
-    """A person's yes to one app running code on their default machine."""
-
-    __tablename__ = "app_machine_consents"
-    __table_args__ = (
-        Index(
-            "uq_app_machine_consents_live",
-            "user_id",
-            "app_id",
-            unique=True,
-            postgresql_where=text("revoked_at IS NULL"),
-        ),
-    )
-
-    user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
-    )
-    app_id: Mapped[UUID] = mapped_column(nullable=False)
-    pod_id: Mapped[UUID] = mapped_column(nullable=False)
-    revoked_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-
 class MachineSessionModel(UUIDAuditBase):
     """One stretch of a machine running, metered in slices.
 
@@ -99,9 +76,12 @@ class MachineSessionModel(UUIDAuditBase):
             "billing_scope IN ('user', 'org')",
             name="ck_machine_sessions_billing_scope",
         ),
+        # Unique: two open sessions for one machine bill its time twice, and
+        # the meter and a release racing to open one is exactly how they arise.
         Index(
             "ix_machine_sessions_open",
             "sandbox_id",
+            unique=True,
             postgresql_where=text("ended_at IS NULL"),
         ),
     )
@@ -203,5 +183,51 @@ class MachineConnectionModel(UUIDAuditBase):
         DateTime(timezone=True), nullable=True
     )
     revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class MachineServiceModel(UUIDAuditBase):
+    """A named service on a machine: what to run, as whom, and whether to
+    start it again after a pause.
+
+    Durable, unlike the process registry in Redis, because a service outlives
+    any one process: the machine pauses, the process ends, and the definition
+    is what brings it back. The caller's own environment variables are
+    ciphertext under the deployment's secret cipher; ``token_claims`` records
+    what the starting token was minted for, never the token, so a restart
+    mints a fresh one with the same reach.
+    """
+
+    __tablename__ = "machine_services"
+    __table_args__ = (
+        UniqueConstraint("sandbox_id", "name", name="uq_machine_services_name"),
+    )
+
+    sandbox_id: Mapped[UUID] = mapped_column(
+        ForeignKey("sandboxes.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    command: Mapped[str] = mapped_column(Text, nullable=False)
+    cwd: Mapped[str] = mapped_column(Text, nullable=False)
+    env_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    token_claims: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    started_by: Mapped[UUID | None] = mapped_column(nullable=True)
+    restart_on_resume: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    #: The process running it now, if any.
+    process_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: How far its output has been read, and when that last moved: the idle
+    #: ceiling counts from here.
+    output_sequence: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
+    last_active_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    stopped_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

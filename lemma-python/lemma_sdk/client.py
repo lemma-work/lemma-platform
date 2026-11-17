@@ -133,7 +133,7 @@ class Lemma:
     def machines(self) -> "Machines":
         """Machines you can run commands on: your own and your pods'.
 
-        Addressed by ref (``me``, ``pod:<pod>/<name>``, ``mine:<name>`` or an
+        Addressed by ref (``me``, ``pod:<pod>:<name>``, ``mine:<name>`` or an
         id), not by organization; ``pod:<name>`` means this client's pod.
         """
         from .resources import Machines

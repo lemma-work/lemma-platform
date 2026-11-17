@@ -41,6 +41,8 @@ class FakeExisting:
         self._apps = set(apps or [])
         self._surfaces = set(surfaces or [])
         self._machines = set(machines or [])
+        self.refused_templates: set[str] = set()
+        self.machines_checked: list[tuple[str, str, str | None]] = []
 
     async def table_names(self):
         return self._tables
@@ -68,6 +70,14 @@ class FakeExisting:
 
     async def machine_names(self):
         return self._machines
+
+    async def machine_refusals(self, machines):
+        self.machines_checked = [(m.name, m.template, m.size) for m in machines]
+        return [
+            f"Machine '{m.name}': not on this deployment."
+            for m in machines
+            if m.template in self.refused_templates
+        ]
 
 
 def _write(path: Path, payload: dict) -> None:

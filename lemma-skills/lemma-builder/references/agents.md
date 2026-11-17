@@ -94,15 +94,20 @@ needs to be shared, heavier, or to have Docker:
   "machine": "pod:builder" }        // a pod machine: machines/<name>/<name>.json in cli-and-bundles.md
 ```
 
-A `pod`-visibility machine is open to every agent in the pod. A `restricted` one
-is usable only by the agents, functions and members named in its `machine.use`
-grants (`PUT /pods/{pod}/machines/{name}/grants`), and by pod admins.
+A pod machine is a pod resource: an agent uses one only with a `machine.use`
+grant, and never further than the person it acts for may. Setting the agent's
+`machine` grants it, so naming a machine is enough; other agents and functions
+are granted with `PUT /pods/{pod}/machines/{name}/grants`. Keeping a machine
+from an agent -- a verifier the builder must not reach -- is not granting it.
+Everything on one pod machine runs as one user and can read what the others
+hold, so put work that must not share on a machine of its own.
 
 On a pod machine each run gets its own working directory,
 `~/lemma/runs/<agent>/<run>`, and processes it starts stop when the run ends.
 The agent can still name another machine per call (the tools' `machine`
-argument), and `list_machines` shows which ones it may use. A run triggered from
-a channel never uses a person's own machine; give such an agent a pod machine.
+argument), and `list_machines` shows which ones it may use. Every run a member
+owns -- a chat, a schedule, a channel message, a call -- may use that member's own
+machine; only a run answering a contact or another pod gets none.
 
 
 ## Toolsets

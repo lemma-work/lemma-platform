@@ -29,7 +29,6 @@ class RunIdentity(TypedDict):
     workspace_id: str
     workspace_cwd: str
     machine: str | None
-    started_in_lemma: bool
     workspace_repo: ProjectRepo | None
     pod_cwd: str
 

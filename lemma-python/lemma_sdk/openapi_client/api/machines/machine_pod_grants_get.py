@@ -64,7 +64,7 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
 ) -> Response[ErrorResponse | MachineGrantsModel]:
-    """Who is granted a pod machine
+    """Which agents and functions are granted a pod machine
 
     Args:
         pod_id (UUID):
@@ -96,7 +96,7 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
 ) -> ErrorResponse | MachineGrantsModel | None:
-    """Who is granted a pod machine
+    """Which agents and functions are granted a pod machine
 
     Args:
         pod_id (UUID):
@@ -123,7 +123,7 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
 ) -> Response[ErrorResponse | MachineGrantsModel]:
-    """Who is granted a pod machine
+    """Which agents and functions are granted a pod machine
 
     Args:
         pod_id (UUID):
@@ -153,7 +153,7 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
 ) -> ErrorResponse | MachineGrantsModel | None:
-    """Who is granted a pod machine
+    """Which agents and functions are granted a pod machine
 
     Args:
         pod_id (UUID):

@@ -7,15 +7,15 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException, status
 
-from sandbox_runtime.errors import SandboxPathNotFound, SandboxUnavailable
+from sandbox_runtime.errors import SandboxPathNotFound
 
 from sandbox_runtime.paths import HOME_ROOT, WORKSPACE_ROOT
 from app.modules.workspace.api.controllers import (
     machine_files_controller as controller,
 )
+from app.modules.workspace.api.controllers.machine_failures import MachineCallFailed
 from app.modules.workspace.providers.runtime_errors import (
     WorkspaceRuntimeFileNotFound,
-    WorkspaceRuntimeFileRejected,
 )
 
 
@@ -177,46 +177,30 @@ async def test_a_directory_larger_than_one_page_says_so() -> None:
 
 
 # --- error mapping ----------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "exc,expected",
-    [
-        (SandboxPathNotFound("gone"), 404),
-        (WorkspaceRuntimeFileNotFound("gone"), 404),
-        (WorkspaceRuntimeFileRejected("big", status_code=413), 413),
-        (SandboxUnavailable("paused"), 503),
-    ],
-)
-def test_read_failures_map_to_something_the_caller_can_act_on(exc, expected) -> None:
-    """The two families are parallel, not shared, so both spellings of "not
-    there" have to reach the same 404."""
-    assert controller._as_http_error(exc, f"{WORKSPACE_ROOT}/a").status_code == expected
-
-
-def test_a_refused_credential_is_not_reported_as_a_file_that_is_too_large() -> None:
-    """`SandboxUnauthorized` is a refusal, and refusals matched the size branch.
-
-    The size branch keys on the word "Rejected", which every refusal carries.
-    A runtime rejecting Lemma's own credential therefore reached the file
-    explorer as 413 "File is larger than this endpoint will serve" -- sending
-    the user after a problem with their file that they did not have.
-    """
-    from sandbox_runtime.errors import SandboxUnauthorized
-
-    error = controller._as_http_error(
-        SandboxUnauthorized("workspace runtime returned HTTP 401"),
-        f"{WORKSPACE_ROOT}/a",
-    )
-
-    assert error.status_code == 503
-    assert "larger" not in str(error.detail)
+# The table itself is held in test_machine_failures.py; these hold that the
+# files routes use it.
 
 
 def test_only_real_read_failures_are_dressed_as_a_status() -> None:
     """A defect must surface as a 500, not as "the workspace is busy"."""
     assert not isinstance(TypeError("bug"), controller._FAILURES)
     assert isinstance(SandboxPathNotFound("x"), controller._FAILURES)
+
+
+@pytest.mark.asyncio
+async def test_a_missing_directory_lists_as_absent() -> None:
+    files = _FakeFiles(running=True, stats=[])
+
+    async def gone(*_args, **_kwargs):
+        raise WorkspaceRuntimeFileNotFound("gone")
+
+    files.stat_file = gone  # type: ignore[method-assign]
+
+    result = await controller.list_files(
+        _machine(), files, path="nowhere", wake=False, after=None
+    )
+
+    assert result.exists is False
 
 
 @pytest.mark.asyncio
@@ -261,7 +245,7 @@ async def test_a_missing_file_is_still_a_404() -> None:
         async def stat_file(self, machine_id, path, *, deadline_at):
             raise SandboxPathNotFound(path)
 
-    with pytest.raises(HTTPException) as raised:
+    with pytest.raises(MachineCallFailed) as raised:
         await controller.stat_file(
             _machine(), _StatMissing(running=True), path="nope.md"
         )
@@ -571,3 +555,22 @@ class TestLoginsCannotBeChangedThroughTheFileApi:
             _machine(), files, path="/home/user/lemma/old.log", recursive=False
         )
         assert files.deleted == ["/home/user/lemma/old.log"]
+
+
+# --- the write's two spellings ------------------------------------------------
+
+
+def test_the_write_is_files_colon_content_and_the_old_path_is_deprecated() -> None:
+    """`PUT files:content` matches `GET files:content`; the first spelling
+    still writes, for one release, marked deprecated where a client reads it."""
+    writes = {
+        route.path: route
+        for route in controller.router.routes
+        if "PUT" in getattr(route, "methods", set())
+    }
+
+    assert writes["/machines/{ref}/files:content"].endpoint is controller.write_file
+    legacy = writes["/machines/{ref}/files/content"]
+    assert legacy.endpoint is controller.write_file
+    assert legacy.deprecated is True
+    assert not writes["/machines/{ref}/files:content"].deprecated

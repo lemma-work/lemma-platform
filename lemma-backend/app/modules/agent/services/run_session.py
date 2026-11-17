@@ -77,7 +77,6 @@ from app.modules.agent.services.conversation_access import (
 )
 from app.modules.agent.services.run_phase_spans import record_history_size, run_phase
 from app.modules.agent.services.run_context_fields import RunIdentity
-from app.modules.agent.services.run_origin import run_started_in_lemma
 from app.modules.agent.domain.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
     assemble_runtime_history,
@@ -144,8 +143,6 @@ class RunSession:
     surface: ConversationSurface | None = None
     #: The run's place in its conversation (``RuntimeHistoryWindow``).
     run_index: int | None = None
-    #: Whether its run may use the person's own machine (``services/run_origin``).
-    started_in_lemma: bool = False
 
     # -- Loading ------------------------------------------------------------
 
@@ -217,12 +214,9 @@ class RunSession:
                         messages, runs, current_run_id=agent_run.id
                     )
                 surface = await conversation_surface(uow, conversation.id)
-                in_lemma = await run_started_in_lemma(
-                    uow, conversation, user_id, run=agent_run
-                )
                 record_history_size(span, runs=runs, sent=messages)
         session = cls.of(conversation, agent, agent_run, messages, surface)
-        session.run_index, session.started_in_lemma = window.current_run_index, in_lemma
+        session.run_index = window.current_run_index
         return session
 
     @classmethod
@@ -263,8 +257,6 @@ class RunSession:
             workspace=resolve_workspace_location(conversation),
             runtime=resolved,
             runtime_profile=resolved.runtime_snapshot().as_payload(),
-            # The paused run is the conversation's newest.
-            started_in_lemma=await run_started_in_lemma(uow, conversation, user_id),
         )
 
     async def resolve_turn_runtime(
@@ -319,7 +311,6 @@ class RunSession:
             "workspace_id": self.workspace.workspace_id,
             "workspace_cwd": self.workspace.cwd,
             "machine": agent.machine if agent is not None else None,
-            "started_in_lemma": self.started_in_lemma,
             "workspace_repo": self.workspace.repo,
             "pod_cwd": pod_cwd_from_workspace_cwd(self.workspace.cwd),
         }

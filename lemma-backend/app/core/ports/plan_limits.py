@@ -69,7 +69,7 @@ class MachinePolicy:
     see ``UsageLimitValues``.
     """
 
-    default_size: str = "2x4"
+    default_size: str = "1x2"
     max_size: str = "8x16"
     allowed_templates: frozenset[str] = frozenset({"workspace", "workspace-docker"})
     max_pod_machines: int | None = None

@@ -6040,59 +6040,6 @@
         "title": "ConnectorStatusResponse",
         "type": "object"
       },
-      "ConsentListResponse": {
-        "properties": {
-          "consents": {
-            "items": {
-              "$ref": "#/components/schemas/ConsentResponse"
-            },
-            "title": "Consents",
-            "type": "array"
-          }
-        },
-        "required": [
-          "consents"
-        ],
-        "title": "ConsentListResponse",
-        "type": "object"
-      },
-      "ConsentResponse": {
-        "properties": {
-          "app_id": {
-            "format": "uuid",
-            "title": "App Id",
-            "type": "string"
-          },
-          "app_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "App Name"
-          },
-          "granted_at": {
-            "format": "date-time",
-            "title": "Granted At",
-            "type": "string"
-          },
-          "pod_id": {
-            "format": "uuid",
-            "title": "Pod Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "app_id",
-          "pod_id",
-          "granted_at"
-        ],
-        "title": "ConsentResponse",
-        "type": "object"
-      },
       "ContactAnswer": {
         "description": "Whom a bot answers in a private chat, beyond the pod's members.",
         "enum": [
@@ -7555,15 +7502,6 @@
               "workspace-docker"
             ],
             "title": "Template",
-            "type": "string"
-          },
-          "visibility": {
-            "default": "pod",
-            "enum": [
-              "pod",
-              "restricted"
-            ],
-            "title": "Visibility",
             "type": "string"
           }
         },
@@ -12119,20 +12057,6 @@
         "title": "GenerationSettings",
         "type": "object"
       },
-      "GrantConsentRequest": {
-        "properties": {
-          "app_id": {
-            "format": "uuid",
-            "title": "App Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "app_id"
-        ],
-        "title": "GrantConsentRequest",
-        "type": "object"
-      },
       "GranteeRef": {
         "properties": {
           "grantee_id": {
@@ -14193,7 +14117,7 @@
         "type": "object"
       },
       "MachineGrantsModel": {
-        "description": "Who may use a pod machine beyond what visibility already allows.\n\nAgents and functions by name; people by user id. A RESTRICTED machine is\nusable only by those named here (and pod admins).",
+        "description": "Which agents and functions may use a pod machine, by name.\n\nA workload uses a pod machine only with this grant, and then only as far\nas the person it acts for may. People need none: their pod role decides.",
         "properties": {
           "agents": {
             "items": {
@@ -14207,14 +14131,6 @@
               "type": "string"
             },
             "title": "Functions",
-            "type": "array"
-          },
-          "members": {
-            "items": {
-              "format": "uuid",
-              "type": "string"
-            },
-            "title": "Members",
             "type": "array"
           }
         },
@@ -14374,7 +14290,7 @@
             "title": "Pod Id"
           },
           "ref": {
-            "description": "How to name this machine in a call: `me`, `pod:<pod-id>/<name>` or `mine:<name>`. In a URL path use `:` for the slash.",
+            "description": "How to name this machine in a call: `me`, `pod:<pod-id>:<name>` or `mine:<name>`. Use it as it is in a URL path. The pod may also be named by its name, and `pod:<name>` means the pod in context.",
             "title": "Ref",
             "type": "string"
           },
@@ -14410,8 +14326,7 @@
           "visibility": {
             "enum": [
               "private",
-              "pod",
-              "restricted"
+              "pod"
             ],
             "title": "Visibility",
             "type": "string"
@@ -23213,7 +23128,7 @@
                 "type": "null"
               }
             ],
-            "description": "Run as a named service: no lifetime cap, not stopped when the run that started it ends, listed under Processes as a service.",
+            "description": "Run as a named service: not stopped when the run that started it ends, listed under Processes as a service. It keeps the machine awake only while it produces output (MACHINE_SERVICE_IDLE_SECONDS).",
             "title": "Service"
           },
           "timeout_seconds": {
@@ -26182,21 +26097,6 @@
               }
             ],
             "title": "Size"
-          },
-          "visibility": {
-            "anyOf": [
-              {
-                "enum": [
-                  "pod",
-                  "restricted"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Visibility"
           }
         },
         "title": "UpdatePodMachineRequest",
@@ -30268,129 +30168,6 @@
         }
       }
     },
-    "/machine-consents": {
-      "get": {
-        "operationId": "machine.consent.list",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ConsentListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Apps you let run code on your machine",
-        "tags": [
-          "Machine Consents"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "machine.consent",
-          "result": "collection",
-          "verb": "list"
-        }
-      },
-      "post": {
-        "operationId": "machine.consent.grant",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GrantConsentRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ConsentResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Let an app run code on your machine",
-        "tags": [
-          "Machine Consents"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "machine.consent"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "machine.consent",
-          "result": "entity",
-          "verb": "grant"
-        }
-      }
-    },
-    "/machine-consents/{app_id}": {
-      "delete": {
-        "operationId": "machine.consent.revoke",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "app_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "App Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Stop an app running code on your machine",
-        "tags": [
-          "Machine Consents"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "machine.consent"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "machine.consent",
-          "result": "void",
-          "verb": "revoke"
-        }
-      }
-    },
     "/machine-previews/{label}:open": {
       "get": {
         "operationId": "machine.preview.open",
@@ -31144,7 +30921,8 @@
     },
     "/machines/{ref}/files/content": {
       "put": {
-        "operationId": "machine.files.write",
+        "deprecated": true,
+        "operationId": "machine.files.write_legacy",
         "parameters": [
           {
             "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
@@ -31192,7 +30970,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Write a file on a machine",
+        "summary": "Write a file on a machine (deprecated: use PUT files:content)",
         "tags": [
           "Machine Files"
         ],
@@ -31204,7 +30982,7 @@
           "paginates": false,
           "resource": "machine.files",
           "result": "entity",
-          "verb": "write"
+          "verb": "write_legacy"
         }
       }
     },
@@ -31322,6 +31100,70 @@
           "resource": "machine.files",
           "result": "entity",
           "verb": "content"
+        }
+      },
+      "put": {
+        "operationId": "machine.files.write",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineFileEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Write a file on a machine",
+        "tags": [
+          "Machine Files"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.files"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.files",
+          "result": "entity",
+          "verb": "write"
         }
       }
     },
@@ -50421,7 +50263,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Rename, resize or change who sees a pod machine",
+        "summary": "Rename or resize a pod machine",
         "tags": [
           "Machines"
         ],
@@ -50483,7 +50325,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Who is granted a pod machine",
+        "summary": "Which agents and functions are granted a pod machine",
         "tags": [
           "Machines"
         ],
@@ -50550,7 +50392,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Replace who is granted a pod machine",
+        "summary": "Replace which agents and functions are granted a pod machine",
         "tags": [
           "Machines"
         ],

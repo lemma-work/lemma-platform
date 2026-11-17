@@ -16,15 +16,13 @@ and takes the defaults: a default machine is private, billed to its user,
 and reports the size it was built at, 1x2 -- which is how the later move to
 2x4 finds the rows it has not moved yet.
 
-Five tables arrive with it:
+Four tables arrive with it:
 
 - `machine_connections`: a person's own computer joined with the CLI;
   `connection_id` names it, without a foreign key, because a machine row
   outlives a revoked connection;
 - `machine_previews`: a port reachable at a subdomain, revocable before it
   expires;
-- `app_machine_consents`: a person's yes to one app running code on their
-  machine;
 - `machine_sessions`: a stretch of a machine running, metered in slices;
 - `machine_login_backups`: encrypted copies of a browser profile's logins.
 
@@ -62,10 +60,7 @@ SANDBOX_COLUMNS = (
 )
 
 SANDBOX_CHECKS = (
-    (
-        "CONSTRAINT ck_sandboxes_visibility "
-        "CHECK (visibility IN ('private', 'pod', 'restricted'))"
-    ),
+    "CONSTRAINT ck_sandboxes_visibility CHECK (visibility IN ('private', 'pod'))",
     "CONSTRAINT ck_sandboxes_billing_scope CHECK (billing_scope IN ('user', 'org'))",
     "CONSTRAINT ck_sandboxes_run_slots CHECK (run_slots >= 1)",
 )
@@ -81,13 +76,9 @@ TABLES: dict[str, tuple[str, ...]] = {
         "CREATE TABLE machine_previews ( sandbox_id UUID NOT NULL, label VARCHAR(32) NOT NULL, port INTEGER NOT NULL, visibility VARCHAR(16) NOT NULL, created_by UUID NOT NULL, expires_at TIMESTAMP WITH TIME ZONE, revoked_at TIMESTAMP WITH TIME ZONE, id UUID NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id), CONSTRAINT ck_machine_previews_visibility CHECK (visibility IN ('private', 'link')), CONSTRAINT ck_machine_previews_port CHECK (port BETWEEN 1 AND 65535), CONSTRAINT uq_machine_previews_label UNIQUE (label), FOREIGN KEY(sandbox_id) REFERENCES sandboxes (id) ON DELETE CASCADE )",
         "CREATE INDEX ix_machine_previews_sandbox ON machine_previews (sandbox_id)",
     ),
-    "app_machine_consents": (
-        "CREATE TABLE app_machine_consents ( user_id UUID NOT NULL, app_id UUID NOT NULL, pod_id UUID NOT NULL, revoked_at TIMESTAMP WITH TIME ZONE, id UUID NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id), FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE )",
-        "CREATE UNIQUE INDEX uq_app_machine_consents_live ON app_machine_consents (user_id, app_id) WHERE revoked_at IS NULL",
-    ),
     "machine_sessions": (
         "CREATE TABLE machine_sessions ( sandbox_id UUID NOT NULL, size VARCHAR(16) NOT NULL, compute_units_per_hour FLOAT NOT NULL, billing_scope VARCHAR(8) NOT NULL, user_id UUID, organization_id UUID, pod_id UUID, started_at TIMESTAMP WITH TIME ZONE NOT NULL, metered_until TIMESTAMP WITH TIME ZONE NOT NULL, ended_at TIMESTAMP WITH TIME ZONE, id UUID NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id), CONSTRAINT ck_machine_sessions_billing_scope CHECK (billing_scope IN ('user', 'org')), FOREIGN KEY(sandbox_id) REFERENCES sandboxes (id) ON DELETE CASCADE )",
-        "CREATE INDEX ix_machine_sessions_open ON machine_sessions (sandbox_id) WHERE ended_at IS NULL",
+        "CREATE UNIQUE INDEX ix_machine_sessions_open ON machine_sessions (sandbox_id) WHERE ended_at IS NULL",
     ),
     "machine_login_backups": (
         "CREATE TABLE machine_login_backups ( sandbox_id UUID NOT NULL, object_key VARCHAR(512) NOT NULL, wrapped_key TEXT NOT NULL, size_bytes BIGINT NOT NULL, sha256 VARCHAR(64) NOT NULL, reason VARCHAR(32) NOT NULL, id UUID NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id), FOREIGN KEY(sandbox_id) REFERENCES sandboxes (id) ON DELETE CASCADE )",
@@ -118,6 +109,44 @@ def _downgrade_machines() -> None:
     ):
         op.execute(f"ALTER TABLE sandboxes DROP CONSTRAINT {check}")
     for column in SANDBOX_COLUMNS:
+        op.execute(f"ALTER TABLE sandboxes DROP COLUMN {column.split()[0]}")
+
+
+# --- lifecycle ----------------------------------------------------------------
+#
+# What keeps a machine's operations resumable and durable: a size move's
+# state and the object key of the home it carries, on the machine row, written
+# before anything is destroyed; and `machine_services`, a service's definition
+# (its environment encrypted, the claims its token was minted for -- never the
+# token), so a restart after a pause finds it whatever Redis has forgotten.
+
+LIFECYCLE_SANDBOX_COLUMNS = (
+    "size_migration_state VARCHAR(16)",
+    "size_migration_target VARCHAR(16)",
+    "size_migration_carry_key VARCHAR(512)",
+    "size_migration_attempts INTEGER DEFAULT 0 NOT NULL",
+    "size_migration_started_at TIMESTAMP WITH TIME ZONE",
+)
+
+LIFECYCLE_TABLES: dict[str, tuple[str, ...]] = {
+    "machine_services": (
+        "CREATE TABLE machine_services ( sandbox_id UUID NOT NULL, name VARCHAR(64) NOT NULL, command TEXT NOT NULL, cwd TEXT NOT NULL, env_ciphertext TEXT, token_claims JSONB DEFAULT '{}'::jsonb NOT NULL, started_by UUID, restart_on_resume BOOLEAN DEFAULT false NOT NULL, process_id VARCHAR(64), output_sequence BIGINT DEFAULT 0 NOT NULL, last_active_at TIMESTAMP WITH TIME ZONE, stopped_at TIMESTAMP WITH TIME ZONE, id UUID NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id), CONSTRAINT uq_machine_services_name UNIQUE (sandbox_id, name), FOREIGN KEY(sandbox_id) REFERENCES sandboxes (id) ON DELETE CASCADE )",
+    ),
+}
+
+
+def _upgrade_lifecycle() -> None:
+    for column in LIFECYCLE_SANDBOX_COLUMNS:
+        op.execute(f"ALTER TABLE sandboxes ADD COLUMN {column}")
+    for statements in LIFECYCLE_TABLES.values():
+        for statement in statements:
+            op.execute(statement)
+
+
+def _downgrade_lifecycle() -> None:
+    for table in reversed(LIFECYCLE_TABLES):
+        op.execute(f"DROP TABLE {table}")
+    for column in LIFECYCLE_SANDBOX_COLUMNS:
         op.execute(f"ALTER TABLE sandboxes DROP COLUMN {column.split()[0]}")
 
 
@@ -155,9 +184,11 @@ def _downgrade_connected_machines() -> None:
 
 def upgrade() -> None:
     _upgrade_machines()
+    _upgrade_lifecycle()
     _upgrade_connected_machines()
 
 
 def downgrade() -> None:
     _downgrade_connected_machines()
+    _downgrade_lifecycle()
     _downgrade_machines()

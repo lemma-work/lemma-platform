@@ -39,7 +39,6 @@ async def apply_machine(
         name=step.name,
         template=str(payload.get("template") or "workspace"),
         size=str(payload["size"]) if payload.get("size") else None,
-        visibility=str(payload.get("visibility") or "pod"),
         run_slots=int(run_slots) if run_slots is not None else None,
         display_name=str(display_name) if display_name else None,
     )

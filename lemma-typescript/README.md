@@ -74,7 +74,7 @@ handle.close(); // stop the stream and prevent further reconnects
 
 ### Machines
 
-`client.machines` reaches the computers commands, files and a browser run on. A machine is named by a ref: `"me"` (the person's own default machine), `"pod:<pod-id>/<name>"` (one a pod keeps), `"mine:<name>"` (one they connected), or its id.
+`client.machines` reaches the computers commands, files and a browser run on. A machine is named by a ref: `"me"` (the person's own default machine), `"pod:<pod>:<name>"` (one a pod keeps, the pod by id or name), `"mine:<name>"` (one they connected), or its id.
 
 ```ts
 const run = await client.machines.exec("me", { command: "npm test", cwd: "~/app" });
@@ -83,13 +83,16 @@ for await (const event of run) {
   else console.log("exited", event.exit_code);
 }
 
-const listing = await client.machines.files.list("pod:abc/ci", { path: "/home/user" });
+const result = await client.machines.run("me", { command: "python --version" });
+console.log(result.exitCode, result.output);
+
+const listing = await client.machines.files.list("pod:abc:ci", { path: "/home/user" });
 const preview = await client.machines.previews.create("me", { port: 3000, visibility: "link" });
 ```
 
 - **Output** comes over the process's WebSocket where there is one and from polling `/output` where there is not (or the socket drops), resuming from the last sequence either way. `run.input(...)`, `run.resize(...)` and `run.kill()` steer it.
-- **Namespaces.** `processes`, `files` (`list`/`stat`/`read`/`readWhole`/`write`/`delete`/`move`/`sync`), `previews`, `browser`, `consents`, and `pod` (create, update, delete and grants for a pod's machines), plus `startup`, `release`, `restart`, `reset` and `policy`.
-- **Consent.** An app calling these for `"me"` needs the person's say-so. Without it the call throws `MachineConsentRequiredError`, whose `consentUrl` is the Lemma page that asks them; open it (a popup works: the page posts `{ type: MACHINE_CONSENT_MESSAGE_TYPE, app_id, granted }` to its opener and closes) and retry once they answer. An app cannot grant itself consent.
+- **Namespaces.** `processes`, `files` (`list`/`stat`/`read`/`readWhole`/`write`/`delete`/`move`/`sync`), `previews`, `browser`, plus `run`, `startup`, `release`, `restart`, `reset` and `policy`. A pod's machines are managed flat, as in the Python SDK: `create({ name, ... })`, `update(name, changes)`, `delete(name)`, `grants(name)` and `setGrants(name, grants)`, in the client's pod unless `{ podId }` names another.
+- **Apps.** An app's page reaches the machines of its own pod, as its viewer, and never anybody's own `"me"`: that is not the pod's to offer. Creating, changing, deleting and granting machines stay the person's own.
 
 ## Browser bundle (no-build HTML)
 

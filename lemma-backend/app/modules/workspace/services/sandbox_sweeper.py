@@ -58,7 +58,9 @@ _UNREACHABLE_GIVE_UP_MULTIPLE = 6
 
 
 class SandboxSweeper:
-    def __init__(self, *, service, uow_factory, release=None, held=None) -> None:
+    def __init__(
+        self, *, service, uow_factory, release=None, held=None, idle_service=None
+    ) -> None:
         self._service = service
         self._uow_factory = uow_factory
         # How an idle sandbox is stopped. The machine lifecycle's release by
@@ -68,6 +70,10 @@ class SandboxSweeper:
         # Whether something still holds this machine though nothing runs on
         # it: a run slot on a shared machine.
         self._held = held
+        # Whether a running process is a service past its idle ceiling, which
+        # no longer keeps the machine awake: a dev server nobody has touched
+        # in hours is not work, and it comes back when the machine does.
+        self._idle_service = idle_service
 
     @property
     def _provider(self):
@@ -138,6 +144,7 @@ class SandboxSweeper:
                     "workspace.sandbox_sweeper.idle_release_failed",
                     sandbox_id=str(sandbox.id),
                     error_type=type(exc).__name__,
+                    exc_info=True,
                 )
                 continue
             released += 1
@@ -230,7 +237,18 @@ class SandboxSweeper:
         # released it. Agents kill processes exactly when a tool call looks
         # stuck, which is how this compounded: the sandbox that frustrated
         # someone was then the one that could never be reclaimed.
-        return any(not has_stopped(p) for p in processes)
+        return await self._any_working(sandbox.id, processes)
+
+    async def _any_working(self, sandbox_id, processes) -> bool:
+        for process in processes:
+            if has_stopped(process):
+                continue
+            if self._idle_service is not None and await self._idle_service(
+                sandbox_id, process.process_id
+            ):
+                continue
+            return True
+        return False
 
     async def reclaim_orphans(self, *, dry_run: bool = False) -> tuple[str, ...]:
         """Destroy provider objects this environment created and no longer wants.
@@ -319,6 +337,7 @@ class SandboxSweeper:
                     "workspace.sandbox_sweeper.orphan_destroy_failed",
                     sandbox_id=str(obj.sandbox_id),
                     error_type=type(exc).__name__,
+                    exc_info=True,
                 )
                 continue
             # A destroy that returns is not a destroy that happened. On E2B a

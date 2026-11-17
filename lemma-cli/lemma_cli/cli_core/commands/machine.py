@@ -4,7 +4,8 @@ A machine is named by a ref rather than a bare name, because the same name can
 be a pod's machine or one of your own:
 
   me                     your default machine
-  pod:<pod-id>/<name>    a pod's machine (pod:<name> for the selected pod)
+  pod:<pod>:<name>       a pod's machine, the pod by id or name
+                         (pod:<name> for the selected pod)
   mine:<name>            another machine of yours
   <machine-id>
 
@@ -42,17 +43,27 @@ preview_app = typer.Typer(
 logins_app = typer.Typer(
     help="Sites a machine's browser is signed in to.", no_args_is_help=True
 )
+grants_app = typer.Typer(
+    help="Which agents and functions may use a pod's machine.", no_args_is_help=True
+)
 app.add_typer(preview_app, name="preview")
 app.add_typer(logins_app, name="logins")
+app.add_typer(grants_app, name="grants")
 # Joining this computer as a machine, and removing it (`machine_connect`).
 app.command("connect")(machine_connect.connect)
 app.command("disconnect")(machine_connect.disconnect)
 
-_REF_HELP = "Which machine: me, pod:<pod-id>/<name>, pod:<name>, mine:<name> or an id."
+_REF_HELP = "Which machine: me, pod:<pod>:<name>, pod:<name>, mine:<name> or an id."
 
 #: Exit code for a command whose exit status the machine never reported (it
 #: was cancelled, or timed out): the shell's convention for "killed".
 _NO_EXIT_CODE = 137
+
+_POD_REF_HELP = (
+    "The pod's machine: pod:<name> for the selected pod (or --pod), or "
+    "pod:<pod>:<name> with the pod's id or name."
+)
+_TEMPLATES = ("workspace", "workspace-docker")
 
 _RESET_SCOPES = ("processes", "runs", "caches", "browser-session", "docker", "home")
 _WORK_LOSING_SCOPES = frozenset({"docker", "home"})
@@ -81,6 +92,195 @@ def list_machines(
         from .pods import resolve_pod_id
 
         return client.machines.list(pod_id=resolve_pod_id(client, cli_state, pod))
+
+    result = run_with_client(ctx, call)
+    if result is not None:
+        emit(state, result)
+
+
+# -- a pod's machines ---------------------------------------------------------
+
+
+def split_pod_ref(ref: str) -> tuple[str | None, str]:
+    """``(pod, name)`` for ``pod:<name>``, ``pod:<pod>:<name>`` or the older
+    ``pod:<pod>/<name>``; ``pod`` is None when the ref leaves it to context."""
+    if not ref.startswith("pod:"):
+        raise typer.BadParameter(
+            f"{ref!r} is not a pod's machine; write pod:<name> or pod:<pod>:<name>",
+            param_hint="REF",
+        )
+    pod, sep, name = ref[len("pod:") :].replace("/", ":", 1).rpartition(":")
+    if not name:
+        raise typer.BadParameter(f"{ref!r} names no machine", param_hint="REF")
+    return (pod or None) if sep else None, name
+
+
+def _pod_option() -> Any:
+    return typer.Option(
+        None, "--pod", help="The pod, when the ref does not name one (id or name)."
+    )
+
+
+def _resolved(
+    client: Lemma, cli_state: CliState, ref: str, pod: str | None
+) -> tuple[str, str]:
+    """``(pod_id, name)``: the ref's own pod first, then --pod, then the
+    selected pod."""
+    from .pods import resolve_pod_id
+
+    named, name = split_pod_ref(ref)
+    return resolve_pod_id(client, cli_state, named or pod), name
+
+
+@app.command(
+    "create",
+    epilog=(
+        "Examples:\n\n"
+        "  lemma machine create pod:ci --template workspace-docker --size 4x8\n"
+        "  lemma machine create pod:research:qa --size 2x4"
+    ),
+)
+def create_machine(
+    ctx: typer.Context,
+    ref: str = typer.Argument(..., help=_POD_REF_HELP),
+    template: str = typer.Option(
+        "workspace", "--template", help=f"One of {', '.join(_TEMPLATES)}."
+    ),
+    size: str | None = typer.Option(
+        None, "--size", help="<vcpu>x<memory GB>, like 2x4. Default: the plan's."
+    ),
+    run_slots: int | None = typer.Option(
+        None, "--run-slots", help="Agent runs it takes at once."
+    ),
+    display_name: str | None = typer.Option(None, "--display-name"),
+    pod: str | None = _pod_option(),
+) -> None:
+    """Create a machine for a pod."""
+    if template not in _TEMPLATES:
+        raise typer.BadParameter(
+            f"use {' or '.join(_TEMPLATES)}", param_hint="--template"
+        )
+    split_pod_ref(ref)
+    state = state_from_ctx(ctx)
+
+    def call(client: Lemma, cli_state: CliState) -> object:
+        pod_id, name = _resolved(client, cli_state, ref, pod)
+        return client.machines.create(
+            name,
+            pod_id=pod_id,
+            template=template,  # type: ignore[arg-type]
+            size=size,
+            run_slots=run_slots,
+            display_name=display_name,
+        )
+
+    result = run_with_client(ctx, call)
+    if result is not None:
+        emit(state, result)
+
+
+@app.command("update")
+def update_machine(
+    ctx: typer.Context,
+    ref: str = typer.Argument(..., help=_POD_REF_HELP),
+    size: str | None = typer.Option(
+        None, "--size", help="<vcpu>x<memory GB>; takes effect when it next starts."
+    ),
+    run_slots: int | None = typer.Option(None, "--run-slots"),
+    display_name: str | None = typer.Option(None, "--display-name"),
+    pod: str | None = _pod_option(),
+) -> None:
+    """Change a pod machine's size, run slots or display name."""
+    split_pod_ref(ref)
+    if size is None and run_slots is None and display_name is None:
+        raise typer.BadParameter("pass --size, --run-slots or --display-name")
+    state = state_from_ctx(ctx)
+
+    def call(client: Lemma, cli_state: CliState) -> object:
+        pod_id, name = _resolved(client, cli_state, ref, pod)
+        return client.machines.update(
+            name,
+            pod_id=pod_id,
+            size=size,
+            run_slots=run_slots,
+            display_name=display_name,
+        )
+
+    result = run_with_client(ctx, call)
+    if result is not None:
+        emit(state, result)
+
+
+@app.command("delete")
+def delete_machine(
+    ctx: typer.Context,
+    ref: str = typer.Argument(..., help=_POD_REF_HELP),
+    pod: str | None = _pod_option(),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt."
+    ),
+) -> None:
+    """Delete a pod's machine and its disk."""
+    split_pod_ref(ref)
+    state = state_from_ctx(ctx)
+    confirm_destructive(f"Delete machine {ref} and everything on its disk?", yes)
+
+    def call(client: Lemma, cli_state: CliState) -> dict[str, object]:
+        pod_id, name = _resolved(client, cli_state, ref, pod)
+        client.machines.delete(name, pod_id=pod_id)
+        return {"pod_id": pod_id, "name": name, "deleted": True}
+
+    result = run_with_client(ctx, call)
+    if result is not None:
+        emit(state, result)
+
+
+@grants_app.command("list")
+def list_grants(
+    ctx: typer.Context,
+    ref: str = typer.Argument(..., help=_POD_REF_HELP),
+    pod: str | None = _pod_option(),
+) -> None:
+    """Show which agents and functions may use a pod machine."""
+    split_pod_ref(ref)
+    state = state_from_ctx(ctx)
+
+    def call(client: Lemma, cli_state: CliState) -> object:
+        pod_id, name = _resolved(client, cli_state, ref, pod)
+        return client.machines.grants(name, pod_id=pod_id)
+
+    result = run_with_client(ctx, call)
+    if result is not None:
+        emit(state, result)
+
+
+@grants_app.command("set")
+def set_grants(
+    ctx: typer.Context,
+    ref: str = typer.Argument(..., help=_POD_REF_HELP),
+    agent: list[str] | None = typer.Option(
+        None, "--agent", help="An agent that may use it; repeatable."
+    ),
+    function: list[str] | None = typer.Option(
+        None, "--function", help="A function that may use it; repeatable."
+    ),
+    pod: str | None = _pod_option(),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt."
+    ),
+) -> None:
+    """Replace which agents and functions may use a pod machine."""
+    split_pod_ref(ref)
+    agents, functions = list(agent or []), list(function or [])
+    state = state_from_ctx(ctx)
+    granted = ", ".join(agents + functions) or "nothing"
+    confirm_destructive(f"Let {granted} use {ref}, replacing its current grants?", yes)
+
+    def call(client: Lemma, cli_state: CliState) -> object:
+        pod_id, name = _resolved(client, cli_state, ref, pod)
+        return client.machines.set_grants(
+            name, pod_id=pod_id, agents=agents, functions=functions
+        )
 
     result = run_with_client(ctx, call)
     if result is not None:
@@ -487,4 +687,4 @@ def forget_login(
         emit(state, to_plain(result) or {"site": site, "forgotten": True})
 
 
-__all__ = ["app", "err_console", "split_machine_path"]
+__all__ = ["app", "err_console", "split_machine_path", "split_pod_ref"]

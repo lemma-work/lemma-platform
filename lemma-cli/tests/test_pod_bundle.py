@@ -72,6 +72,16 @@ class _NoPodMachines:
     def list(*_args, **_kwargs):
         return {"machines": []}
 
+    @staticmethod
+    def policy(*_args, **_kwargs):
+        return {
+            "default_size": "1x2",
+            "templates": [
+                {"template": "workspace", "sizes": ["1x2", "2x4", "4x8", "8x16"]},
+                {"template": "workspace-docker", "sizes": ["4x8", "8x16"]},
+            ],
+        }
+
 
 class FakeClient(SimpleNamespace):
     #: Export reads the pod's connectors; a fake that names none has none.
@@ -4145,7 +4155,6 @@ def test_import_creates_a_pod_machine_before_the_agent_that_runs_on_it(
                 "name": "builder",
                 "template": "workspace-docker",
                 "size": "4x8",
-                "visibility": "restricted",
                 "run_slots": 2,
             }
         ),
@@ -4159,7 +4168,7 @@ def test_import_creates_a_pod_machine_before_the_agent_that_runs_on_it(
     )
     calls: list[tuple[str, object]] = []
 
-    class Machines:
+    class Machines(_NoPodMachines):
         def list(self, pod_id=None):
             return {"machines": []}
 
@@ -4196,7 +4205,6 @@ def test_import_creates_a_pod_machine_before_the_agent_that_runs_on_it(
         "pod_id": "pod_123",
         "template": "workspace-docker",
         "size": "4x8",
-        "visibility": "restricted",
         "run_slots": 2,
         "display_name": None,
     }

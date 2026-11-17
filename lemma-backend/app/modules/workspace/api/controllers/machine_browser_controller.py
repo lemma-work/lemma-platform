@@ -14,6 +14,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, HttpUrl
 
+from app.modules.workspace.api.controllers.machine_failures import MachineFailureRoute
 from app.modules.workspace.api.controllers.machine_browser_view_controller import (
     browser_view_service,
 )
@@ -26,6 +27,7 @@ router = APIRouter(
     prefix="/machines/{ref}/browser",
     tags=["Machine Browser"],
     dependencies=[Depends(machines_enabled)],
+    route_class=MachineFailureRoute,
 )
 
 

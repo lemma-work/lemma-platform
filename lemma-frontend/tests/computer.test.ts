@@ -205,7 +205,6 @@ test("a close code is read, not collapsed into 'disconnected'", () => {
     assert.equal(stateFromClose(4422), "unsupported");
     assert.equal(stateFromClose(4426), "stale-image");
     assert.equal(stateFromClose(4404), "unsupported");
-    assert.equal(stateFromClose(4428), "refused");
     assert.equal(stateFromClose(1006), "lost");
 });
 

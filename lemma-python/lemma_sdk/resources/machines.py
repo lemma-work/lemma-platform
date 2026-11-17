@@ -4,13 +4,14 @@ A machine is addressed by a *ref*, never a bare name, because the same name can
 mean a pod's machine or one of your own:
 
 - ``me`` -- your default machine, created the first time it is named;
-- ``pod:<pod-id>/<name>`` -- a pod's machine (``pod:<name>`` for the pod this
-  client is bound to);
+- ``pod:<pod>:<name>`` -- a pod's machine, the pod by id or by name
+  (``pod:<name>`` for the pod this client is bound to);
 - ``mine:<name>`` -- another machine of yours, such as a connected Mac;
 - the machine's id.
 
-Refs travel in one URL path segment, where a ``/`` cannot, so they are sent in
-the colon form the server also accepts (``pod:<pod-id>:<name>``).
+Refs travel in one URL path segment, which is why the pod and the name are
+separated by ``:``. The older ``pod:<pod>/<name>`` is still accepted and sent
+in the colon form.
 """
 
 from __future__ import annotations
@@ -32,11 +33,6 @@ from ..openapi_client.api.machine_browser import (
     machine_browser_display,
     machine_browser_navigate,
     machine_browser_status,
-)
-from ..openapi_client.api.machine_consents import (
-    machine_consent_grant,
-    machine_consent_list,
-    machine_consent_revoke,
 )
 from ..openapi_client.api.machine_files import (
     machine_files_content,
@@ -86,7 +82,6 @@ from ..openapi_client.models.create_pod_machine_request import (
 )
 from ..openapi_client.models.create_preview_request import CreatePreviewRequest
 from ..openapi_client.models.display_size_request import DisplaySizeRequest
-from ..openapi_client.models.grant_consent_request import GrantConsentRequest
 from ..openapi_client.models.machine_file_entry import MachineFileEntry
 from ..openapi_client.models.machine_grants_model import MachineGrantsModel
 from ..openapi_client.models.move_request import MoveRequest
@@ -111,8 +106,6 @@ if TYPE_CHECKING:
     from ..openapi_client.models.browser_status_response import (
         BrowserStatusResponse,
     )
-    from ..openapi_client.models.consent_list_response import ConsentListResponse
-    from ..openapi_client.models.consent_response import ConsentResponse
     from ..openapi_client.models.machine_file_list_response import (
         MachineFileListResponse,
     )
@@ -149,7 +142,7 @@ _POLL_WAIT_SECONDS = 25.0
 def machine_ref(ref: str, *, pod_id: str | UUID | None = None) -> str:
     """The ref as the server wants it in a URL path segment.
 
-    ``pod:<pod>/<name>`` becomes ``pod:<pod>:<name>``, and ``pod:<name>``
+    The older ``pod:<pod>/<name>`` becomes ``pod:<pod>:<name>``, and ``pod:<name>``
     gains ``pod_id`` when one is given, so a client bound to a pod can name its
     machines without repeating the pod.
     """
@@ -752,21 +745,6 @@ class MachineBrowser(_MachineResource):
         return self._call(machine_browser_logins_forget, self._ref(ref), site)
 
 
-class MachineConsents(Resource):
-    """Apps you have let start processes on your machines."""
-
-    def list(self) -> ConsentListResponse:
-        return self._call(machine_consent_list)
-
-    def grant(self, app_id: str | UUID) -> ConsentResponse:
-        return self._call(
-            machine_consent_grant, body=GrantConsentRequest(app_id=as_uuid(app_id))
-        )
-
-    def revoke(self, app_id: str | UUID) -> None:
-        self._call(machine_consent_revoke, as_uuid(app_id))
-
-
 class Machines(_MachineResource):
     """Machines you can use: your own, and your pods'.
 
@@ -789,10 +767,6 @@ class Machines(_MachineResource):
     @property
     def browser(self) -> MachineBrowser:
         return MachineBrowser(self._transport, pod_id=self.pod_id)
-
-    @property
-    def consents(self) -> MachineConsents:
-        return MachineConsents(self._transport)
 
     # -- the machine itself ------------------------------------------------
 
@@ -854,7 +828,6 @@ class Machines(_MachineResource):
         pod_id: str | UUID | None = None,
         template: Literal["workspace", "workspace-docker"] | None = None,
         size: str | None = None,
-        visibility: Literal["pod", "restricted"] | None = None,
         run_slots: int | None = None,
         display_name: str | None = None,
     ) -> MachineResponse:
@@ -868,7 +841,6 @@ class Machines(_MachineResource):
                         "name": name,
                         "template": template,
                         "size": size,
-                        "visibility": visibility,
                         "run_slots": run_slots,
                         "display_name": display_name,
                     }
@@ -882,7 +854,6 @@ class Machines(_MachineResource):
         *,
         pod_id: str | UUID | None = None,
         size: str | None = None,
-        visibility: Literal["pod", "restricted"] | None = None,
         run_slots: int | None = None,
         display_name: str | None = None,
     ) -> MachineResponse:
@@ -894,7 +865,6 @@ class Machines(_MachineResource):
                 compact(
                     {
                         "size": size,
-                        "visibility": visibility,
                         "run_slots": run_slots,
                         "display_name": display_name,
                     }
@@ -908,7 +878,7 @@ class Machines(_MachineResource):
     def grants(
         self, name: str, *, pod_id: str | UUID | None = None
     ) -> MachineGrantsModel:
-        """Who may use a restricted pod machine."""
+        """Which agents and functions may use a pod machine."""
         return self._call(machine_pod_grants_get, self._pod(pod_id), name)
 
     def set_grants(
@@ -916,17 +886,16 @@ class Machines(_MachineResource):
         name: str,
         *,
         pod_id: str | UUID | None = None,
-        members: Sequence[str | UUID] = (),
         agents: Sequence[str] = (),
         functions: Sequence[str] = (),
     ) -> MachineGrantsModel:
-        """Replace who may use a restricted pod machine."""
+        """Replace which agents and functions may use a pod machine. People
+        need no grant: their pod role decides."""
         return self._call(
             machine_pod_grants_set,
             self._pod(pod_id),
             name,
             body=MachineGrantsModel(
-                members=[as_uuid(member) for member in members],
                 agents=list(agents),
                 functions=list(functions),
             ),
@@ -982,7 +951,6 @@ class Machines(_MachineResource):
 
 __all__ = [
     "MachineBrowser",
-    "MachineConsents",
     "MachineFiles",
     "MachinePreviews",
     "MachineProcesses",

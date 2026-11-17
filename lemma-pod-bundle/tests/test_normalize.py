@@ -497,7 +497,6 @@ def test_normalize_machine_payload_keeps_the_definition_only():
         "name": "builder",
         "template": "workspace",
         "size": "2x4",
-        "visibility": "pod",
         "run_slots": 1,
     }
 
@@ -505,7 +504,7 @@ def test_normalize_machine_payload_keeps_the_definition_only():
 def test_validate_machine_payload(tmp_path: Path):
     from lemma_pod_bundle.normalize import _validate_machine_payload
 
-    good = {"name": "builder", "template": "workspace", "visibility": "restricted"}
+    good = {"name": "builder", "template": "workspace"}
     assert _validate_machine_payload(tmp_path, "builder", good) == []
 
     messages = [
@@ -516,9 +515,8 @@ def test_validate_machine_payload(tmp_path: Path):
             {"name": "builder", "size": "big", "run_slots": 0, "status": "x"},
         )
     ]
-    assert len(messages) == 5
+    assert len(messages) == 4
     assert any("status" in message for message in messages)
     assert any("template" in message for message in messages)
-    assert any("visibility" in message for message in messages)
     assert any("2x4" in message for message in messages)
     assert any("run_slots" in message for message in messages)

@@ -1,9 +1,7 @@
-import { ApiError, ForbiddenError } from "../http.js";
+import { ApiError } from "../http.js";
 import type { HttpClient } from "../http.js";
 import type { BrowserAccessResponse } from "../openapi_client/models/BrowserAccessResponse.js";
 import type { BrowserStatusResponse } from "../openapi_client/models/BrowserStatusResponse.js";
-import type { ConsentListResponse } from "../openapi_client/models/ConsentListResponse.js";
-import type { ConsentResponse } from "../openapi_client/models/ConsentResponse.js";
 import type { CreatePodMachineRequest } from "../openapi_client/models/CreatePodMachineRequest.js";
 import type { ForgetResponse } from "../openapi_client/models/ForgetResponse.js";
 import type { MachineFileEntry } from "../openapi_client/models/MachineFileEntry.js";
@@ -24,7 +22,6 @@ import type { WebLoginListResponse } from "../openapi_client/models/WebLoginList
 export type {
   BrowserAccessResponse as MachineBrowserAccess,
   BrowserStatusResponse as MachineBrowserStatus,
-  ConsentResponse as MachineConsent,
   MachineFileEntry,
   MachineFileListResponse,
   MachineGrantsModel as MachineGrants,
@@ -38,46 +35,21 @@ export type {
 };
 
 /**
- * What the consent page posts to the window that opened it once the person
- * answers: `{ type, app_id, granted }`. An app that opened `consentUrl` in a
- * popup listens for it rather than polling.
- */
-export const MACHINE_CONSENT_MESSAGE_TYPE = "lemma:machine-consent";
-
-/** The error code a machine route answers with when an app has no consent. */
-export const MACHINE_CONSENT_REQUIRED = "MACHINE_CONSENT_REQUIRED";
-
-/**
- * An app asked to use somebody's machine and they have not said it may.
- *
- * Not something an app can grant itself: the server refuses a grant whose
- * Origin is an app host. `consentUrl` is the Lemma page that asks the person,
- * so the app opens it (a new tab or a popup) and tries again once they answer.
- */
-export class MachineConsentRequiredError extends ForbiddenError {
-  override name = "MachineConsentRequiredError";
-
-  constructor(
-    public readonly appId: string,
-    public readonly consentUrl: string,
-    source: ApiError,
-  ) {
-    super(403, source.message, source.code, source.details, source.rawResponse);
-    this.requestId = source.requestId;
-  }
-}
-
-/**
  * A machine ref as it goes in a URL path.
  *
- * Refs are written `pod:<pod-id>/<name>` for people, but a slash cannot sit in
- * one path segment, so the path form is `pod:<pod-id>:<name>`. Each part is
- * then escaped on its own, keeping the colons that separate them literal.
+ * A pod machine is `pod:<pod>:<name>`, the pod by id or by name: the form
+ * that fits in one path segment. The older `pod:<pod>/<name>` is still
+ * accepted and sent in the colon form. `pod:<name>` gains `podId` when one is
+ * given, so a client bound to a pod can name its machines without repeating
+ * it. Each part is escaped on its own, keeping the separating colons literal.
  */
-export function machinePathRef(ref: string): string {
+export function machinePathRef(ref: string, podId?: string): string {
   const trimmed = ref.trim();
   if (!trimmed) throw new Error("A machine ref is required.");
-  const pathForm = trimmed.replace(/^pod:([^/:]+)\/(.+)$/, "pod:$1:$2");
+  let pathForm = trimmed.replace(/^pod:([^/:]+)\/(.+)$/, "pod:$1:$2");
+  if (podId && /^pod:[^:]+$/.test(pathForm)) {
+    pathForm = `pod:${podId}:${pathForm.slice("pod:".length)}`;
+  }
   return pathForm.split(":").map(encodeURIComponent).join(":");
 }
 
@@ -106,6 +78,16 @@ function rangeHonoured(status: number, contentRange: string | null, start: numbe
   return status === 206;
 }
 
+/**
+ * Whether an unranged read came back short of the file: a 206 whose
+ * `Content-Range` names a total past the bytes received.
+ */
+function cutShort(status: number, contentRange: string | null, received: number): boolean {
+  if (status !== 206 || !contentRange) return false;
+  const match = /^bytes (\d+)-\d+\/(\d+)$/.exec(contentRange.trim());
+  return match !== null && Number(match[1]) + received < Number(match[2]);
+}
+
 /** A process's states once it has stopped, by whatever means. */
 const STOPPED_STATES = new Set(["succeeded", "failed", "cancelled", "timed_out"]);
 
@@ -131,14 +113,28 @@ export interface ExecOptions {
 export type WebSocketFactory = new (url: string) => WebSocket;
 
 export interface MachinesOptions {
-  /** Where the consent page lives, e.g. `https://lemma.work`. */
-  hostOrigin?: string;
   /** The token a socket presents as `access_token`, when not using cookies. */
   bearerToken?: () => string | null;
   /** Overrides the global `WebSocket`; tests pass a fake. */
   WebSocket?: WebSocketFactory | null;
   /** How long one output poll waits on the server for something new. */
   pollWaitSeconds?: number;
+  /** The client's pod: the default for creating and changing pod machines. */
+  podId?: () => string | undefined;
+}
+
+/** What `run` returns: how the command ended, and everything it wrote. */
+export interface MachineRunResult {
+  exitCode: number | null;
+  state: string;
+  events: Array<Extract<MachineProcessEvent, { type: "output" }>>;
+  /** Everything written, in order, whatever the channel. */
+  output: string;
+  /** stdout and terminal output. */
+  stdout: string;
+  stderr: string;
+  /** Exited 0. */
+  ok: boolean;
 }
 
 /**
@@ -280,12 +276,11 @@ export class MachineExecution implements AsyncIterable<MachineProcessEvent> {
 
 /**
  * The machines a person can use: their own default one (`me`), the ones a pod
- * keeps (`pod:<pod-id>/<name>`), and the ones they connected (`mine:<name>`).
+ * keeps (`pod:<pod>:<name>`), and the ones they connected (`mine:<name>`).
  *
  * Hand-written rather than generated because a ref is not a plain path
- * parameter -- see `machinePathRef` -- and because a page calling these for an
- * app has to be told, in a form it can act on, that the person has not yet
- * said the app may: `MachineConsentRequiredError`.
+ * parameter -- see `machinePathRef`. An app's page reaches the machines of its
+ * own pod, as its viewer; never anybody's own (`me`).
  */
 export class MachinesNamespace {
   readonly pollWaitSeconds: number;
@@ -293,8 +288,6 @@ export class MachinesNamespace {
   readonly files: MachineFilesApi;
   readonly previews: MachinePreviewsApi;
   readonly browser: MachineBrowserApi;
-  readonly consents: MachineConsentsApi;
-  readonly pod: PodMachinesApi;
 
   constructor(
     private readonly http: HttpClient,
@@ -305,48 +298,31 @@ export class MachinesNamespace {
     this.files = new MachineFilesApi(this);
     this.previews = new MachinePreviewsApi(this);
     this.browser = new MachineBrowserApi(this);
-    this.consents = new MachineConsentsApi(this);
-    this.pod = new PodMachinesApi(this);
   }
 
-  /** @internal A request, with a consent refusal turned into its own error. */
-  async call<T>(
+  private podMachines(podId: string | undefined): string {
+    const chosen = podId ?? this.options.podId?.();
+    if (!chosen) {
+      throw new Error("podId is required for a pod's machines: pass it, or bind the client to a pod.");
+    }
+    return `/pods/${encodeURIComponent(chosen)}/machines`;
+  }
+
+  /** @internal A request. */
+  call<T>(
     method: string,
     path: string,
     options: Parameters<HttpClient["request"]>[2] = {},
   ): Promise<T> {
-    try {
-      return await this.http.request<T>(method, path, options);
-    } catch (error) {
-      throw this.translate(error);
-    }
+    return this.http.request<T>(method, path, options);
   }
 
   /** @internal `call`, for a response that is bytes. */
-  async bytes(
+  bytes(
     path: string,
     headers?: Record<string, string>,
   ): Promise<{ blob: Blob; status: number; contentRange: string | null }> {
-    try {
-      return await this.http.requestBytesResponse("GET", path, { headers });
-    } catch (error) {
-      throw this.translate(error);
-    }
-  }
-
-  /** The page where a person says whether an app may use their machine. */
-  consentUrl(appId: string): string {
-    const origin = this.options.hostOrigin ?? "";
-    return `${origin}/consent/machine?app=${encodeURIComponent(appId)}`;
-  }
-
-  private translate(error: unknown): unknown {
-    if (error instanceof ApiError && error.code === MACHINE_CONSENT_REQUIRED) {
-      const details = error.details as { app_id?: unknown } | undefined;
-      const appId = typeof details?.app_id === "string" ? details.app_id : "";
-      return new MachineConsentRequiredError(appId, this.consentUrl(appId), error);
-    }
-    return error;
+    return this.http.requestBytesResponse("GET", path, { headers });
   }
 
   /** @internal */
@@ -437,6 +413,105 @@ export class MachinesNamespace {
   async exec(ref: string, options: ExecOptions): Promise<MachineExecution> {
     const process = await this.processes.start(ref, options);
     return new MachineExecution(this, ref, process);
+  }
+
+  /**
+   * Run a command to the end and return its exit code and output -- the
+   * Python SDK's `machines.run`.
+   *
+   *     const result = await client.machines.run("me", { command: "python --version" });
+   *     console.log(result.exitCode, result.output);
+   */
+  async run(ref: string, options: ExecOptions): Promise<MachineRunResult> {
+    const execution = await this.exec(ref, options);
+    const events: MachineRunResult["events"] = [];
+    let state = "";
+    let exitCode: number | null = null;
+    for await (const event of execution) {
+      if (event.type === "output") {
+        events.push(event);
+      } else {
+        state = event.state;
+        exitCode = event.exit_code;
+      }
+    }
+    const written = (keep: (channel: string) => boolean) =>
+      events
+        .filter((event) => keep(event.channel))
+        .map((event) => event.data)
+        .join("");
+    return {
+      exitCode,
+      state,
+      events,
+      output: written(() => true),
+      stdout: written((channel) => channel !== "stderr"),
+      stderr: written((channel) => channel === "stderr"),
+      ok: exitCode === 0,
+    };
+  }
+
+  // -- a pod's machines: the client's pod unless `podId` says otherwise -------
+
+  /** Create a machine for a pod. */
+  create(options: {
+    name: string;
+    podId?: string;
+    displayName?: string;
+    template?: "workspace" | "workspace-docker";
+    size?: string;
+    runSlots?: number;
+  }): Promise<MachineResponse> {
+    const body: Partial<Record<keyof CreatePodMachineRequest, unknown>> = {
+      name: options.name,
+      display_name: options.displayName,
+      template: options.template,
+      size: options.size,
+      run_slots: options.runSlots,
+    };
+    return this.call("POST", this.podMachines(options.podId), { body });
+  }
+
+  /** Change a pod machine's display name, size or run slots. */
+  update(
+    name: string,
+    changes: {
+      displayName?: string | null;
+      size?: string | null;
+      runSlots?: number | null;
+    },
+    options: { podId?: string } = {},
+  ): Promise<MachineResponse> {
+    const body: Partial<Record<keyof UpdatePodMachineRequest, unknown>> = {};
+    if (changes.displayName !== undefined) body.display_name = changes.displayName;
+    if (changes.size !== undefined) body.size = changes.size;
+    if (changes.runSlots !== undefined) body.run_slots = changes.runSlots;
+    return this.call("PATCH", `${this.podMachines(options.podId)}/${encodeURIComponent(name)}`, {
+      body,
+    });
+  }
+
+  delete(name: string, options: { podId?: string } = {}): Promise<void> {
+    return this.call("DELETE", `${this.podMachines(options.podId)}/${encodeURIComponent(name)}`);
+  }
+
+  /** Which agents and functions may use a pod machine. */
+  grants(name: string, options: { podId?: string } = {}): Promise<MachineGrantsModel> {
+    return this.call("GET", `${this.podMachines(options.podId)}/${encodeURIComponent(name)}/grants`);
+  }
+
+  /** Replace which agents and functions may use a pod machine. People need
+   *  no grant: their pod role decides. */
+  setGrants(
+    name: string,
+    grants: MachineGrantsModel,
+    options: { podId?: string } = {},
+  ): Promise<MachineGrantsModel> {
+    return this.call(
+      "PUT",
+      `${this.podMachines(options.podId)}/${encodeURIComponent(name)}/grants`,
+      { body: grants },
+    );
   }
 }
 
@@ -538,6 +613,11 @@ export class MachineFilesApi {
    * A file, or a slice of one. `range` sends an HTTP `Range` and gets a 206
    * back, which is how a file past the server's single-read ceiling is
    * reachable at all; `readWhole` does that for you.
+   *
+   * Without a slice asked for, this is the whole file: a file past the
+   * ceiling comes back as a 206 naming its total, and the rest is read in
+   * ranges and stitched on, rather than handing back the first 8 MiB as if
+   * it were all of it.
    */
   async read(
     ref: string,
@@ -548,7 +628,13 @@ export class MachineFilesApi {
       contentPath(ref, path, options),
       options.range ? rangeHeader(options.range) : undefined,
     );
-    return answer.blob;
+    const asked =
+      options.range !== undefined || options.offset !== undefined || options.length !== undefined;
+    if (asked || !cutShort(answer.status, answer.contentRange, answer.blob.size)) {
+      return answer.blob;
+    }
+    const rest = await this.readFrom(ref, path, answer.blob.size, MAX_READ_BYTES);
+    return new Blob([answer.blob, rest]);
   }
 
   /**
@@ -568,17 +654,22 @@ export class MachineFilesApi {
     chunk = MAX_READ_BYTES,
   ): Promise<Blob> {
     const step = Math.min(Math.max(Math.floor(chunk), 1), MAX_READ_BYTES);
-    const parts: Blob[] = [];
-    let start = 0;
+    // An unranged read follows a truncation it is told about (see `read`),
+    // so a stale hint costs nothing: a file that grew is still read whole.
     if (sizeBytes > 0 && sizeBytes <= step) {
       const only = await this.read(ref, path);
-      // Short of the ceiling means that was the whole file. Exactly the
-      // ceiling means the hint was stale -- the file grew after the listing
-      // that measured it -- so keep what arrived and read on from there.
-      if (only.size < MAX_READ_BYTES) return only;
-      parts.push(only);
-      start = only.size;
+      // Exactly the ceiling is a server that cut the file without saying so
+      // (one older than the 206): read on from there. A 416 there means the
+      // file really was exactly that long.
+      if (only.size !== MAX_READ_BYTES) return only;
+      return new Blob([only, await this.readFrom(ref, path, only.size, step)]);
     }
+    return this.readFrom(ref, path, 0, step);
+  }
+
+  /** Everything from byte `start` on, in ranges of `step`. */
+  private async readFrom(ref: string, path: string, start: number, step: number): Promise<Blob> {
+    const parts: Blob[] = [];
     for (;;) {
       let part: Blob;
       let honoured: boolean;
@@ -620,7 +711,7 @@ export class MachineFilesApi {
     path: string,
     content: Blob | ArrayBuffer | Uint8Array | string,
   ): Promise<MachineFileEntry> {
-    return this.machines.call("PUT", `${machinePath(ref)}/files/content`, {
+    return this.machines.call("PUT", `${machinePath(ref)}/files:content`, {
       params: { path },
       rawBody: content as BodyInit,
       headers: { "Content-Type": "application/octet-stream" },
@@ -766,93 +857,3 @@ export class MachineBrowserApi {
   }
 }
 
-/**
- * Which apps may use the caller's machine. Granting only works from Lemma
- * itself: an app page asking to grant its own consent is refused.
- */
-export class MachineConsentsApi {
-  constructor(private readonly machines: MachinesNamespace) {}
-
-  async list(): Promise<ConsentResponse[]> {
-    const response = await this.machines.call<ConsentListResponse>("GET", "/machine-consents");
-    return response.consents;
-  }
-
-  grant(appId: string): Promise<ConsentResponse> {
-    return this.machines.call("POST", "/machine-consents", { body: { app_id: appId } });
-  }
-
-  revoke(appId: string): Promise<void> {
-    return this.machines.call("DELETE", `/machine-consents/${encodeURIComponent(appId)}`);
-  }
-}
-
-/** The machines a pod keeps, and who may use each. */
-export class PodMachinesApi {
-  constructor(private readonly machines: MachinesNamespace) {}
-
-  create(
-    podId: string,
-    options: {
-      name: string;
-      displayName?: string;
-      template?: "workspace" | "workspace-docker";
-      size?: string;
-      visibility?: "pod" | "restricted";
-      runSlots?: number;
-    },
-  ): Promise<MachineResponse> {
-    const body: Partial<Record<keyof CreatePodMachineRequest, unknown>> = {
-      name: options.name,
-      display_name: options.displayName,
-      template: options.template,
-      size: options.size,
-      visibility: options.visibility,
-      run_slots: options.runSlots,
-    };
-    return this.machines.call("POST", podMachinesPath(podId), { body });
-  }
-
-  update(
-    podId: string,
-    name: string,
-    changes: {
-      displayName?: string | null;
-      size?: string | null;
-      visibility?: "pod" | "restricted" | null;
-      runSlots?: number | null;
-    },
-  ): Promise<MachineResponse> {
-    const body: Partial<Record<keyof UpdatePodMachineRequest, unknown>> = {};
-    if (changes.displayName !== undefined) body.display_name = changes.displayName;
-    if (changes.size !== undefined) body.size = changes.size;
-    if (changes.visibility !== undefined) body.visibility = changes.visibility;
-    if (changes.runSlots !== undefined) body.run_slots = changes.runSlots;
-    return this.machines.call("PATCH", `${podMachinesPath(podId)}/${encodeURIComponent(name)}`, {
-      body,
-    });
-  }
-
-  delete(podId: string, name: string): Promise<void> {
-    return this.machines.call("DELETE", `${podMachinesPath(podId)}/${encodeURIComponent(name)}`);
-  }
-
-  grants(podId: string, name: string): Promise<MachineGrantsModel> {
-    return this.machines.call(
-      "GET",
-      `${podMachinesPath(podId)}/${encodeURIComponent(name)}/grants`,
-    );
-  }
-
-  setGrants(podId: string, name: string, grants: MachineGrantsModel): Promise<MachineGrantsModel> {
-    return this.machines.call(
-      "PUT",
-      `${podMachinesPath(podId)}/${encodeURIComponent(name)}/grants`,
-      { body: grants },
-    );
-  }
-}
-
-function podMachinesPath(podId: string): string {
-  return `/pods/${encodeURIComponent(podId)}/machines`;
-}

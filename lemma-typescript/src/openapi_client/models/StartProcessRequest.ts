@@ -19,7 +19,7 @@ export type StartProcessRequest = {
      */
     run_id?: (string | null);
     /**
-     * Run as a named service: no lifetime cap, not stopped when the run that started it ends, listed under Processes as a service.
+     * Run as a named service: not stopped when the run that started it ends, listed under Processes as a service. It keeps the machine awake only while it produces output (MACHINE_SERVICE_IDLE_SECONDS).
      */
     service?: (string | null);
     /**

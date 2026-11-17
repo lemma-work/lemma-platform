@@ -148,7 +148,8 @@ def machine_section(
         lines.append(
             f"- Shared with other runs: work in `{workdir}`, which is yours "
             "for this run. Processes you leave running stop when the run "
-            "ends, unless started as a service."
+            "ends, unless started as a service (`exec_command` with "
+            "`service`)."
         )
     if disk_fraction is not None:
         lines.append(

@@ -135,8 +135,9 @@ SIGN_IN_PATHS: dict[str, frozenset[str]] = {
 #: socket, `/pods/{pod_id}/live`, and its predecessor
 #: `/pods/{pod_id}/datastore/changes` are matched by `_is_pod_live_ws_path`
 #: because their prefix is a pod id, and a machine's sockets by
-#: `_is_machine_ws_path` because theirs is a machine ref.
-SELF_AUTHENTICATED_WEBSOCKETS: tuple[str, ...] = ()
+#: `_is_machine_ws_path` because theirs is a machine ref. The workspace's old
+#: browser view only closes, with the path that replaced it, and reads nothing.
+SELF_AUTHENTICATED_WEBSOCKETS: tuple[str, ...] = ("/workspace/browser/view",)
 
 #: Old paths of routes that moved under `/public/`, and the day each goes. The
 #: same handler serves both until then; the gate fails once a date passes, so
@@ -148,6 +149,10 @@ LEGACY_ALIASES: dict[str, date] = {
     "/widgets/serve": date(2026, 12, 15),
     # Short file links live at most seven days.
     "/s": date(2026, 11, 30),
+    # Port grants are minted per preview and expire within the hour. Machines
+    # moved the public path to `/public/machine-ports`; `/public/workspace-ports`
+    # is served beside it until the same day (`port_proxy_controller`).
+    "/workspace-ports": date(2026, 11, 30),
 }
 
 

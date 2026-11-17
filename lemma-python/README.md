@@ -383,7 +383,7 @@ Facades: `lemma.orgs` · `lemma.org` · `lemma.pods` · `lemma.user` ·
 
 ### Machines
 
-A machine is addressed by ref: `me` (your default machine), `pod:<pod-id>/<name>`
+A machine is addressed by ref: `me` (your default machine), `pod:<pod>:<name>`
 (`pod:<name>` for the client's pod), `mine:<name>`, or its id. Inside a
 function, `ctx.machines` is the same facade acting as the run.
 

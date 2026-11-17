@@ -322,7 +322,14 @@ class WorkspaceSandboxService(
         scope: list[str] | None = None,
         session_id: str | None = None,
         conversation_id: UUID | None = None,
+        with_token: bool = True,
     ) -> dict[str, str]:
+        """The environment a process on a machine runs with.
+
+        ``with_token=False`` leaves ``LEMMA_TOKEN`` out without minting one --
+        for a caller whose process must not carry a Lemma credential (an app's
+        page, which has the SDK) or that brings its own (a function run).
+        """
         from app.modules.identity.contracts.delegated_tokens import (
             mint_delegated_token,
         )
@@ -337,16 +344,18 @@ class WorkspaceSandboxService(
             if conversation_id is not None
             else session_id or str(uuid4())
         )
-        token = await mint_delegated_token(
-            user_id=user_id,
-            workload_type=workload_type,
-            workload_id=workload_id,
-            pod_id=pod_id,
-            session_id=delegation_session_id,
-            workload_name=workload_name,
-            scope=scope,
-            delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
-        )
+        token = None
+        if with_token:
+            token = await mint_delegated_token(
+                user_id=user_id,
+                workload_type=workload_type,
+                workload_id=workload_id,
+                pod_id=pod_id,
+                session_id=delegation_session_id,
+                workload_name=workload_name,
+                scope=scope,
+                delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
+            )
         api_url = self._resolve_workspace_api_url()
         auth_url = (
             workspace_settings.workspace_callback_auth_url

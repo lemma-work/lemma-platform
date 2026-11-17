@@ -8,9 +8,10 @@ from app.core.domain.errors import DomainError
 class MachineNotFound(DomainError):
     """No such machine -- or one this caller may not know about."""
 
-    def __init__(self, ref: str) -> None:
+    def __init__(self, ref: str, *, hint: str | None = None) -> None:
+        message = f"There is no machine '{ref}' you can use."
         super().__init__(
-            f"There is no machine '{ref}' you can use.",
+            f"{message} {hint}" if hint else message,
             code="MACHINE_NOT_FOUND",
             status_code=404,
         )
@@ -24,18 +25,6 @@ class MachineAccessDenied(DomainError):
             f"You can see '{ref}' but not {needs} it. Ask a pod editor.",
             code="MACHINE_ACCESS_DENIED",
             status_code=403,
-        )
-
-
-class MachineConsentRequired(DomainError):
-    """An app asked to run code on its viewer's machine before they said yes."""
-
-    def __init__(self, app_id: str, app_name: str | None = None) -> None:
-        super().__init__(
-            "This app needs your permission to run commands on your machine.",
-            code="MACHINE_CONSENT_REQUIRED",
-            status_code=403,
-            details={"app_id": app_id, "app_name": app_name},
         )
 
 
