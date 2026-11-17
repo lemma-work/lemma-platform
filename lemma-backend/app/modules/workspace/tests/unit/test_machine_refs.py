@@ -25,8 +25,8 @@ from app.modules.workspace.services.machine_resolver import MachineResolver
 
 pytestmark = pytest.mark.unit
 
-POD = uuid4()
-OTHER_POD = uuid4()
+POD = UUID("11111111-1111-4111-8111-111111111111")
+OTHER_POD = UUID("22222222-2222-4222-8222-222222222222")
 
 
 @pytest.mark.parametrize(

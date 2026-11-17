@@ -16,3 +16,10 @@ lemma-skills/browser/references/agent-browser-core.md:agent-sandbox  # vendored 
 # The legacy /workspace path, named because recognising it is the point.
 desktop/agent-host/src/conversation_directory.rs:workspace-path  # test that a cwd at the legacy /workspace root is refused before anything is created
 lemma-backend/app/modules/agent/tests/e2e/test_agent_host_session_binding_e2e.py:workspace-path  # a conversation stamped with a legacy /workspace cwd keeps it across a rebind
+
+# The retired /workspace routes and port-grant paths, named because answering them is the point.
+lemma-backend/app/modules/workspace/api/controllers/retired_workspace_routes.py:old-route  # answers each removed /workspace route with 410 naming its /machines/me replacement
+lemma-backend/app/modules/workspace/tests/unit/test_retired_workspace_routes.py:old-route  # holds that every removed /workspace route answers 410, and main's port-grant paths still serve
+lemma-backend/app/modules/workspace/tests/unit/test_retired_workspace_routes.py:workspace-path  # asserts no /workspace route is in the public spec
+lemma-backend/app/modules/workspace/api/controllers/port_proxy_controller.py:old-route  # main's port-grant paths, served until their LEGACY_ALIASES date (2026-11-30)
+lemma-backend/app/core/auth_exemptions.py:old-route  # the retired browser-view socket and main's /workspace-ports alias, each until it is removed

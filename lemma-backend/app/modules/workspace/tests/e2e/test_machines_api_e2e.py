@@ -303,3 +303,53 @@ async def test_cleaning_up_by_scope_and_the_home_needs_a_yes(machine) -> None:
 
     unconfirmed = await client.post("/machines/me:reset", json={"scopes": ["home"]})
     assert unconfirmed.status_code == status.HTTP_409_CONFLICT, unconfirmed.text
+
+
+async def test_a_pod_machine_is_named_by_its_pods_name_from_outside_the_pod(
+    machine, fixed_test_org
+) -> None:
+    """What the CLI sends: `pod:<pod name>:<machine>`, with no pod in context.
+    It resolved against the caller's pod only, so it 404'd for every pod."""
+    client = machine["client"]
+    pod_name = f"refs-{uuid4().hex[:8]}"
+    pod = await client.post(
+        "/pods",
+        json={
+            "name": pod_name,
+            "type": "ASSISTANT",
+            "organization_id": fixed_test_org["id"],
+        },
+    )
+    assert pod.status_code == status.HTTP_201_CREATED, pod.text
+    pod_id = pod.json()["id"]
+    created = await client.post(f"/pods/{pod_id}/machines", json={"name": "qa"})
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    assert created.json()["ref"] == f"pod:{pod_id}:qa"
+
+    for ref in (f"pod:{pod_id}:qa", f"pod:{pod_name}:qa", f"pod:{pod_name.upper()}:qa"):
+        found = await client.get(f"/machines/{ref}")
+        assert found.status_code == status.HTTP_200_OK, (ref, found.text)
+        assert found.json()["id"] == created.json()["id"]
+
+    elsewhere = await client.get("/machines/pod:no-such-pod:qa")
+    assert elsewhere.status_code == status.HTTP_404_NOT_FOUND
+
+
+async def test_the_old_workspace_routes_say_where_they_went(machine) -> None:
+    retired = await machine["client"].get("/workspace/files", params={"path": "/"})
+
+    assert retired.status_code == status.HTTP_410_GONE, retired.text
+    assert retired.json()["details"] == {"replacement": "GET /machines/me/files"}
+
+
+async def test_the_old_write_path_still_writes(machine) -> None:
+    path = f"{WORKSPACE_ROOT}/legacy-{uuid4().hex[:6]}.txt"
+    written = await machine["client"].put(
+        "/machines/me/files/content", params={"path": path}, content=b"old client"
+    )
+    assert written.status_code == status.HTTP_200_OK, written.text
+
+    read = await machine["client"].get(
+        "/machines/me/files:content", params={"path": path}
+    )
+    assert read.content == b"old client"

@@ -13,7 +13,7 @@ word in its name.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 
 from fastapi import Request, Response
@@ -174,7 +174,9 @@ class MachineFailureRoute(APIRoute):
     first; this is for every call that had nothing to add.
     """
 
-    def get_route_handler(self) -> Callable[[Request], Awaitable[Response]]:
+    def get_route_handler(
+        self,
+    ) -> Callable[[Request], Coroutine[object, object, Response]]:
         handler = super().get_route_handler()
 
         async def answered(request: Request) -> Response:
