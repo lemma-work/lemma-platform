@@ -39,6 +39,9 @@ from app.modules.agent.infrastructure.tools.workspace_cli.run_machine import (
     place_on_machine,
     tag_for_run,
 )
+from app.modules.agent.infrastructure.tools.workspace_cli.service_start import (
+    start_service,
+)
 from app.modules.agent.infrastructure.tools.workspace_cli.process_visibility import (
     visible_processes,
 )
@@ -335,6 +338,9 @@ async def exec_command_internal(
                 runtime=runtime,
                 machine=request.machine,
             )
+        if request.service:
+            async with workspace_session:
+                return await start_service(ctx, request, workspace_session, runtime)
         async with workspace_session:
             # A repo-backed conversation needs credentials for every command,
             # not just git-looking ones: the clone that puts the project on disk

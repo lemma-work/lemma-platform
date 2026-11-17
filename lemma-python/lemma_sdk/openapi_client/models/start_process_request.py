@@ -26,8 +26,9 @@ class StartProcessRequest:
         env (StartProcessRequestEnv | Unset):
         restart_on_resume (bool | Unset): With `service`: start it again after a pause. Default: False.
         run_id (None | str | Unset): Stop it when this run ends (pod machines tag agent work this way).
-        service (None | str | Unset): Run as a named service: no lifetime cap, not stopped when the run that started it
-            ends, listed under Processes as a service.
+        service (None | str | Unset): Run as a named service: not stopped when the run that started it ends, listed
+            under Processes as a service. It keeps the machine awake only while it produces output
+            (MACHINE_SERVICE_IDLE_SECONDS).
         timeout_seconds (int | None | Unset): How long it may run. Capped at the machine's process lifetime.
         tty (None | TerminalSizeModel | Unset): Run in a terminal of this size (for a shell).
     """

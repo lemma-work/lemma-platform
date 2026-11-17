@@ -13,15 +13,16 @@ Three kinds, and the difference is ownership, not machinery:
   whole pod or only to those granted it;
 - **connected machines**, a person's own laptop or VM joined over a link.
 
-Refs are how every caller names one: ``me``, ``pod:<pod>/<name>``,
-``mine:<name>`` or the row id. ``services/machine_resolver.py`` is the only
-thing that turns a ref into a row.
+Refs are how every caller names one: ``me``, ``pod:<pod>:<name>`` (the pod
+by id or name; ``pod:<name>`` inside the pod), ``mine:<name>`` or the row
+id. ``services/machine_resolver.py`` is the only thing that turns a ref into
+a row.
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
@@ -37,16 +38,17 @@ class MachineKind(StrEnum):
 
 
 class MachineVisibility(StrEnum):
-    """Who in a pod sees a pod machine.
+    """Whether a machine is somebody's own or a pod's.
 
     ``PRIVATE`` is a person's own machine: their default, or one they
-    connected and did not share. ``RESTRICTED`` exists for isolation, not
-    tidiness: a verifier's machine the builder must not be able to reach.
+    connected and did not share. ``POD`` is a pod machine, or a connected one
+    its owner shared into a pod. Who in the pod may do what with it is the
+    pod's roles and grants, like any pod resource; keeping a machine from
+    someone -- a verifier the builder must not reach -- is not granting it.
     """
 
     PRIVATE = "private"
     POD = "pod"
-    RESTRICTED = "restricted"
 
 
 class MachineBillingScope(StrEnum):
@@ -88,8 +90,8 @@ class MachineSize:
 
     @property
     def compute_units_per_hour(self) -> float:
-        """1 CU is one hour of the 2x4 default; other sizes scale by vCPU."""
-        return self.cpu_count / DEFAULT_MACHINE_SIZE.cpu_count
+        """1 CU is one hour at 2x4; other sizes scale by vCPU."""
+        return self.cpu_count / COMPUTE_UNIT_SIZE.cpu_count
 
     @classmethod
     def parse(cls, label: str) -> MachineSize:
@@ -122,10 +124,14 @@ KNOWN_SIZES = (
     MachineSize(4, 8),
     MachineSize(8, 16),
 )
-DEFAULT_MACHINE_SIZE = MachineSize(2, 4)
-#: The default machine's size before the 2x4 migration; still what an
-#: unmigrated row reports.
+DEFAULT_MACHINE_SIZE = MachineSize(1, 2)
+#: What a row built before machines had a size reports: the size every
+#: default machine was built at. A plan whose default is bigger moves such a
+#: row when it next stops (``services/machine_housekeeping``).
 LEGACY_DEFAULT_SIZE = MachineSize(1, 2)
+#: What one compute unit is an hour of. Fixed, not the default size: a
+#: plan's default may change, and what an hour costs must not change with it.
+COMPUTE_UNIT_SIZE = MachineSize(2, 4)
 
 #: Sizes each template is built at. Docker needs room for a compose stack.
 TEMPLATE_SIZES: dict[MachineTemplate, tuple[MachineSize, ...]] = {
@@ -217,9 +223,11 @@ class MachineRefKind(StrEnum):
 class MachineRef:
     """A parsed ref. Parsing never touches the database.
 
-    ``pod:<pod>/<name>`` also accepts ``pod:<pod>:<name>``, because a slash
-    cannot travel inside one URL path segment; the SDKs and the CLI send the
-    colon form. ``pod:<name>`` means "this pod" and needs a pod in context.
+    One grammar, written one way: ``pod:<pod>:<name>``, where ``<pod>`` is the
+    pod's id or its name, because that is the form that fits in one URL path
+    segment. ``pod:<pod>/<name>`` is still read -- older docs and clients
+    wrote it -- but never written. ``pod:<name>`` means "this pod" and needs a
+    pod in context.
     """
 
     kind: MachineRefKind
@@ -248,15 +256,15 @@ class MachineRef:
             return cls(MachineRefKind.ID, machine_id=UUID(text))
         except ValueError:
             raise ValueError(
-                f"'{raw}' is not a machine ref; use me, pod:<pod>/<name>, "
-                "mine:<name> or a machine id"
+                f"'{raw}' is not a machine ref; use me, pod:<pod>:<name>, "
+                "pod:<name>, mine:<name> or a machine id"
             ) from None
 
     def __str__(self) -> str:
         if self.kind is MachineRefKind.ME:
             return "me"
         if self.kind is MachineRefKind.POD:
-            return f"pod:{self.pod}/{self.name}" if self.pod else f"pod:{self.name}"
+            return f"pod:{self.pod}:{self.name}" if self.pod else f"pod:{self.name}"
         if self.kind is MachineRefKind.MINE:
             return f"mine:{self.name}"
         return str(self.machine_id)
@@ -299,18 +307,15 @@ class Machine:
     home: str = HOME_ROOT
     status: MachineStatus = MachineStatus.STOPPED
     last_used_at: datetime | None = None
-    #: Pod members granted a RESTRICTED machine; agents and functions are
-    #: granted through the pod's resource grants instead.
-    granted_user_ids: frozenset[UUID] = field(default_factory=frozenset)
 
     @property
     def ref(self) -> str:
         """How to name this machine, in a URL path as much as anywhere.
 
-        `pod:<pod>:<name>`, not `pod:<pod>/<name>`. Both parse, but this is
-        what the API hands out, and the slash form cannot sit in a path
+        The canonical `pod:<pod-id>:<name>`, the same spelling
+        `MachineRef.__str__` gives. The slash form cannot sit in a path
         segment: encoded or not, `/machines/pod:<pod>/qa` reaches no route,
-        so a client using the `ref` it was just given got a 404.
+        so a client using a slash `ref` it was just given got a 404.
         """
         if self.kind is MachineKind.DEFAULT:
             return "me"
@@ -320,6 +325,7 @@ class Machine:
 
 
 __all__ = [
+    "COMPUTE_UNIT_SIZE",
     "Capabilities",
     "DEFAULT_MACHINE_SIZE",
     "KNOWN_SIZES",

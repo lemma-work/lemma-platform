@@ -128,7 +128,7 @@ def test_a_pod_machine_is_created_in_the_bound_pod() -> None:
     transport = RecordingTransport()
 
     Machines(transport, pod_id=POD).create(  # type: ignore[arg-type]
-        "builder", template="workspace-docker", visibility="restricted", run_slots=2
+        "builder", template="workspace-docker", run_slots=2
     )
 
     endpoint, path_args, kwargs = transport.calls[0]
@@ -137,7 +137,6 @@ def test_a_pod_machine_is_created_in_the_bound_pod() -> None:
     assert kwargs["body"].to_dict() == {
         "name": "builder",
         "template": "workspace-docker",
-        "visibility": "restricted",
         "run_slots": 2,
     }
 
@@ -151,7 +150,7 @@ def test_a_write_sends_raw_bytes_and_a_read_returns_them() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.params["path"]
         if request.method == "PUT":
-            assert request.url.path == "/machines/me/files/content"
+            assert request.url.path == "/machines/me/files:content"
             stored[path] = request.read()
             return httpx.Response(
                 200,
@@ -172,6 +171,29 @@ def test_a_write_sends_raw_bytes_and_a_read_returns_them() -> None:
 
     assert entry.size_bytes == len("héllo".encode())
     assert files.read("me", "/home/user/lemma/a.txt") == "héllo".encode()
+
+
+def test_a_file_past_one_page_is_read_whole_from_206_pages() -> None:
+    """The server answers a slice with 206 and a ``Content-Range``; ``read``
+    pages through to the end rather than stopping at the first slice."""
+    from lemma_sdk.resources.machines import MAX_READ_BYTES
+
+    total = MAX_READ_BYTES + 10
+    content = bytes(range(256)) * (total // 256) + bytes(total % 256)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        offset = int(request.url.params.get("offset", 0))
+        length = int(request.url.params.get("length", MAX_READ_BYTES))
+        page = content[offset : offset + min(length, MAX_READ_BYTES)]
+        return httpx.Response(
+            206,
+            content=page,
+            headers={
+                "Content-Range": f"bytes {offset}-{offset + len(page) - 1}/{total}"
+            },
+        )
+
+    assert Machines(_wired(handler)).files.read("me", "/home/user/big") == content
 
 
 def test_a_failed_write_raises_the_typed_error() -> None:

@@ -45,8 +45,50 @@ function serving(totalBytes: number, { ignoresRange = false } = {}) {
       return (await respond(...args)).blob;
     },
   } as unknown as HttpClient;
-  return { files: new MachinesNamespace(http).files, asked };
+  return { files: new MachinesNamespace(http).files, asked, respond };
 }
+
+/** The current server: an unranged read cut at the ceiling is a 206. */
+function servingWith206(totalBytes: number) {
+  const { respond } = serving(totalBytes);
+  const http = {
+    async requestBytesResponse(
+      method: string,
+      path: string,
+      options: { headers?: Record<string, string> } = {},
+    ) {
+      if (!options.headers?.Range && totalBytes > MAX_READ_BYTES) {
+        return {
+          blob: new Blob([new Uint8Array(MAX_READ_BYTES)]),
+          status: 206,
+          contentRange: `bytes 0-${MAX_READ_BYTES - 1}/${totalBytes}`,
+        };
+      }
+      return respond(method, path, options);
+    },
+  } as unknown as HttpClient;
+  return new MachinesNamespace(http).files;
+}
+
+describe("files.read", () => {
+  it("reads past the server's ceiling when the server says it cut the file", async () => {
+    // A 200 with the first 8 MiB under the whole file's ETag read as the
+    // whole file. The server now answers 206 with the total, and `read`
+    // follows it to the end.
+    const total = MAX_READ_BYTES * 2 + 99;
+    const files = servingWith206(total);
+
+    expect((await files.read("me", "/home/user/big.bin")).size).toBe(total);
+  });
+
+  it("returns only the slice asked for", async () => {
+    const files = servingWith206(MAX_READ_BYTES * 2);
+
+    const blob = await files.read("me", "/home/user/big.bin", { range: { start: 0, end: 9 } });
+
+    expect(blob.size).toBe(10);
+  });
+});
 
 describe("files.readWhole", () => {
   it("reads a file whose size the caller does not know", async () => {

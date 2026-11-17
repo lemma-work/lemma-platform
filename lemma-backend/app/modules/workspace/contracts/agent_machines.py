@@ -1,14 +1,15 @@
 """Where an agent run's commands run, for the agent module's tools.
 
 The agent module names a machine (the agent's `machine:`, or a tool call's
-`machine` argument) and this decides it with the same resolver and matrix as
-every `/machines` route: a person's default machine only for a run they
-started in Lemma; a pod machine by visibility or grant; a connected machine by
-share and grant.
+`machine` argument) and this decides it with the same resolver as every
+`/machines` route: a person's default machine for every run they own that
+answers a member; a pod machine as a pod resource, by the agent's grant
+intersected with its person (the pod's default agent as its person); a
+connected machine by share and grant.
 
 A pod machine is shared, so work on one also gets what sharing needs: a slot
 (``run_slots`` at a time), its own working directory under
-``~/lemma/runs/<agent>/<conversation>``, the disk janitor before it starts,
+``~/lemma/runs/<agent>/<conversation>``, a disk check before it starts,
 and -- when it is over -- its leftover processes stopped and its slot freed.
 
 "A run" here is a conversation's work, not one agent run: a conversation
@@ -54,18 +55,6 @@ class AgentMachine:
         return self.machine.ref
 
 
-class ChannelRunHasNoMachine(MachineNotFound):
-    """A run started from a channel asked for a person's own machine."""
-
-    def __init__(self) -> None:
-        super().__init__("me")
-        self.message = (
-            "This run was not started by its person in Lemma, so it cannot use "
-            "anyone's own machine. Give the agent a pod machine "
-            "(machine: pod:<name>) to run commands here."
-        )
-
-
 def _slug(value: str | None) -> str:
     return _SLUG.sub("-", (value or "agent").lower()).strip("-")[:40] or "agent"
 
@@ -98,14 +87,9 @@ async def resolve_agent_machine(
     )
     target = (ref or "me").strip() or "me"
     async with get_uow_factory()() as uow:
-        try:
-            resolved = await MachineResolver(uow).resolve(
-                target, caller, need=MachineAccess.USE
-            )
-        except MachineNotFound:
-            if target == "me":
-                raise ChannelRunHasNoMachine() from None
-            raise
+        resolved = await MachineResolver(uow).resolve(
+            target, caller, need=MachineAccess.USE
+        )
         await uow.commit()
     machine = resolved.machine
     if machine.kind is MachineKind.DEFAULT or run_id is None:
@@ -114,17 +98,18 @@ async def resolve_agent_machine(
 
 
 async def begin_run(machine: AgentMachine, *, run_id: UUID, acting_user: UUID) -> None:
-    """Take a slot and make room, once per run per shared machine; renew the
-    slot on every later command."""
+    """Take a slot, once per run per shared machine, after one look at the
+    disk; renew the slot on every later command. Pruning a full disk is the
+    janitor's, in the background -- never this command's wait."""
     if not machine.shared:
         return
-    from app.modules.workspace.services.disk_janitor import keep_room
+    from app.modules.workspace.services.disk_janitor import refuse_if_full
     from app.modules.workspace.services.run_slots import RunSlots
 
     slots = RunSlots()
     already = str(run_id) in await slots.holders(machine.machine_id)
     if not already:
-        await keep_room(machine.machine_id, acting_user=acting_user)
+        await refuse_if_full(machine.machine_id, acting_user=acting_user)
     await slots.acquire(machine.machine_id, run_id, slots=machine.machine.run_slots)
 
 
@@ -173,6 +158,14 @@ async def end_run(run_id: UUID) -> list[str]:
         await slots.release(machine_id, run_id)
     await slots.forget_run(run_id)
     return stopped
+
+
+async def park_run(run_id: UUID) -> None:
+    """Keep a WAITING conversation's slots past the ordinary lease: what it
+    waits on runs there, and the run that resumes it needs the same slot."""
+    from app.modules.workspace.services.run_slots import RunSlots
+
+    await RunSlots().park(run_id)
 
 
 async def machines_for_agent(
@@ -232,8 +225,12 @@ async def expose_port(
     created_by: UUID,
 ) -> tuple[str, str | None]:
     from app.core.api.dependencies import get_uow_factory
-    from app.modules.workspace.services.machine_previews import MachinePreviews
+    from app.modules.workspace.services.machine_previews import (
+        MachinePreviews,
+        refuse_unpreviewable_port,
+    )
 
+    refuse_unpreviewable_port(machine.machine.kind, port)
     preview = await MachinePreviews(get_uow_factory()).create(
         machine.machine_id,
         port=port,
@@ -300,10 +297,15 @@ async def sync_files(
 
 
 async def reset_for_agent(
-    machine: AgentMachine, *, scopes: list[str], acting_user: UUID
+    machine: AgentMachine,
+    *,
+    scopes: list[str],
+    acting_user: UUID,
+    run_id: UUID | None,
 ) -> tuple[int, list[str]]:
     """The scopes an agent may clean: nothing that costs a person a login or
-    a disk."""
+    a disk, and nothing another run is using -- ``processes`` stops only
+    this run's (``run_id``, the conversation)."""
     from app.core.api.dependencies import get_uow_factory
     from app.modules.workspace.domain.machine_errors import MachineAccessDenied
     from app.modules.workspace.services.machine_lifecycle import (
@@ -314,7 +316,10 @@ async def reset_for_agent(
     if not set(scopes) <= AGENT_SCOPES:
         raise MachineAccessDenied(machine.ref, "reset that scope of")
     outcomes = await MachineLifecycle(get_uow_factory()).reset(
-        machine.machine, scopes, acting_user=acting_user
+        machine.machine,
+        scopes,
+        acting_user=acting_user,
+        run_id=str(run_id) if run_id is not None else "",
     )
     freed = sum(outcome.freed_bytes or 0 for outcome in outcomes)
     details = [
@@ -405,9 +410,9 @@ __all__ = [
     "reset_for_agent",
     "sync_files",
     "AgentMachine",
-    "ChannelRunHasNoMachine",
     "begin_run",
     "end_run",
+    "park_run",
     "resolve_agent_machine",
     "run_workdir",
     "tag_run_process",

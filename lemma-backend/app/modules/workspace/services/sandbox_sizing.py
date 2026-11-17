@@ -2,7 +2,7 @@
 
 A machine is built at the size recorded on its row: chosen when it was
 created, within its plan's policy, and changed only by an explicit resize or
-the move of default machines to 2x4. A row still at the legacy default is
+the move of a default machine to a bigger plan default. A row at 1x2 is
 built at whatever the deployment configured, which is what it has always been
 built at. Everything else -- a function runtime -- keeps the configured size.
 

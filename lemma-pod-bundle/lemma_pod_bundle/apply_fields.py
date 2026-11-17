@@ -136,7 +136,7 @@ GRANT_HOLDER_DIRS = ("agents", "functions")
 #: who made it belong to the pod it came from; the grants that let an agent or
 #: a function use it travel on that agent or function, by machine name.
 MACHINE_APPLY_FIELDS = frozenset(
-    {"name", "display_name", "template", "size", "visibility", "run_slots"}
+    {"name", "display_name", "template", "size", "run_slots"}
 )
 
 #: What a TIME schedule may not carry: there is no event for a filter to judge.

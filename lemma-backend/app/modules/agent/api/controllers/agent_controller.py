@@ -25,6 +25,7 @@ from app.modules.agent.api.dependencies import (
     AgentServiceDep,
     AgentViewerDep,
 )
+from app.modules.agent.services.agent_machine_grant import sync_agent_machine_grant
 from app.modules.agent.services.agent_memory_grant import sync_memory_folder_grant
 from app.modules.agent.api.schemas import (
     AgentActionResponse,
@@ -138,6 +139,14 @@ async def create_agent(
         pod_id=pod_id,
         agent_id=agent.id,
         toolsets=data.toolsets,
+        ctx=ctx,
+        created_by_user_id=user.id,
+    )
+    await sync_agent_machine_grant(
+        uow,
+        pod_id=pod_id,
+        agent_id=agent.id,
+        machine=agent.machine,
         ctx=ctx,
         created_by_user_id=user.id,
     )
@@ -336,6 +345,14 @@ async def replace_agent_permissions(
         ctx=ctx,
         created_by_user_id=user.id,
     )
+    await sync_agent_machine_grant(
+        uow,
+        pod_id=pod_id,
+        agent_id=agent.id,
+        machine=agent.machine,
+        ctx=ctx,
+        created_by_user_id=user.id,
+    )
     return await _agent_permissions_response(uow, pod_id=pod_id, agent=agent)
 
 
@@ -391,6 +408,14 @@ async def update_agent(
         pod_id=pod_id,
         agent_id=agent.id,
         toolsets=agent.toolsets,
+        ctx=ctx,
+        created_by_user_id=user.id,
+    )
+    await sync_agent_machine_grant(
+        uow,
+        pod_id=pod_id,
+        agent_id=agent.id,
+        machine=agent.machine,
         ctx=ctx,
         created_by_user_id=user.id,
     )

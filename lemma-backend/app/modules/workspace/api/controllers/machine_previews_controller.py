@@ -24,15 +24,16 @@ from app.modules.workspace.api.controllers.machine_dependencies import (
     caller_for,
 )
 from app.modules.workspace.api.controllers.machines_controller import machines_enabled
-from app.modules.workspace.domain.machine import Machine, MachineKind
+from app.modules.workspace.domain.machine import Machine
 from app.modules.workspace.domain.machine_access import MachineAccess
-from app.modules.workspace.domain.machine_errors import MachineConflict, MachineNotFound
+from app.modules.workspace.domain.machine_errors import MachineNotFound
 from app.modules.workspace.services.machine_previews import (
     AUTH_PATH,
     MachinePreviews,
     Preview,
     mint_ticket,
     preview_url,
+    refuse_unpreviewable_port,
 )
 from app.modules.workspace.services.machine_resolver import MachineResolver
 
@@ -106,21 +107,7 @@ async def create_preview(
 
 
 def _refuse_the_machines_own_port(machine: Machine, port: int) -> None:
-    """The runtime, the browser relay, VNC and the streamer are not previews.
-
-    A preview of 8080 reached the workspace runtime -- which asked for its own
-    credential, so nothing leaked, but a URL that can only ever answer 401 is a
-    preview nobody can use. A connected machine is somebody's own computer, and
-    there 8080 is as likely as not the dev server they meant.
-    """
-    from sandbox_runtime.workspace.port_relay import RESERVED_PORTS
-
-    if machine.kind is not MachineKind.CONNECTED and port in RESERVED_PORTS:
-        raise MachineConflict(
-            f"Port {port} is one the machine itself uses. Run the server on "
-            "another port and preview that.",
-            code="MACHINE_PORT_RESERVED",
-        )
+    refuse_unpreviewable_port(machine.kind, port)
 
 
 @router.get(
@@ -165,10 +152,14 @@ async def open_preview(
         raise MachineNotFound(f"preview {label}")
     async with uow_factory() as uow:
         caller = await caller_for(request, uow)
+        if caller.user_id is None:
+            # A person-less run has nobody to open a browser for.
+            raise MachineNotFound(f"preview {label}")
+        # Use, not sight: a preview is the machine's running server, and
+        # reaching it is using the machine.
         await MachineResolver(uow).resolve(
-            str(preview.sandbox_id), caller, need=MachineAccess.STATUS
+            str(preview.sandbox_id), caller, need=MachineAccess.USE
         )
-    assert caller.user_id is not None
     # The stored label, not the one in the path: only a preview that exists
     # is ever redirected to.
     ticket = mint_ticket(preview.label, caller.user_id)

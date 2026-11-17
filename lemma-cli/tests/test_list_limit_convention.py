@@ -68,6 +68,14 @@ COMPLETE_SET_LISTINGS = {
     "machines preview list": (
         "one machine's shared ports -- the endpoint takes no limit or cursor"
     ),
+    "machine grants list": (
+        "the agents and functions granted one machine -- the endpoint takes "
+        "no limit or cursor"
+    ),
+    "machines grants list": (
+        "the agents and functions granted one machine -- the endpoint takes "
+        "no limit or cursor"
+    ),
     "machines logins list": (
         "the cookie domains one machine's browser holds, read in one round trip"
     ),

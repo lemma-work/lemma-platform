@@ -15,7 +15,7 @@ of a 350-line method.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable
+from typing import Any, Awaitable, Callable
 from uuid import UUID
 
 
@@ -186,20 +186,26 @@ async def _redraw(run: RunIdentity, message: Message | None) -> None:
 
 
 async def _end_machine_work(
-    conversation_id: UUID, status: ConversationStatus | None
+    conversation_id: UUID,
+    status: ConversationStatus | None,
+    *,
+    park: Callable[[UUID], Awaitable[None]] | None = None,
+    end: Callable[[UUID], Awaitable[object]] | None = None,
 ) -> None:
     """Free the conversation's slots on shared machines and stop what it left
     running there. Not while it waits on its own work: that work is what a
-    waiting conversation is waiting for."""
-    if status is ConversationStatus.WAITING:
-        return
-    from app.modules.workspace.contracts.agent_machines import end_run
+    waiting conversation is waiting for, so its slots are parked instead --
+    held past the ordinary lease until it resumes."""
+    from app.modules.workspace.contracts.agent_machines import end_run, park_run
     from app.modules.workspace.contracts.runtime_errors import machine_runtime_errors
 
     from redis.exceptions import RedisError
 
     try:
-        await end_run(conversation_id)
+        if status is ConversationStatus.WAITING:
+            await (park or park_run)(conversation_id)
+            return
+        await (end or end_run)(conversation_id)
     except (OSError, RedisError, *machine_runtime_errors()):
         logger.warning(
             "agent.run.machine_work_end_failed.degraded",

@@ -349,6 +349,7 @@ class BundleApplier:
         explicitly empty grant list clears them — see `_apply_function_grants`."""
         from app.modules.agent.contracts.provisioning import (
             get_agent,
+            sync_agent_machine_grant,
             sync_agent_memory_grant,
         )
 
@@ -375,6 +376,14 @@ class BundleApplier:
             pod_id=self._pod_id,
             agent_id=agent.id,
             toolsets=getattr(agent, "toolsets", None),
+            ctx=self._ctx,
+            created_by_user_id=self._user_id,
+        )
+        await sync_agent_machine_grant(
+            self._uow,
+            pod_id=self._pod_id,
+            agent_id=agent.id,
+            machine=getattr(agent, "machine", None),
             ctx=self._ctx,
             created_by_user_id=self._user_id,
         )

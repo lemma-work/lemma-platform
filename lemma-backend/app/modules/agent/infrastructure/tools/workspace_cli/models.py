@@ -51,6 +51,17 @@ class ExecCommandRequest(BaseModel):
             "machines, or one from `list_machines`. Omit for your usual one."
         ),
     )
+    service: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+        description=(
+            "Start the command as a named service (a dev server behind a "
+            "preview): it outlives this run, comes back after the machine "
+            "sleeps, and keeps the machine awake only while it writes output. "
+            "Returns its `process_id` at once. One service per name."
+        ),
+    )
     yield_time_ms: Optional[int] = Field(
         default=None,
         description=(

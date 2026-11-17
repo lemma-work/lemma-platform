@@ -4,6 +4,10 @@ Authorized twice, on purpose: the caller must be able to use the machine (the
 route resolved it) *and* the pod files are read or written as the caller, with
 their own context in that pod -- a machine is not a way into a pod's files
 somebody could not otherwise reach.
+
+Capped both ways and per file, not only per tree: a single file is measured
+before it is read, and read as a stream that stops at the cap, so one large
+file cannot be pulled whole into the API's memory.
 """
 
 from __future__ import annotations
@@ -17,6 +21,17 @@ from app.modules.workspace.domain.machine_errors import MachineConflict
 from app.modules.workspace.providers.runtime_client import WorkspaceRuntimeError
 from sandbox_runtime.errors import SandboxError
 from sandbox_runtime.protocol import FileKind
+
+
+#: The most one file copied onto a machine from a pod may be.
+MAX_FROM_POD_BYTES = 256 * 1024 * 1024
+
+
+def _too_large(max_bytes: int) -> MachineConflict:
+    return MachineConflict(
+        f"That is more than {max_bytes // (1024 * 1024)} MB; sync a smaller file.",
+        code="MACHINE_SYNC_TOO_LARGE",
+    )
 
 
 def _deadline(seconds: int = 300) -> datetime:
@@ -45,11 +60,18 @@ async def sync_from_pod(
     pod_id: UUID,
     pod_path: str,
     machine_path: str,
+    max_bytes: int = MAX_FROM_POD_BYTES,
 ) -> tuple[list[str], int]:
-    from app.modules.datastore.contracts.pod_files import read_pod_file
+    from app.modules.datastore.contracts.pod_files import (
+        read_pod_file,
+        readable_pod_file,
+    )
 
     async with uow_factory() as uow:
         ctx = await _pod_context(uow, user_id, pod_id)
+        facts = await readable_pod_file(uow, pod_id=pod_id, path=pod_path, ctx=ctx)
+        if facts is not None and facts.size_bytes > max_bytes:
+            raise _too_large(max_bytes)
         found = await read_pod_file(uow, pod_id=pod_id, path=pod_path, ctx=ctx)
     target = machine_path
     client = _client()
@@ -77,22 +99,26 @@ async def sync_to_pod(
     machine_path: str,
     max_files: int,
     max_bytes: int,
+    client=None,
 ) -> tuple[list[str], int]:
+    """``client`` is the machine's runtime client; built here when not given."""
     from app.modules.datastore.contracts.pod_files import write_pod_file
 
+    client = client or _client()
     files = await _collect(
-        machine_id, machine_path, max_files=max_files, max_bytes=max_bytes
+        client, machine_id, machine_path, max_files=max_files, max_bytes=max_bytes
     )
     base = (
         machine_path
         if len(files) != 1 or files[0][0] != machine_path
         else posixpath.dirname(machine_path)
     )
-    client = _client()
     written: list[str] = []
     total = 0
     for path, _size in files:
-        content = await client.read_file(machine_id, path, deadline_at=_deadline())
+        content = await _read_capped(
+            client, machine_id, path, room=max_bytes - total, cap=max_bytes
+        )
         relative_dir = posixpath.dirname(posixpath.relpath(path, base))
         directory = posixpath.normpath(posixpath.join(pod_folder, relative_dir))
         async with uow_factory() as uow:
@@ -111,15 +137,33 @@ async def sync_to_pod(
     return written, total
 
 
+async def _read_capped(
+    client, machine_id: UUID, path: str, *, room: int, cap: int
+) -> bytes:
+    """One file, streamed and stopped at ``room`` bytes: a file that grew past
+    the cap after it was measured is refused, not buffered whole."""
+    chunks: list[bytes] = []
+    size = 0
+    async with client.stream_file(machine_id, path, deadline_at=_deadline()) as stream:
+        async for chunk in stream:
+            size += len(chunk)
+            if size > room:
+                raise _too_large(cap)
+            chunks.append(chunk)
+    return b"".join(chunks)
+
+
 async def _collect(
-    machine_id: UUID, root: str, *, max_files: int, max_bytes: int
+    client, machine_id: UUID, root: str, *, max_files: int, max_bytes: int
 ) -> list[tuple[str, int]]:
     """Every file under ``root`` (or ``root`` itself), refusing past the caps
     rather than copying a silently partial tree."""
-    client = _client()
     stat = await client.stat_file(machine_id, root, deadline_at=_deadline(30))
     if getattr(stat, "kind", None) != FileKind.DIRECTORY:
-        return [(root, int(getattr(stat, "size_bytes", 0) or 0))]
+        size = int(getattr(stat, "size_bytes", 0) or 0)
+        if size > max_bytes:
+            raise _too_large(max_bytes)
+        return [(root, size)]
     found: list[tuple[str, int]] = []
     pending = [root]
     size = 0

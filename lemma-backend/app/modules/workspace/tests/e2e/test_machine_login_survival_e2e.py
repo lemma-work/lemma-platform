@@ -164,10 +164,17 @@ async def test_moving_from_the_old_size_to_the_default(machine) -> None:
     assert moved is True
     assert (await client.get("/machines/me")).json()["size"] == "2x4"
     assert await _login(client) == value
+    async with machine["uow_factory"]() as uow:
+        row = await uow.session.get(SandboxModel, machine["id"])
+        assert row is not None
+        assert (row.size_migration_state, row.size_migration_carry_key) == (
+            None,
+            None,
+        ), "a finished move leaves nothing for the job to resume"
 
 
 async def test_the_janitor_pruning_a_full_disk(machine, monkeypatch) -> None:
-    from app.modules.workspace.services.disk_janitor import keep_room
+    from app.modules.workspace.services.disk_janitor import prune
 
     client = machine["client"]
     value = await _sign_in(client)
@@ -175,7 +182,7 @@ async def test_the_janitor_pruning_a_full_disk(machine, monkeypatch) -> None:
     monkeypatch.setattr(workspace_settings, "machine_disk_prune_fraction", 0.0)
     monkeypatch.setattr(workspace_settings, "machine_disk_refuse_fraction", 1.01)
 
-    report = await keep_room(machine["id"], acting_user=machine["user"])
+    report = await prune(machine["id"], acting_user=machine["user"])
 
     assert report is not None
     assert await _login(client) == value

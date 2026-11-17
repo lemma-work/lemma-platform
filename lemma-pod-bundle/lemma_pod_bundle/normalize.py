@@ -261,7 +261,6 @@ def _normalize_agent_payload(
 
 
 _MACHINE_TEMPLATES = ("workspace", "workspace-docker")
-_MACHINE_VISIBILITIES = ("pod", "restricted")
 _MACHINE_SIZE = re.compile(r"^[1-9][0-9]*x[1-9][0-9]*$")
 
 
@@ -301,11 +300,6 @@ def _validate_machine_payload(
         issue(
             f"Machine '{resource_name}' needs a template: "
             f"{' or '.join(_MACHINE_TEMPLATES)}."
-        )
-    if payload.get("visibility") not in _MACHINE_VISIBILITIES:
-        issue(
-            f"Machine '{resource_name}' needs a visibility: "
-            f"{' or '.join(_MACHINE_VISIBILITIES)}."
         )
     size = payload.get("size")
     if size is not None and not (

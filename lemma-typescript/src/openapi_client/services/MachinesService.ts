@@ -207,7 +207,7 @@ export class MachinesService {
         });
     }
     /**
-     * Rename, resize or change who sees a pod machine
+     * Rename or resize a pod machine
      * @param podId
      * @param name
      * @param requestBody
@@ -234,7 +234,7 @@ export class MachinesService {
         });
     }
     /**
-     * Who is granted a pod machine
+     * Which agents and functions are granted a pod machine
      * @param podId
      * @param name
      * @returns MachineGrantsModel Successful Response
@@ -257,7 +257,7 @@ export class MachinesService {
         });
     }
     /**
-     * Replace who is granted a pod machine
+     * Replace which agents and functions are granted a pod machine
      * @param podId
      * @param name
      * @param requestBody

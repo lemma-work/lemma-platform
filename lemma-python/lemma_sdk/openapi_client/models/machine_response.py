@@ -35,8 +35,8 @@ class MachineResponse:
         id (UUID):
         kind (MachineResponseKind):
         name (str):
-        ref (str): How to name this machine in a call: `me`, `pod:<pod-id>/<name>` or `mine:<name>`. In a URL path use
-            `:` for the slash.
+        ref (str): How to name this machine in a call: `me`, `pod:<pod-id>:<name>` or `mine:<name>`. Use it as it is in
+            a URL path. The pod may also be named by its name, and `pod:<name>` means the pod in context.
         run_slots (int):
         size (str): `<vcpu>x<memory GB>`, e.g. `2x4`.
         status (MachineResponseStatus):

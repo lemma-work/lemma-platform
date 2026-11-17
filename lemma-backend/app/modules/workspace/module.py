@@ -15,9 +15,6 @@ def _routers():
     from app.modules.workspace.api.controllers.machine_browser_view_controller import (
         router as browser_view,
     )
-    from app.modules.workspace.api.controllers.machine_consents_controller import (
-        router as consents,
-    )
     from app.modules.workspace.api.controllers.machine_files_controller import (
         router as files,
     )
@@ -36,11 +33,13 @@ def _routers():
     from app.modules.workspace.api.controllers.port_proxy_controller import (
         router as port_proxy,
     )
+    from app.modules.workspace.api.controllers.retired_workspace_routes import (
+        router as retired,
+    )
 
-    # `consents` and `previews` before `machines`: their literal paths must be
-    # matched before `/machines/{ref}` reads them as a ref.
+    # `previews` before `machines`: its literal paths must be matched before
+    # `/machines/{ref}` reads them as a ref.
     return [
-        consents,
         previews,
         machines,
         processes,
@@ -50,6 +49,7 @@ def _routers():
         browser_view,
         preview_proxy,
         port_proxy,
+        retired,
     ]
 
 

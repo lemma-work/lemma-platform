@@ -9100,8 +9100,6 @@ var LemmaClient = (() => {
     LEMMA_COMPOSE_RESULT_MESSAGE_TYPE: () => LEMMA_COMPOSE_RESULT_MESSAGE_TYPE,
     LEMMA_THEME_EVENT: () => LEMMA_THEME_EVENT,
     LemmaClient: () => LemmaClient,
-    MACHINE_CONSENT_MESSAGE_TYPE: () => MACHINE_CONSENT_MESSAGE_TYPE,
-    MachineConsentRequiredError: () => MachineConsentRequiredError,
     POD_DEFAULT_AGENT_SELECTOR: () => POD_DEFAULT_AGENT_SELECTOR,
     applyLemmaHostTheme: () => applyLemmaHostTheme,
     buildAuthUrl: () => buildAuthUrl,
@@ -22100,21 +22098,13 @@ var LemmaClient = (() => {
   };
 
   // src/namespaces/machines.ts
-  var MACHINE_CONSENT_MESSAGE_TYPE = "lemma:machine-consent";
-  var MACHINE_CONSENT_REQUIRED = "MACHINE_CONSENT_REQUIRED";
-  var MachineConsentRequiredError = class extends ForbiddenError {
-    constructor(appId, consentUrl, source) {
-      super(403, source.message, source.code, source.details, source.rawResponse);
-      __publicField(this, "appId", appId);
-      __publicField(this, "consentUrl", consentUrl);
-      __publicField(this, "name", "MachineConsentRequiredError");
-      this.requestId = source.requestId;
-    }
-  };
-  function machinePathRef(ref) {
+  function machinePathRef(ref, podId) {
     const trimmed = ref.trim();
     if (!trimmed) throw new Error("A machine ref is required.");
-    const pathForm = trimmed.replace(/^pod:([^/:]+)\/(.+)$/, "pod:$1:$2");
+    let pathForm = trimmed.replace(/^pod:([^/:]+)\/(.+)$/, "pod:$1:$2");
+    if (podId && /^pod:[^:]+$/.test(pathForm)) {
+      pathForm = `pod:${podId}:${pathForm.slice("pod:".length)}`;
+    }
     return pathForm.split(":").map(encodeURIComponent).join(":");
   }
   var MAX_READ_BYTES = 8 * 1024 * 1024;
@@ -22127,6 +22117,11 @@ var LemmaClient = (() => {
       return match !== null && Number(match[1]) === start;
     }
     return status === 206;
+  }
+  function cutShort(status, contentRange, received) {
+    if (status !== 206 || !contentRange) return false;
+    const match = /^bytes (\d+)-\d+\/(\d+)$/.exec(contentRange.trim());
+    return match !== null && Number(match[1]) + received < Number(match[2]);
   }
   var STOPPED_STATES = /* @__PURE__ */ new Set(["succeeded", "failed", "cancelled", "timed_out"]);
   var MachineExecution = class {
@@ -22255,46 +22250,28 @@ var LemmaClient = (() => {
       __publicField(this, "files");
       __publicField(this, "previews");
       __publicField(this, "browser");
-      __publicField(this, "consents");
-      __publicField(this, "pod");
       var _a;
       this.pollWaitSeconds = (_a = options.pollWaitSeconds) != null ? _a : 20;
       this.processes = new MachineProcessesApi(this);
       this.files = new MachineFilesApi(this);
       this.previews = new MachinePreviewsApi(this);
       this.browser = new MachineBrowserApi(this);
-      this.consents = new MachineConsentsApi(this);
-      this.pod = new PodMachinesApi(this);
     }
-    /** @internal A request, with a consent refusal turned into its own error. */
-    async call(method, path, options = {}) {
-      try {
-        return await this.http.request(method, path, options);
-      } catch (error) {
-        throw this.translate(error);
+    podMachines(podId) {
+      var _a, _b;
+      const chosen = podId != null ? podId : (_b = (_a = this.options).podId) == null ? void 0 : _b.call(_a);
+      if (!chosen) {
+        throw new Error("podId is required for a pod's machines: pass it, or bind the client to a pod.");
       }
+      return `/pods/${encodeURIComponent(chosen)}/machines`;
+    }
+    /** @internal A request. */
+    call(method, path, options = {}) {
+      return this.http.request(method, path, options);
     }
     /** @internal `call`, for a response that is bytes. */
-    async bytes(path, headers) {
-      try {
-        return await this.http.requestBytesResponse("GET", path, { headers });
-      } catch (error) {
-        throw this.translate(error);
-      }
-    }
-    /** The page where a person says whether an app may use their machine. */
-    consentUrl(appId) {
-      var _a;
-      const origin = (_a = this.options.hostOrigin) != null ? _a : "";
-      return `${origin}/consent/machine?app=${encodeURIComponent(appId)}`;
-    }
-    translate(error) {
-      if (error instanceof ApiError && error.code === MACHINE_CONSENT_REQUIRED) {
-        const details = error.details;
-        const appId = typeof (details == null ? void 0 : details.app_id) === "string" ? details.app_id : "";
-        return new MachineConsentRequiredError(appId, this.consentUrl(appId), error);
-      }
-      return error;
+    bytes(path, headers) {
+      return this.http.requestBytesResponse("GET", path, { headers });
     }
     /** @internal */
     webSocketFactory() {
@@ -22366,6 +22343,75 @@ var LemmaClient = (() => {
     async exec(ref, options) {
       const process2 = await this.processes.start(ref, options);
       return new MachineExecution(this, ref, process2);
+    }
+    /**
+     * Run a command to the end and return its exit code and output -- the
+     * Python SDK's `machines.run`.
+     *
+     *     const result = await client.machines.run("me", { command: "python --version" });
+     *     console.log(result.exitCode, result.output);
+     */
+    async run(ref, options) {
+      const execution = await this.exec(ref, options);
+      const events = [];
+      let state = "";
+      let exitCode = null;
+      for await (const event of execution) {
+        if (event.type === "output") {
+          events.push(event);
+        } else {
+          state = event.state;
+          exitCode = event.exit_code;
+        }
+      }
+      const written = (keep) => events.filter((event) => keep(event.channel)).map((event) => event.data).join("");
+      return {
+        exitCode,
+        state,
+        events,
+        output: written(() => true),
+        stdout: written((channel) => channel !== "stderr"),
+        stderr: written((channel) => channel === "stderr"),
+        ok: exitCode === 0
+      };
+    }
+    // -- a pod's machines: the client's pod unless `podId` says otherwise -------
+    /** Create a machine for a pod. */
+    create(options) {
+      const body = {
+        name: options.name,
+        display_name: options.displayName,
+        template: options.template,
+        size: options.size,
+        run_slots: options.runSlots
+      };
+      return this.call("POST", this.podMachines(options.podId), { body });
+    }
+    /** Change a pod machine's display name, size or run slots. */
+    update(name, changes, options = {}) {
+      const body = {};
+      if (changes.displayName !== void 0) body.display_name = changes.displayName;
+      if (changes.size !== void 0) body.size = changes.size;
+      if (changes.runSlots !== void 0) body.run_slots = changes.runSlots;
+      return this.call("PATCH", `${this.podMachines(options.podId)}/${encodeURIComponent(name)}`, {
+        body
+      });
+    }
+    delete(name, options = {}) {
+      return this.call("DELETE", `${this.podMachines(options.podId)}/${encodeURIComponent(name)}`);
+    }
+    /** Which agents and functions may use a pod machine. */
+    grants(name, options = {}) {
+      return this.call("GET", `${this.podMachines(options.podId)}/${encodeURIComponent(name)}/grants`);
+    }
+    /** Replace which agents and functions may use a pod machine. People need
+     *  no grant: their pod role decides. */
+    setGrants(name, grants, options = {}) {
+      return this.call(
+        "PUT",
+        `${this.podMachines(options.podId)}/${encodeURIComponent(name)}/grants`,
+        { body: grants }
+      );
     }
   };
   function machinePath(ref) {
@@ -22446,13 +22492,23 @@ var LemmaClient = (() => {
      * A file, or a slice of one. `range` sends an HTTP `Range` and gets a 206
      * back, which is how a file past the server's single-read ceiling is
      * reachable at all; `readWhole` does that for you.
+     *
+     * Without a slice asked for, this is the whole file: a file past the
+     * ceiling comes back as a 206 naming its total, and the rest is read in
+     * ranges and stitched on, rather than handing back the first 8 MiB as if
+     * it were all of it.
      */
     async read(ref, path, options = {}) {
       const answer = await this.machines.bytes(
         contentPath(ref, path, options),
         options.range ? rangeHeader(options.range) : void 0
       );
-      return answer.blob;
+      const asked2 = options.range !== void 0 || options.offset !== void 0 || options.length !== void 0;
+      if (asked2 || !cutShort(answer.status, answer.contentRange, answer.blob.size)) {
+        return answer.blob;
+      }
+      const rest = await this.readFrom(ref, path, answer.blob.size, MAX_READ_BYTES);
+      return new Blob([answer.blob, rest]);
     }
     /**
      * A whole file, however big, in as many requests as that takes.
@@ -22466,14 +22522,16 @@ var LemmaClient = (() => {
      */
     async readWhole(ref, path, sizeBytes = 0, chunk = MAX_READ_BYTES) {
       const step = Math.min(Math.max(Math.floor(chunk), 1), MAX_READ_BYTES);
-      const parts = [];
-      let start = 0;
       if (sizeBytes > 0 && sizeBytes <= step) {
         const only = await this.read(ref, path);
-        if (only.size < MAX_READ_BYTES) return only;
-        parts.push(only);
-        start = only.size;
+        if (only.size !== MAX_READ_BYTES) return only;
+        return new Blob([only, await this.readFrom(ref, path, only.size, step)]);
       }
+      return this.readFrom(ref, path, 0, step);
+    }
+    /** Everything from byte `start` on, in ranges of `step`. */
+    async readFrom(ref, path, start, step) {
+      const parts = [];
       for (; ; ) {
         let part;
         let honoured;
@@ -22503,7 +22561,7 @@ var LemmaClient = (() => {
     }
     /** Write a file, replacing whatever was there. */
     write(ref, path, content) {
-      return this.machines.call("PUT", `${machinePath(ref)}/files/content`, {
+      return this.machines.call("PUT", `${machinePath(ref)}/files:content`, {
         params: { path },
         rawBody: content,
         headers: { "Content-Type": "application/octet-stream" }
@@ -22619,66 +22677,6 @@ var LemmaClient = (() => {
       );
     }
   };
-  var MachineConsentsApi = class {
-    constructor(machines) {
-      __publicField(this, "machines", machines);
-    }
-    async list() {
-      const response = await this.machines.call("GET", "/machine-consents");
-      return response.consents;
-    }
-    grant(appId) {
-      return this.machines.call("POST", "/machine-consents", { body: { app_id: appId } });
-    }
-    revoke(appId) {
-      return this.machines.call("DELETE", `/machine-consents/${encodeURIComponent(appId)}`);
-    }
-  };
-  var PodMachinesApi = class {
-    constructor(machines) {
-      __publicField(this, "machines", machines);
-    }
-    create(podId, options) {
-      const body = {
-        name: options.name,
-        display_name: options.displayName,
-        template: options.template,
-        size: options.size,
-        visibility: options.visibility,
-        run_slots: options.runSlots
-      };
-      return this.machines.call("POST", podMachinesPath(podId), { body });
-    }
-    update(podId, name, changes) {
-      const body = {};
-      if (changes.displayName !== void 0) body.display_name = changes.displayName;
-      if (changes.size !== void 0) body.size = changes.size;
-      if (changes.visibility !== void 0) body.visibility = changes.visibility;
-      if (changes.runSlots !== void 0) body.run_slots = changes.runSlots;
-      return this.machines.call("PATCH", `${podMachinesPath(podId)}/${encodeURIComponent(name)}`, {
-        body
-      });
-    }
-    delete(podId, name) {
-      return this.machines.call("DELETE", `${podMachinesPath(podId)}/${encodeURIComponent(name)}`);
-    }
-    grants(podId, name) {
-      return this.machines.call(
-        "GET",
-        `${podMachinesPath(podId)}/${encodeURIComponent(name)}/grants`
-      );
-    }
-    setGrants(podId, name, grants) {
-      return this.machines.call(
-        "PUT",
-        `${podMachinesPath(podId)}/${encodeURIComponent(name)}/grants`,
-        { body: grants }
-      );
-    }
-  };
-  function podMachinesPath(podId) {
-    return `/pods/${encodeURIComponent(podId)}/machines`;
-  }
 
   // src/namespaces/web-logins.ts
   var WebLoginsNamespace = class {
@@ -23228,13 +23226,6 @@ var LemmaClient = (() => {
   };
 
   // src/client.ts
-  function hostOriginOf(authUrl) {
-    try {
-      return new URL(authUrl).origin;
-    } catch {
-      return void 0;
-    }
-  }
   var LemmaClient = class _LemmaClient {
     constructor(overrides = {}, internalOptions = {}) {
       __publicField(this, "_config");
@@ -23319,8 +23310,8 @@ var LemmaClient = (() => {
       this.apps = new AppsNamespace(this._generated, this._http, podIdFn);
       this.widgets = new WidgetsNamespace(this._http, podIdFn);
       this.machines = new MachinesNamespace(this._http, {
-        hostOrigin: hostOriginOf(this._config.authUrl),
-        bearerToken: () => this.auth.getBearerToken()
+        bearerToken: () => this.auth.getBearerToken(),
+        podId: () => this._currentPodId
       });
       this.webLogins = new WebLoginsNamespace(this._http);
       this.connectors = new ConnectorsNamespace(this._generated, this._http, podIdFn);
@@ -23604,8 +23595,6 @@ var LemmaClient = (() => {
       ApiError,
       ConnectionRequiredError,
       isConnectionRequiredError,
-      MACHINE_CONSENT_MESSAGE_TYPE,
-      MachineConsentRequiredError,
       POD_DEFAULT_AGENT_SELECTOR,
       LEMMA_APP_THEME_MESSAGE_TYPE,
       LEMMA_THEME_EVENT,

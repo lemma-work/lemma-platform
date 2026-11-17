@@ -53,18 +53,13 @@ async def resolve_run_machine(ctx: ToolContext, machine: str | None):
 async def _named_machine(ctx: ToolContext, machine: str | None):
     """The machine a call names, or None for the person's own.
 
-    The person's own is decided without a lookup: whether the run may use it
-    was settled when its context was built (`started_in_lemma`). Any other
-    machine goes through the machine resolver.
+    The person's own is the run's workspace, as it always was: every run a
+    member owns may use it, and a run answering somebody outside the pod has
+    no WORKSPACE_CLI to get here with (``refuse_owner_workspace`` is the
+    backstop). Any other machine goes through the machine resolver.
     """
     ref = (machine or getattr(ctx, "machine", None) or "").strip()
     if ref in ("", "me", "default"):
-        if not getattr(ctx, "started_in_lemma", True):
-            from app.modules.workspace.contracts.agent_machines import (
-                ChannelRunHasNoMachine,
-            )
-
-            raise ChannelRunHasNoMachine()
         return None
     return await resolve_run_machine(ctx, ref)
 

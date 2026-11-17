@@ -31,7 +31,6 @@ TAG_MODULES = {
     "Functions": "function",
     "MCP Access": "mcp_access",
     "Machine Browser": "workspace",
-    "Machine Consents": "workspace",
     "Machine Files": "workspace",
     "Machine Logins": "web_login",
     "Machine Previews": "workspace",

@@ -74,7 +74,7 @@ def sync_detailed(
     client: AuthenticatedClient | Client,
     body: UpdatePodMachineRequest,
 ) -> Response[ErrorResponse | MachineResponse]:
-    """Rename, resize or change who sees a pod machine
+    """Rename or resize a pod machine
 
     Args:
         pod_id (UUID):
@@ -109,7 +109,7 @@ def sync(
     client: AuthenticatedClient | Client,
     body: UpdatePodMachineRequest,
 ) -> ErrorResponse | MachineResponse | None:
-    """Rename, resize or change who sees a pod machine
+    """Rename or resize a pod machine
 
     Args:
         pod_id (UUID):
@@ -139,7 +139,7 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
     body: UpdatePodMachineRequest,
 ) -> Response[ErrorResponse | MachineResponse]:
-    """Rename, resize or change who sees a pod machine
+    """Rename or resize a pod machine
 
     Args:
         pod_id (UUID):
@@ -172,7 +172,7 @@ async def asyncio(
     client: AuthenticatedClient | Client,
     body: UpdatePodMachineRequest,
 ) -> ErrorResponse | MachineResponse | None:
-    """Rename, resize or change who sees a pod machine
+    """Rename or resize a pod machine
 
     Args:
         pod_id (UUID):

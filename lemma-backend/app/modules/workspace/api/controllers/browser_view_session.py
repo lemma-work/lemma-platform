@@ -15,7 +15,9 @@ it calls, the second of which survives exactly the rename it should catch.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from fastapi import WebSocket
@@ -24,7 +26,12 @@ from supertokens_python.recipe.session.asyncio import (
     get_session_without_request_response,
 )
 
+from app.core.authorization.delegation import DelegationClaims
+from app.core.authorization.function_run import is_function_run_token
 from app.core.log.log import get_logger
+
+if TYPE_CHECKING:
+    from app.core.security import PrincipalLookups
 
 logger = get_logger(__name__)
 
@@ -53,6 +60,10 @@ async def resolve_user_id(websocket: WebSocket) -> str:
         )
     if not token:
         raise PermissionError("the browser view needs a session")
+    if is_function_run_token(token):
+        # A person-less run reaches its pod's data, never a person's terminal
+        # or browser.
+        raise PermissionError("a function run may not open a machine socket")
     session = await get_session_without_request_response(
         token, anti_csrf_check=False, session_required=True
     )
@@ -61,7 +72,51 @@ async def resolve_user_id(websocket: WebSocket) -> str:
         # None, but the signature says otherwise and this is the one place a
         # wrong answer would be an unauthenticated socket that got accepted.
         raise PermissionError("the session could not be read")
-    return session.get_user_id()
+    user_id = session.get_user_id()
+    await remember_principal(websocket, user_id, session.get_access_token_payload())
+    return user_id
+
+
+@dataclass(frozen=True, slots=True)
+class SocketPrincipal:
+    """Who a socket's session acts as: the person, or a workload for them.
+
+    Kept on ``websocket.state`` by :func:`resolve_user_id` because sockets are
+    exempt from ``verify_auth``. A delegated token's claims went unread here
+    once, so a schedule's agent token opened its person's ttys as the person.
+    """
+
+    user_id: UUID
+    delegation_claims: DelegationClaims | None
+
+
+async def remember_principal(
+    websocket: WebSocket,
+    user_id: str,
+    payload: Mapping[str, object] | None,
+    *,
+    lookups: PrincipalLookups | None = None,
+) -> None:
+    """Resolve the token's delegation exactly as HTTP does, or refuse it."""
+    from app.core.security import PrincipalRefused, resolve_delegated_principal
+
+    parsed = UUID(user_id)
+    try:
+        claims = await resolve_delegated_principal(
+            payload or {}, user_id=parsed, lookups=lookups
+        )
+    except PrincipalRefused as refused:
+        raise PermissionError(refused.code) from refused
+    websocket.state.socket_principal = SocketPrincipal(parsed, claims)
+
+
+def socket_principal(websocket: WebSocket, user_id: UUID) -> SocketPrincipal | None:
+    """The principal :func:`resolve_user_id` resolved for this socket, when it
+    is the one ``user_id`` names; None otherwise, which callers refuse."""
+    found = getattr(websocket.state, "socket_principal", None)
+    if isinstance(found, SocketPrincipal) and found.user_id == user_id:
+        return found
+    return None
 
 
 async def session_user_id(
@@ -107,9 +162,12 @@ def user_id_resolver() -> UserIdResolver:
 
 
 __all__ = [
+    "SocketPrincipal",
     "VIEWER_PATTERN",
     "UserIdResolver",
+    "remember_principal",
     "resolve_user_id",
+    "socket_principal",
     "session_user_id",
     "user_id_resolver",
     "viewer_name",

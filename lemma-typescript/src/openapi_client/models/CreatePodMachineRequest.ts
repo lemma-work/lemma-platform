@@ -11,15 +11,10 @@ export type CreatePodMachineRequest = {
      */
     size?: (string | null);
     template?: CreatePodMachineRequest.template;
-    visibility?: CreatePodMachineRequest.visibility;
 };
 export namespace CreatePodMachineRequest {
     export enum template {
         WORKSPACE = 'workspace',
         WORKSPACE_DOCKER = 'workspace-docker',
-    }
-    export enum visibility {
-        POD = 'pod',
-        RESTRICTED = 'restricted',
     }
 }

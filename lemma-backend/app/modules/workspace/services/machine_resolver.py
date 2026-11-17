@@ -2,12 +2,14 @@
 
 Every caller -- a `/machines` route, an agent tool, a function's SDK call --
 names a machine by ref and says what it wants to do with it. This finds the
-row, decides with the matrix in `domain/machine_access.py`, and either hands
-the machine back or raises a refusal a person can act on. Nothing else turns
-a ref into a sandbox id, so nothing else can get the rule wrong.
+row and decides: a pod machine through the core authorizer, like every other
+pod resource; a person's own machine and a connected one by the pure rules in
+`domain/machine_access.py`. It either hands the machine back or raises a
+refusal a person can act on. Nothing else turns a ref into a sandbox id, so
+nothing else can get the rule wrong.
 
 A machine the caller may not see is reported exactly as one that does not
-exist: the name of a RESTRICTED machine is itself something kept from them.
+exist: its name is itself something kept from those it is kept from.
 """
 
 from __future__ import annotations
@@ -20,21 +22,23 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.workspace.domain.machine import (
     DEFAULT_MACHINE_SIZE,
     Machine,
+    MachineKind,
     MachineRef,
     MachineRefKind,
     MachineSize,
 )
 from app.modules.workspace.domain.machine_access import (
-    AccessDecision,
-    DenialReason,
+    CallerKind,
     MachineAccess,
     MachineCaller,
-    MachineFacts,
-    decide,
+    PodAccess,
+    connected_machine_access,
+    default_machine_access,
+    is_shared,
+    pod_machine_access,
 )
 from app.modules.workspace.domain.machine_errors import (
     MachineAccessDenied,
-    MachineConsentRequired,
     MachineNotFound,
 )
 from app.modules.workspace.infrastructure.machine_facts import DatabaseMachineFacts
@@ -48,7 +52,15 @@ _VERBS = {
 
 
 class FactsSource(Protocol):
-    async def gather(self, caller: MachineCaller, machine: Machine) -> MachineFacts: ...
+    """What a decision reads beyond the caller and the row."""
+
+    async def answers_member(self, caller: MachineCaller) -> bool: ...
+
+    async def pod_access(
+        self, caller: MachineCaller, machine: Machine
+    ) -> PodAccess: ...
+
+    async def pods_named(self, caller: MachineCaller, name: str) -> list[UUID]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,12 +99,29 @@ class MachineResolver:
         machine = await self._find(parsed, caller)
         if machine is None:
             raise MachineNotFound(str(parsed))
-        decision = await self.decide(caller, machine)
-        _require(decision, need, parsed, caller)
-        return ResolvedMachine(machine=machine, access=decision.access)
+        access = await self.decide(caller, machine)
+        _require(access, need, parsed)
+        return ResolvedMachine(machine=machine, access=access)
 
-    async def decide(self, caller: MachineCaller, machine: Machine) -> AccessDecision:
-        return decide(caller, machine, await self._facts.gather(caller, machine))
+    async def decide(self, caller: MachineCaller, machine: Machine) -> MachineAccess:
+        if machine.kind is MachineKind.DEFAULT:
+            return default_machine_access(
+                caller,
+                machine,
+                answers_member=caller.kind is CallerKind.AGENT
+                and caller.user_id == machine.owner_id
+                and await self._facts.answers_member(caller),
+            )
+        if machine.kind is MachineKind.POD:
+            return pod_machine_access(
+                caller, machine, await self._facts.pod_access(caller, machine)
+            )
+        pod = (
+            await self._facts.pod_access(caller, machine)
+            if is_shared(machine) and caller.user_id != machine.owner_id
+            else PodAccess()
+        )
+        return connected_machine_access(caller, machine, pod)
 
     async def visible(
         self, caller: MachineCaller, *, pod_ids: list[UUID]
@@ -108,9 +137,9 @@ class MachineResolver:
             candidates.extend(await self._repository.list_for_pod(pod_id))
         visible: list[ResolvedMachine] = []
         for machine in candidates:
-            decision = await self.decide(caller, machine)
-            if decision.access > MachineAccess.NONE:
-                visible.append(ResolvedMachine(machine, decision.access))
+            access = await self.decide(caller, machine)
+            if access > MachineAccess.NONE:
+                visible.append(ResolvedMachine(machine, access))
         return visible
 
     async def _find(self, ref: MachineRef, caller: MachineCaller) -> Machine | None:
@@ -132,21 +161,32 @@ class MachineResolver:
         return None
 
     async def _pod_of(self, ref: MachineRef, caller: MachineCaller) -> UUID | None:
-        """``pod:<name>`` is the caller's own pod; ``pod:<pod>/<name>`` takes a
-        pod id, or the name of the caller's pod."""
+        """``pod:<name>`` is the caller's own pod; ``pod:<pod>:<name>`` takes a
+        pod id, or the name of a pod the caller is in.
+
+        A name two of the caller's pods share is not guessed between -- unless
+        one is the pod the call is made in -- and is refused as not found, with
+        the way out: the id.
+        """
         if ref.pod is None:
             return caller.pod_id
         try:
             return UUID(ref.pod)
         except ValueError:
             pass
-        if caller.pod_id is None:
-            return None
-        from app.modules.pod.contracts.members import pod_name
-
-        name = await pod_name(self._uow.session, caller.pod_id)
-        if name is not None and name.strip().lower() == ref.pod.strip().lower():
+        named = await self._facts.pods_named(caller, ref.pod)
+        if len(named) == 1:
+            return named[0]
+        if caller.pod_id is not None and caller.pod_id in named:
             return caller.pod_id
+        if named:
+            raise MachineNotFound(
+                str(ref),
+                hint=(
+                    f"More than one of your pods is called '{ref.pod}'; name "
+                    f"the pod by its id: pod:<pod-id>:{ref.name}."
+                ),
+            )
         return None
 
     async def _default_for(self, user_id: UUID) -> Machine:
@@ -171,17 +211,10 @@ def _parse(ref: str) -> MachineRef:
         raise MachineNotFound(ref) from None
 
 
-def _require(
-    decision: AccessDecision,
-    need: MachineAccess,
-    ref: MachineRef,
-    caller: MachineCaller,
-) -> None:
-    if decision.access >= need:
+def _require(access: MachineAccess, need: MachineAccess, ref: MachineRef) -> None:
+    if access >= need:
         return
-    if decision.reason is DenialReason.CONSENT_REQUIRED:
-        raise MachineConsentRequired(str(caller.app_id), caller.app_name)
-    if decision.access is MachineAccess.NONE:
+    if access is MachineAccess.NONE:
         raise MachineNotFound(str(ref))
     raise MachineAccessDenied(str(ref), _VERBS[need])
 

@@ -1,19 +1,34 @@
 from http import HTTPStatus
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
-from ...models.consent_list_response import ConsentListResponse
-from ...types import Response
+from ...models.error_response import ErrorResponse
+from ...models.machine_file_entry import MachineFileEntry
+from ...types import UNSET, Response
 
 
-def _get_kwargs() -> dict[str, Any]:
+def _get_kwargs(
+    ref: str,
+    *,
+    path: str,
+) -> dict[str, Any]:
+
+    params: dict[str, Any] = {}
+
+    params["path"] = path
+
+    params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
     _kwargs: dict[str, Any] = {
-        "method": "get",
-        "url": "/machine-consents",
+        "method": "put",
+        "url": "/machines/{ref}/files/content".format(
+            ref=quote(str(ref), safe=""),
+        ),
+        "params": params,
     }
 
     return _kwargs
@@ -21,11 +36,16 @@ def _get_kwargs() -> dict[str, Any]:
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> ConsentListResponse | None:
+) -> ErrorResponse | MachineFileEntry | None:
     if response.status_code == 200:
-        response_200 = ConsentListResponse.from_dict(response.json())
+        response_200 = MachineFileEntry.from_dict(response.json())
 
         return response_200
+
+    if response.status_code == 422:
+        response_422 = ErrorResponse.from_dict(response.json())
+
+        return response_422
 
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
@@ -35,7 +55,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[ConsentListResponse]:
+) -> Response[ErrorResponse | MachineFileEntry]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -45,20 +65,30 @@ def _build_response(
 
 
 def sync_detailed(
+    ref: str,
     *,
     client: AuthenticatedClient | Client,
-) -> Response[ConsentListResponse]:
-    """Apps you let run code on your machine
+    path: str,
+) -> Response[ErrorResponse | MachineFileEntry]:
+    """Write a file on a machine (deprecated: use PUT files:content)
+
+    Args:
+        ref (str): Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in
+            context), `mine:<name>`, or its id.
+        path (str):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ConsentListResponse]
+        Response[ErrorResponse | MachineFileEntry]
     """
 
-    kwargs = _get_kwargs()
+    kwargs = _get_kwargs(
+        ref=ref,
+        path=path,
+    )
 
     response = client.get_httpx_client().request(
         **kwargs,
@@ -68,39 +98,58 @@ def sync_detailed(
 
 
 def sync(
+    ref: str,
     *,
     client: AuthenticatedClient | Client,
-) -> ConsentListResponse | None:
-    """Apps you let run code on your machine
+    path: str,
+) -> ErrorResponse | MachineFileEntry | None:
+    """Write a file on a machine (deprecated: use PUT files:content)
+
+    Args:
+        ref (str): Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in
+            context), `mine:<name>`, or its id.
+        path (str):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ConsentListResponse
+        ErrorResponse | MachineFileEntry
     """
 
     return sync_detailed(
+        ref=ref,
         client=client,
+        path=path,
     ).parsed
 
 
 async def asyncio_detailed(
+    ref: str,
     *,
     client: AuthenticatedClient | Client,
-) -> Response[ConsentListResponse]:
-    """Apps you let run code on your machine
+    path: str,
+) -> Response[ErrorResponse | MachineFileEntry]:
+    """Write a file on a machine (deprecated: use PUT files:content)
+
+    Args:
+        ref (str): Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in
+            context), `mine:<name>`, or its id.
+        path (str):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ConsentListResponse]
+        Response[ErrorResponse | MachineFileEntry]
     """
 
-    kwargs = _get_kwargs()
+    kwargs = _get_kwargs(
+        ref=ref,
+        path=path,
+    )
 
     response = await client.get_async_httpx_client().request(**kwargs)
 
@@ -108,21 +157,30 @@ async def asyncio_detailed(
 
 
 async def asyncio(
+    ref: str,
     *,
     client: AuthenticatedClient | Client,
-) -> ConsentListResponse | None:
-    """Apps you let run code on your machine
+    path: str,
+) -> ErrorResponse | MachineFileEntry | None:
+    """Write a file on a machine (deprecated: use PUT files:content)
+
+    Args:
+        ref (str): Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in
+            context), `mine:<name>`, or its id.
+        path (str):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ConsentListResponse
+        ErrorResponse | MachineFileEntry
     """
 
     return (
         await asyncio_detailed(
+            ref=ref,
             client=client,
+            path=path,
         )
     ).parsed

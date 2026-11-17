@@ -12,7 +12,7 @@ from app.modules.workspace.domain.machine import Machine
 from app.modules.workspace.domain.machine_access import MachineAccess
 
 MachineKindName = Literal["default", "pod", "connected"]
-MachineVisibilityName = Literal["private", "pod", "restricted"]
+MachineVisibilityName = Literal["private", "pod"]
 MachineStatusName = Literal[
     "running", "starting", "stopped", "offline", "error", "deleted"
 ]
@@ -34,8 +34,9 @@ class MachineResponse(BaseModel):
     id: UUID
     ref: str = Field(
         description=(
-            "How to name this machine in a call: `me`, `pod:<pod-id>/<name>` "
-            "or `mine:<name>`. In a URL path use `:` for the slash."
+            "How to name this machine in a call: `me`, `pod:<pod-id>:<name>` "
+            "or `mine:<name>`. Use it as it is in a URL path. The pod may also "
+            "be named by its name, and `pod:<name>` means the pod in context."
         )
     )
     kind: MachineKindName
@@ -168,24 +169,21 @@ class CreatePodMachineRequest(BaseModel):
     size: str | None = Field(
         default=None, description="Defaults to the plan's default size."
     )
-    visibility: Literal["pod", "restricted"] = "pod"
     run_slots: int = Field(default=1, ge=1, le=16)
 
 
 class UpdatePodMachineRequest(BaseModel):
     display_name: str | None = Field(default=None, max_length=255)
     size: str | None = None
-    visibility: Literal["pod", "restricted"] | None = None
     run_slots: int | None = Field(default=None, ge=1, le=16)
 
 
 class MachineGrantsModel(BaseModel):
-    """Who may use a pod machine beyond what visibility already allows.
+    """Which agents and functions may use a pod machine, by name.
 
-    Agents and functions by name; people by user id. A RESTRICTED machine is
-    usable only by those named here (and pod admins).
+    A workload uses a pod machine only with this grant, and then only as far
+    as the person it acts for may. People need none: their pod role decides.
     """
 
     agents: list[str] = Field(default_factory=list)
     functions: list[str] = Field(default_factory=list)
-    members: list[UUID] = Field(default_factory=list)

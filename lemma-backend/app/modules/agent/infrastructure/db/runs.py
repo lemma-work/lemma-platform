@@ -25,6 +25,7 @@ from app.modules.agent.domain.entities import (
     MessageRole,
 )
 from app.modules.agent.domain.run_kind import RunKind
+from app.modules.agent.domain.app_turns import SENT_FROM_APP_KEY
 from app.modules.agent.domain.run_places import ASKED_IN_PLACE_KEY, place_source
 from app.modules.agent.domain.run_state import RunFailure, RunState
 from app.modules.agent.domain.value_objects import (
@@ -304,6 +305,19 @@ class Runs(UnitOfWorkRepository):
                 run_metadata=func.coalesce(
                     AgentRunModel.run_metadata, text("'{}'::jsonb")
                 ).op("||")(func.jsonb_build_object("tool_profile", profile))
+            )
+        )
+
+    async def record_sent_from_app(self, agent_run_id: UUID, app_id: UUID) -> None:
+        """The pod app whose page sent a turn into this run, beside its
+        metadata (``services/app_started_runs``)."""
+        await self.session.execute(
+            update(AgentRunModel)
+            .where(AgentRunModel.id == agent_run_id)
+            .values(
+                run_metadata=func.coalesce(
+                    AgentRunModel.run_metadata, text("'{}'::jsonb")
+                ).op("||")(func.jsonb_build_object(SENT_FROM_APP_KEY, str(app_id)))
             )
         )
 

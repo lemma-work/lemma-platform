@@ -178,8 +178,6 @@ _NAME_TO_MODULE = {
     'ConnectorResponseSchema': 'connector_response_schema',
     'ConnectorSkillResponse': 'connector_skill_response',
     'ConnectorStatusResponse': 'connector_status_response',
-    'ConsentListResponse': 'consent_list_response',
-    'ConsentResponse': 'consent_response',
     'ContactAnswer': 'contact_answer',
     'ContactExportResponse': 'contact_export_response',
     'ContactIdentityResponse': 'contact_identity_response',
@@ -218,7 +216,6 @@ _NAME_TO_MODULE = {
     'CreateOpenAICompatibleRuntimeProfileRequestModelSettings': 'create_open_ai_compatible_runtime_profile_request_model_settings',
     'CreatePodMachineRequest': 'create_pod_machine_request',
     'CreatePodMachineRequestTemplate': 'create_pod_machine_request_template',
-    'CreatePodMachineRequestVisibility': 'create_pod_machine_request_visibility',
     'CreatePreviewRequest': 'create_preview_request',
     'CreatePreviewRequestVisibility': 'create_preview_request_visibility',
     'CreateRecordRequest': 'create_record_request',
@@ -350,7 +347,6 @@ _NAME_TO_MODULE = {
     'FunctionSummaryResponse': 'function_summary_response',
     'FunctionType': 'function_type',
     'GenerationSettings': 'generation_settings',
-    'GrantConsentRequest': 'grant_consent_request',
     'GranteeRef': 'grantee_ref',
     'GranteeRefGranteeType': 'grantee_ref_grantee_type',
     'GroupPublicResponse': 'group_public_response',
@@ -784,7 +780,6 @@ _NAME_TO_MODULE = {
     'UpdateOpenAICompatibleRuntimeProfileRequest': 'update_open_ai_compatible_runtime_profile_request',
     'UpdateOpenAICompatibleRuntimeProfileRequestModelSettingsType0': 'update_open_ai_compatible_runtime_profile_request_model_settings_type_0',
     'UpdatePodMachineRequest': 'update_pod_machine_request',
-    'UpdatePodMachineRequestVisibilityType0': 'update_pod_machine_request_visibility_type_0',
     'UpdateRecordRequest': 'update_record_request',
     'UpdateRecordRequestData': 'update_record_request_data',
     'UpdateScheduleRequest': 'update_schedule_request',
@@ -1031,8 +1026,6 @@ if TYPE_CHECKING:
     from .connector_response_schema import ConnectorResponseSchema
     from .connector_skill_response import ConnectorSkillResponse
     from .connector_status_response import ConnectorStatusResponse
-    from .consent_list_response import ConsentListResponse
-    from .consent_response import ConsentResponse
     from .contact_answer import ContactAnswer
     from .contact_export_response import ContactExportResponse
     from .contact_identity_response import ContactIdentityResponse
@@ -1071,7 +1064,6 @@ if TYPE_CHECKING:
     from .create_open_ai_compatible_runtime_profile_request_model_settings import CreateOpenAICompatibleRuntimeProfileRequestModelSettings
     from .create_pod_machine_request import CreatePodMachineRequest
     from .create_pod_machine_request_template import CreatePodMachineRequestTemplate
-    from .create_pod_machine_request_visibility import CreatePodMachineRequestVisibility
     from .create_preview_request import CreatePreviewRequest
     from .create_preview_request_visibility import CreatePreviewRequestVisibility
     from .create_record_request import CreateRecordRequest
@@ -1203,7 +1195,6 @@ if TYPE_CHECKING:
     from .function_summary_response import FunctionSummaryResponse
     from .function_type import FunctionType
     from .generation_settings import GenerationSettings
-    from .grant_consent_request import GrantConsentRequest
     from .grantee_ref import GranteeRef
     from .grantee_ref_grantee_type import GranteeRefGranteeType
     from .group_public_response import GroupPublicResponse
@@ -1637,7 +1628,6 @@ if TYPE_CHECKING:
     from .update_open_ai_compatible_runtime_profile_request import UpdateOpenAICompatibleRuntimeProfileRequest
     from .update_open_ai_compatible_runtime_profile_request_model_settings_type_0 import UpdateOpenAICompatibleRuntimeProfileRequestModelSettingsType0
     from .update_pod_machine_request import UpdatePodMachineRequest
-    from .update_pod_machine_request_visibility_type_0 import UpdatePodMachineRequestVisibilityType0
     from .update_record_request import UpdateRecordRequest
     from .update_record_request_data import UpdateRecordRequestData
     from .update_schedule_request import UpdateScheduleRequest
@@ -1897,8 +1887,6 @@ __all__ = [
     'ConnectorResponseSchema',
     'ConnectorSkillResponse',
     'ConnectorStatusResponse',
-    'ConsentListResponse',
-    'ConsentResponse',
     'ContactAnswer',
     'ContactExportResponse',
     'ContactIdentityResponse',
@@ -1937,7 +1925,6 @@ __all__ = [
     'CreateOpenAICompatibleRuntimeProfileRequestModelSettings',
     'CreatePodMachineRequest',
     'CreatePodMachineRequestTemplate',
-    'CreatePodMachineRequestVisibility',
     'CreatePreviewRequest',
     'CreatePreviewRequestVisibility',
     'CreateRecordRequest',
@@ -2069,7 +2056,6 @@ __all__ = [
     'FunctionSummaryResponse',
     'FunctionType',
     'GenerationSettings',
-    'GrantConsentRequest',
     'GranteeRef',
     'GranteeRefGranteeType',
     'GroupPublicResponse',
@@ -2503,7 +2489,6 @@ __all__ = [
     'UpdateOpenAICompatibleRuntimeProfileRequest',
     'UpdateOpenAICompatibleRuntimeProfileRequestModelSettingsType0',
     'UpdatePodMachineRequest',
-    'UpdatePodMachineRequestVisibilityType0',
     'UpdateRecordRequest',
     'UpdateRecordRequestData',
     'UpdateScheduleRequest',

@@ -3,13 +3,12 @@
 /* tslint:disable */
 /* eslint-disable */
 /**
- * Who may use a pod machine beyond what visibility already allows.
+ * Which agents and functions may use a pod machine, by name.
  *
- * Agents and functions by name; people by user id. A RESTRICTED machine is
- * usable only by those named here (and pod admins).
+ * A workload uses a pod machine only with this grant, and then only as far
+ * as the person it acts for may. People need none: their pod role decides.
  */
 export type MachineGrantsModel = {
     agents?: Array<string>;
     functions?: Array<string>;
-    members?: Array<string>;
 };
