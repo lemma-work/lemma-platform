@@ -54,6 +54,7 @@ from .filesystem_manager import (
     FileConflictError,
     FilesystemManager,
     FileTooLargeError,
+    ProtectedPathError,
 )
 from . import port_relay
 from .browser_guard import shed_browser_if_starved
@@ -200,6 +201,14 @@ def create_app(
     @app.exception_handler(ValueError)
     async def value_error_handler(_request: Request, error: ValueError) -> JSONResponse:
         return JSONResponse(status_code=422, content={"detail": str(error)})
+
+    @app.exception_handler(ProtectedPathError)
+    async def protected_path_handler(
+        _request: Request, error: ProtectedPathError
+    ) -> JSONResponse:
+        # 423, not 403: the API's client reads 401 and 403 as its own runtime
+        # credential being refused. Not 422, which reads as a file too large.
+        return JSONResponse(status_code=423, content={"detail": str(error)})
 
     @app.exception_handler(FileNotFoundError)
     async def not_found_handler(

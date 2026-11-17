@@ -211,9 +211,13 @@ class FakeE2B:
                 cwd=None,
                 on_stdout=None,
                 on_stderr=None,
+                stdin=None,
                 timeout=None,
-                **_kwargs,
+                request_timeout=None,
             ):
+                # The SDK's `Commands.run`, keyword for keyword. Taking
+                # `**kwargs` here let a release pass `api_key` through every
+                # test and raise on real E2B.
                 if not world.agent_answers:
                     raise FakeE2BError("the sandbox agent is not answering")
                 world.commands.append(cmd)

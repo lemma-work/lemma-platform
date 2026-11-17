@@ -371,21 +371,39 @@ class MachineProcesses:
             killed.append(view.record.process_id)
         return killed
 
-    async def _alive(self, machine_id: UUID) -> set[str]:
-        from sandbox_runtime.protocol import WorkloadKind
+    async def _alive(self, machine_id: UUID) -> tuple[set[str], set[str]]:
+        """``(running, ended_by_itself)`` among the machine's processes.
 
-        return {
-            str(ref.operation_id)
-            for ref in await self._client().list_processes(
-                WorkloadKind.WORKSPACE, machine_id
-            )
-            if not has_stopped(ref)
-        }
+        Only a process the machine reports running counts as alive. After a
+        pause E2B still lists the processes it lost, as ``unknown``, and
+        reading that as alive left every service down after a resume (found
+        by QA on a real E2B machine). One that exited on its own -- failed or
+        done -- was not ended by the pause and is not started again: a
+        service that fails at start would otherwise fail on every resume.
+        """
+        from sandbox_runtime.protocol import ProcessState, WorkloadKind
+
+        running: set[str] = set()
+        ended: set[str] = set()
+        for ref in await self._client().list_processes(
+            WorkloadKind.WORKSPACE, machine_id
+        ):
+            if has_stopped(ref):
+                ended.add(str(ref.operation_id))
+            elif str(ref.state) in (ProcessState.RUNNING, ProcessState.STARTING):
+                running.add(str(ref.operation_id))
+        return running, ended
+
+    @staticmethod
+    def _wants_restart(definition, running: set[str], ended: set[str]) -> bool:
+        return definition.restart_on_resume and not (
+            definition.process_id in running or definition.process_id in ended
+        )
 
     async def services_to_restart(self, machine_id: UUID) -> list[ProcessRecord]:
         """Services whose process did not survive the machine pausing, from
         their durable definitions -- whatever Redis has forgotten."""
-        alive = await self._alive(machine_id)
+        running, ended = await self._alive(machine_id)
         return [
             ProcessRecord(
                 process_id=definition.process_id or "",
@@ -399,7 +417,7 @@ class MachineProcesses:
                 restart_on_resume=True,
             )
             for definition in await self.services.running(machine_id)
-            if definition.restart_on_resume and definition.process_id not in alive
+            if self._wants_restart(definition, running, ended)
         ]
 
     async def restart_services(
@@ -411,10 +429,10 @@ class MachineProcesses:
         """Start again every service the last pause ended, under its own name,
         with a token minted afresh for the claims the first start used. A
         service whose claims were never recorded starts with none."""
-        alive = await self._alive(machine_id)
+        running, ended = await self._alive(machine_id)
         restarted: list[ProcessRecord] = []
         for definition in await self.services.running(machine_id):
-            if not definition.restart_on_resume or definition.process_id in alive:
+            if not self._wants_restart(definition, running, ended):
                 continue
             if definition.process_id:
                 await self._registry.drop(machine_id, [definition.process_id])

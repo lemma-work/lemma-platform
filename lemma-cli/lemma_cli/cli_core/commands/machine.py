@@ -83,14 +83,18 @@ def list_machines(
         None, "--pod", help="Only this pod's machines (id or name)."
     ),
 ) -> None:
-    """List the machines you can use."""
+    """List the machines you can use: your own, and the selected pod's."""
     state = state_from_ctx(ctx)
 
     def call(client: Lemma, cli_state: CliState) -> object:
-        if pod is None:
-            return client.machines.list()
+        from ..context import selected_pod
         from .pods import resolve_pod_id
 
+        # The pod the command is bound to (`--pod`, LEMMA_POD_ID, or the stored
+        # default) when this command's own --pod is not given: without it the
+        # list was only ever the person's own machine.
+        if pod is None and selected_pod(cli_state, required=False) is None:
+            return client.machines.list()
         return client.machines.list(pod_id=resolve_pod_id(client, cli_state, pod))
 
     result = run_with_client(ctx, call)

@@ -238,7 +238,22 @@ class TestClosingTheBrowserBeforeAPause:
             self.calls: list[tuple[str, object]] = []
             self._raises = raises
 
-        async def run(self, command: str, *, timeout=None, **api):
+        # The SDK's own signature, keyword for keyword: a fake that took
+        # `**api` let a call passing `api_key` pass here and raise on E2B.
+        async def run(
+            self,
+            cmd: str,
+            background=None,
+            envs=None,
+            user=None,
+            cwd=None,
+            on_stdout=None,
+            on_stderr=None,
+            stdin=None,
+            timeout=60,
+            request_timeout=None,
+        ):
+            command = cmd
             self.calls.append((command, timeout))
             if self._raises is not None:
                 raise self._raises
