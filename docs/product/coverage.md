@@ -13,10 +13,10 @@ only a promise marked `covered` with no test is.
 | --- | ---: |
 | `covered` | 180 |
 | `gap` | 4 |
-| `manual` | 35 |
+| `manual` | 37 |
 | `planned` | 36 |
 | `withdrawn` | 2 |
-| **total** | **257** |
+| **total** | **259** |
 
 Scenario tests declaring a promise: 461.
 
@@ -176,6 +176,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-006` Authentication resumes the person's requested destination | `manual` | — |
 | `PS-ONB-007` A new person confirms their name and can prove their phone before they start | `manual` | — |
 | `PS-ONB-008` A person is asked what they do once, and the answer stays with them | `covered` | `test_what_a_person_does_stays_with_them` |
+| `PS-ONB-009` Every way in looks the same and says what a Lemma is | `manual` | — |
 | `PS-ONB-010` The person who creates an organization owns it | `covered` | `test_creator_of_an_organization_owns_it`, `test_a_person_can_own_several_organizations` |
 | `PS-ONB-011` An organization has a handle that survives being renamed | `covered` | `test_renaming_an_organization_keeps_its_handle`, `test_handle_availability_is_checkable` |
 | `PS-ONB-014` Two organizations may share a display name | `covered` | `test_two_organizations_may_share_a_display_name` |
@@ -187,6 +188,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-022` An invitation stops working when it should | `covered` | `test_a_revoked_invitation_is_dead`, `test_an_invitation_is_single_use` |
 | `PS-ONB-023` Inviting someone already inside is refused clearly | `covered` | `test_inviting_an_existing_member_is_refused` |
 | `PS-ONB-024` A person can see the invitations waiting for them | `covered` | `test_an_unproven_address_is_not_shown_its_invitations`, `test_an_owner_sees_sent_invitations` |
+| `PS-ONB-025` An invited person sees the Lemmas they can join | `manual` | — |
 | `PS-ONB-030` A person is offered the organizations they could join | `covered` | `test_suggestions_are_empty_without_a_matching_domain` |
 | `PS-ONB-031` A person joins an organization that is open to them | `covered` | `test_invite_only_refuses_self_join`, `test_an_open_organization_admits_anyone_as_a_member`, `test_joining_again_changes_nothing` |
 | `PS-ONB-032` Colleagues from one work domain land in one organization | `planned` | — |

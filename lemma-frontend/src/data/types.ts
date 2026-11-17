@@ -92,6 +92,34 @@ export interface NewOrg {
     derived?: boolean;
 }
 
+/** What the way in asks of the server's first-workspace rule. */
+export interface FirstWorkspaceWanted {
+    /** Start their own organization even though their company's is open to
+     *  them. It is then theirs alone, named after them. */
+    ownOrganization?: boolean;
+    /** False makes it theirs alone whatever their address says: on a local
+     *  install nobody else can reach the server yet. */
+    team?: boolean;
+}
+
+/** Where somebody's first organization left them. */
+export interface FirstWorkspace {
+    orgId: string;
+    orgName: string;
+    /** How they came in: invited, let in by their email domain, a new
+     *  organization, or one they were already in. */
+    entry: "existing" | "surface_join" | "invitation" | "domain_join" | "new_org";
+    orgCreated: boolean;
+    /** The Lemma to land in: the one they were invited to, else the one
+     *  everyone in the organization shares. */
+    podId: string | null;
+    podName: string | null;
+    /** The Lemma everyone in the organization shares, when it has one. */
+    orgPodId: string | null;
+    /** The email domain whose people may join the organization themselves. */
+    openToDomain: string | null;
+}
+
 /** A channel this pod answers on. `mine` is whether the pod's own
  *  responder is the one behind it — a pod can carry surfaces bound to other
  *  agents, and saying "Lem is on Slack" when it is not would be a lie. */
@@ -208,6 +236,9 @@ export interface Pod {
     hiredAt?: string;
     /** Who hired it, as the account id (`user_id` on the pod). */
     hiredBy?: string;
+    /** Everyone in the organization is in it, and everyone who joins later:
+     *  the organization's own Lemma. */
+    everyone?: boolean;
 }
 
 /** Another teammate this one can ask. Through you: you are in both, so it asks
@@ -746,10 +777,12 @@ export interface PodSource {
     /** Whether Lemma's own Slack app is set up on this server, so "Add to
      *  Slack" can work. Asked before anybody is given an organization for it. */
     slackInstallAvailable(): Promise<boolean>;
-    /** An organization and first teammate for somebody who has none -- the
-     *  server's own first-workspace provisioning (invitations honoured, a
-     *  company domain joined). Returns the organization. */
-    ensureFirstWorkspace(): Promise<{ orgId: string }>;
+    /** Somebody's first organization and the Lemma they land in, by the
+     *  server's one rule for every way in: invitations accepted, then their
+     *  company's organization if it is open to their email domain, else a new
+     *  one with a Lemma everyone in it shares. Idempotent: asked again, it
+     *  answers with what is already there. */
+    ensureFirstWorkspace(wanted?: FirstWorkspaceWanted): Promise<FirstWorkspace>;
     /** Slack's consent page for Lemma's own app, for "Add to Slack" into
      *  this organization. */
     startSlackInstall(orgId: string): Promise<string>;

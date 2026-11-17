@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { ConversationRef, Org, Pod } from "@/data";
+import type { ConversationRef, Invitation, Org, Pod } from "@/data";
 import { sinceShort, type Channel } from "@/channels/model";
 import { useMe } from "@/session/use-me";
 import { chatItems, chatView, inSidebar, rowOfChat, type Ask, type Go, type QueueItem } from "./model";
@@ -29,7 +29,7 @@ function greeting(now: number): string {
  *  chats to pick up again, across every Lemma -- the sidebar folds each
  *  Lemma to its name, so this is where the latest of them are. A failed
  *  read of what waits says so, rather than greeting over it. */
-export function Today({ org, pods, activity, channels, queue, queueFailed, onRetryQueue, me, go, onAsk }: {
+export function Today({ org, pods, activity, channels, queue, queueFailed, onRetryQueue, me, go, onAsk, onJoined }: {
     org: Org;
     pods: readonly Pod[];
     activity: Map<string, ConversationRef[]>;
@@ -42,6 +42,8 @@ export function Today({ org, pods, activity, channels, queue, queueFailed, onRet
     me: string;
     go: Go;
     onAsk: Ask;
+    /** An invitation accepted from Home. */
+    onJoined?: (invite: Invitation) => void;
 }) {
     const [now] = useState(() => Date.now());
     const reader = useMe();
@@ -58,7 +60,7 @@ export function Today({ org, pods, activity, channels, queue, queueFailed, onRet
     if (pods.length === 0) {
         return (
             <div className="ox-page ox-home">
-                <Invited go={go} />
+                <Invited go={go} onJoined={onJoined} />
                 <Empty title={`No Lemmas at ${org.name} yet.`}>
                     <p>Each one holds a team’s chats, pages, tables, files and apps, with an assistant that works in all of them.</p>
                     <a className="ox-btn ox-btn--primary" {...to({ name: "hire" }, go)}>Start a Lemma</a>
@@ -71,7 +73,7 @@ export function Today({ org, pods, activity, channels, queue, queueFailed, onRet
         <div className="ox-page ox-home">
             <h1 className="ox-home__t">{headline}</h1>
             <AskBox pods={pods} onAsk={onAsk} autoFocus />
-            <Invited go={go} />
+            <Invited go={go} onJoined={onJoined} />
             {queueFailed && queue.length === 0 && (
                 <section aria-label="Needs you">
                     <div className="ox-sec"><h2>Needs you</h2></div>
