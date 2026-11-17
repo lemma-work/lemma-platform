@@ -372,6 +372,7 @@ async def _forward(client: httpx.AsyncClient, outbound: httpx.Request) -> Respon
             name: value
             for name, value in proxied.headers.items()
             if name.lower() not in _STRIPPED_RESPONSE_HEADERS
+            and name.lower() != "set-cookie"
         }
         headers["content-security-policy"] = f"frame-ancestors {_frame_ancestors()}"
         # Raw bytes, so a gzip body stays gzip under its own content-encoding
@@ -382,11 +383,31 @@ async def _forward(client: httpx.AsyncClient, outbound: httpx.Request) -> Respon
             headers=headers,
             background=BackgroundTask(proxied.aclose),
         )
+        for cookie in _set_cookies(proxied.headers):
+            forwarded.headers.append("set-cookie", cookie)
         handed_over = True
         return forwarded
     finally:
         if not handed_over:
             await proxied.aclose()
+
+
+def _set_cookies(upstream: httpx.Headers) -> list[str]:
+    """The upstream's cookies, one header each, without ``Domain`` and without
+    any named like Lemma's own.
+
+    One header each: folding them into one (as a plain dict of the headers
+    did) breaks every cookie after the first. Without ``Domain``: a server in
+    a sandbox must not set cookies for the parent of the host serving it --
+    the API's own, or every other preview.
+    """
+    from app.modules.workspace.services.machine_previews import upstream_set_cookie
+
+    kept = []
+    for name, value in upstream.multi_items():
+        if name.lower() == "set-cookie" and (cookie := upstream_set_cookie(value)):
+            kept.append(cookie)
+    return kept
 
 
 async def _relay(proxied: httpx.Response) -> AsyncIterator[bytes]:

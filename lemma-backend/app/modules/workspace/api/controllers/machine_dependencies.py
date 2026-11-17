@@ -17,6 +17,9 @@ from uuid import UUID
 
 from fastapi import Depends, Path, Request
 
+from app.core.authorization.delegation import DelegationClaims
+from app.core.authorization.function_run import FunctionRunClaims
+
 from app.core.api.dependencies import get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.workspace.domain.machine_access import (
@@ -24,7 +27,10 @@ from app.modules.workspace.domain.machine_access import (
     MachineAccess,
     MachineCaller,
 )
-from app.modules.workspace.domain.machine_errors import MachineNotFound
+from app.modules.workspace.domain.machine_errors import (
+    MachineAccessDenied,
+    MachineNotFound,
+)
 from app.modules.workspace.services.machine_resolver import (
     MachineResolver,
     ResolvedMachine,
@@ -37,18 +43,40 @@ def caller_from_request(
     request: Request, *, pod_id: UUID | None = None
 ) -> MachineCaller:
     state = getattr(request, "state", None)
-    run_claims = getattr(state, "function_run_claims", None)
-    if run_claims is not None:
+    user = getattr(state, "user", None)
+    return caller_from_principal(
+        user_id=getattr(user, "id", None),
+        delegation_claims=getattr(state, "delegation_claims", None),
+        function_run_claims=getattr(state, "function_run_claims", None),
+        pod_id=pod_id,
+    )
+
+
+def caller_from_principal(
+    *,
+    user_id: UUID | None,
+    delegation_claims: DelegationClaims | None,
+    function_run_claims: FunctionRunClaims | None = None,
+    pod_id: UUID | None = None,
+) -> MachineCaller:
+    """The caller a verified credential names, whichever door it came through.
+
+    One function for the HTTP routes and the machine sockets, so a delegated
+    token is the same agent or function on both: a socket that read only the
+    token's user id handed a schedule's agent token the person's own ttys.
+    ``delegation_claims`` must already have been through
+    ``resolve_delegated_principal``.
+    """
+    if function_run_claims is not None:
         return MachineCaller(
             CallerKind.FUNCTION,
             user_id=None,
-            pod_id=getattr(run_claims, "pod_id", None),
-            workload_id=getattr(run_claims, "function_id", None),
+            pod_id=function_run_claims.pod_id,
+            workload_id=function_run_claims.function_id,
         )
-    user = getattr(state, "user", None)
-    if user is None:
+    if user_id is None:
         raise MachineNotFound("me")
-    claims = getattr(state, "delegation_claims", None)
+    claims = delegation_claims
     if claims is not None:
         kind = (
             CallerKind.FUNCTION
@@ -57,12 +85,12 @@ def caller_from_request(
         )
         return MachineCaller(
             kind,
-            user_id=user.id,
+            user_id=user_id,
             pod_id=claims.pod_id,
             workload_id=claims.actor_id,
             conversation_id=_uuid(claims.session_id),
         )
-    return MachineCaller(CallerKind.USER, user_id=user.id, pod_id=pod_id)
+    return MachineCaller(CallerKind.USER, user_id=user_id, pod_id=pod_id)
 
 
 def _as_app(caller: MachineCaller, request: Request) -> MachineCaller:
@@ -144,9 +172,13 @@ ManageMachine = Annotated[ResolvedMachine, Depends(_needing(MachineAccess.MANAGE
 
 
 def acting_user(request: Request, resolved: ResolvedMachine) -> UUID:
-    """Whose token a process on this machine carries: the person calling, or
-    -- for a function with nobody behind it -- the machine's creator."""
+    """The person a call on this machine acts for.
+
+    Refused for a caller with nobody behind it -- a person-less function run.
+    This used to fall back to the machine's creator, which handed such a run
+    the creator's full session and the creator's reach into pod files.
+    """
     caller: MachineCaller | None = getattr(request.state, "machine_caller", None)
     if caller is not None and caller.user_id is not None:
         return caller.user_id
-    return resolved.machine.created_by or resolved.machine.owner_id
+    raise MachineAccessDenied(str(resolved.machine.id), "act for a person on")

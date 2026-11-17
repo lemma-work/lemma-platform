@@ -172,6 +172,86 @@ async def test_a_link_preview_shows_the_page_and_its_live_reload(previews) -> No
     assert gone.status_code == status.HTTP_404_NOT_FOUND
 
 
+@pytest.fixture
+async def preview_rows(
+    monkeypatch,
+    local_sandbox_server,
+    backend_server,
+    configure_workspace_api_url,
+    authenticated_client,
+):
+    """Previews switched on, with no machine started: creating, listing and
+    revoking a preview are rows, and these tests are about the rows."""
+    del local_sandbox_server, backend_server, configure_workspace_api_url
+    monkeypatch.setattr(workspace_settings, "machine_preview_domain", "preview.test")
+    monkeypatch.setattr(workspace_settings, "machine_preview_scheme", "http")
+    return authenticated_client
+
+
+async def test_the_browsers_devtools_port_is_never_a_preview(preview_rows) -> None:
+    refused = await preview_rows.post(
+        "/machines/me/previews", json={"port": 9222, "visibility": "link"}
+    )
+    assert refused.status_code == status.HTTP_409_CONFLICT, refused.text
+    assert refused.json()["code"] == "MACHINE_PORT_RESERVED"
+
+
+async def test_a_deleted_pod_machine_takes_its_previews_and_grants_with_it(
+    preview_rows, fixed_test_org
+) -> None:
+    """And a machine made again under its name starts with neither: the row
+    is revived with the same id, so nothing keyed by it may come back."""
+    client = preview_rows
+    pod = await client.post(
+        "/pods",
+        json={
+            "name": f"Previews {uuid4().hex[:6]}",
+            "type": "ASSISTANT",
+            "organization_id": fixed_test_org["id"],
+        },
+    )
+    assert pod.status_code == status.HTTP_201_CREATED, pod.text
+    pod_id = pod.json()["id"]
+    agent = await client.post(
+        f"/pods/{pod_id}/agents", json={"name": "qa", "instruction": "Test."}
+    )
+    assert agent.status_code == status.HTTP_201_CREATED, agent.text
+
+    async def make() -> str:
+        made = await client.post(f"/pods/{pod_id}/machines", json={"name": "qa"})
+        assert made.status_code == status.HTTP_201_CREATED, made.text
+        return made.json()["id"]
+
+    first = await make()
+    granted = await client.put(
+        f"/pods/{pod_id}/machines/qa/grants", json={"agents": ["qa"]}
+    )
+    assert granted.status_code == status.HTTP_200_OK, granted.text
+    opened = await client.post(
+        f"/machines/{first}/previews", json={"port": PORT, "visibility": "link"}
+    )
+    assert opened.status_code == status.HTTP_201_CREATED, opened.text
+    label = urlsplit(opened.json()["url"]).hostname.split(".", 1)[0][2:]
+
+    deleted = await client.delete(f"/pods/{pod_id}/machines/qa")
+    assert deleted.status_code == status.HTTP_204_NO_CONTENT, deleted.text
+
+    from app.core.api.dependencies import get_uow_factory
+    from app.modules.workspace.services.machine_previews import MachinePreviews
+
+    gone = await MachinePreviews(get_uow_factory()).by_label(label, cached=False)
+    assert gone is not None and gone.revoked_at is not None
+
+    again = await make()
+    assert again == first, "the row is revived, which is why this matters"
+    grants = await client.get(f"/pods/{pod_id}/machines/qa/grants")
+    assert grants.status_code == status.HTTP_200_OK, grants.text
+    assert grants.json()["agents"] == []
+    listed = await client.get(f"/machines/{again}/previews")
+    assert listed.status_code == status.HTTP_200_OK, listed.text
+    assert listed.json()["previews"] == []
+
+
 async def test_a_private_preview_opens_only_through_the_persons_session(
     previews,
 ) -> None:
@@ -203,6 +283,14 @@ async def test_a_private_preview_opens_only_through_the_persons_session(
         status.HTTP_303_SEE_OTHER,
     ), exchanged.text
     cookie = exchanged.headers["set-cookie"].split(";", 1)[0]
+
+    replayed = await previews["visitor"].get(
+        f"{ticket_url.path}?{ticket_url.query}", headers={"Host": host}
+    )
+    assert replayed.status_code == status.HTTP_403_FORBIDDEN, (
+        "a ticket is spent on its first use"
+    )
+    assert preview["expires_at"] is not None, "a private preview ends too"
 
     page = await eventually(
         label="the private page with its cookie",
