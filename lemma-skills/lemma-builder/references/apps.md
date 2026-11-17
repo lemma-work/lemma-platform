@@ -285,6 +285,14 @@ adopt any one design system.
   borders (subtle/strong), text (primary/secondary/muted), one accent + hover, one
   color per status, a 4/8/12/16/24/32 spacing scale. A dominant base + one sharp
   accent beats a timid even palette.
+- **Follow the Lemma's light and dark.** Inside the Lemma web app an app is
+  framed and told the person's theme (`lemma-app-theme`, tokens named
+  `--lemma-app-bg`, `--lemma-app-text`, `--lemma-app-accent`, …) when it loads
+  and whenever it changes. Point your root variables at those tokens with your
+  own values as the fallback — `--surface: var(--lemma-app-surface, #fff)` — so
+  the app matches the Lemma around it and still stands alone in a tab. The HTML
+  bundle applies the message itself; a Vite app adds the short listener in the
+  SDK README ("Drawing in the Lemma's theme").
 - **Legibility & density.** Three font sizes max in dense UIs; tabular/mono figures
   for ids, timestamps, metadata so columns align; panel layouts with intentional
   widths; selected row = accent left-border, not a heavy fill.
