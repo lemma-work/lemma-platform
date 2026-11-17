@@ -13,10 +13,10 @@ only a promise marked `covered` with no test is.
 | --- | ---: |
 | `covered` | 178 |
 | `gap` | 4 |
-| `manual` | 32 |
+| `manual` | 33 |
 | `planned` | 35 |
 | `withdrawn` | 2 |
-| **total** | **251** |
+| **total** | **252** |
 
 Scenario tests declaring a promise: 459.
 
@@ -236,6 +236,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-PACK-030` A person builds an app for a pod | `covered` | `test_an_app_can_be_changed`, `test_a_bad_bundle_is_refused`, `test_an_earlier_deployment_can_be_restored`, `test_an_app_is_created`, `test_a_duplicate_app_name_is_refused`, `test_deleting_an_app_removes_it`, `test_promoting_a_missing_result_is_refused` |
 | `PS-PACK-031` An app reaches the people it is meant for | `covered` | `test_an_asset_without_a_release_is_not_found`, `test_shipping_a_release_publishes_the_app`, `test_opening_an_app_starts_a_session`, `test_an_outsider_cannot_read_apps`, `test_private_app_address_requires_app_access` |
 | `PS-PACK-032` A person can retrieve what an app was built from | `covered` | `test_an_app_without_a_release_is_honest`, `test_an_apps_source_is_returned_byte_for_byte`, `test_an_outsider_cannot_take_the_source` |
+| `PS-PACK-033` An app opened inside a Lemma takes the Lemma's look | `manual` | — |
 
 ## [Scheduling and triggers](journeys/scheduling-and-triggers.md)
 

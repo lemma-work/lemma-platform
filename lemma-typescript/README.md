@@ -88,6 +88,37 @@ For a no-build HTML app or a conversation widget, load the prebuilt bundle from 
 
 The bundle exposes the same client and namespaces as the npm package (a legacy `window.Lemma` alias also points at it). `import.meta.env`/`VITE_LEMMA_*` are only for the React/Vite path; the browser bundle resolves config from `window.__LEMMA_CONFIG__`.
 
+### Drawing in the Lemma's theme
+
+Inside the Lemma web app an app is framed on its own origin, so it inherits nothing from the page around it. The web app tells it its look instead: a `postMessage` from the parent window each time the app loads, and again whenever the person's appearance changes (the device flipping between light and dark included):
+
+```js
+{ type: "lemma-app-theme", theme: "light" | "dark", tokens: { "--lemma-app-bg": "…", "--lemma-app-text": "…", … } }
+```
+
+The tokens are semantic and prefixed `--lemma-app-`: `bg`, `surface`, `subtle`, `raised`, `text`, `muted`, `faint`, `border`, `border-strong`, `accent`, `accent-soft`, `success`, `warning`, `danger`, `info`, `radius-sm`, `radius-md`, `radius-lg`, `font`, and a few more.
+
+The browser bundle applies the message itself: it sets each token on `<html>`, sets `data-lemma-theme`, toggles the `dark` class and `color-scheme`, and dispatches a `lemma:theme` event. `window.LemmaClient.subscribeLemmaHostTheme(listener)` calls `listener` with the current theme and every change, and returns the way to stop; `window.LemmaClient.getLemmaHostTheme()` returns the latest message, or `null` before one arrives. Read every token with a fallback, so the app still looks right opened on its own, where no message comes:
+
+```css
+body { background: var(--lemma-app-bg, #fff); color: var(--lemma-app-text, #1c1c1c); font-family: var(--lemma-app-font, system-ui, sans-serif); }
+```
+
+The npm package does not listen for the message. A Vite app that wants the Lemma's look adds the listener itself, accepting only messages from the parent window and only `--lemma-app-` names:
+
+```ts
+window.addEventListener("message", (event) => {
+  const message = event.data;
+  if (event.source !== window.parent || message?.type !== "lemma-app-theme") return;
+  const root = document.documentElement;
+  for (const [name, value] of Object.entries(message.tokens ?? {})) {
+    if (name.startsWith("--lemma-app-") && typeof value === "string") root.style.setProperty(name, value);
+  }
+  root.classList.toggle("dark", message.theme === "dark");
+  root.style.colorScheme = message.theme;
+});
+```
+
 ### Agent web components (`lemma-ui.js`)
 
 For a drop-in agent UI in a no-build app, load the **opt-in** UI bundle *after* the client bundle. It registers two framework-agnostic custom elements that drive the same agent core, reuse `window.LemmaClient`, and read `window.__LEMMA_CONFIG__`:

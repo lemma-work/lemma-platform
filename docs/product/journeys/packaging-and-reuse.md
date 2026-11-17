@@ -216,6 +216,26 @@ their credentials do not travel with it.
 
 **Contracts:** `app.source.archive.get`, `app.dist.archive.get`
 
+### PS-PACK-033 — An app opened inside a Lemma takes the Lemma's look
+**Status:** manual
+
+> **Verified by:** opening an app inside a Lemma in the browser, switching
+> Settings > Appearance between light, dark and system (and flipping the
+> device's appearance while on system), and checking that the app redraws each
+> time without reloading; plus `npm test` in `lemma-frontend`, whose
+> `tests/app-theme.test.ts` covers when the theme is sent and to whom. The API
+> scenario suite cannot see a framed page.
+
+- When an app opened inside a Lemma loads, including after a reload, a
+  navigation inside the app, or a sign-in, the system shall send it the
+  Lemma's current light or dark theme and the tokens that draw it.
+- When a person changes their appearance, or the device switches between light
+  and dark while they follow it, the system shall send the app the new theme,
+  so the app follows without reloading.
+- The system shall send the theme only to the app's own origin, and shall send
+  nothing to a frame whose origin cannot be addressed.
+- An app that does not listen for the theme shall be drawn exactly as before.
+
 ---
 
 ## Not covered here
