@@ -260,14 +260,14 @@ class FilesystemManager:
 
     def _move_sync(self, source: str, destination: str) -> None:
         source_path = self._existing_path(source, follow_symlinks=False)
-        self._refuse_protected(source_path)
+        self._refuse_protected(source_path, containing=True)
         destination_path = self._new_path(destination)
         self._refuse_protected(destination_path)
         os.replace(source_path, destination_path)
 
     def _delete_sync(self, path: str, recursive: bool) -> bool:
         candidate = self._existing_path(path, follow_symlinks=False)
-        self._refuse_protected(candidate)
+        self._refuse_protected(candidate, containing=True)
         if candidate in self._roots:
             raise ValueError("cannot delete an allowed filesystem root")
         if candidate.is_symlink() or candidate.is_file():
@@ -322,14 +322,20 @@ class FilesystemManager:
         # link, after the runtime starts.
         return tuple(Path(path).resolve() for path in self._protected)
 
-    def _refuse_protected(self, resolved: Path) -> None:
-        """``resolved`` (its parent resolved, for a link not followed) is, is
-        inside, or contains a protected path."""
+    def _refuse_protected(self, resolved: Path, *, containing: bool = False) -> None:
+        """``resolved`` (its parent resolved, for a link not followed) is or is
+        inside a protected path -- or, with ``containing``, holds one.
+
+        ``containing`` is for what takes a whole tree with it, a delete or a
+        move's source: removing ``~/.lemma`` removes the profile. Making or
+        writing ``/home/user`` does not, and the runtime does exactly that to
+        ensure a session's directory.
+        """
         for protected in self._protected_roots():
             if (
                 resolved == protected
                 or resolved.is_relative_to(protected)
-                or protected.is_relative_to(resolved)
+                or (containing and protected.is_relative_to(resolved))
             ):
                 raise ProtectedPathError(
                     "that path is the browser's profile, which holds the "

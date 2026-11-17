@@ -87,6 +87,16 @@ async def test_removing_the_link_itself_leaves_the_profile_alone(home) -> None:
     assert (home["profile"] / "Cookies").read_bytes() == b"session"
 
 
+async def test_ensuring_the_home_that_holds_the_profile_is_allowed(home) -> None:
+    """The runtime makes the home (and ``~/.lemma``) exist for every session;
+    holding the profile is not touching it."""
+    files = _files(home)
+    await files.create_directory(str(home["root"]))
+    await files.create_directory(str(home["root"] / ".lemma"))
+    with pytest.raises(ProtectedPathError):
+        await files.delete(str(home["root"] / ".lemma"), recursive=True)
+
+
 async def test_ordinary_files_beside_it_are_unaffected(home) -> None:
     files = _files(home)
     target = str(home["work"] / "notes.md")
