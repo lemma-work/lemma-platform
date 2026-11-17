@@ -103,3 +103,20 @@ async def test_ordinary_files_beside_it_are_unaffected(home) -> None:
     await files.write(target, b"hi", expected_sha256=None)
     await files.move(target, str(home["work"] / "moved.md"))
     assert await files.delete(str(home["work"] / "moved.md"), recursive=False)
+
+
+async def test_the_runtime_answers_a_protected_path_with_423(tmp_path) -> None:
+    """Not 422, which the API reads as a file too large, and not 403, which
+    it reads as its own credential refused -- QA found the first."""
+    import json
+
+    from sandbox_runtime.workspace.app import create_app
+    from sandbox_runtime.workspace.filesystem_manager import ProtectedPathError
+
+    app = create_app(token="t" * 32, allowed_roots=(str(tmp_path),))
+    handler = app.exception_handlers[ProtectedPathError]
+
+    response = await handler(None, ProtectedPathError("the browser's profile"))
+
+    assert response.status_code == 423
+    assert "profile" in json.loads(response.body)["detail"]

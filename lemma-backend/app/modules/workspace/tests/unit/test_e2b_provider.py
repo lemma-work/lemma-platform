@@ -701,6 +701,8 @@ async def test_files_round_trip(provider: E2BSandboxProvider) -> None:
         deadline_at=_deadline(),
     )
     assert stat.path == f"{WORKSPACE_ROOT}/a.txt"
+    # E2B's write answer has no size; the reply says what was written.
+    assert stat.size_bytes == len(b"contents")
 
     chunks = [
         chunk

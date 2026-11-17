@@ -389,7 +389,7 @@ class E2BSandboxProvider(E2BOpsMixin):
         keep_memory = kind is SandboxKind.FUNCTION
         sandbox = await self._connect(instance.provider_id)
         if kind is SandboxKind.WORKSPACE:
-            await close_browser(sandbox, instance.provider_id, **self._api())
+            await close_browser(sandbox, instance.provider_id)
         try:
             with sdk_errors():
                 await sandbox.pause(keep_memory=keep_memory, **self._api())

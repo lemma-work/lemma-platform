@@ -108,11 +108,18 @@ async def probe_process(
     *,
     user_id: UUID,
     process_id: str,
+    pod_id: UUID | None = None,
     provider: ProcessListingProvider | None = None,
     uow_factory: Callable[[], AbstractAsyncContextManager[object]] | None = None,
     repository: Callable[[object], SandboxRepositoryPort] = SandboxRepository,
 ) -> ProcessProbe:
-    """Read one process in one of ``user_id``'s workspace sandboxes.
+    """Read one process in one of ``user_id``'s workspace sandboxes, or one of
+    ``pod_id``'s machines.
+
+    A run on a pod machine starts its processes there, not on its person's
+    own machine, so a wait that looked only at the person's found every one of
+    them gone at once -- and the run ended and stopped the process it was
+    waiting for (found by QA on a real pod machine).
 
     The three collaborators are parameters, defaulting to the ones the sweep
     uses, so a test can drive this without a provider or a database. That is the
@@ -133,6 +140,15 @@ async def probe_process(
             owner_kind=SandboxOwnerKind.USER,
             owner_id=user_id,
         )
+        if pod_id is not None:
+            sandboxes = [
+                *sandboxes,
+                *await sandboxes_of.list_for_owner(
+                    kind=SandboxKind.WORKSPACE,
+                    owner_kind=SandboxOwnerKind.POD,
+                    owner_id=pod_id,
+                ),
+            ]
         instances = [
             (sandbox, await sandboxes_of.current_instance(sandbox.id))
             for sandbox in sandboxes

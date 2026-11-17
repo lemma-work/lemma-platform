@@ -311,3 +311,52 @@ async def test_a_process_that_exited_unobserved_reads_as_finished(one_live_sandb
 
     assert probe.status is ProcessProbeStatus.FINISHED
     assert probe.exit_code is None
+
+
+def _owners_repository(by_owner_kind, instance):
+    """Sandboxes per owner kind: the person's, and their pod's machines."""
+
+    class _Repository:
+        def __init__(self, _uow):
+            pass
+
+        async def list_for_owner(self, *, owner_kind, **_kwargs):
+            return by_owner_kind.get(owner_kind, [])
+
+        async def current_instance(self, _sandbox_id):
+            return instance
+
+    return _Repository
+
+
+@pytest.mark.asyncio
+async def test_a_process_on_a_pod_machine_is_found_through_its_pod():
+    """QA on a real pod machine: a run waiting on its own process there read
+    it as gone at once, because only the person's own machine was looked at;
+    the run then ended and stopped the process it was waiting for."""
+    from app.modules.workspace.domain.sandbox import SandboxOwnerKind
+
+    repository = _owners_repository(
+        {SandboxOwnerKind.POD: [SimpleNamespace(id=uuid4())]},
+        SimpleNamespace(provider_id="sbx-pod"),
+    )
+    provider = _provider(processes=[_descriptor(ProcessState.RUNNING)])
+
+    on_pod = await probe_process(
+        user_id=uuid4(),
+        process_id=_PROCESS_ID,
+        pod_id=uuid4(),
+        provider=provider,
+        uow_factory=_Uow(None),
+        repository=repository,
+    )
+    without_pod = await probe_process(
+        user_id=uuid4(),
+        process_id=_PROCESS_ID,
+        provider=provider,
+        uow_factory=_Uow(None),
+        repository=repository,
+    )
+
+    assert on_pod.status is ProcessProbeStatus.RUNNING
+    assert without_pod.status is ProcessProbeStatus.GONE

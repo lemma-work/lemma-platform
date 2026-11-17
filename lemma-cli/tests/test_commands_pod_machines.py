@@ -205,3 +205,12 @@ def test_what_the_plan_offers_passes(tmp_path) -> None:
     ]
 
     assert machine_policy_issues(offered_sizes(_DOCKER_DEPLOYMENT), dirs, {}) == []
+
+
+def test_list_shows_the_selected_pods_machines_too(runner, machines) -> None:
+    """QA: with a pod bound, `machine list` showed only the person's own
+    machine -- the pod's machines were never asked for."""
+    result = runner.invoke(app, ["machine", "list"])
+
+    assert result.exit_code == 0, result.stderr
+    assert machines.calls == [("list", (), {"pod_id": POD_ID})]

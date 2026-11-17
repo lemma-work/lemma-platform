@@ -4,7 +4,7 @@ variables were never stored in the clear."""
 
 from __future__ import annotations
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from pydantic import SecretStr
 
@@ -197,3 +197,51 @@ async def test_an_agent_service_outside_the_home_is_refused() -> None:
                 conversation_id=None,
             )
         )
+
+
+def _service(name: str, process: UUID) -> ServiceDefinition:
+    return ServiceDefinition(
+        machine_id=MACHINE,
+        name=name,
+        command="python3 -m http.server 8001",
+        cwd="/home/user/lemma",
+        claims=None,
+        started_by=None,
+        restart_on_resume=True,
+        process_id=str(process),
+    )
+
+
+async def test_a_service_the_pause_lost_is_started_again() -> None:
+    """QA on a real E2B machine: after a pause E2B still lists the process it
+    lost, as ``unknown``, and reading that as alive left the service down."""
+    lost = uuid4()
+    processes = _Processes(_Services([_service("web", lost)]))
+
+    async def listed(kind, machine_id):
+        return (LocalProcessRef(operation_id=lost, state=ProcessState.UNKNOWN),)
+
+    processes.runtime.list_processes = listed  # type: ignore[method-assign]
+
+    restarted = await processes.restart_services(MACHINE)
+
+    assert [record.service for record in restarted] == ["web"]
+
+
+async def test_a_service_that_failed_on_its_own_is_not_started_on_every_resume() -> (
+    None
+):
+    """The pause did not end it; starting it again only fails again."""
+    failed = uuid4()
+    processes = _Processes(_Services([_service("web", failed)]))
+
+    async def listed(kind, machine_id):
+        return (
+            LocalProcessRef(
+                operation_id=failed, state=ProcessState.FAILED, exit_code=2
+            ),
+        )
+
+    processes.runtime.list_processes = listed  # type: ignore[method-assign]
+
+    assert await processes.restart_services(MACHINE) == []
