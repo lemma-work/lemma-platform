@@ -89,8 +89,8 @@ async def test_out_of_compute_refuses_new_work_then_releases_and_keeps_logins(
     )
     assert sign_in["exit_code"] == 0
 
-    # A minute of a 2x4 machine is 1/60 CU; the month allows a hundredth.
-    metered["allowance"].units = 0.01
+    # A minute of the default 1x2 machine is 1/120 CU; the month allows less.
+    metered["allowance"].units = 0.005
     now = datetime.now(timezone.utc) + timedelta(minutes=1)
     tick = await compute_meter.meter_running(metered["uow_factory"], now=now)
     assert tick.written >= 1
