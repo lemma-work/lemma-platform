@@ -75,6 +75,9 @@ test("every view writes an address that reads back as itself, and is told apart 
         { name: "run", podId: "abc", runId: "r/1" },
         { name: "workflow", podId: "abc", workflow: "late-fees" },
         { name: "app", podId: "abc", app: "crm" },
+        /* Where an app is inside itself: the page for one of its records. */
+        { name: "app", podId: "abc", app: "people", at: "/1042" },
+        { name: "app", podId: "pod one/2", app: "people", at: "/by owner/r 9" },
         { name: "table", podId: "abc", table: "leads" },
         { name: "file", podId: "abc", path: "/reports/Q3 review.md" },
         { name: "computer", podId: "abc", conversationId: null },
@@ -90,7 +93,9 @@ test("every view writes an address that reads back as itself, and is told apart 
 });
 
 test("an address that is not the app's own is left for another reader, not guessed at", () => {
-    for (const path of ["/", "/blog", "/t", "/t/outcome/abc", "/o/outcome/abc", "/l/abc/whatever", "/l/abc/apps/a/b", "/l/%E0%A4%A", "/l/abc/files/%E0%A4%A", "/l/new/x", "/home/x"]) {
+    /* Inside an app, a part that steps up, stays put, or hides a slash is not
+       a path the app could have said it was at. */
+    for (const path of ["/", "/blog", "/t", "/t/outcome/abc", "/o/outcome/abc", "/l/abc/whatever", "/l/abc/apps/a/..", "/l/abc/apps/a/./b", "/l/abc/apps/a/b%2Fc", "/l/%E0%A4%A", "/l/abc/files/%E0%A4%A", "/l/new/x", "/home/x"]) {
         assert.equal(readView(path), null, path);
     }
     /* Words every object answers to are not places. */

@@ -236,6 +236,70 @@ their credentials do not travel with it.
   nothing to a frame whose origin cannot be addressed.
 - An app that does not listen for the theme shall be drawn exactly as before.
 
+### PS-PACK-034 — A Lemma with apps opens on its apps
+**Status:** manual
+
+> **Verified by:** opening, in the browser on a local stack, a Lemma that has
+> apps from the sidebar, from its name in a list and from a link to the Lemma,
+> then one that has none, and checking where each lands and that Home never
+> shows first. The API scenario suite cannot see the frame.
+
+- When a person opens a Lemma that has apps, by its name or by a link to the
+  Lemma, the system shall open it on its first app, in the order the Lemma
+  lists them.
+- Where a Lemma has no apps, the system shall open it on its Home.
+- While the system finds out which of the two it is, it shall say the Lemma is
+  opening, rather than show Home and then replace it.
+- The sidebar shall list an open Lemma's apps under its name, with a way to ask
+  for another.
+
+### PS-PACK-035 — Where a person is in an app is an address they can share
+**Status:** manual
+
+> **Verified by:** on a local stack in the browser, opening a record in an app,
+> copying the address into a new tab, reloading, and pressing Back and Forward;
+> plus `npm test` in `lemma-frontend` (`tests/named-address.test.ts`,
+> `tests/location-bridge.test.ts`, `tests/outcomes.test.ts`) and in
+> `lemma-typescript` (`browser-location.test.ts`). The API scenario suite
+> cannot see the frame.
+
+- While an app is open in a Lemma, the address shall name the organization,
+  the Lemma, the app and the page inside the app, in words a person can read:
+  `/l/acme/sales/apps/people/1042`.
+- When an app moves to another page inside itself, the system shall make it a
+  step in the address, so Back returns to the page before and the app is told
+  to go there.
+- When a person reloads, or opens an address someone copied, the system shall
+  open the app on the page the address names.
+- Where two of an organization's Lemmas have names that read the same, or a
+  name reads as one of a Lemma's own sections, the system shall keep that
+  Lemma's id in the address.
+- An address that names a Lemma by its id shall keep working, and the system
+  shall show it in names where it can.
+- The system shall record in analytics what kind of place an address is, and
+  never the names of the organization or the Lemma, or the page inside an app.
+
+### PS-PACK-036 — One app opens another app of the same Lemma
+**Status:** manual
+
+> **Verified by:** on a local stack in the browser, an app asking for another
+> app at one of its records inside a Lemma, the same app opened on its own in a
+> tab, and pressing Back after each; plus `npm test` in `lemma-typescript`
+> (`browser-location.test.ts`) and in `lemma-frontend`
+> (`tests/location-bridge.test.ts`). The API scenario suite cannot see the frame.
+
+- When an app open inside a Lemma asks to open another app of that Lemma at a
+  page, the system shall switch to that app at that page, as a step Back undoes.
+- When the app is open on its own in a browser tab, the SDK shall go to the
+  other app's own address at that page.
+- When the app is open inside an AI tool's conversation, the SDK shall do
+  nothing and report that it did not open, because another app loaded there
+  would arrive signed out.
+- The system shall act only on what the app in front asks, and shall answer
+  only that app, at its own origin.
+- If the app asked for is not one of the Lemma's, then the system shall say it
+  is not here rather than open something else.
+
 ---
 
 ## Not covered here

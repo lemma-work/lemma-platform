@@ -41,6 +41,16 @@ import {
   canComposeInConversation,
   composeInConversation,
 } from "./browser-compose.js";
+import {
+  LEMMA_LOCATION_MESSAGE_TYPE,
+  LEMMA_OPEN_MESSAGE_TYPE,
+  LEMMA_OPEN_RESULT_MESSAGE_TYPE,
+  currentAppPath,
+  isFramedByHost,
+  moveAppTo,
+  openApp,
+  watchAppPath,
+} from "./browser-location.js";
 import { isEmbeddedInHost } from "./embedded.js";
 
 export {
@@ -66,6 +76,14 @@ export {
   LEMMA_COMPOSE_RESULT_MESSAGE_TYPE,
   canComposeInConversation,
   composeInConversation,
+  LEMMA_LOCATION_MESSAGE_TYPE,
+  LEMMA_OPEN_MESSAGE_TYPE,
+  LEMMA_OPEN_RESULT_MESSAGE_TYPE,
+  currentAppPath,
+  isFramedByHost,
+  moveAppTo,
+  openApp,
+  watchAppPath,
   isEmbeddedInHost,
 };
 
@@ -99,6 +117,14 @@ if (typeof globalThis !== "undefined") {
     LEMMA_COMPOSE_RESULT_MESSAGE_TYPE,
     canComposeInConversation,
     composeInConversation,
+    LEMMA_LOCATION_MESSAGE_TYPE,
+    LEMMA_OPEN_MESSAGE_TYPE,
+    LEMMA_OPEN_RESULT_MESSAGE_TYPE,
+    currentAppPath,
+    isFramedByHost,
+    moveAppTo,
+    openApp,
+    watchAppPath,
     isEmbeddedInHost,
   };
   if (!scope.LemmaClient) {

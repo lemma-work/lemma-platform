@@ -13,10 +13,10 @@ only a promise marked `covered` with no test is.
 | --- | ---: |
 | `covered` | 178 |
 | `gap` | 4 |
-| `manual` | 33 |
+| `manual` | 36 |
 | `planned` | 35 |
 | `withdrawn` | 2 |
-| **total** | **252** |
+| **total** | **255** |
 
 Scenario tests declaring a promise: 459.
 
@@ -237,6 +237,9 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-PACK-031` An app reaches the people it is meant for | `covered` | `test_an_asset_without_a_release_is_not_found`, `test_shipping_a_release_publishes_the_app`, `test_opening_an_app_starts_a_session`, `test_an_outsider_cannot_read_apps`, `test_private_app_address_requires_app_access` |
 | `PS-PACK-032` A person can retrieve what an app was built from | `covered` | `test_an_app_without_a_release_is_honest`, `test_an_apps_source_is_returned_byte_for_byte`, `test_an_outsider_cannot_take_the_source` |
 | `PS-PACK-033` An app opened inside a Lemma takes the Lemma's look | `manual` | — |
+| `PS-PACK-034` A Lemma with apps opens on its apps | `manual` | — |
+| `PS-PACK-035` Where a person is in an app is an address they can share | `manual` | — |
+| `PS-PACK-036` One app opens another app of the same Lemma | `manual` | — |
 
 ## [Scheduling and triggers](journeys/scheduling-and-triggers.md)
 

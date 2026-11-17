@@ -24,6 +24,10 @@
 
 import { isNewPlace, readAddress } from "@/shell/address";
 import { NEW_CHAT, readTrialView, readView, type View } from "@/outcomes/address";
+import { namedTail } from "@/outcomes/named-address";
+
+/** A Lemma named by its organization's name and its own, with both taken out. */
+const NAMED_LEMMA = "/l/[org]/[lemma]";
 
 /** Every page route in `app/`, with route groups such as `(marketing)` stripped
  *  because they do not appear in URLs. */
@@ -248,7 +252,8 @@ function viewTemplate(view: View): string {
         }
         case "computer": return lemma + "/computer" + (view.conversationId ? "/[id]" : "");
         case "run": return lemma + "/runs/[id]";
-        case "app": return lemma + "/apps/[name]";
+        /* Where an app is inside itself is a record's id as often as not. */
+        case "app": return lemma + "/apps/[name]" + (view.at ? "/[...path]" : "");
         case "table": return lemma + "/tables/[name]";
         case "workflow": return lemma + "/workflows/[name]";
         case "agent": return lemma + "/agents/[name]";
@@ -268,7 +273,18 @@ export function toRouteTemplate(pathname: string): string {
     if (parts.length === 0) return "/";
     const view = readView(pathname);
     if (view) return viewTemplate(view);
-    if (parts[0] === "l") return workspaceTemplate(pathname, "/l");
+    if (parts[0] === "l") {
+        /* An address spelled in names holds an organization's and a Lemma's,
+           and the workspace's grammar would not know to drop them. One the
+           workspace does read -- a known word after the Lemma -- is its own. */
+        const old = readAddress(pathname);
+        const tail = old.tabId || old.team ? null : namedTail(pathname);
+        if (tail === null) return workspaceTemplate(pathname, "/l");
+        /* What follows the Lemma is the app's own grammar, read as it is
+           under an id; a tail it does not read is named for nothing in it. */
+        const inside = readView("/l/x" + tail);
+        return inside ? viewTemplate(inside).replace("/l/[lemma]", NAMED_LEMMA) : NAMED_LEMMA + "/[...rest]";
+    }
     if (parts[0] === "t" || parts[0] === "o") {
         const old = readTrialView(pathname);
         return old ? viewTemplate(old) : workspaceTemplate("/t" + pathname.slice(2), "/t");
