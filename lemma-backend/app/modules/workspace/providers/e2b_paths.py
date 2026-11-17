@@ -14,10 +14,16 @@ fabric does give us, so the boundary is enforced with that.
 
 from __future__ import annotations
 
+import posixpath
 import shlex
 
 from app.core.log.log import get_logger
-from sandbox_runtime.errors import SandboxPathNotFound, SandboxUnavailable
+from sandbox_runtime.errors import (
+    SandboxPathNotFound,
+    SandboxRejected,
+    SandboxUnavailable,
+)
+from sandbox_runtime.paths import is_protected
 from app.modules.workspace.providers.base import (
     ProviderFailed,
     ProviderGone,
@@ -79,4 +85,30 @@ async def resolve_real_path(sandbox, path: str) -> tuple[str, bool]:
     return (resolved.strip() or path), marker.strip() == "link"
 
 
-__all__ = ["resolve_real_path"]
+async def refuse_protected(sandbox, path: str, *, follow_last: bool) -> None:
+    """Refuse a change whose *resolved* path is, is inside, or contains the
+    browser's profile.
+
+    The files API checks the path as spelled, and E2B's file SDK follows links
+    on its own, so ``~/lemma/p -> ~/.lemma/browser/profile`` walked a write
+    into the profile on this fabric. The runtime-backed fabrics check the
+    resolved path in the machine (``FilesystemManager``); this is the same
+    rule for the one fabric that does not run that code. ``follow_last``
+    says whether the operation follows the final link (a write, a mkdir, a
+    move's destination) or acts on the link itself (a delete, a move's
+    source), which leaves the profile alone.
+    """
+    if follow_last:
+        resolved, _ = await resolve_real_path(sandbox, path)
+    else:
+        parent, name = posixpath.split(path.rstrip("/") or "/")
+        real_parent, _ = await resolve_real_path(sandbox, parent or "/")
+        resolved = posixpath.join(real_parent, name)
+    if is_protected(path) or is_protected(resolved):
+        raise SandboxRejected(
+            "That path is the browser's profile, which holds the machine's "
+            "logins; it is not changed through the file API."
+        )
+
+
+__all__ = ["refuse_protected", "resolve_real_path"]
