@@ -4,6 +4,7 @@ import type { MetadataRoute } from 'next';
 import { collectionLastModified, listContent } from '@/site/content/loader';
 import { docsPages } from '@/site/data/docs';
 import { publicSiteUrl } from '@/site/seo/site-url';
+import { installHref, PLUGINS } from '@/site/plugins/catalog';
 import { PUBLIC_TEMPLATES, templateRunHref } from '@/site/templates/catalog';
 
 export default function sitemap(): MetadataRoute.Sitemap {
@@ -25,15 +26,23 @@ export default function sitemap(): MetadataRoute.Sitemap {
             changeFrequency: 'monthly',
             priority: 0.65,
         }));
-    // Not `/templates/<slug>` — that route is a noindex redirect stub. The page
-    // a template actually resolves to is its import URL, which renders the
-    // repository's README server-side and is the thing worth ranking for the
-    // problem the pod solves.
-    const templates: MetadataRoute.Sitemap = PUBLIC_TEMPLATES.map((template) => ({
-        url: `${base}${templateRunHref(template)}`,
-        changeFrequency: 'weekly',
-        priority: 0.8,
-    }));
+    // A GitHub template's `/templates/<slug>` is a noindex redirect stub; the
+    // page it resolves to is its import URL, which renders the repository's
+    // README server-side and is the thing worth ranking for the problem the
+    // pod solves. A plugin's `/templates/<slug>` is a page of its own, indexed
+    // once the plugin can be installed (see its `robots` metadata).
+    const templates: MetadataRoute.Sitemap = [
+        ...PLUGINS.filter((plugin) => installHref(plugin)).map((plugin) => ({
+            url: `${base}/templates/${plugin.slug}`,
+            changeFrequency: 'weekly' as const,
+            priority: 0.8,
+        })),
+        ...PUBLIC_TEMPLATES.map((template) => ({
+            url: `${base}${templateRunHref(template)}`,
+            changeFrequency: 'weekly' as const,
+            priority: 0.8,
+        })),
+    ];
     /*
      * These carry a real `lastModified`, which nothing else here can. Docs and
      * templates have no recorded modification date, and inventing one would

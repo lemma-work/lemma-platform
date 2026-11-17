@@ -15,7 +15,7 @@ export function SiteFooter() {
         {
             title: "Explore",
             links: [
-                ["Examples", "/templates"],
+                ["Plugins", "/templates"],
                 ["Documentation", "/docs"],
                 ["Download", "/download"],
                 ["Changelog", "/changelog"],
@@ -127,7 +127,7 @@ export function SiteHeader() {
                 <LemmaLogo />
             </Link>
             <nav aria-label="Main navigation">
-                <Link href="/templates">Templates</Link>
+                <Link href="/templates">Plugins</Link>
                 <Link href="/docs">Docs</Link>
                 <HostedOnly><Link href="/download" data-nav="download">Download</Link></HostedOnly>
                 <a href={githubUrl} data-nav="github">GitHub ↗</a>
