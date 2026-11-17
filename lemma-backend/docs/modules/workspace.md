@@ -51,6 +51,7 @@ names out of code, docs and skills.
 | `machine_connections` | A person's own computer joined with the CLI: its owner, mode, the hash of its secret, the capabilities and home it reports, and when it was last seen or revoked. A machine row names it by `connection_id`, without a foreign key, so the row outlives a revoked connection |
 | `machine_previews` | A port on a machine reachable at `p-<label>.<MACHINE_PREVIEW_DOMAIN>`, `private` or `link`, revocable before it expires |
 | `machine_sessions` | A stretch of a machine running, metered into compute-unit slices in the usage ledger |
+| `machine_services` | A named, long-lived process on a machine: its command, directory, the caller's environment encrypted, and the claims its Lemma token was minted for (never the token), so it is started again after the machine resumes whatever Redis has forgotten |
 | `machine_login_backups` | Encrypted copies of the login-bearing parts of a machine's browser profile, kept off the machine |
 
 `agents.machine` is the ref an agent's commands run on; unset means the default
