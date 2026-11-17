@@ -419,7 +419,7 @@ async def _poll_runtime(url: str, budget_seconds: float) -> int | None:
             await asyncio.sleep(0.1)
 
 
-async def close_browser(sandbox, provider_id: str, **api) -> None:
+async def close_browser(sandbox, provider_id: str) -> None:
     """Ask the browser to shut down, so the profile is written back.
 
     Called before a pause, because an E2B workspace pause is
@@ -443,10 +443,13 @@ async def close_browser(sandbox, provider_id: str, **api) -> None:
     """
     try:
         with sdk_errors():
+            # No connection settings: the sandbox handle already carries
+            # them, and `Commands.run` takes none -- passing `api_key` here
+            # raised on every release, so on E2B the browser was never closed
+            # and a login made since the last copy was lost (found by QA on a
+            # real E2B machine).
             await sandbox.commands.run(
-                "agent-browser close --all",
-                timeout=BROWSER_CLOSE_SECONDS,
-                **api,
+                "agent-browser close --all", timeout=BROWSER_CLOSE_SECONDS
             )
     # Exhaustive over what `classify` returns -- and that is wider than it
     # looks, because `sdk_errors` catches *every* `Exception` and maps it
