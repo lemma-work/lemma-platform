@@ -33,6 +33,8 @@ class AgentService:
     workload_id: UUID | None
     workload_name: str | None
     conversation_id: UUID | None
+    #: The run's delegation scope; empty when it is unscoped.
+    scope: tuple[str, ...] = ()
 
 
 def _cwd(service: AgentService) -> str:
@@ -73,6 +75,7 @@ async def start_agent_service(service: AgentService) -> str:
                 workload_id=service.workload_id,
                 workload_name=service.workload_name,
                 conversation_id=service.conversation_id,
+                scope=service.scope or None,
             ),
         ),
         base_env=service.base_env,

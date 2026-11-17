@@ -20,6 +20,9 @@ from app.modules.workspace.domain.machine_errors import MachineAccessDenied
 from app.modules.workspace.services.machine_process_credentials import (
     process_env_for,
 )
+from app.modules.workspace.services.machine_services import (
+    TokenClaims,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -68,7 +71,22 @@ async def _env(caller: MachineCaller, minter: _Minter, **overrides):
         "delegated_tokens_enabled": True,
     }
     arguments.update(overrides)
-    return await process_env_for(caller, **arguments)
+    env, _claims_minted = await process_env_for(caller, **arguments)
+    return env
+
+
+async def _claims_for(caller: MachineCaller, minter: _Minter, **overrides):
+    arguments = {
+        "machine_pod_id": None,
+        "get_env_vars": minter,
+        "delegation_claims": None,
+        "function_run_claims": None,
+        "function_run_token": None,
+        "delegated_tokens_enabled": True,
+    }
+    arguments.update(overrides)
+    _env_minted, claims = await process_env_for(caller, **arguments)
+    return claims
 
 
 async def test_an_apps_page_gets_no_lemma_token() -> None:
@@ -181,3 +199,39 @@ async def test_a_caller_whose_claims_cannot_be_built_is_refused(
     with pytest.raises(MachineAccessDenied):
         await _env(caller, minter, **overrides)
     assert minter.calls == [], "nothing was minted for a refused caller"
+
+
+async def test_a_service_restart_is_minted_exactly_what_its_start_was() -> None:
+    """A service started by an agent comes back with the agent's claims, and one
+    started by a page or a person-less run comes back with no token at all --
+    never the person's whole session."""
+    claims = _claims(WorkloadPrincipalType.AGENT)
+    agent = MachineCaller(
+        CallerKind.AGENT,
+        user_id=PERSON,
+        pod_id=POD,
+        workload_id=AGENT,
+        conversation_id=UUID(claims.session_id),
+    )
+
+    stored = await _claims_for(agent, _Minter(), delegation_claims=claims)
+
+    assert stored is not None
+    assert (stored.user_id, stored.pod_id) == (PERSON, POD)
+    assert (stored.workload_type, stored.workload_id) == ("AGENT", AGENT)
+    assert stored.scope == ("pod:read",)
+    assert stored.session_id == claims.session_id
+    assert TokenClaims.from_json(stored.to_json()) == stored
+
+    page = MachineCaller(CallerKind.APP, user_id=PERSON, pod_id=POD, app_id=uuid4())
+    assert await _claims_for(page, _Minter()) is None
+    run = SimpleNamespace(pod_id=POD, function_id=AGENT)
+    headless = MachineCaller(
+        CallerKind.FUNCTION, user_id=None, pod_id=POD, workload_id=AGENT
+    )
+    assert (
+        await _claims_for(
+            headless, _Minter(), function_run_claims=run, function_run_token="lfr_x"
+        )
+        is None
+    )

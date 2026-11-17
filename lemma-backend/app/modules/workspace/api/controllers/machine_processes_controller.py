@@ -189,7 +189,7 @@ def _cwd(machine: Machine, cwd: str | None) -> str:
 
 async def _ready_machine_for(
     request: Request, machine: Machine, cwd: str
-) -> dict[str, str]:
+) -> tuple[dict[str, str], TokenClaims | None]:
     """The machine up, the directory there, and the caller's credentials --
     never wider than the caller's own (``machine_process_credentials``)."""
     from app.core.authorization.function_run import (
@@ -266,7 +266,7 @@ async def start_process(
     user_id = request.state.machine_caller.user_id
     cwd = _cwd(machine, body.cwd)
     await _refuse_when_out_of_compute(uow_factory, machine)
-    base_env = await _ready_machine_for(request, machine, cwd)
+    base_env, claims = await _ready_machine_for(request, machine, cwd)
     record = await processes.start_process(
         machine.id,
         StartProcess(
@@ -282,8 +282,8 @@ async def start_process(
             run_id=body.run_id,
             started_by=user_id,
             # What `_ready_machine_for` minted the token for: a service's
-            # restart mints the same afresh.
-            claims=TokenClaims(user_id=user_id, pod_id=machine.pod_id),
+            # restart mints the same afresh, and none when there was none.
+            claims=claims,
         ),
         base_env=base_env,
     )

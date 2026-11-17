@@ -54,6 +54,7 @@ async def start_service(
             workload_id=principal.workload_id,
             workload_name=principal.workload_name,
             conversation_id=ctx.conversation_id,
+            scope=tuple(sorted(getattr(ctx, "delegation_scope", ()) or ())),
         )
     )
     if session.session_id:

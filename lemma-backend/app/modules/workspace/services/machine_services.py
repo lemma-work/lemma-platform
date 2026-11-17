@@ -50,6 +50,8 @@ class TokenClaims:
     workload_name: str | None = None
     scope: tuple[str, ...] | None = None
     conversation_id: UUID | None = None
+    #: The delegation session, so a restart's token finds the same approvals.
+    session_id: str | None = None
 
     def to_json(self) -> dict[str, object]:
         def text(value: UUID | None) -> str | None:
@@ -64,6 +66,7 @@ class TokenClaims:
             "workload_name": self.workload_name,
             "scope": list(self.scope) if self.scope is not None else None,
             "conversation_id": text(self.conversation_id),
+            "session_id": self.session_id,
         }
 
     @classmethod
@@ -86,6 +89,7 @@ class TokenClaims:
             else None,
             scope=tuple(str(s) for s in scope) if isinstance(scope, list) else None,
             conversation_id=uuid_or_none("conversation_id"),
+            session_id=str(data["session_id"]) if data.get("session_id") else None,
         )
 
 
@@ -107,6 +111,7 @@ async def mint_env(claims: TokenClaims) -> dict[str, str]:
             workload_name=claims.workload_name,
             scope=list(claims.scope) if claims.scope is not None else None,
             conversation_id=claims.conversation_id,
+            session_id=claims.session_id,
         )
     finally:
         await service.close()

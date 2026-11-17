@@ -32,6 +32,7 @@ from uuid import UUID
 
 from app.modules.workspace.domain.machine_access import CallerKind, MachineCaller
 from app.modules.workspace.domain.machine_errors import MachineAccessDenied
+from app.modules.workspace.services.machine_services import TokenClaims
 
 if TYPE_CHECKING:
     from app.core.authorization.delegation import DelegationClaims
@@ -49,17 +50,22 @@ async def process_env_for(
     function_run_claims: FunctionRunClaims | None,
     function_run_token: str | None,
     delegated_tokens_enabled: bool,
-) -> dict[str, str]:
-    """The base environment for a process ``caller`` starts on a machine."""
+) -> tuple[dict[str, str], TokenClaims | None]:
+    """The base environment for a process ``caller`` starts on a machine, and
+    the claims its token was minted for -- None when it carries no token Lemma
+    can mint again (an app's page, a person-less function run), so a service
+    restarted later gets none either, never a wider one."""
     if caller.kind is CallerKind.APP:
         if caller.user_id is None:
             raise _refused()
-        return await get_env_vars(caller.user_id, machine_pod_id, with_token=False)
+        env = await get_env_vars(caller.user_id, machine_pod_id, with_token=False)
+        return env, None
 
     if caller.kind is CallerKind.USER:
         if caller.user_id is None or delegation_claims is not None:
             raise _refused()
-        return await get_env_vars(caller.user_id, machine_pod_id)
+        env = await get_env_vars(caller.user_id, machine_pod_id)
+        return env, TokenClaims(user_id=caller.user_id, pod_id=machine_pod_id)
 
     if caller.user_id is None:
         # A person-less function run: its own token, which reaches only its
@@ -77,21 +83,32 @@ async def process_env_for(
         )
         env.pop("LEMMA_USER_ID", None)
         env["LEMMA_TOKEN"] = function_run_token
-        return env
+        return env, None
 
     # An agent or function acting for a person: the same claims, never wider.
     if delegation_claims is None or not delegated_tokens_enabled:
         raise _refused()
-    return await get_env_vars(
-        caller.user_id,
-        delegation_claims.pod_id,
+    claims = TokenClaims(
+        user_id=caller.user_id,
+        pod_id=delegation_claims.pod_id,
         workload_type=str(delegation_claims.actor_type.value),
         workload_id=delegation_claims.actor_id,
         workload_name=delegation_claims.actor_name,
-        scope=list(delegation_claims.scope),
-        session_id=delegation_claims.session_id,
+        scope=tuple(delegation_claims.scope),
         conversation_id=caller.conversation_id,
+        session_id=delegation_claims.session_id,
     )
+    env = await get_env_vars(
+        claims.user_id,
+        claims.pod_id,
+        workload_type=claims.workload_type,
+        workload_id=claims.workload_id,
+        workload_name=claims.workload_name,
+        scope=list(delegation_claims.scope),
+        session_id=claims.session_id,
+        conversation_id=claims.conversation_id,
+    )
+    return env, claims
 
 
 def _refused() -> MachineAccessDenied:
