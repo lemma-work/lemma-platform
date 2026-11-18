@@ -160,13 +160,24 @@ strictDepBuilds: false
 """
 
 
+#: The ``package.json`` keys under ``pnpm`` that already say which install
+#: scripts run. An app that says so there has made the choice the default file
+#: would otherwise replace.
+_OWN_BUILD_POLICY = (
+    '"(onlyBuiltDependencies|allowBuilds|neverBuiltDependencies'
+    '|ignoredBuiltDependencies)"'
+)
+
+
 def build_script(src_dir: str) -> str:
     """The shell that installs and builds the app in ``src_dir`` with pnpm, the
-    sandbox's package manager. An app's own ``pnpm-workspace.yaml`` is left as
-    it is: what it allows is its author's choice."""
+    sandbox's package manager. An app's own ``pnpm-workspace.yaml``, or a build
+    policy in its ``package.json``, is left as it is: what it allows is its
+    author's choice."""
     return (
         f"cd {shlex.quote(src_dir)} && "
-        "if [ ! -e pnpm-workspace.yaml ]; then "
+        "if [ ! -e pnpm-workspace.yaml ] && "
+        f"! grep -qE {shlex.quote(_OWN_BUILD_POLICY)} package.json 2>/dev/null; then "
         f"printf '%s' {shlex.quote(DEFAULT_PNPM_WORKSPACE)} > pnpm-workspace.yaml; "
         "fi && "
         "if [ -f pnpm-lock.yaml ]; then "

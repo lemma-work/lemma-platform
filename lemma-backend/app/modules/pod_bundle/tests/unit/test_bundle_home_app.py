@@ -162,9 +162,15 @@ def test_an_export_carries_the_app_its_pod_opens_on() -> None:
 
 
 def test_the_pod_config_keeps_a_cleared_choice_and_never_fails_on_one() -> None:
-    # Serialized even when null: an update merges key by key, and null is how
-    # a person hands the choice back to the apps' own order.
+    # A null somebody sent is kept: an update merges key by key, and null is
+    # how a person hands the choice back to the apps' own order. A config
+    # nobody chose for reads as it did before there was a choice.
     assert PodConfig(home_app=None).model_dump()["home_app"] is None
+    assert "home_app" not in PodConfig().model_dump()
+    assert (
+        "home_app"
+        not in PodConfig.from_raw({"join_policy": "ORG_MEMBERS"}).model_dump()
+    )
     assert PodConfig(home_app="  ").home_app is None
     # A stored value of the wrong shape costs the choice, not the whole config.
     stored = PodConfig.from_raw({"join_policy": "ORG_MEMBERS", "home_app": 7})

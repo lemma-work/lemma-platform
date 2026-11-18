@@ -127,3 +127,55 @@ async def test_a_run_with_no_body_is_as_it_was(
 
     assert run.status_code == 201, run.text
     assert "start" not in run.json()["execution_context"]
+
+
+async def test_a_row_the_starter_cannot_read_is_no_row(
+    authenticated_client: AsyncClient, async_client: AsyncClient, fixed_test_org
+):
+    """Row security holds: another member's row in a table with row security
+    is not handed to a run a member starts, and says nothing about whether it
+    exists."""
+    from app.modules.test_support.e2e_authz import (
+        add_pod_member,
+        auth_headers,
+        invite_org_member,
+        signup_user,
+    )
+
+    pod_id, _, _ = await _pod_with_a_deal(authenticated_client, fixed_test_org["id"])
+    table = f"notes_{uuid4().hex[:6]}"
+    made = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/tables",
+        json={
+            "name": table,
+            "enable_rls": True,
+            "columns": [{"name": "body", "type": "TEXT"}],
+        },
+    )
+    assert made.status_code == 201, made.text
+    owners_row = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/tables/{table}/records",
+        json={"data": {"body": "the owner's own note"}},
+    )
+    assert owners_row.status_code == 201, owners_row.text
+    workflow = await _waiting_workflow(authenticated_client, pod_id)
+
+    member = await signup_user(async_client, "run-about")
+    joined = await invite_org_member(
+        authenticated_client, async_client, org_id=fixed_test_org["id"], user=member
+    )
+    await add_pod_member(
+        authenticated_client,
+        pod_id=pod_id,
+        organization_member_id=joined["id"],
+        role="POD_USER",
+    )
+
+    refused = await async_client.post(
+        f"/pods/{pod_id}/workflows/{workflow}/runs",
+        json={"about": {"table": table, "record_id": str(owners_row.json()["id"])}},
+        headers=auth_headers(member),
+    )
+
+    assert refused.status_code == 404, refused.text
+    assert "the owner's own note" not in refused.text

@@ -32,8 +32,8 @@ A new revision's schemas are read by the pod's function runtime
 (`application/function_schema_dispatcher.py`). A dead or moved runtime (a
 transport error, 404/410, 5xx) is asked once more on a fresh endpoint; an
 inspection the runtime refused because fetching the code failed in transit (a
-422 naming an httpx transport error such as `ReadError`) is asked once more on
-the same one. A function whose code does not load is refused at once.
+422 naming an httpx transport error such as `ReadError`) is asked once more.
+A function whose code does not load is refused at once.
 
 ## Runs on the work runtime
 

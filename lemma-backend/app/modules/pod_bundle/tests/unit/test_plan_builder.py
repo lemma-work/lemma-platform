@@ -616,7 +616,10 @@ async def test_two_schedules_on_one_global_workflow_are_refused_before_writing(t
     from app.modules.pod_bundle.domain.errors import BundleInvalidError
 
     root = _build_bundle(tmp)
-    _write(root / "workflows" / "triage" / "triage.json", {"name": "triage"})
+    _write(
+        root / "workflows" / "triage" / "triage.json",
+        {"name": "triage", "mode": "GLOBAL"},
+    )
     for name in ("on_ticket", "every_morning"):
         _write(
             root / "schedules" / name / f"{name}.json",
@@ -626,3 +629,11 @@ async def test_two_schedules_on_one_global_workflow_are_refused_before_writing(t
     with pytest.raises(BundleInvalidError) as excinfo:
         await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
     assert "workflow 'triage'" in str(excinfo.value)
+
+    # With no mode, this import creates the workflow USER: two schedules are fine.
+    _write(root / "workflows" / "triage" / "triage.json", {"name": "triage"})
+    plan = await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
+    assert {s.name for s in plan.steps if s.kind.value == "SCHEDULE"} == {
+        "on_ticket",
+        "every_morning",
+    }

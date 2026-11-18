@@ -365,6 +365,21 @@ def test_an_apps_own_workspace_file_is_left_as_it_is(tmp_path):
     assert calls == ["install --frozen-lockfile", "run build"]
 
 
+def test_an_apps_build_policy_in_package_json_is_left_as_it_is(tmp_path):
+    """pnpm reads `pnpm.onlyBuiltDependencies` from package.json; a default
+    workspace file would replace that list with esbuild alone."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "package.json").write_text(
+        '{"name": "app", "pnpm": {"onlyBuiltDependencies": ["sharp", "esbuild"]}}'
+    )
+
+    calls = _run_build_script(src, tmp_path)
+
+    assert not (src / "pnpm-workspace.yaml").exists()
+    assert calls == ["install --no-frozen-lockfile", "run build"]
+
+
 # --- runner artifact selection by tier ---------------------------------------
 
 

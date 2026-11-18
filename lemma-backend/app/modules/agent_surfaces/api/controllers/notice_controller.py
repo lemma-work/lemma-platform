@@ -102,14 +102,14 @@ async def send_self_notice(
         )
     await _within_rate(pod_id, person)
     messages = build_direct_messages(uow)
-    recipient = await messages.membership.resolve_pod_recipient(
-        pod_id=pod_id, reference=str(person)
-    )
-    if recipient is None:
+    # Asked of the person's own user id, not through the "member id, user id
+    # or email" resolver: there is nothing here to resolve.
+    if await messages.membership.get_pod_member_id(person, pod_id) is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             detail="The person this acts for is not a member of this pod.",
         )
+    recipient = person
     workload = ctx.workload
     try:
         line = await messages.send(

@@ -80,8 +80,9 @@ def sync_detailed(
     """Update Column
 
      Add options to an ENUM column, drop a column's foreign key, or both. `options` must include every
-    option the column has now: removing one is refused (422), because rows may already hold it, as is
-    any column that is not ENUM. Sending what the column already is changes nothing.
+    option the column has now: removing one is refused (422), because rows may already hold it, and
+    sending `options` for a column that is not ENUM is refused too. `drop_foreign_key` works on any
+    column. Sending what the column already is changes nothing.
 
     Args:
         pod_id (UUID):
@@ -127,8 +128,9 @@ def sync(
     """Update Column
 
      Add options to an ENUM column, drop a column's foreign key, or both. `options` must include every
-    option the column has now: removing one is refused (422), because rows may already hold it, as is
-    any column that is not ENUM. Sending what the column already is changes nothing.
+    option the column has now: removing one is refused (422), because rows may already hold it, and
+    sending `options` for a column that is not ENUM is refused too. `drop_foreign_key` works on any
+    column. Sending what the column already is changes nothing.
 
     Args:
         pod_id (UUID):
@@ -169,8 +171,9 @@ async def asyncio_detailed(
     """Update Column
 
      Add options to an ENUM column, drop a column's foreign key, or both. `options` must include every
-    option the column has now: removing one is refused (422), because rows may already hold it, as is
-    any column that is not ENUM. Sending what the column already is changes nothing.
+    option the column has now: removing one is refused (422), because rows may already hold it, and
+    sending `options` for a column that is not ENUM is refused too. `drop_foreign_key` works on any
+    column. Sending what the column already is changes nothing.
 
     Args:
         pod_id (UUID):
@@ -214,8 +217,9 @@ async def asyncio(
     """Update Column
 
      Add options to an ENUM column, drop a column's foreign key, or both. `options` must include every
-    option the column has now: removing one is refused (422), because rows may already hold it, as is
-    any column that is not ENUM. Sending what the column already is changes nothing.
+    option the column has now: removing one is refused (422), because rows may already hold it, and
+    sending `options` for a column that is not ENUM is refused too. `drop_foreign_key` works on any
+    column. Sending what the column already is changes nothing.
 
     Args:
         pod_id (UUID):

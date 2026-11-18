@@ -17,7 +17,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.authorization.assistant_grants import runs_the_assistant
+from app.core.authorization.assistant_grants import split_assistant_grant
 from app.core.authorization.context import ResourceType
 from app.core.authorization.grants import validate_pod_resource_grant_permissions
 from app.core.authorization.permissions import (
@@ -145,24 +145,27 @@ async def test_an_export_names_the_pod_slash_and_drops_another_pods_id() -> None
 
 def test_a_grant_to_run_the_assistant_by_name_is_the_pods_own() -> None:
     """`agent:pod_default:execute` names the assistant's row, whose id is the
-    pod's; it is stored where starting the assistant is checked."""
+    pod's; running it is stored where starting the assistant is checked, and
+    anything else named with it stays on the row."""
     pod_id = uuid4()
     run = [Permissions.AGENT_EXECUTE]
-    assert runs_the_assistant(ResourceType.AGENT, pod_id, run, pod_id=pod_id)
-    assert runs_the_assistant(
+    assert split_assistant_grant(ResourceType.AGENT, pod_id, run, pod_id=pod_id) == (
+        run,
+        [],
+    )
+    assert split_assistant_grant(
         ResourceType.AGENT,
         pod_id,
-        [Permissions.AGENT_EXECUTE, Permissions.AGENT_READ],
+        [Permissions.AGENT_EXECUTE, Permissions.AGENT_READ, Permissions.AGENT_UPDATE],
         pod_id=pod_id,
+    ) == (run, [Permissions.AGENT_UPDATE])
+    # A named agent's row, or a grant that does not run it, is left alone.
+    assert (
+        split_assistant_grant(ResourceType.AGENT, uuid4(), run, pod_id=pod_id) is None
     )
-    # A named agent's row, or anything beyond running it, is left alone.
-    assert not runs_the_assistant(ResourceType.AGENT, uuid4(), run, pod_id=pod_id)
-    assert not runs_the_assistant(
-        ResourceType.AGENT,
-        pod_id,
-        [Permissions.AGENT_EXECUTE, Permissions.AGENT_UPDATE],
-        pod_id=pod_id,
-    )
-    assert not runs_the_assistant(
-        ResourceType.AGENT, pod_id, [Permissions.AGENT_READ], pod_id=pod_id
+    assert (
+        split_assistant_grant(
+            ResourceType.AGENT, pod_id, [Permissions.AGENT_READ], pod_id=pod_id
+        )
+        is None
     )

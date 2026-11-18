@@ -76,13 +76,6 @@ async def carry_home_app(
     chosen = await target.chosen()
     if chosen == wanted:
         return []
-    apps = await target.app_names()
-    if wanted not in apps:
-        missing = (
-            f"This bundle opens on an app called '{wanted}', which it does not "
-            "bring; it opens on its first app instead."
-        )
-        return [missing]
     if chosen is not None:
         kept = (
             f"Kept the app this Lemma opens on ('{chosen}'); the bundle's "
@@ -90,6 +83,13 @@ async def carry_home_app(
             "open there instead."
         )
         return [kept]
+    apps = await target.app_names()
+    if wanted not in apps:
+        missing = (
+            f"This bundle opens on an app called '{wanted}', which it does not "
+            "bring; it opens on its first app instead."
+        )
+        return [missing]
     # The bundle's own app, there before, is not another app: re-importing
     # into the pod it came from opens there as it already did.
     if apps - created - {wanted}:

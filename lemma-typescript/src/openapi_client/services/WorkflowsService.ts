@@ -448,6 +448,7 @@ export class WorkflowsService {
             body: requestBody,
             mediaType: 'application/json',
             errors: {
+                404: `No record you can read matches \`about\`.`,
                 422: `Validation Error`,
             },
         });

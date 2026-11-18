@@ -105,13 +105,15 @@ visualization.
 
 A run takes no free-form input; inputs arrive through FORM nodes. A person
 starting one may name the one record it is about (`POST .../runs` with
-`{"about": {"table", "record_id"}}`, `api/run_about.py`): the record is read as
-them, through the table permission and row scope the datastore applies
+`{"about": {"table": "deals", "record_id": "<the record's key>"}}`,
+`api/run_about.py`): the record is read as them, through the table permission
+and row scope the datastore applies
 (`datastore.contracts.event_reads.read_record_as`), and handed to the run as a
 table change would hand it -- its fields in `start.payload`, `table_name` and
 `record_id` in `start.metadata` -- so one workflow serves a table trigger and an
 app's button about one row. A record they cannot read is a 404, the same as
-none.
+none. Like a run a table trigger started, the run then carries the record's
+fields as they were read: whoever can read the run sees them in its start.
 
 ## Execution flow
 

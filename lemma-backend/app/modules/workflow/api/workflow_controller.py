@@ -307,6 +307,7 @@ async def delete_workflow(
         "already created."
     ),
     dependencies=[WorkflowResourceExecuteDep],
+    responses={404: {"description": "No record you can read matches `about`."}},
 )
 async def create_workflow_run(
     uow: UoWDep,

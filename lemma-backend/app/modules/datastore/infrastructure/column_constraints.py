@@ -71,7 +71,10 @@ async def replace_column_check(
                         text(f'ALTER TABLE {relation} DROP CONSTRAINT "{quoted}"')
                     )
             if check_clause is not None:
-                await conn.execute(text(f"ALTER TABLE {relation} ADD{check_clause}"))
+                # `text()` reads ":word" as a bind parameter, and an option
+                # may well hold a colon ("ref:42"): escaped, it stays literal.
+                literal = check_clause.replace(":", "\\:")
+                await conn.execute(text(f"ALTER TABLE {relation} ADD{literal}"))
     except DBAPIError as exc:
         if getattr(exc.orig, "sqlstate", None) != _CHECK_VIOLATION:
             raise

@@ -45,8 +45,10 @@ all is an error: 503 `DECISION_PROVIDER_UNAVAILABLE`, retryable.
 
 How a provider says "not sure" differs. The `model` provider answers `null`
 when it judges the evidence does not support an answer -- an answer, not a
-failure. `typesafe` never answers `null`: it answers its most probable value
-and reports that value's calibrated probability as `confidence`. A caller that
+failure. `typesafe` never answers `null`: it answers the value it judged most
+likely and, where it reports one, that value's calibrated probability as
+`confidence` (`null` for a scale read from its score alone; for several
+choices, the least certain of its per-option decisions). A caller that
 wants to route "not sure" somewhere treats an answer as unsure when `value` is
 `null`, or `confidence` is not `null` and below its own threshold -- one rule
 that holds on either provider. The threshold is the caller's because what a

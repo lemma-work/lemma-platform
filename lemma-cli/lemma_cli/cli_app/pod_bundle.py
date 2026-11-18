@@ -21,7 +21,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 # The `X as X` spellings are the explicit re-export form: those names exist for
 # importers of this module and are not used in the body, so without it they read
 # as dead imports and `make lint` fails on the whole file.
-from lemma_pod_bundle.workflow_schedules import check_one_schedule_per_global_workflow
+from lemma_pod_bundle.workflow_schedules import schedules_sharing_a_global_workflow
 from lemma_pod_bundle.diff import (
     TableDiff as TableDiff,
     _is_system_table_column as _is_system_table_column,
@@ -141,7 +141,6 @@ from lemma_sdk.openapi_client.models.function_permissions_replace_request import
 from lemma_sdk.openapi_client.models.pod_update_request import PodUpdateRequest
 from lemma_sdk.openapi_client.models.update_agent_request import UpdateAgentRequest
 from lemma_sdk.openapi_client.models.update_app_request import UpdateAppRequest
-from lemma_sdk.openapi_client.models.update_column_request import UpdateColumnRequest
 from lemma_sdk.openapi_client.models.update_function_request import (
     UpdateFunctionRequest,
 )
@@ -1455,15 +1454,6 @@ def _build_import_plan(
                         )
                     )
 
-    # The platform refuses a second schedule on one GLOBAL workflow when it is
-    # created -- after everything before it has been written. Said here instead.
-    try:
-        check_one_schedule_per_global_workflow(source_dir)
-    except ValueError as exc:
-        issues.append(
-            BundleValidationIssue(path=str(source_dir / "schedules"), message=str(exc))
-        )
-
     existing_tables = _build_existing_map(list_items(pod_sdk.tables.list(limit=1000)))
     for resource_dir in _resource_dirs(source_dir, "tables"):
         table_name = resource_dir.name
@@ -1555,6 +1545,20 @@ def _build_import_plan(
                 )
         else:
             summary["schedules"].append(f"created:{schedule_name}")
+    # The platform refuses a second schedule on one GLOBAL workflow when it is
+    # created -- after everything before it has been written. Said here instead.
+    # A workflow this import creates through the API is GLOBAL unless its
+    # manifest says otherwise; what the pod already has is not counted.
+    clash = schedules_sharing_a_global_workflow(
+        source_dir,
+        default_mode="GLOBAL",
+        existing_schedules=set(existing_schedules),
+        existing_workflows=set(existing_workflows),
+    )
+    if clash is not None:
+        issues.append(
+            BundleValidationIssue(path=str(source_dir / "schedules"), message=clash)
+        )
 
     surface_dirs = _resource_dirs(source_dir, "surfaces")
     # Surfaces are addressed by their pod-unique name (defaulting to the
@@ -2220,6 +2224,12 @@ def _change_existing_columns(
     this done.
     """
     columns = sorted(set(diff.options_to_add) | set(diff.foreign_keys_to_drop))
+    if columns:
+        # Imported only when a column changes: the model is newer than the
+        # route-less SDKs this CLI still imports beside.
+        from lemma_sdk.openapi_client.models.update_column_request import (
+            UpdateColumnRequest,
+        )
     for column_name in columns:
         change: dict[str, Any] = {}
         if column_name in diff.options_to_add:
@@ -2589,6 +2599,7 @@ def import_pod_bundle(
             )
             if home_app
             else set(),
+            source_dir=source_dir,
         )
         return {
             "ok": len(issues) == 0,

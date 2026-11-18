@@ -111,8 +111,10 @@ installation to map to, and that no bundled schedule or surface runs through
 import goes ahead without it, its CONNECTOR step is marked skipped, and grants
 on it are dropped with a warning (`connector_grants.resolve_connector_grants`).
 Choosing an installation or to create one brings it in. An importer may also
-leave out any other optional connector with `{"skip": true}`; a required one
-cannot be. lemma-cli applies the same rule (`pod_bundle_connectors.py`).
+leave out any other optional connector with `{"skip": true}`; one that is
+required, or that a bundled schedule or surface runs through, cannot be.
+lemma-cli leaves such a connector out the same way (`pod_bundle_connectors.py`),
+and `--create-installations` brings it in; it has no explicit `skip`.
 
 A slug the pod already declares is kept only when it is the same catalog
 connector in the same mode (`EXISTS`); another connector or the other mode is
@@ -133,12 +135,16 @@ them here, or gone -- is planned as skipped with a warning
 the apply is requested for one given as an import variable. The rest of the
 bundle imports.
 
-**One schedule per GLOBAL workflow.** The platform keeps a GLOBAL workflow
-(every workflow unless its manifest says `"mode": "USER"`) to one schedule per
-person in a pod and refuses the second when it is created -- after everything
-before it had been written. The plan refuses a bundle in which two schedules
-start one of its own GLOBAL workflows (`lemma_pod_bundle.workflow_schedules`,
-asked by `plan_builder` and by lemma-cli before either writes anything).
+**One schedule per GLOBAL workflow.** The platform keeps a GLOBAL workflow to
+one schedule per person in a pod and refuses the second when it is created --
+after everything before it had been written. The plan refuses a bundle in which
+two schedules it creates would start one GLOBAL workflow it creates
+(`lemma_pod_bundle.workflow_schedules`, through `infrastructure/one_schedule.py`).
+A manifest with no `mode` is created USER by this import, so only an explicit
+`"mode": "GLOBAL"` counts here; lemma-cli, which creates through the API where
+the default is GLOBAL, asks the same question with that default. Workflows and
+schedules the pod already has, and one-time schedules already past, are not
+counted.
 
 **The app a pod opens on.** `pod.json -> home_app` names one of the bundle's
 apps (its `apps/<name>` directory); the exporter writes it from the pod's

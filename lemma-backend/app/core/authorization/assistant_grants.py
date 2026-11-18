@@ -10,8 +10,8 @@ for, who must be able to run the assistant themselves.
 
 `agent:pod_default:execute`, which names the row, was accepted and then never
 matched. It is stored as the pod's grant instead, so the spelling a builder
-reaches for does what it says. Anything else named on the assistant's row is
-left as it was.
+reaches for does what it says; anything else named with it on the row stays
+on the row.
 """
 
 from __future__ import annotations
@@ -25,20 +25,24 @@ from app.core.authorization.permissions import Permissions
 _RUN_THE_ASSISTANT = frozenset({Permissions.AGENT_EXECUTE, Permissions.AGENT_READ})
 
 
-def runs_the_assistant(
+def split_assistant_grant(
     resource_type: ResourceType,
     resource_id: UUID,
     permission_ids: Collection[str],
     *,
     pod_id: UUID,
-) -> bool:
-    """Whether this grant, on the assistant's row, asks only to run it."""
-    return (
-        resource_type is ResourceType.AGENT
-        and resource_id == pod_id
-        and set(permission_ids) <= _RUN_THE_ASSISTANT
-        and Permissions.AGENT_EXECUTE in permission_ids
-    )
+) -> tuple[list[str], list[str]] | None:
+    """For a grant on the assistant's row that lets it run, what goes on the
+    pod (``agent.execute``) and what stays on the row (anything beyond
+    running it); ``None`` for every other grant."""
+    if (
+        resource_type is not ResourceType.AGENT
+        or resource_id != pod_id
+        or Permissions.AGENT_EXECUTE not in permission_ids
+    ):
+        return None
+    rest = sorted(set(permission_ids) - _RUN_THE_ASSISTANT)
+    return [Permissions.AGENT_EXECUTE], rest
 
 
-__all__ = ["runs_the_assistant"]
+__all__ = ["split_assistant_grant"]

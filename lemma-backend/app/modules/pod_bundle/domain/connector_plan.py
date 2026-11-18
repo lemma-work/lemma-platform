@@ -132,6 +132,14 @@ class ConnectorPlan(BaseModel):
         return self.mode == "SHARED"
 
     @property
+    def runs_something(self) -> bool:
+        """Whether a bundled schedule or surface runs through it: one that
+        cannot be made without it, so it is never left out."""
+        return any(
+            where.startswith(("schedules/", "surfaces/")) for where in self.used_by
+        )
+
+    @property
     def declares(self) -> bool:
         """Whether applying the plan declares this connector, unless the
         importer chooses otherwise: a SKIPPED one is declared only when they
@@ -198,7 +206,7 @@ def _left_out(
         or choice.auth_config_id is not None
         or choice.share_account_id is not None
     )
-    if choice.skip and plan.required:
+    if choice.skip and (plan.required or plan.runs_something):
         return BlockingConnector(
             slug=plan.slug,
             reason="the bundle needs this connector; it cannot be left out",

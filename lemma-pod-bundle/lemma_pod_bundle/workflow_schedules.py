@@ -1,58 +1,80 @@
-"""How many of a bundle's schedules start each of its workflows.
+"""How many of a bundle's new schedules start each of its new workflows.
 
-The platform keeps a GLOBAL workflow -- every workflow, unless its manifest
-says ``"mode": "USER"`` -- to one schedule per person in a pod, and refuses
-the second when it is created. An import creates schedules last, so a bundle
-with two schedules on one such workflow failed after its tables, functions,
-agents, workflows and the first schedule had already landed. Both importers
-ask this first, so the bundle is refused before anything is written.
+The platform keeps a GLOBAL workflow to one schedule per person in a pod, and
+refuses the second when it is created. An import creates schedules last, so a
+bundle with two schedules on one such workflow failed after its tables,
+functions, agents, workflows and the first schedule had already landed. Both
+importers ask this first, so the bundle is refused before anything is written.
 
-Only the bundle's own workflows are judged: a schedule naming one the pod
-already has is the platform's to check, with the pod's own mode for it.
+Only what the import will create is counted:
+
+- a workflow's mode is what the importer would create it with: a manifest
+  with no ``mode`` is created USER by the server's import and GLOBAL through
+  the API (lemma-cli), so the caller says which (``default_mode``);
+- a workflow the pod already has keeps the pod's own mode, which the platform
+  checks when the schedule is created;
+- a schedule the pod already has, or a one-time schedule already past (both
+  importers leave those out), creates nothing.
+
+Names are compared as the schedule service compares them: stripped and
+lowercased.
 """
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from pathlib import Path
+from typing import Any
 
+from .apply_fields import is_past_one_time_schedule
 from .layout import load_resource_payload
 
 
-def _bundled_global_workflows(bundle_root: Path) -> set[str]:
-    root = bundle_root / "workflows"
+def _key(name: object) -> str:
+    return str(name or "").strip().lower()
+
+
+def _manifests(bundle_root: Path, kind: str) -> list[tuple[str, dict[str, Any]]]:
+    root = bundle_root / kind
     if not root.is_dir():
-        return set()
-    names: set[str] = set()
+        return []
+    found: list[tuple[str, dict[str, Any]]] = []
     for resource_dir in sorted(p for p in root.iterdir() if p.is_dir()):
         try:
             payload = load_resource_payload(
-                resource_dir, resource_dir.name, resource_type="workflows"
+                resource_dir, resource_dir.name, resource_type=kind
             )
         except OSError, ValueError:
             continue  # the importer reports a manifest it cannot read
-        if str(payload.get("mode") or "GLOBAL").upper() == "GLOBAL":
-            names.add(str(payload.get("name") or resource_dir.name))
-    return names
+        found.append((str(payload.get("name") or resource_dir.name), payload))
+    return found
 
 
-def global_workflows_scheduled_twice(bundle_root: Path) -> dict[str, list[str]]:
-    """Bundled GLOBAL workflows more than one bundled schedule starts, each
-    with the names of those schedules."""
-    root = bundle_root / "schedules"
-    if not root.is_dir():
-        return {}
-    global_workflows = _bundled_global_workflows(bundle_root)
+def global_workflows_scheduled_twice(
+    bundle_root: Path,
+    *,
+    default_mode: str,
+    existing_schedules: Collection[str] = (),
+    existing_workflows: Collection[str] = (),
+) -> dict[str, list[str]]:
+    """New GLOBAL workflows that more than one new schedule starts, each with
+    the names of those schedules."""
+    pod_workflows = {_key(name) for name in existing_workflows}
+    global_workflows = {
+        _key(name)
+        for name, payload in _manifests(bundle_root, "workflows")
+        if _key(name) not in pod_workflows
+        and str(payload.get("mode") or default_mode).upper() == "GLOBAL"
+    }
+    pod_schedules = {_key(name) for name in existing_schedules}
     starts: dict[str, list[str]] = {}
-    for resource_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-        try:
-            payload = load_resource_payload(
-                resource_dir, resource_dir.name, resource_type="schedules"
-            )
-        except OSError, ValueError:
-            continue
-        workflow = payload.get("workflow_name")
-        if isinstance(workflow, str) and workflow in global_workflows:
-            name = str(payload.get("name") or resource_dir.name)
+    for name, payload in _manifests(bundle_root, "schedules"):
+        workflow = _key(payload.get("workflow_name"))
+        if (
+            workflow in global_workflows
+            and _key(name) not in pod_schedules
+            and not is_past_one_time_schedule(payload)
+        ):
             starts.setdefault(workflow, []).append(name)
     return {
         workflow: schedules
@@ -61,17 +83,28 @@ def global_workflows_scheduled_twice(bundle_root: Path) -> dict[str, list[str]]:
     }
 
 
-def check_one_schedule_per_global_workflow(bundle_root: Path) -> None:
-    """Raise ``ValueError`` naming each bundled GLOBAL workflow that more than
-    one bundled schedule starts, and how to fix it."""
-    twice = global_workflows_scheduled_twice(bundle_root)
+def schedules_sharing_a_global_workflow(
+    bundle_root: Path,
+    *,
+    default_mode: str,
+    existing_schedules: Collection[str] = (),
+    existing_workflows: Collection[str] = (),
+) -> str | None:
+    """Why the import would fail at its second schedule on one workflow, or
+    ``None`` when it would not."""
+    twice = global_workflows_scheduled_twice(
+        bundle_root,
+        default_mode=default_mode,
+        existing_schedules=existing_schedules,
+        existing_workflows=existing_workflows,
+    )
     if not twice:
-        return
+        return None
     named = "; ".join(
         f"workflow '{workflow}' by {', '.join(repr(s) for s in schedules)}"
         for workflow, schedules in sorted(twice.items())
     )
-    raise ValueError(
+    return (
         "A workflow can have one schedule per person, and this bundle gives "
         f"some more than one: {named}. Give each schedule its own workflow "
         "(a small one can start the shared work)."
@@ -79,6 +112,6 @@ def check_one_schedule_per_global_workflow(bundle_root: Path) -> None:
 
 
 __all__ = [
-    "check_one_schedule_per_global_workflow",
     "global_workflows_scheduled_twice",
+    "schedules_sharing_a_global_workflow",
 ]

@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
-from lemma_pod_bundle import check_one_schedule_per_global_workflow as one_schedule_each
 from lemma_pod_bundle import diff_table_columns, load_resource_payload
 from lemma_pod_bundle.diff import _order_table_dirs_by_dependency
 from lemma_pod_bundle.jsonc import loads_jsonc
@@ -51,6 +50,7 @@ from app.modules.pod_bundle.infrastructure.connector_planning import (
 )
 from app.modules.pod_bundle.infrastructure import account_checks, bundle_outcome
 from app.modules.pod_bundle.infrastructure.grants import has_grants
+from app.modules.pod_bundle.infrastructure.one_schedule import refuse_shared_workflows
 from app.modules.pod_bundle.infrastructure.plan_variables import (
     variables_from_manifest,
 )
@@ -252,7 +252,6 @@ class PlanBuilder:
         pod_manifest = self._read_pod_manifest(bundle_root)
         try:
             format_version = check_format_version(pod_manifest)
-            one_schedule_each(bundle_root)  # before anything is written, not after
         except ValueError as exc:
             raise BundleInvalidError(str(exc)) from exc
         bundle_name = pod_manifest.get("name")
@@ -337,6 +336,7 @@ class PlanBuilder:
 
         # --- schedules -------------------------------------------------------
         existing_schedules = await self._existing.schedule_names()
+        refuse_shared_workflows(bundle_root, existing_schedules, existing_workflows)
         for d in _resource_subdirs(bundle_root, "schedules"):
             step = self._create_once_step(
                 StepKind.SCHEDULE,

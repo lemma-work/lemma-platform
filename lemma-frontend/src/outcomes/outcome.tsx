@@ -113,7 +113,7 @@ export function OutcomePage({ pod, pods, orgName, tab, section = null, activity,
                 {tab === "pages" && <PagesTab pod={pod} go={go} actions={actions} />}
                 {tab === "tables" && <TablesTab pod={pod} go={go} actions={actions} />}
                 {tab === "files" && <FilesTab pod={pod} go={go} />}
-                {tab === "apps" && <AppsTab pod={pod} go={go} actions={actions} />}
+                {tab === "apps" && <AppsTab key={pod.id} pod={pod} go={go} actions={actions} />}
                 {tab === "people" && <PeopleTab pod={pod} orgName={orgName} />}
                 {tab === "contacts" && (contacts
                     ? <ContactsPage pod={pod} onConnect={() => actions.connect(pod.id)} />

@@ -16,7 +16,7 @@ class DecisionAnswerResponse:
         confidence (float | None): The provider's probability for this value, when it measures one. Null from providers
             that do not, such as a language model.
         value (bool | int | list[str] | None | str): The answer, or null when the provider judged the evidence did not
-            support one (the model provider does; Typesafe always answers its most probable value). Treat null, or a
+            support one (the model provider does; Typesafe always answers the value it judged most likely). Treat null, or a
             confidence below your own threshold, as unsure. Null is an answer, not a failure: a failure is an error
             response.
     """

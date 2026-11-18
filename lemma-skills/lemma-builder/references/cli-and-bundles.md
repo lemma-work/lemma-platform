@@ -75,7 +75,7 @@ Rules:
   - `"config": {"$json_file": "config.json"}` — parsed as JSON
 - `visibility` (`PERSONAL|POD|RESTRICTED|PUBLIC`, default `POD`) is a first-class field on tables/functions/agents/workflows/schedules and round-trips through export/import.
 - `pod.json` is metadata plus the portability variables: `{"name": ..., "description": ..., "icon_url": ..., "format_version": 3, "variables": {...}}`; `format_version` is `4` when the bundle declares a pod connector under `connectors/`, which readers of 3 would skip. A bundle of a newer format than your CLI reads is refused up front: update the CLI.
-- **One schedule per workflow.** A workflow (unless `"mode": "USER"`) takes one schedule per person; a bundle with two schedules on one workflow is refused before anything is written. Give each schedule its own small workflow.
+- **One schedule per GLOBAL workflow.** A GLOBAL workflow takes one schedule per person. A bundle whose new schedules would put two on one new GLOBAL workflow is refused before anything is written: `lemma pods import` creates a workflow with no `mode` as GLOBAL, the server's import as USER. Give each schedule its own small workflow.
 - `"home_app": "<app name>"` in `pod.json` is the app the Lemma opens on (otherwise its oldest app). An import sets it only on a Lemma that has no choice and had no other apps; a Lemma that already opens somewhere keeps it, and people change it from the Lemma's Apps tab ("Make it first").
 - `payloads/` and `README.md` are ignored by pod import, but they are part of a high-quality handoff: keep sample function/workflow inputs, seed records, and the end-to-end smoke test there.
 

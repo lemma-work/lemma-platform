@@ -157,6 +157,8 @@ async def test_a_granted_function_tells_its_own_person_and_nobody_else(
         lines = await authenticated_client.get(
             f"/pods/{pod_id}/channels/{channel_id}/messages"
         )
+        # Read, or the absence below would prove nothing.
+        assert lines.status_code == 200, lines.text
         assert "Not yours to say." not in lines.text
 
 

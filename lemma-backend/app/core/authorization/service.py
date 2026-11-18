@@ -228,6 +228,9 @@ class AuthorizationDataService:
             await self.session.flush()
         else:
             role.description = description
+        # Role rows carry a foreign key to the permission rows, which are
+        # seeded lazily: a permission added in a release may not be there yet.
+        await ensure_permission_rows(self.session, permission_ids)
         await self._replace_role_permissions(
             role_id=role.id,
             permission_ids=permission_ids,

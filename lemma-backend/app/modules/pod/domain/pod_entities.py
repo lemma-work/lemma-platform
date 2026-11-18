@@ -252,10 +252,11 @@ class PodConfig(BaseModel):
     #: config written any other way keeps the outcome it had.
     outcome: PodOutcome | None = None
     #: The app the pod opens on, by its name. Read before the apps' own order
-    #: (oldest first), which nobody chose. Always serialized, like
-    #: ``auto_join_new_members``: an update merges key by key, and ``null`` is
-    #: how somebody hands the choice back to that order. A name no app has any
-    #: longer is no choice, and readers fall back the same way.
+    #: (oldest first), which nobody chose. Omitted while nobody chose one, so
+    #: a config nobody touched reads as it did; a ``null`` somebody sent is
+    #: kept, because an update merges key by key and that ``null`` is how the
+    #: choice is handed back to the apps' order. A name no app has any longer
+    #: is no choice, and readers fall back the same way.
     home_app: str | None = Field(
         default=None,
         description=(
@@ -338,6 +339,8 @@ class PodConfig(BaseModel):
             data.pop("contacts", None)
         if data.get("outcome") is None:
             data.pop("outcome", None)
+        if data.get("home_app") is None and "home_app" not in self.model_fields_set:
+            data.pop("home_app", None)
         return data
 
 

@@ -39,10 +39,11 @@ class PodDecisions(BoundResource):
     Treat an answer as unsure by that one rule, whichever provider the
     deployment runs: the language-model provider answers `None` when the
     evidence did not support an answer, and the `typesafe` provider always
-    answers its most probable value with that value's probability as
-    `confidence`. The threshold is yours, because what a wrong answer costs
-    differs per question. A provider that could not answer raises instead (503,
-    or 429 with a Retry-After), so "unsure" and "failed" never look alike.
+    answers the value it judged most likely, with that value's probability as
+    `confidence` where it reports one (for several choices, the least certain
+    option). The threshold is yours, because what a wrong answer costs differs
+    per question. A provider that could not answer raises instead (503 or 429),
+    so "unsure" and "failed" never look alike.
     """
 
     def make(

@@ -20,8 +20,8 @@ from app.core.authorization.grant_generation import (
 from app.core.domain.errors import BadRequestError
 from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.permission_rows import ensure_permission_rows
-from app.core.authorization.assistant_grants import runs_the_assistant
-from app.core.authorization.permissions import PERMISSION_BY_ID, Permissions
+from app.core.authorization.assistant_grants import split_assistant_grant
+from app.core.authorization.permissions import PERMISSION_BY_ID
 from app.core.authorization.resource_actions import RESOURCE_ACTIONS
 from app.core.authorization.resource_names import (
     resolve_resource_ids_by_names,
@@ -165,21 +165,20 @@ async def normalize_pod_resource_grants(
     normalized: list[NormalizedResourceGrant] = []
     for grant in grants:
         resource_id = resolved[(grant.resource_type, grant.resource_name)]
-        if runs_the_assistant(
-            grant.resource_type, resource_id, grant.permission_ids, pod_id=pod_id
-        ):
-            # Stored where starting the assistant is checked: see the module.
+        permission_ids = list(grant.permission_ids)
+        # Running the assistant is stored where it is checked: see the module.
+        split = split_assistant_grant(
+            grant.resource_type, resource_id, permission_ids, pod_id=pod_id
+        )
+        if split is not None:
+            on_pod, permission_ids = split
+            normalized.append(NormalizedResourceGrant(ResourceType.POD, pod_id, on_pod))
+        if permission_ids:
             normalized.append(
                 NormalizedResourceGrant(
-                    ResourceType.POD, pod_id, [Permissions.AGENT_EXECUTE]
+                    grant.resource_type, resource_id, permission_ids
                 )
             )
-            continue
-        normalized.append(
-            NormalizedResourceGrant(
-                grant.resource_type, resource_id, list(grant.permission_ids)
-            )
-        )
     return normalized
 
 

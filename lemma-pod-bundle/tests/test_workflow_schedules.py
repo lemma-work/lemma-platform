@@ -1,15 +1,13 @@
-"""Two bundled schedules on one GLOBAL workflow are found before an import."""
+"""Two new schedules on one new GLOBAL workflow are found before an import."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-import pytest
-
 from lemma_pod_bundle import (
-    check_one_schedule_per_global_workflow,
     global_workflows_scheduled_twice,
+    schedules_sharing_a_global_workflow,
 )
 
 
@@ -26,28 +24,70 @@ def _bundle(root: Path, *, mode: str | None = None) -> Path:
     _write(root / "workflows" / "digest" / "digest.json", {"name": "digest"})
     for name, target in (
         ("on_ticket", "triage"),
-        ("every_morning", "triage"),
+        ("every_morning", "Triage"),
         ("weekly", "digest"),
         ("elsewhere", "a_pod_workflow"),
         ("also_elsewhere", "a_pod_workflow"),
     ):
         _write(
             root / "schedules" / name / f"{name}.json",
-            {"name": name, "schedule_type": "TIME", "workflow_name": target},
+            {
+                "name": name,
+                "schedule_type": "TIME",
+                "config": {"cron": "0 9 * * *"},
+                "workflow_name": target,
+            },
         )
     return root
 
 
-def test_a_global_workflow_two_schedules_start_is_named(tmp_path: Path):
-    root = _bundle(tmp_path)
+def test_a_global_workflow_two_new_schedules_start_is_named(tmp_path: Path):
+    root = _bundle(tmp_path, mode="GLOBAL")
 
-    assert global_workflows_scheduled_twice(root) == {
+    # Names compare as the schedule service compares them.
+    assert global_workflows_scheduled_twice(root, default_mode="USER") == {
         "triage": ["every_morning", "on_ticket"]
     }
-    with pytest.raises(ValueError, match="workflow 'triage' by 'every_morning'"):
-        check_one_schedule_per_global_workflow(root)
+    clash = schedules_sharing_a_global_workflow(root, default_mode="USER")
+    assert clash is not None and "workflow 'triage' by 'every_morning'" in clash
 
 
-def test_a_user_workflow_and_a_bundle_without_schedules_pass(tmp_path: Path):
-    check_one_schedule_per_global_workflow(_bundle(tmp_path / "a", mode="USER"))
-    check_one_schedule_per_global_workflow(tmp_path / "empty")
+def test_a_workflow_with_no_mode_counts_as_the_importer_creates_it(tmp_path: Path):
+    """The server's import creates it USER; the API, which lemma-cli uses,
+    creates it GLOBAL."""
+    root = _bundle(tmp_path)
+
+    assert schedules_sharing_a_global_workflow(root, default_mode="USER") is None
+    assert schedules_sharing_a_global_workflow(root, default_mode="GLOBAL")
+
+
+def test_what_the_pod_already_has_is_not_counted(tmp_path: Path):
+    root = _bundle(tmp_path, mode="GLOBAL")
+
+    assert (
+        schedules_sharing_a_global_workflow(
+            root, default_mode="GLOBAL", existing_schedules={"on_ticket"}
+        )
+        is None
+    )
+    assert (
+        schedules_sharing_a_global_workflow(
+            root, default_mode="GLOBAL", existing_workflows={"triage"}
+        )
+        is None
+    )
+
+
+def test_a_one_time_schedule_already_past_is_not_counted(tmp_path: Path):
+    root = _bundle(tmp_path, mode="GLOBAL")
+    _write(
+        root / "schedules" / "every_morning" / "every_morning.json",
+        {
+            "name": "every_morning",
+            "schedule_type": "TIME",
+            "config": {"scheduled_at": "2020-01-01T09:00:00Z"},
+            "workflow_name": "triage",
+        },
+    )
+
+    assert schedules_sharing_a_global_workflow(root, default_mode="GLOBAL") is None

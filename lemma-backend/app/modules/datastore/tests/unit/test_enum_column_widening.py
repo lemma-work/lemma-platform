@@ -421,3 +421,23 @@ async def test_the_foreign_key_is_dropped_by_what_it_constrains_with_no_check():
     assert statements[2:] == [
         f'ALTER TABLE {relation} DROP CONSTRAINT "tickets_customer_id_fkey"'
     ]
+
+
+@pytest.mark.asyncio
+async def test_an_option_with_a_colon_is_not_read_as_a_bind_parameter():
+    connection = SimpleNamespace(
+        execute=AsyncMock(return_value=_ConstraintNames(["tickets_status_check"]))
+    )
+    manager = _manager_on(connection)
+    status_change = _widened_status()
+    column = status_change.column.model_copy(update={"options": ["open", "ref:42"]})
+
+    await manager.change_column_constraints(
+        uuid4(),
+        "tickets",
+        ColumnChange(column=column, options_widened=True, foreign_key_dropped=False),
+    )
+
+    added = connection.execute.await_args_list[-1].args[0]
+    assert not added._bindparams
+    assert "'ref:42'" in str(added.compile())

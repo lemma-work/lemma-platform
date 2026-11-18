@@ -7908,7 +7908,7 @@
                 "type": "null"
               }
             ],
-            "description": "The answer, or null when the provider judged the evidence did not support one (the model provider does; Typesafe always answers its most probable value). Treat null, or a confidence below your own threshold, as unsure. Null is an answer, not a failure: a failure is an error response.",
+            "description": "The answer, or null when the provider judged the evidence did not support one (the model provider does; Typesafe always answers the value it judged most likely). Treat null, or a confidence below your own threshold, as unsure. Null is an answer, not a failure: a failure is an error response.",
             "title": "Value"
           }
         },
@@ -43925,7 +43925,7 @@
         }
       },
       "patch": {
-        "description": "Add options to an ENUM column, drop a column's foreign key, or both. `options` must include every option the column has now: removing one is refused (422), because rows may already hold it, as is any column that is not ENUM. Sending what the column already is changes nothing.",
+        "description": "Add options to an ENUM column, drop a column's foreign key, or both. `options` must include every option the column has now: removing one is refused (422), because rows may already hold it, and sending `options` for a column that is not ENUM is refused too. `drop_foreign_key` works on any column. Sending what the column already is changes nothing.",
         "operationId": "table.column.update",
         "parameters": [
           {
@@ -52448,6 +52448,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No record you can read matches `about`."
           },
           "422": {
             "content": {
