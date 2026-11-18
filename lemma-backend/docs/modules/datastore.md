@@ -40,7 +40,7 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 
 | Routes | What they do |
 | --- | --- |
-| `/pods/{pod_id}/datastore/tables` | Create/list/get/update/delete tables and add/remove columns |
+| `/pods/{pod_id}/datastore/tables` | Create/list/get/update/delete tables; add and remove columns, add options to an ENUM column, and drop a foreign key (see [Changing a column](#changing-a-column)) |
 | `/.../tables/{table}/records` | CRUD, filter/sort/page, and bulk create/update/delete records |
 | `/pods/{pod_id}/datastore/query` | Restricted ad-hoc datastore query under the RLS subject role |
 | `/pods/{pod_id}/outcome/standing`, `/history` | What the pod owns, its measure read now, and its last weeks |
@@ -48,6 +48,38 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | `/public/datastore/files`, `/public/s/{code}` | Signed file delivery paths (`/s/{code}` is a legacy alias until 2026-10-17) |
 | `/pods/{pod_id}/live` | The pod's live socket ([live.md](live.md)); this module provides its `records` topic (see below) |
 | `/pods/{pod_id}/datastore/changes` | The previous one-table change socket, kept for one release as one implicit subscription on the same hub |
+
+### Changing a column
+
+`PATCH /pods/{pod_id}/datastore/tables/{table}/columns/{column}`
+(`table.column.update`, body `{"options": [...]}`, `{"drop_foreign_key":
+true}`, or both) adds options to an ENUM column and drops a column's foreign
+key, and changes nothing else about a column. It needs
+`datastore.table.update` on the table, as adding a column does, and answers
+the table as `table.get` does.
+
+- **Widening only.** `options` must contain every current option; one left out
+  is refused with 422 (`DATASTORE_COLUMN_CHANGE_REFUSED`) naming it, because
+  rows may hold it. A column that is not ENUM, or is computed, is refused the
+  same way, and any other field, or neither, is a 422 from validation.
+  Sending the current options changes nothing.
+- **A foreign key is dropped, never added.** `drop_foreign_key` removes the
+  column's foreign key constraint (found the same way, contype `f`) and its
+  declaration; the values stay and stop having to name a row of the other
+  table. A column with none is left as it is. Adding one would have to decide
+  what becomes of rows that already point nowhere, so it is not offered:
+  `lemma pods import` drops a foreign key its bundle no longer declares and
+  warns about one it adds.
+- **Enforced by PostgreSQL.** An ENUM column is `TEXT` with an inline
+  `CHECK (col IN (...))`. The change finds that check in `pg_constraint` by
+  the one column it constrains (PostgreSQL named it, so the name is not
+  guessed), drops it and adds the new one in one transaction under the table's
+  lock. Adding the check validates existing rows, so a row outside the new
+  options refuses the change.
+- **Database first, then the declared schema.** Interrupted between the two,
+  the check accepts an option the declared schema does not list yet, which the
+  record API still refuses; sending the same options again finishes it. The
+  change emits `datastore.table.column.updated`.
 
 ## Live socket
 

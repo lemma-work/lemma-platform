@@ -18,6 +18,7 @@ from app.modules.datastore.api.schemas.table_schemas import (
     TableListResponse,
     TableResponse,
     TableSummaryResponse,
+    UpdateColumnRequest,
     UpdateTableRequest,
 )
 from app.modules.datastore.domain.datastore_entities import (
@@ -234,6 +235,38 @@ async def add_column(
         table_name,
         data.column,
         ctx=ctx,
+    )
+    return await _table_detail_response(updated_table)
+
+
+@router.patch(
+    "/tables/{table_name}/columns/{column_name}",
+    response_model=TableDetailResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="table.column.update",
+    summary="Update Column",
+    description=(
+        "Add options to an ENUM column, drop a column's foreign key, or both. "
+        "`options` must include every option the column has now: removing one is "
+        "refused (422), because rows may already hold it, as is any column that "
+        "is not ENUM. Sending what the column already is changes nothing."
+    ),
+)
+async def update_column(
+    pod_id: UUID,
+    table_name: str,
+    column_name: str,
+    data: UpdateColumnRequest,
+    table_service: TableServiceDep,
+    ctx: PodContextDep,
+) -> TableDetailResponse:
+    updated_table = await table_service.update_column(
+        pod_id,
+        table_name,
+        column_name,
+        data.options,
+        ctx=ctx,
+        drop_foreign_key=data.drop_foreign_key,
     )
     return await _table_detail_response(updated_table)
 
