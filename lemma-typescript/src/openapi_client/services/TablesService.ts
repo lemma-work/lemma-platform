@@ -248,6 +248,7 @@ export class TablesService {
             body: requestBody,
             mediaType: 'application/json',
             errors: {
+                409: `The table stayed in use for a few seconds, so nothing was changed; try again.`,
                 422: `Validation Error`,
             },
         });

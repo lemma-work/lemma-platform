@@ -40,8 +40,9 @@ class PodDecisions(BoundResource):
     deployment runs: the language-model provider answers `None` when the
     evidence did not support an answer, and the `typesafe` provider always
     answers the value it judged most likely, with that value's probability as
-    `confidence` where it reports one (for several choices, the least certain
-    option). The threshold is yours, because what a wrong answer costs differs
+    `confidence` where it reports one (for several choices, the confidence of
+    the least certain per-option decision, not the probability of the whole
+    selection). The threshold is yours, because what a wrong answer costs differs
     per question. A provider that could not answer raises instead (503 or 429),
     so "unsure" and "failed" never look alike.
     """

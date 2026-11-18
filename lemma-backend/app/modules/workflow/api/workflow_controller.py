@@ -307,7 +307,14 @@ async def delete_workflow(
         "already created."
     ),
     dependencies=[WorkflowResourceExecuteDep],
-    responses={404: {"description": "No record you can read matches `about`."}},
+    responses={
+        400: {"description": "`about.record_id` is not a valid key for the table."},
+        404: {
+            "description": (
+                "No such workflow, or no record you can read matches `about`."
+            )
+        },
+    },
 )
 async def create_workflow_run(
     uow: UoWDep,
@@ -330,11 +337,6 @@ async def create_workflow_run(
     _verify_pod(workflow, pod_id)
     assert workflow is not None
     about = data.about if data is not None else None
-    trigger = (
-        await run_about_record(uow, pod_id=pod_id, about=about, ctx=ctx)
-        if about is not None
-        else None
-    )
 
     engine = build_workflow_engine(uow)
     # A double click, or a retry of a request whose answer was lost, used to
@@ -345,9 +347,22 @@ async def create_workflow_run(
         if idempotency_key is not None
         else None
     )
-    run = await engine.start_run(
-        workflow.id, user.id, run_id=run_id, ctx=ctx, trigger=trigger
+    # A retry of a run about a record answers with that run before reading the
+    # record again: the record may have changed, or gone, since the run began.
+    run = (
+        await engine.reserved_run(run_id, flow_id=workflow.id, user_id=user.id)
+        if run_id is not None and about is not None
+        else None
     )
+    if run is None:
+        trigger = (
+            await run_about_record(uow, pod_id=pod_id, about=about, ctx=ctx)
+            if about is not None
+            else None
+        )
+        run = await engine.start_run(
+            workflow.id, user.id, run_id=run_id, ctx=ctx, trigger=trigger
+        )
     active_wait = await engine.get_active_wait(run.id)
     return run_response_from_domain(run, active_wait, workflow.run_title)
 

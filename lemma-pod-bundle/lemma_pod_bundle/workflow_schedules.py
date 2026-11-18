@@ -13,11 +13,15 @@ Only what the import will create is counted:
   the API (lemma-cli), so the caller says which (``default_mode``);
 - a workflow the pod already has keeps the pod's own mode, which the platform
   checks when the schedule is created;
-- a schedule the pod already has, or a one-time schedule already past (both
-  importers leave those out), creates nothing.
+- a schedule the pod already has, a one-time schedule already past (both
+  importers leave those out), or one the caller knows the import will leave
+  out (``left_out``: the server's plan skips a schedule naming an account the
+  importer cannot use) creates nothing. A schedule whose account is an import
+  variable not yet given is counted: the variable may be given on apply.
 
-Names are compared as the schedule service compares them: stripped and
-lowercased.
+A schedule or workflow is the one its directory names, as both importers
+create and look it up, whatever its manifest's ``name`` says; names are
+compared as the schedule service compares them: stripped and lowercased.
 """
 
 from __future__ import annotations
@@ -46,7 +50,7 @@ def _manifests(bundle_root: Path, kind: str) -> list[tuple[str, dict[str, Any]]]
             )
         except OSError, ValueError:
             continue  # the importer reports a manifest it cannot read
-        found.append((str(payload.get("name") or resource_dir.name), payload))
+        found.append((resource_dir.name, payload))
     return found
 
 
@@ -56,6 +60,7 @@ def global_workflows_scheduled_twice(
     default_mode: str,
     existing_schedules: Collection[str] = (),
     existing_workflows: Collection[str] = (),
+    left_out: Collection[str] = (),
 ) -> dict[str, list[str]]:
     """New GLOBAL workflows that more than one new schedule starts, each with
     the names of those schedules."""
@@ -66,7 +71,7 @@ def global_workflows_scheduled_twice(
         if _key(name) not in pod_workflows
         and str(payload.get("mode") or default_mode).upper() == "GLOBAL"
     }
-    pod_schedules = {_key(name) for name in existing_schedules}
+    pod_schedules = {_key(name) for name in (*existing_schedules, *left_out)}
     starts: dict[str, list[str]] = {}
     for name, payload in _manifests(bundle_root, "schedules"):
         workflow = _key(payload.get("workflow_name"))
@@ -89,6 +94,7 @@ def schedules_sharing_a_global_workflow(
     default_mode: str,
     existing_schedules: Collection[str] = (),
     existing_workflows: Collection[str] = (),
+    left_out: Collection[str] = (),
 ) -> str | None:
     """Why the import would fail at its second schedule on one workflow, or
     ``None`` when it would not."""
@@ -97,6 +103,7 @@ def schedules_sharing_a_global_workflow(
         default_mode=default_mode,
         existing_schedules=existing_schedules,
         existing_workflows=existing_workflows,
+        left_out=left_out,
     )
     if not twice:
         return None

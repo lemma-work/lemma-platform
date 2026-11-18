@@ -448,7 +448,8 @@ export class WorkflowsService {
             body: requestBody,
             mediaType: 'application/json',
             errors: {
-                404: `No record you can read matches \`about\`.`,
+                400: `\`about.record_id\` is not a valid key for the table.`,
+                404: `No such workflow, or no record you can read matches \`about\`.`,
                 422: `Validation Error`,
             },
         });

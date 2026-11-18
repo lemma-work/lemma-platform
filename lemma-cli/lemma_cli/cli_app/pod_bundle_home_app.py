@@ -3,7 +3,10 @@
 `lemma pods import` applies a bundle from here, so it does what the server's
 import does with ``pod.json -> home_app``: once the apps have landed, it sets
 the app the pod opens on -- only on a pod that has none and had no apps before
-this import. A pod that already opens somewhere keeps it, with an advisory.
+this import. A pod that already opens somewhere keeps it, with an advisory; a
+choice naming an app the pod no longer has is no choice. The pod update has no
+conditional write, so a choice a person saves between the read and the write
+here is written over; the server's import checks it under the pod's lock.
 """
 
 from __future__ import annotations
@@ -13,7 +16,7 @@ from typing import Any
 
 from lemma_pod_bundle.jsonc import loads_jsonc
 from lemma_sdk import Lemma
-from lemma_sdk.errors import LemmaAPIError
+from lemma_sdk.errors import LemmaAPIError, LemmaConnectionError
 
 from ..cli_core.io import list_items, to_plain
 from ..cli_core.payload import build_request
@@ -42,8 +45,13 @@ def _chosen(client: Lemma, pod_id: str) -> str | None:
 
 
 def _brings(source_dir: Path | None, wanted: str) -> bool:
-    """Whether the bundle has the app it says it opens on."""
+    """Whether the bundle has an app of this name."""
     return source_dir is None or (source_dir / "apps" / wanted).is_dir()
+
+
+def _not_set(exc: LemmaAPIError | LemmaConnectionError) -> list[str]:
+    why = getattr(exc, "message", None) or str(exc)
+    return [f"The app this pod opens on was not set: {why}"]
 
 
 def plan_home_app(
@@ -58,6 +66,13 @@ def plan_home_app(
     if wanted is None:
         return []
     chosen = _chosen(client, pod_id)
+    # An app gone before the import, and not brought back by it, is no choice.
+    if (
+        chosen is not None
+        and chosen not in apps_before
+        and not _brings(source_dir, chosen)
+    ):
+        chosen = None
     if chosen == wanted:
         return [f"same:{wanted}"]
     if chosen is not None:
@@ -86,8 +101,10 @@ def carry_home_app(
             for item in list_items(client.pod(pod_id).apps.list(limit=1000))
             if isinstance(item, dict) and item.get("name")
         }
-    except LemmaAPIError as exc:
-        return [], [f"The app this pod opens on was not set: {exc.message}"]
+    except (LemmaAPIError, LemmaConnectionError) as exc:
+        return [], _not_set(exc)
+    if chosen not in apps:
+        chosen = None  # an app since removed: the pod opens on its first
     if chosen == wanted:
         return [f"same:{wanted}"], []
     if chosen is not None:
@@ -112,6 +129,6 @@ def carry_home_app(
         client.pods.update(
             pod_id, build_request(PodUpdateRequest, {"config": {"home_app": wanted}})
         )
-    except LemmaAPIError as exc:
-        return [], [f"The app this pod opens on was not set: {exc.message}"]
+    except (LemmaAPIError, LemmaConnectionError) as exc:
+        return [], _not_set(exc)
     return [f"set:{wanted}"], []

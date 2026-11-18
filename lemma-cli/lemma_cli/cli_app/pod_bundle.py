@@ -2212,6 +2212,51 @@ def _upload_bundled_files(pod_sdk: Any, files_root: Path) -> list[str]:
     return summaries
 
 
+def _column_updates_supported(pod_sdk: Any) -> bool:
+    """Whether the installed lemma-sdk can change an existing column: the
+    request model and the route came after SDKs this CLI still installs beside."""
+    try:
+        from lemma_sdk.openapi_client.models.update_column_request import (  # noqa: F401
+            UpdateColumnRequest,
+        )
+    except ImportError:
+        return False
+    return callable(getattr(pod_sdk.tables, "update_column", None))
+
+
+def _refuse_column_changes_the_sdk_cannot_make(
+    pod_sdk: Any, source_dir: Path, existing_tables: dict[str, Any]
+) -> None:
+    """Stop before the first table write when an existing column must change
+    and the installed SDK cannot change it; otherwise the import would fail
+    part-way, at that column, with the tables before it already written. Reads
+    the existing tables only when the SDK is that old."""
+    if _column_updates_supported(pod_sdk):
+        return
+    needed: list[str] = []
+    for resource_dir in _resource_dirs(source_dir, "tables"):
+        table_name = resource_dir.name
+        if table_name not in existing_tables:
+            continue
+        payload = _sanitize_table_payload_for_import(
+            load_resource_payload(resource_dir, table_name)
+        )
+        payload["columns"] = canonical_columns(payload.get("columns") or [])
+        diff = diff_table_columns(to_plain(pod_sdk.tables.get(table_name)), payload)
+        needed += [
+            f"{table_name}.{column}"
+            for column in sorted(
+                set(diff.options_to_add) | set(diff.foreign_keys_to_drop)
+            )
+        ]
+    if needed:
+        raise ValueError(
+            f"This bundle changes existing column(s) {', '.join(needed)}, which "
+            "the installed lemma-sdk cannot do. Upgrade lemma-cli and import "
+            "again; no table was changed."
+        )
+
+
 def _change_existing_columns(
     pod_sdk: Any, table_name: str, diff: TableDiff, summary: list[str]
 ) -> None:
@@ -2226,7 +2271,9 @@ def _change_existing_columns(
     columns = sorted(set(diff.options_to_add) | set(diff.foreign_keys_to_drop))
     if columns:
         # Imported only when a column changes: the model is newer than the
-        # route-less SDKs this CLI still imports beside.
+        # route-less SDKs this CLI still imports beside, and an import that
+        # needs it on such an SDK stopped before its first table write
+        # (`_refuse_column_changes_the_sdk_cannot_make`).
         from lemma_sdk.openapi_client.models.update_column_request import (
             UpdateColumnRequest,
         )
@@ -2649,6 +2696,7 @@ def import_pod_bundle(
     summary["connectors"].extend(f"kept:{slug}" for slug in kept_connectors)
 
     existing_tables = _build_existing_map(list_items(pod_sdk.tables.list(limit=1000)))
+    _refuse_column_changes_the_sdk_cannot_make(pod_sdk, source_dir, existing_tables)
     for resource_dir in _order_table_dirs_by_dependency(
         _resource_dirs(source_dir, "tables")
     ):

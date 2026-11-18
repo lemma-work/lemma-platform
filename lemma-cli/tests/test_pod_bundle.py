@@ -4303,6 +4303,44 @@ def test_a_foreign_key_the_bundle_no_longer_declares_is_dropped(tmp_path: Path):
     assert "foreign-key-dropped:deals.customer_id" in result["summary"]["tables"]
 
 
+def test_an_sdk_that_cannot_change_a_column_stops_before_any_table_write(
+    tmp_path: Path,
+):
+    """An older lemma-sdk has no column update: the import used to fail at
+    that column, after the table's other changes had been written."""
+    resource_dir = tmp_path / "tables" / "deals"
+    resource_dir.mkdir(parents=True)
+    (resource_dir / "deals.json").write_text(
+        json.dumps(
+            {
+                "name": "deals",
+                "columns": [
+                    {"name": "stage", "type": "ENUM", "options": ["lead", "won"]},
+                    {"name": "note", "type": "TEXT"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    writes: list[str] = []
+
+    client = _bare_pod_client()
+    client.tables = SimpleNamespace(  # no update_column: an older SDK
+        list=lambda pod_id, limit=1000: {"items": [{"name": "deals"}]},
+        get=lambda pod_id, name: {
+            "name": name,
+            "columns": [{"name": "stage", "type": "ENUM", "options": ["lead"]}],
+            "enable_rls": False,
+        },
+        update=lambda pod_id, name, payload: writes.append("update"),
+        add_column=lambda pod_id, name, request: writes.append("add_column"),
+    )
+
+    with pytest.raises(ValueError, match=r"deals\.stage.*no table was changed"):
+        import_pod_bundle(client, pod_id="pod_1", source_dir=tmp_path)
+    assert writes == []
+
+
 def test_two_schedules_on_one_global_workflow_stop_the_import_before_writing(
     tmp_path: Path,
 ):

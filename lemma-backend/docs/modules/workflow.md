@@ -114,6 +114,9 @@ table change would hand it -- its fields in `start.payload`, `table_name` and
 app's button about one row. A record they cannot read is a 404, the same as
 none. Like a run a table trigger started, the run then carries the record's
 fields as they were read: whoever can read the run sees them in its start.
+A retry with the same `Idempotency-Key` returns that run before the record is
+read again, so a record changed or deleted since does not turn the retry into
+a 404 or a second run. A `record_id` the table's key cannot hold is a 400.
 
 ## Execution flow
 

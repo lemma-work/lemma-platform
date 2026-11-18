@@ -51,9 +51,7 @@ from app.modules.pod_bundle.infrastructure.connector_planning import (
 from app.modules.pod_bundle.infrastructure import account_checks, bundle_outcome
 from app.modules.pod_bundle.infrastructure.grants import has_grants
 from app.modules.pod_bundle.infrastructure.one_schedule import refuse_shared_workflows
-from app.modules.pod_bundle.infrastructure.plan_variables import (
-    variables_from_manifest,
-)
+from app.modules.pod_bundle.infrastructure.plan_variables import variables_from_manifest
 from app.modules.pod_bundle.infrastructure.grant_planning import (
     GrantConferral,
     NoGrantConferral,
@@ -336,7 +334,6 @@ class PlanBuilder:
 
         # --- schedules -------------------------------------------------------
         existing_schedules = await self._existing.schedule_names()
-        refuse_shared_workflows(bundle_root, existing_schedules, existing_workflows)
         for d in _resource_subdirs(bundle_root, "schedules"):
             step = self._create_once_step(
                 StepKind.SCHEDULE,
@@ -432,6 +429,9 @@ class PlanBuilder:
             warnings,
             replacements={v.name: v.default for v in variables if v.default},
             check=self._accounts,
+        )
+        refuse_shared_workflows(
+            bundle_root, steps, existing_schedules, existing_workflows
         )
 
         outcome, notes = await bundle_outcome.plan_outcome(pod_manifest, self._outcome)

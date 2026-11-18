@@ -34,6 +34,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import io
+import json
 import os
 import shlex
 import zipfile
@@ -160,26 +161,48 @@ strictDepBuilds: false
 """
 
 
-#: The ``package.json`` keys under ``pnpm`` that already say which install
-#: scripts run. An app that says so there has made the choice the default file
-#: would otherwise replace.
-_OWN_BUILD_POLICY = (
-    '"(onlyBuiltDependencies|allowBuilds|neverBuiltDependencies'
-    '|ignoredBuiltDependencies)"'
+#: The keys of ``package.json -> pnpm`` that already say which install scripts
+#: run. An app that says so there has made the choice the default file would
+#: otherwise replace; the same names anywhere else in the file say nothing.
+_OWN_BUILD_POLICY = frozenset(
+    {
+        "onlyBuiltDependencies",
+        "allowBuilds",
+        "neverBuiltDependencies",
+        "ignoredBuiltDependencies",
+    }
 )
 
 
-def build_script(src_dir: str) -> str:
+def has_own_build_policy(source_zip: bytes) -> bool:
+    """Whether the app's ``package.json`` says under ``pnpm`` which install
+    scripts run. A file that is missing or unreadable says nothing."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(source_zip)) as archive:
+            manifest = json.loads(archive.read("package.json"))
+    except KeyError, ValueError, zipfile.BadZipFile:
+        return False
+    pnpm = manifest.get("pnpm") if isinstance(manifest, dict) else None
+    return isinstance(pnpm, dict) and not _OWN_BUILD_POLICY.isdisjoint(pnpm)
+
+
+def build_script(src_dir: str, *, own_policy: bool = False) -> str:
     """The shell that installs and builds the app in ``src_dir`` with pnpm, the
     sandbox's package manager. An app's own ``pnpm-workspace.yaml``, or a build
-    policy in its ``package.json``, is left as it is: what it allows is its
-    author's choice."""
+    policy in its ``package.json`` (``own_policy``), is left as it is: what it
+    allows is its author's choice."""
+    default_policy = (
+        ""
+        if own_policy
+        else (
+            "if [ ! -e pnpm-workspace.yaml ]; then "
+            f"printf '%s' {shlex.quote(DEFAULT_PNPM_WORKSPACE)} > pnpm-workspace.yaml; "
+            "fi && "
+        )
+    )
     return (
         f"cd {shlex.quote(src_dir)} && "
-        "if [ ! -e pnpm-workspace.yaml ] && "
-        f"! grep -qE {shlex.quote(_OWN_BUILD_POLICY)} package.json 2>/dev/null; then "
-        f"printf '%s' {shlex.quote(DEFAULT_PNPM_WORKSPACE)} > pnpm-workspace.yaml; "
-        "fi && "
+        f"{default_policy}"
         "if [ -f pnpm-lock.yaml ]; then "
         "pnpm install --frozen-lockfile; "
         "else pnpm install --no-frozen-lockfile; fi "
@@ -240,7 +263,9 @@ class AppSandboxBuilder:
                 session,
                 f"cd {shlex.quote(build_dir)} && unzip -oq source.zip -d src",
             )
-            await self._run_build(session, src_dir)
+            await self._run_build(
+                session, src_dir, own_policy=has_own_build_policy(source_zip)
+            )
             dist_index = f"{src_dir}/dist/index.html"
             check = await session.exec_command(
                 cmd=f"test -f {shlex.quote(dist_index)}",
@@ -256,9 +281,12 @@ class AppSandboxBuilder:
             )
             return await self._download(session, f"{build_dir}/dist.zip")
 
-    async def _run_build(self, session: Any, src_dir: str) -> None:
+    async def _run_build(
+        self, session: Any, src_dir: str, *, own_policy: bool = False
+    ) -> None:
         result = await session.exec_command(
-            cmd=build_script(src_dir), timeout=_BUILD_TIMEOUT_SECONDS
+            cmd=build_script(src_dir, own_policy=own_policy),
+            timeout=_BUILD_TIMEOUT_SECONDS,
         )
         if not result.get("success"):
             raise build_failed("App build failed", result)

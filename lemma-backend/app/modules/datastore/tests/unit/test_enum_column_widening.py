@@ -317,10 +317,11 @@ class TestReplacingTheCheck:
 
         await manager.change_column_constraints(pod_id, "tickets", _widened_status())
 
-        statements = [str(c.args[0]) for c in connection.execute.await_args_list]
+        calls = connection.execute.await_args_list[1:]  # after the lock timeout
+        statements = [str(c.args[0]) for c in calls]
         assert statements[0] == f"LOCK TABLE {relation} IN ACCESS EXCLUSIVE MODE"
         assert "pg_constraint" in statements[1]
-        assert connection.execute.await_args_list[1].args[1] == {
+        assert calls[1].args[1] == {
             "column": "status",
             "relation": relation,
             "kind": "c",
@@ -415,12 +416,34 @@ async def test_the_foreign_key_is_dropped_by_what_it_constrains_with_no_check():
         ),
     )
 
-    calls = connection.execute.await_args_list
+    calls = connection.execute.await_args_list[1:]  # after the lock timeout
     statements = [str(c.args[0]) for c in calls]
     assert calls[1].args[1]["kind"] == "f"
     assert statements[2:] == [
         f'ALTER TABLE {relation} DROP CONSTRAINT "tickets_customer_id_fkey"'
     ]
+
+
+@pytest.mark.asyncio
+async def test_the_change_waits_a_bounded_time_for_the_table():
+    """A waiting ACCESS EXCLUSIVE request queues every later query on the
+    table; one that cannot have the table soon gives up, as a 409."""
+    from app.modules.datastore.domain.errors import DatastoreConflictError
+
+    timed_out = DBAPIError("LOCK TABLE", {}, SimpleNamespace(sqlstate="55P03"), False)
+
+    async def _execute(statement, *args):
+        if str(statement).startswith("LOCK TABLE"):
+            raise timed_out
+        return _ConstraintNames([])
+
+    connection = SimpleNamespace(execute=AsyncMock(side_effect=_execute))
+    manager = _manager_on(connection)
+
+    with pytest.raises(DatastoreConflictError, match="in use"):
+        await manager.change_column_constraints(uuid4(), "tickets", _widened_status())
+    first = str(connection.execute.await_args_list[0].args[0])
+    assert first.startswith("SET LOCAL lock_timeout = ")
 
 
 @pytest.mark.asyncio
@@ -430,7 +453,11 @@ async def test_an_option_with_a_colon_is_not_read_as_a_bind_parameter():
     )
     manager = _manager_on(connection)
     status_change = _widened_status()
-    column = status_change.column.model_copy(update={"options": ["open", "ref:42"]})
+    # `:triage` is what text() would take for a bind parameter: a colon after a
+    # word character (`ref:42`) it leaves alone either way.
+    column = status_change.column.model_copy(
+        update={"options": [*status_change.column.options, ":triage"]}
+    )
 
     await manager.change_column_constraints(
         uuid4(),
@@ -440,4 +467,4 @@ async def test_an_option_with_a_colon_is_not_read_as_a_bind_parameter():
 
     added = connection.execute.await_args_list[-1].args[0]
     assert not added._bindparams
-    assert "'ref:42'" in str(added.compile())
+    assert "':triage'" in str(added.compile())

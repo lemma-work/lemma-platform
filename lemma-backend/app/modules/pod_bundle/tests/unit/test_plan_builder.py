@@ -637,3 +637,42 @@ async def test_two_schedules_on_one_global_workflow_are_refused_before_writing(t
         "on_ticket",
         "every_morning",
     }
+
+
+async def test_a_schedule_naming_an_account_the_importer_cannot_use_is_not_counted(
+    tmp,
+):
+    """The plan skips it, so it never reaches the GLOBAL workflow it names: the
+    other schedule on that workflow imports."""
+    from uuid import uuid4
+
+    class _Refused:
+        async def refusal(self, account_id):
+            del account_id
+            return "not yours"
+
+    root = _build_bundle(tmp)
+    _write(
+        root / "workflows" / "triage" / "triage.json",
+        {"name": "triage", "mode": "GLOBAL"},
+    )
+    _write(
+        root / "schedules" / "on_ticket" / "on_ticket.json",
+        {"name": "on_ticket", "schedule_type": "TIME", "workflow_name": "triage"},
+    )
+    _write(
+        root / "schedules" / "on_mail" / "on_mail.json",
+        {
+            "name": "on_mail",
+            "schedule_type": "TIME",
+            "workflow_name": "triage",
+            "account_id": str(uuid4()),
+        },
+    )
+
+    plan = await PlanBuilder(FakeExisting(), accounts=_Refused()).build_plan(
+        bundle_root=root
+    )
+
+    actions = {s.name: s.action.value for s in plan.steps if s.kind.value == "SCHEDULE"}
+    assert actions == {"on_ticket": "CREATE", "on_mail": "SKIP"}

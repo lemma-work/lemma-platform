@@ -252,6 +252,14 @@ async def add_column(
         "for a column that is not ENUM is refused too. `drop_foreign_key` works "
         "on any column. Sending what the column already is changes nothing."
     ),
+    responses={
+        409: {
+            "description": (
+                "The table stayed in use for a few seconds, so nothing was "
+                "changed; try again."
+            )
+        }
+    },
 )
 async def update_column(
     pod_id: UUID,

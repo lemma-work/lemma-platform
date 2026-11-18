@@ -62,6 +62,36 @@ def test_a_pods_own_choice_and_its_apps_are_kept():
     assert chose.updates == had_apps.updates == []
 
 
+def test_a_choice_naming_an_app_since_removed_is_no_choice(tmp_path: Path):
+    (tmp_path / "apps" / "today").mkdir(parents=True)
+    client = _Client(chosen="inbox", apps=["today"])
+
+    assert plan_home_app(
+        client, "p", "today", apps_before=set(), source_dir=tmp_path
+    ) == ["set:today"]
+    summary, notes = carry_home_app(client, "p", "today", apps_before=set())
+
+    assert summary == ["set:today"] and notes == []
+    assert client.config["home_app"] == "today"
+
+
+def test_a_timeout_after_the_apps_landed_is_an_advisory():
+    from lemma_sdk.errors import LemmaTimeoutError
+
+    client = _Client(chosen=None, apps=["today"])
+
+    def _times_out(pod_id, request):
+        raise LemmaTimeoutError("timed out")
+
+    client.pods.update = _times_out
+
+    summary, notes = carry_home_app(client, "p", "today", apps_before=set())
+
+    assert summary == [] and notes == [
+        "The app this pod opens on was not set: timed out"
+    ]
+
+
 def test_the_bundles_choice_is_read_from_pod_json(tmp_path: Path):
     (tmp_path / "pod.json").write_text(json.dumps({"home_app": " today "}))
     assert bundle_home_app(tmp_path) == "today"

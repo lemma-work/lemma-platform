@@ -18,14 +18,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.authorization.context import Context
 
 
-async def read_home_app(session: AsyncSession, pod_id: UUID) -> str | None:
-    """The app the pod opens on, or ``None`` when nobody chose one."""
+async def read_home_app(
+    session: AsyncSession, pod_id: UUID, *, for_update: bool = False
+) -> str | None:
+    """The app the pod opens on, or ``None`` when nobody chose one.
+
+    ``for_update`` locks the pod's row until the transaction ends, as the
+    pod's own update does: a choice read so, then written in the same
+    transaction, cannot pass over one a person saved in between."""
     from app.modules.pod.domain.pod_entities import PodConfig
     from app.modules.pod.infrastructure.models import Pod
 
-    raw = await session.scalar(
-        select(Pod.config).where(Pod.id == pod_id, Pod.is_deleted.is_(False))
-    )
+    query = select(Pod.config).where(Pod.id == pod_id, Pod.is_deleted.is_(False))
+    raw = await session.scalar(query.with_for_update() if for_update else query)
     return PodConfig.from_raw(raw).home_app if raw is not None else None
 
 

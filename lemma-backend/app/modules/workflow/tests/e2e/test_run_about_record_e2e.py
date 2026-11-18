@@ -110,9 +110,14 @@ async def test_a_record_nobody_can_read_is_no_record(
         path, json={"about": {"table": "nowhere", "record_id": str(uuid4())}}
     )
     free_form = await authenticated_client.post(path, json={"inputs": {"x": 1}})
+    bad_key = await authenticated_client.post(
+        path, json={"about": {"table": table, "record_id": "not-a-key"}}
+    )
 
     assert missing.status_code == 404, missing.text
     assert no_table.status_code == 404, no_table.text
+    # A key the table's primary key cannot hold is a malformed request.
+    assert bad_key.status_code == 400, bad_key.text
     # A run still takes no input of its own.
     assert free_form.status_code == 422, free_form.text
 
@@ -171,6 +176,21 @@ async def test_a_row_the_starter_cannot_read_is_no_row(
         role="POD_USER",
     )
 
+    # The member reaches the workflow and the table: a row of their own starts
+    # a run, so the refusal below is the row's scope, not the workflow's.
+    members_row = await async_client.post(
+        f"/pods/{pod_id}/datastore/tables/{table}/records",
+        json={"data": {"body": "the member's own note"}},
+        headers=auth_headers(member),
+    )
+    assert members_row.status_code == 201, members_row.text
+    own = await async_client.post(
+        f"/pods/{pod_id}/workflows/{workflow}/runs",
+        json={"about": {"table": table, "record_id": str(members_row.json()["id"])}},
+        headers=auth_headers(member),
+    )
+    assert own.status_code == 201, own.text
+
     refused = await async_client.post(
         f"/pods/{pod_id}/workflows/{workflow}/runs",
         json={"about": {"table": table, "record_id": str(owners_row.json()["id"])}},
@@ -178,4 +198,34 @@ async def test_a_row_the_starter_cannot_read_is_no_row(
     )
 
     assert refused.status_code == 404, refused.text
+    assert "No record you can read matches that." in refused.text
     assert "the owner's own note" not in refused.text
+
+
+async def test_a_retry_returns_the_run_even_once_its_record_is_gone(
+    authenticated_client: AsyncClient, fixed_test_org
+):
+    """The first answer was lost and the record deleted since: the same key
+    is still the same run, not a 404."""
+    pod_id, table, record_id = await _pod_with_a_deal(
+        authenticated_client, fixed_test_org["id"]
+    )
+    workflow = await _waiting_workflow(authenticated_client, pod_id)
+    path = f"/pods/{pod_id}/workflows/{workflow}/runs"
+    body = {"about": {"table": table, "record_id": record_id}}
+    key = {"Idempotency-Key": f"prepare-{uuid4().hex}"}
+
+    first = await authenticated_client.post(path, json=body, headers=key)
+    assert first.status_code == 201, first.text
+    gone = await authenticated_client.delete(
+        f"/pods/{pod_id}/datastore/tables/{table}/records/{record_id}"
+    )
+    assert gone.status_code in (200, 204), gone.text
+
+    retry = await authenticated_client.post(path, json=body, headers=key)
+
+    assert retry.status_code == 201, retry.text
+    assert retry.json()["id"] == first.json()["id"]
+    # Without the key it is a new run, and the record is no longer there.
+    fresh = await authenticated_client.post(path, json=body)
+    assert fresh.status_code == 404, fresh.text

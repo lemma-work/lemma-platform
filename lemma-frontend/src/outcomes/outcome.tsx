@@ -307,7 +307,9 @@ function AppsTab({ pod, go, actions }: { pod: Pod; go: Go; actions: FrameActions
     const cache = useQueryClient();
     const choose = useMutation({
         mutationFn: (name: string) => source.setHomeApp(pod.id, name),
-        onSuccess: () => void cache.invalidateQueries({ queryKey: ["pods", pod.orgId] }),
+        /* Returned, so the choice stays pending until the list shows it: a
+           second tap cannot send it again in between. */
+        onSuccess: () => cache.invalidateQueries({ queryKey: ["pods", pod.orgId] }),
     });
     const url = mcpUrl(pod.id);
     return (

@@ -143,8 +143,11 @@ two schedules it creates would start one GLOBAL workflow it creates
 A manifest with no `mode` is created USER by this import, so only an explicit
 `"mode": "GLOBAL"` counts here; lemma-cli, which creates through the API where
 the default is GLOBAL, asks the same question with that default. Workflows and
-schedules the pod already has, and one-time schedules already past, are not
-counted.
+schedules the pod already has, one-time schedules already past, and schedules
+the plan skips (naming an account the importer cannot use) are not counted; a
+schedule whose account is an import variable not yet given is, since the
+variable may come on apply. A schedule or workflow is the one its directory
+names, as both importers create it, whatever its manifest's `name` says.
 
 **The app a pod opens on.** `pod.json -> home_app` names one of the bundle's
 apps (its `apps/<name>` directory); the exporter writes it from the pod's
@@ -152,9 +155,13 @@ apps (its `apps/<name>` directory); the exporter writes it from the pod's
 (`infrastructure/bundle_home_app.py`, through `pod.contracts.home_app`, as the
 person importing) -- but only on a pod that has not chosen one and had no other
 apps before the import. A pod that already opens somewhere keeps it, and the
-import says so in its warnings. A reader that does not know the key skips it,
-so it does not move the format. lemma-cli does the same
-(`cli_app/pod_bundle_home_app.py`).
+import says so in its warnings; a choice naming an app the pod no longer has is
+no choice. The write is made only if the choice is still the one read, under
+the pod row's lock, so a person who chooses while the import runs keeps theirs;
+a write the pod refuses is a warning, not a failed import. A reader that does
+not know the key skips it, so it does not move the format. lemma-cli does the
+same (`cli_app/pod_bundle_home_app.py`), except that the pod update it calls has
+no conditional write.
 
 **Format version.** `pod.json`'s `format_version` is 4 for a bundle that
 declares a pod connector, and 3 for one that does not

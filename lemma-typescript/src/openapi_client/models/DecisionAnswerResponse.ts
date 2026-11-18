@@ -4,7 +4,7 @@
 /* eslint-disable */
 export type DecisionAnswerResponse = {
     /**
-     * The provider's probability for this value, when it measures one. Null from providers that do not, such as a language model.
+     * The provider's probability for this value, when it measures one; for several choices, that of the least certain per-option decision, not of the whole selection. Null from providers that do not, such as a language model.
      */
     confidence: (number | null);
     /**

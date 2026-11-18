@@ -75,7 +75,10 @@ the table as `table.get` does.
   the one column it constrains (PostgreSQL named it, so the name is not
   guessed), drops it and adds the new one in one transaction under the table's
   lock. Adding the check validates existing rows, so a row outside the new
-  options refuses the change.
+  options refuses the change. The change waits at most five seconds for the
+  lock (`lock_timeout`; every later query on the table would queue behind it)
+  and is refused with a 409 when the table stays in use; the scan itself is
+  not bounded.
 - **Database first, then the declared schema.** Interrupted between the two,
   the check accepts an option the declared schema does not list yet, which the
   record API still refuses; sending the same options again finishes it. The

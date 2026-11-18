@@ -20978,7 +20978,8 @@ var LemmaClient = (() => {
      * language-model provider answers `null` when the evidence did not support
      * an answer, and the `typesafe` provider always answers the value it judged
      * most likely, with that value's probability as `confidence` where it reports
-     * one (for several choices, the least certain option). A provider that could
+     * one (for several choices, the confidence of the least certain per-option
+     * decision, not the probability of the whole selection). A provider that could
      * not answer rejects instead (503 or 429), so "unsure" and "failed" never
      * look alike.
      */
@@ -21543,6 +21544,7 @@ var LemmaClient = (() => {
         body: requestBody,
         mediaType: "application/json",
         errors: {
+          409: `The table stayed in use for a few seconds, so nothing was changed; try again.`,
           422: `Validation Error`
         }
       });
@@ -22187,7 +22189,8 @@ var LemmaClient = (() => {
         body: requestBody,
         mediaType: "application/json",
         errors: {
-          404: `No record you can read matches \`about\`.`,
+          400: `\`about.record_id\` is not a valid key for the table.`,
+          404: `No such workflow, or no record you can read matches \`about\`.`,
           422: `Validation Error`
         }
       });

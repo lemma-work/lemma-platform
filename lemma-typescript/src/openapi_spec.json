@@ -7884,7 +7884,7 @@
                 "type": "null"
               }
             ],
-            "description": "The provider's probability for this value, when it measures one. Null from providers that do not, such as a language model.",
+            "description": "The provider's probability for this value, when it measures one; for several choices, that of the least certain per-option decision, not of the whole selection. Null from providers that do not, such as a language model.",
             "title": "Confidence"
           },
           "value": {
@@ -43978,6 +43978,16 @@
             },
             "description": "Successful Response"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The table stayed in use for a few seconds, so nothing was changed; try again."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -52449,6 +52459,16 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`about.record_id` is not a valid key for the table."
+          },
           "404": {
             "content": {
               "application/json": {
@@ -52457,7 +52477,7 @@
                 }
               }
             },
-            "description": "No record you can read matches `about`."
+            "description": "No such workflow, or no record you can read matches `about`."
           },
           "422": {
             "content": {

@@ -38,9 +38,18 @@ pytestmark = pytest.mark.unit
 class _Pod:
     """A pod as the importer reaches it: its choice, and its apps."""
 
-    def __init__(self, *, chosen: str | None = None, apps: set[str]):
+    def __init__(
+        self,
+        *,
+        chosen: str | None = None,
+        apps: set[str],
+        chosen_meanwhile: str | None = None,
+        refuse: bool = False,
+    ):
         self.home: str | None = chosen
         self.apps = apps
+        self._meanwhile = chosen_meanwhile
+        self._refuse = refuse
 
     async def chosen(self) -> str | None:
         return self.home
@@ -48,8 +57,17 @@ class _Pod:
     async def app_names(self) -> set[str]:
         return set(self.apps)
 
-    async def choose(self, app_name: str) -> None:
+    async def choose(self, app_name: str, *, unless_not: str | None) -> str | None:
+        if self._meanwhile is not None:
+            self.home = self._meanwhile  # a person chose while the import ran
+        if self._refuse:
+            from app.core.domain.errors import DomainError
+
+            raise DomainError("You cannot change this Lemma", status_code=403)
+        if self.home != unless_not:
+            return self.home
         self.home = app_name
+        return None
 
 
 async def test_a_pod_with_nothing_before_opens_on_the_bundles_app() -> None:
@@ -68,6 +86,49 @@ async def test_a_pods_own_choice_is_kept() -> None:
 
     assert pod.home == "inbox"
     assert len(notes) == 1 and "Kept the app this Lemma opens on ('inbox')" in notes[0]
+
+
+async def test_a_choice_naming_an_app_since_removed_is_no_choice() -> None:
+    """The pod opens on its first app, so the bundle's is set as on a pod with
+    no choice; a stale name equal to the bundle's is not taken as set."""
+    pod = _Pod(chosen="inbox", apps={"meetings", "today"})
+
+    assert await carry_home_app("today", pod, created={"meetings", "today"}) == []
+    assert pod.home == "today"
+
+    gone = _Pod(chosen="today", apps={"inbox"})
+    notes = await carry_home_app("today", gone, created={"inbox"})
+    assert gone.home == "today" and "does not bring" in notes[0]
+
+
+async def test_a_choice_made_while_the_import_ran_is_kept() -> None:
+    pod = _Pod(apps={"meetings", "today"}, chosen_meanwhile="meetings")
+
+    notes = await carry_home_app("today", pod, created={"meetings", "today"})
+
+    assert pod.home == "meetings"
+    assert len(notes) == 1 and "('meetings')" in notes[0]
+
+
+async def test_a_refused_write_is_a_warning_not_a_failed_import(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pod.json").write_text(
+        json.dumps({"name": "x", "home_app": "today"}), encoding="utf-8"
+    )
+    pod = _Pod(apps={"today"}, refuse=True)
+    state = ImportState(
+        import_id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        source=BundleSource(kind=BundleSourceKind.URL),
+    )
+
+    await carry_to_pod(object(), state, tmp_path, target=pod)  # type: ignore[arg-type]
+
+    assert state.warnings == [
+        "The app this Lemma opens on was not set: You cannot change this Lemma"
+    ]
 
 
 async def test_a_pod_that_had_apps_keeps_opening_on_its_first() -> None:

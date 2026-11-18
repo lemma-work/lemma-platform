@@ -16,6 +16,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.channels.infrastructure.message_models import ChannelMessageModel
 from app.modules.channels.infrastructure.models import ChannelModel
 from app.modules.identity.infrastructure.supertokens_auth.helpers import (
     get_user_token,
@@ -148,18 +149,17 @@ async def test_a_granted_function_tells_its_own_person_and_nobody_else(
     # Reaching anyone else is `channel.write`, which the function does not hold
     # and cannot be given.
     assert to_colleague.status_code == 403, to_colleague.text
-    colleague_channels = await db_session.scalars(
-        select(ChannelModel.id).where(
-            ChannelModel.member_user_id == UUID(colleague["id"])
+    # Asked of the stored lines, not through a channel read, which only the
+    # colleague may make: the note to self is found, the refused one nowhere.
+    bodies = list(
+        await db_session.scalars(
+            select(ChannelMessageModel.body).where(
+                ChannelMessageModel.pod_id == UUID(pod_id)
+            )
         )
     )
-    for channel_id in colleague_channels:
-        lines = await authenticated_client.get(
-            f"/pods/{pod_id}/channels/{channel_id}/messages"
-        )
-        # Read, or the absence below would prove nothing.
-        assert lines.status_code == 200, lines.text
-        assert "Not yours to say." not in lines.text
+    assert "Three things today." in bodies
+    assert "Not yours to say." not in bodies
 
 
 async def test_channel_write_is_still_not_grantable_on_the_pod(

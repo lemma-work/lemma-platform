@@ -40,7 +40,9 @@ copied into whatever reads the answer next.
 
 Every answer is `{value, confidence}`. `confidence` is the provider's
 probability for the value when it measures one, and `null` when it does not (a
-language model's self-report is not used). A provider that could not answer at
+language model's self-report is not used). For several choices it is the
+confidence of the least certain per-option decision, not the probability of
+the whole selection: two options chosen at 0.9 each answer 0.9, not 0.81. A provider that could not answer at
 all is an error: 503 `DECISION_PROVIDER_UNAVAILABLE`, retryable.
 
 How a provider says "not sure" differs. The `model` provider answers `null`

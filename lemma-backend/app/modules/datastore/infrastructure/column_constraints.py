@@ -10,11 +10,17 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from app.modules.datastore.domain.datastore_entities import ColumnSchema
 from app.modules.datastore.domain.errors import (
     DatastoreColumnChangeRefusedError,
+    DatastoreConflictError,
     DatastoreValidationError,
 )
 
 #: SQLSTATE ``check_violation``: ``ADD CHECK`` found an existing row it rejects.
 _CHECK_VIOLATION = "23514"
+_LOCK_NOT_AVAILABLE = "55P03"
+#: How long the change waits for the table. Every later query on the table
+#: queues behind a waiting ACCESS EXCLUSIVE request, so a change that cannot
+#: have the table soon gives up rather than stall its reads and writes.
+_LOCK_TIMEOUT_MS = 5_000
 
 # A constraint of one kind (`c` check, `f` foreign key) on this one column and
 # nothing else.
@@ -54,6 +60,9 @@ async def replace_column_check(
         )
     try:
         async with engine.begin() as conn:
+            # Bounds waits for locks (this table's, and a dropped foreign
+            # key's other table), never the scan the new CHECK makes.
+            await conn.execute(text(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT_MS}ms'"))
             # Before reading the catalog, so a concurrent change to the same
             # column cannot add a check this transaction never sees.
             await conn.execute(text(f"LOCK TABLE {relation} IN ACCESS EXCLUSIVE MODE"))
@@ -76,7 +85,13 @@ async def replace_column_check(
                 literal = check_clause.replace(":", "\\:")
                 await conn.execute(text(f"ALTER TABLE {relation} ADD{literal}"))
     except DBAPIError as exc:
-        if getattr(exc.orig, "sqlstate", None) != _CHECK_VIOLATION:
+        sqlstate = getattr(exc.orig, "sqlstate", None)
+        if sqlstate == _LOCK_NOT_AVAILABLE:
+            raise DatastoreConflictError(
+                f"The table is in use, so column '{column.name}' was not "
+                "changed; try again shortly."
+            ) from exc
+        if sqlstate != _CHECK_VIOLATION:
             raise
         raise DatastoreColumnChangeRefusedError(
             f"Some rows hold a value of column '{column.name}' that is not one "

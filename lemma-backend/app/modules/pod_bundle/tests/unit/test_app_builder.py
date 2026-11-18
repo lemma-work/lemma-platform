@@ -31,6 +31,7 @@ from app.modules.pod_bundle.infrastructure.app_builder import (
     _clean_slug,
     build_script,
     classify_source_dir,
+    has_own_build_policy,
     slug_candidates,
     zip_dir,
 )
@@ -321,7 +322,9 @@ def test_a_failure_with_no_build_output_adds_nothing_to_the_step():
 # --- the build script, run by a shell -----------------------------------------
 
 
-def _run_build_script(src: Path, tmp_path: Path) -> list[str]:
+def _run_build_script(
+    src: Path, tmp_path: Path, *, own_policy: bool = False
+) -> list[str]:
     """Run the real script with a ``pnpm`` that records what it was asked."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -330,7 +333,7 @@ def _run_build_script(src: Path, tmp_path: Path) -> list[str]:
     pnpm.write_text(f'#!/bin/sh\necho "$*" >> {shlex.quote(str(calls))}\n')
     pnpm.chmod(0o755)
     subprocess.run(
-        ["bash", "-c", build_script(str(src))],
+        ["bash", "-c", build_script(str(src), own_policy=own_policy)],
         check=True,
         env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
     )
@@ -365,16 +368,39 @@ def test_an_apps_own_workspace_file_is_left_as_it_is(tmp_path):
     assert calls == ["install --frozen-lockfile", "run build"]
 
 
+def _zipped(package_json: str | None) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("index.html", "<html></html>")
+        if package_json is not None:
+            archive.writestr("package.json", package_json)
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("package_json", "own"),
+    [
+        ('{"pnpm": {"onlyBuiltDependencies": ["sharp", "esbuild"]}}', True),
+        ('{"pnpm": {"allowBuilds": {"sharp": true}}}', True),
+        # The same names outside `pnpm` say nothing about install scripts.
+        ('{"config": {"allowBuilds": false}}', False),
+        ('{"name": "onlyBuiltDependencies"}', False),
+        ('{"pnpm": "onlyBuiltDependencies"}', False),
+        ("not json", False),
+        (None, False),
+    ],
+)
+def test_only_a_policy_under_pnpm_is_the_apps_own(package_json, own):
+    assert has_own_build_policy(_zipped(package_json)) is own
+
+
 def test_an_apps_build_policy_in_package_json_is_left_as_it_is(tmp_path):
     """pnpm reads `pnpm.onlyBuiltDependencies` from package.json; a default
     workspace file would replace that list with esbuild alone."""
     src = tmp_path / "src"
     src.mkdir()
-    (src / "package.json").write_text(
-        '{"name": "app", "pnpm": {"onlyBuiltDependencies": ["sharp", "esbuild"]}}'
-    )
 
-    calls = _run_build_script(src, tmp_path)
+    calls = _run_build_script(src, tmp_path, own_policy=True)
 
     assert not (src / "pnpm-workspace.yaml").exists()
     assert calls == ["install --no-frozen-lockfile", "run build"]

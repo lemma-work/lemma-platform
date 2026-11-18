@@ -91,3 +91,51 @@ def test_a_one_time_schedule_already_past_is_not_counted(tmp_path: Path):
     )
 
     assert schedules_sharing_a_global_workflow(root, default_mode="GLOBAL") is None
+
+
+def test_a_schedule_and_workflow_are_the_ones_their_directories_name(tmp_path: Path):
+    """Both importers create and look up a schedule or workflow by its
+    directory; a manifest `name` that says otherwise does not move it."""
+    _write(
+        tmp_path / "workflows" / "triage" / "triage.json",
+        {"name": "Triage tickets", "mode": "GLOBAL"},
+    )
+    for name in ("on_ticket", "every_morning"):
+        _write(
+            tmp_path / "schedules" / name / f"{name}.json",
+            {
+                "name": f"{name} (renamed)",
+                "schedule_type": "TIME",
+                "config": {"cron": "0 9 * * *"},
+                "workflow_name": "triage",
+            },
+        )
+
+    assert global_workflows_scheduled_twice(tmp_path, default_mode="USER") == {
+        "triage": ["every_morning", "on_ticket"]
+    }
+    # The pod has a schedule named as one directory: that one is kept.
+    assert (
+        schedules_sharing_a_global_workflow(
+            tmp_path, default_mode="USER", existing_schedules={"on_ticket"}
+        )
+        is None
+    )
+    # A schedule named as a manifest's `name` is another schedule.
+    assert (
+        schedules_sharing_a_global_workflow(
+            tmp_path, default_mode="USER", existing_schedules={"on_ticket (renamed)"}
+        )
+        is not None
+    )
+
+
+def test_a_schedule_the_import_leaves_out_is_not_counted(tmp_path: Path):
+    root = _bundle(tmp_path, mode="GLOBAL")
+
+    assert (
+        schedules_sharing_a_global_workflow(
+            root, default_mode="USER", left_out=["every_morning"]
+        )
+        is None
+    )
