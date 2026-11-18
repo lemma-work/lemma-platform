@@ -18,7 +18,7 @@ own account) and grants on the slug it answers with
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Protocol
 from uuid import UUID
@@ -27,6 +27,10 @@ from lemma_pod_bundle import load_resource_payload
 
 from app.core.authorization.context import Context
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.pod_bundle.domain.connector_plan import (
+    ConnectorChoice,
+    skipped_connectors,
+)
 from app.modules.pod_bundle.domain.errors import BundleInvalidError
 from app.modules.pod_bundle.infrastructure.grants import (
     GrantInput,
@@ -139,16 +143,26 @@ async def resolve_connector_grants(
     *,
     pod_id: UUID,
     grants: list[GrantInput],
+    choices: Mapping[str, ConnectorChoice] | None = None,
+    warnings: list[str] | None = None,
 ) -> list[GrantInput]:
     """``grants`` with each undeclared connector declared and named by its slug.
 
     A name with no installation is left as it is, and the grant write that
     follows refuses it by name; planning has already refused such a bundle, so
     reaching that means the installation went away between plan and apply.
+
+    A grant on a bundled connector the importer's ``choices`` leave out
+    (optional, nothing to map it to) is dropped and said in ``warnings``: the holder is
+    imported without it rather than the whole grant write refusing a name the
+    importer was told would be missing. Unless the pod declares that slug after
+    all -- by hand, since the plan -- when the grant stands.
     """
     if not any(g.resource_type.value == _CONNECTOR for g in grants):
         return grants
     from app.modules.connectors.contracts import pod_connectors
+
+    left_out = skipped_connectors(choices or {})
 
     directory = ServiceConnectorDirectory(
         uow=uow, pod_id=pod_id, organization_id=ctx.organization_id
@@ -159,6 +173,11 @@ async def resolve_connector_grants(
         name = grant.resource_name
         if grant.resource_type.value != _CONNECTOR or await directory.declares(name):
             resolved.append(grant)
+            continue
+        if name in left_out:
+            note = f"A grant on connector '{name}' was dropped: it was left out."
+            if warnings is not None and note not in warnings:
+                warnings.append(note)
             continue
         if name not in slugs:
             installation = await directory.installation_for(name)

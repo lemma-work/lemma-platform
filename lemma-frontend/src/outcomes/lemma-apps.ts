@@ -3,13 +3,16 @@
 import { useMemo } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { source, type Pod, type Tab } from "@/data";
+import { homeFirst } from "./model";
 
 export type AppTab = Extract<Tab, { kind: "app" }>;
 
-/** A Lemma's apps, in the order it lists them. The first is the one it
- *  opens on. There is no order anyone set yet, so this is the list's own. */
-export function appsOf(tabs: readonly Tab[] | undefined): AppTab[] {
-    return (tabs ?? []).flatMap((tab) => (tab.kind === "app" ? [tab] : []));
+/** A Lemma's apps, the one it opens on first. That is the app somebody chose
+ *  (`home`, the Lemma's `homeApp`) when it still has it; otherwise the list's
+ *  own order, oldest first, which nobody chose. */
+export function appsOf(tabs: readonly Tab[] | undefined, home?: string): AppTab[] {
+    const apps = (tabs ?? []).flatMap((tab) => (tab.kind === "app" ? [tab] : []));
+    return homeFirst(apps, home, (app) => app.id);
 }
 
 /** The name an app is addressed by: its tab's id without the kind. */
@@ -29,7 +32,7 @@ export function useLemmaApps(pods: readonly Pod[]): ReadonlyMap<string, readonly
        them changed. */
     const readAt = results.map((one) => one.dataUpdatedAt).join(",");
     return useMemo(
-        () => new Map(pods.map((pod, index) => [pod.id, appsOf(results[index]?.data)])),
+        () => new Map(pods.map((pod, index) => [pod.id, appsOf(results[index]?.data, pod.homeApp)])),
         /* `results` is read through `readAt`, which changes when it does. */
         [pods, readAt],
     );

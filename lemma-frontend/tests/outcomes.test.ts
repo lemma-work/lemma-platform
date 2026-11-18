@@ -10,6 +10,7 @@ import {
     chatView,
     dailyActivity,
     foldSection,
+    homeFirst,
     sectionRows,
     workRows,
     inSidebar,
@@ -533,4 +534,13 @@ test("a kept app outlives a Lemma list that leaves its Lemma out, until its own 
     assert.equal(refreshKept(read, [{ id: "p9", name: "Elsewhere" }], "o2"), read, "another organization's list leaves it mounted");
     assert.equal(refreshKept(read, [], "o2")[0].pod, desk, "with the Lemma it was last drawn with");
     assert.deepEqual(refreshKept(read, [], "o1"), [], "its own organization, read without it, lets it go");
+});
+
+test("a Lemma opens on the app somebody chose, else on its first", () => {
+    const apps = [{ id: "app:inbox" }, { id: "app:meetings" }, { id: "app:today" }];
+    const id = (app: { id: string }) => app.id;
+    assert.deepEqual(homeFirst(apps, "today", id).map(id), ["app:today", "app:inbox", "app:meetings"]);
+    assert.deepEqual(homeFirst(apps, undefined, id).map(id), ["app:inbox", "app:meetings", "app:today"]);
+    assert.deepEqual(homeFirst(apps, "gone", id).map(id), ["app:inbox", "app:meetings", "app:today"], "a name no app has any longer is no choice");
+    assert.deepEqual(homeFirst(apps, "inbox", id).map(id), ["app:inbox", "app:meetings", "app:today"]);
 });

@@ -14,7 +14,7 @@ import { useConversationFolder } from "@/desktop/folders";
 import { FolderChip } from "@/desktop/folder-chip";
 import { RepositoryChip } from "@/thread/repository-chip";
 import { TeammateFace } from "@/space/teammate-face";
-import type { Ask, Go } from "./model";
+import { homeFirst, type Ask, type Go } from "./model";
 import { Icon, to } from "./parts";
 
 /** The Lemma the reader last asked from Home, to ask again. */
@@ -185,14 +185,16 @@ export interface PodApp {
 }
 
 /** The apps of the Lemmas given, newest first, read under the key every
- *  view of them shares. */
+ *  view of them shares. One Lemma's own leads with the app it opens on,
+ *  when somebody chose one: its home shows first what opening it shows. */
 export function useApps(pods: readonly Pod[]): { apps: PodApp[]; pending: boolean } {
     const results = useQueries({
         queries: pods.map((pod) => ({ queryKey: ["outcome-apps", pod.id], queryFn: () => source.listTabs(pod.id), staleTime: 5 * 60_000 })),
     });
-    const apps = pods
+    const newest = pods
         .flatMap((pod, index) => (results[index]?.data ?? []).flatMap((tab) => (tab.kind === "app" ? [{ pod, app: tab }] : [])))
         .sort((a, b) => (Date.parse(b.app.updated ?? "") || 0) - (Date.parse(a.app.updated ?? "") || 0));
+    const apps = pods.length === 1 ? homeFirst(newest, pods[0].homeApp, ({ app }) => app.id) : newest;
     return { apps, pending: results.some((result) => result.isPending) };
 }
 

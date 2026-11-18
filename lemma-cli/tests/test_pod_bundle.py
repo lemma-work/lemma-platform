@@ -4119,3 +4119,218 @@ def test_exported_no_build_app_re_imports(tmp_path: Path):
     assert result["errors"] == []
     assert result["ok"] is True
     assert result["summary"]["apps"] == ["created:support_app"]
+
+
+def test_variable_applier_falls_back_to_a_free_variables_default(tmp_path: Path):
+    """An app slug variable carries the slug it was exported with as its
+    default; the server's import reads it, and so does this one, rather than
+    dropping the slug and naming the app after itself."""
+    from lemma_cli.cli_app.pod_bundle import _build_variable_applier
+
+    (tmp_path / "pod.json").write_text(
+        json.dumps(
+            {
+                "name": "demo",
+                "variables": {
+                    "meetings_slug": {"type": "app_slug", "default": "meetings"}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def applier(overrides):
+        return _build_variable_applier(
+            client=None,
+            pod_sdk=None,
+            source_dir=tmp_path,
+            var_overrides=overrides,
+            member_override=None,
+        )
+
+    assert applier(None)({"public_slug": "${meetings_slug}"}) == {
+        "public_slug": "meetings"
+    }
+    assert applier({"meetings_slug": "mine"})({"public_slug": "${meetings_slug}"}) == {
+        "public_slug": "mine"
+    }
+
+
+def test_one_part_imported_alone_reads_its_bundles_variables_and_connectors(
+    tmp_path: Path,
+):
+    """Importing `functions/due` on its own: its `${var}`s are declared in the
+    bundle's pod.json, and its grant names a connector the bundle declares.
+    Nothing that acts on the whole pod -- its name, what it owns, the app it
+    opens on -- comes along."""
+    from lemma_cli.cli_app.pod_bundle import _prepared_import_source
+
+    bundle = tmp_path / "meetings"
+    (bundle / "connectors" / "meet").mkdir(parents=True)
+    (bundle / "connectors" / "meet" / "meet.json").write_text(
+        json.dumps({"connector": "googlemeet", "mode": "PER_MEMBER"}), encoding="utf-8"
+    )
+    (bundle / "connectors" / "crm").mkdir(parents=True)
+    (bundle / "connectors" / "crm" / "crm.json").write_text(
+        json.dumps({"connector": "hubspot", "mode": "PER_MEMBER"}), encoding="utf-8"
+    )
+    function_dir = bundle / "functions" / "due"
+    function_dir.mkdir(parents=True)
+    (function_dir / "due.json").write_text(
+        json.dumps(
+            {
+                "name": "due",
+                "permissions": {
+                    "grants": [
+                        {
+                            "resource_type": "connector",
+                            "resource_name": "meet",
+                            "permission_ids": ["connector.use"],
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    variables = {"meetings_slug": {"type": "app_slug", "default": "meetings"}}
+    (bundle / "pod.json").write_text(
+        json.dumps(
+            {
+                "format_version": 4,
+                "name": "Meetings",
+                "home_app": "meetings",
+                "outcome": {"sentence": "Every meeting prepared", "kind": "rate"},
+                "variables": variables,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with _prepared_import_source(function_dir) as root:
+        assert json.loads((root / "pod.json").read_text()) == {
+            "format_version": 4,
+            "variables": variables,
+        }
+        assert (root / "functions" / "due" / "due.json").is_file()
+        assert sorted(p.name for p in (root / "connectors").iterdir()) == ["meet"]
+
+
+def test_an_existing_choice_column_gains_the_bundles_new_options(
+    tmp_path: Path, capsys
+):
+    """ "updated" used to be said with the new options never added: the column
+    diff did not look at a choice column's options at all."""
+    resource_dir = tmp_path / "tables" / "deals"
+    resource_dir.mkdir(parents=True)
+    (resource_dir / "deals.json").write_text(
+        json.dumps(
+            {
+                "name": "deals",
+                "columns": [
+                    {
+                        "name": "stage",
+                        "type": "ENUM",
+                        "options": ["lead", "qualified", "won"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    widened: list[tuple[str, str, dict]] = []
+
+    client = _bare_pod_client()
+    client.tables = SimpleNamespace(
+        list=lambda pod_id, limit=1000: {"items": [{"name": "deals"}]},
+        get=lambda pod_id, name: {
+            "name": name,
+            "columns": [
+                {"name": "stage", "type": "ENUM", "options": ["lead", "won", "lost"]}
+            ],
+            "enable_rls": False,
+        },
+        update=lambda pod_id, name, payload: {"name": name},
+        update_column=lambda pod_id, table, column, request: widened.append(
+            (table, column, _plain(request))
+        ),
+    )
+
+    result = import_pod_bundle(client, pod_id="pod_1", source_dir=tmp_path)
+
+    assert widened == [
+        ("deals", "stage", {"options": ["lead", "won", "lost", "qualified"]})
+    ]
+    assert "options:deals.stage" in result["summary"]["tables"]
+    out = " ".join(capsys.readouterr().err.split())
+    assert "kept option(s) lost" in out
+
+
+def test_a_foreign_key_the_bundle_no_longer_declares_is_dropped(tmp_path: Path):
+    resource_dir = tmp_path / "tables" / "deals"
+    resource_dir.mkdir(parents=True)
+    (resource_dir / "deals.json").write_text(
+        json.dumps(
+            {"name": "deals", "columns": [{"name": "customer_id", "type": "UUID"}]}
+        ),
+        encoding="utf-8",
+    )
+    changed: list[tuple[str, str, dict]] = []
+
+    client = _bare_pod_client()
+    client.tables = SimpleNamespace(
+        list=lambda pod_id, limit=1000: {"items": [{"name": "deals"}]},
+        get=lambda pod_id, name: {
+            "name": name,
+            "columns": [
+                {
+                    "name": "customer_id",
+                    "type": "UUID",
+                    "foreign_key": {"references": "customers.id"},
+                }
+            ],
+            "enable_rls": False,
+        },
+        update=lambda pod_id, name, payload: {"name": name},
+        update_column=lambda pod_id, table, column, request: changed.append(
+            (table, column, _plain(request))
+        ),
+    )
+
+    result = import_pod_bundle(client, pod_id="pod_1", source_dir=tmp_path)
+
+    assert changed == [("deals", "customer_id", {"drop_foreign_key": True})]
+    assert "foreign-key-dropped:deals.customer_id" in result["summary"]["tables"]
+
+
+def test_two_schedules_on_one_global_workflow_stop_the_import_before_writing(
+    tmp_path: Path,
+):
+    """The second schedule used to be refused at its create, after the
+    workflow and the first schedule had been written."""
+    (tmp_path / "pod.json").write_text(
+        json.dumps({"name": "tasks", "format_version": 3}), encoding="utf-8"
+    )
+    workflow_dir = tmp_path / "workflows" / "triage"
+    workflow_dir.mkdir(parents=True)
+    (workflow_dir / "triage.json").write_text(
+        json.dumps({"name": "triage", "start": {"type": "MANUAL"}}), encoding="utf-8"
+    )
+    for name in ("on_ticket", "every_morning"):
+        schedule_dir = tmp_path / "schedules" / name
+        schedule_dir.mkdir(parents=True)
+        (schedule_dir / f"{name}.json").write_text(
+            json.dumps(
+                {
+                    "name": name,
+                    "schedule_type": "TIME",
+                    "config": {"cron": "0 9 * * *"},
+                    "workflow_name": "triage",
+                }
+            ),
+            encoding="utf-8",
+        )
+    client = _bare_pod_client()
+
+    with pytest.raises(ValueError, match="workflow 'triage'"):
+        import_pod_bundle(client, pod_id="pod_1", source_dir=tmp_path)

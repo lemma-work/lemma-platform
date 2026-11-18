@@ -608,3 +608,21 @@ async def test_an_import_that_sets_no_outcome_plans_none(tmp):
 
     assert plan.outcome is None
     assert plan.warnings == []
+
+
+async def test_two_schedules_on_one_global_workflow_are_refused_before_writing(tmp):
+    """The platform takes one schedule per person on a GLOBAL workflow and
+    refused the second at its step, after the rest of the bundle had landed."""
+    from app.modules.pod_bundle.domain.errors import BundleInvalidError
+
+    root = _build_bundle(tmp)
+    _write(root / "workflows" / "triage" / "triage.json", {"name": "triage"})
+    for name in ("on_ticket", "every_morning"):
+        _write(
+            root / "schedules" / name / f"{name}.json",
+            {"name": name, "schedule_type": "TIME", "workflow_name": "triage"},
+        )
+
+    with pytest.raises(BundleInvalidError) as excinfo:
+        await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
+    assert "workflow 'triage'" in str(excinfo.value)

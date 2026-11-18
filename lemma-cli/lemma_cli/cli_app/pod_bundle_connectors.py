@@ -17,6 +17,11 @@ own accounts a SHARED one shares, are the importer's choices:
   SHARED connector. Left out, it is declared needing an account -- a warning,
   not a failure.
 
+A connector the bundle marks optional (``required: false``), with no
+installation in the org to map to and nothing in the bundle running through
+it, is left out instead of stopping the import, and grants on it are dropped,
+as the server's import plans it (``SKIPPED``).
+
 Every choice is checked before anything is written, so an import that cannot
 declare its connectors stops with the pod untouched -- the backend's apply
 refuses the same cases the same way: another catalog connector or the other
@@ -35,7 +40,10 @@ from typing import Any
 
 from lemma_pod_bundle import BundleConnector, load_bundle_connectors
 from lemma_pod_bundle.layout import _write_json
-from lemma_pod_bundle.normalize import _normalize_pod_connector_payload
+from lemma_pod_bundle.normalize import (
+    _normalize_pod_connector_payload,
+    referenced_connector_slugs,
+)
 
 from ..cli_core.io import list_items, to_plain
 
@@ -67,6 +75,26 @@ class _Planned:
     #: An installation id, or None to install Lemma's app for it.
     auth_config_id: str | None
     share_account_id: str | None
+    #: Left out: optional, nothing in the organization to map it to, and
+    #: nothing the bundle brings runs through it. Grants on it are dropped.
+    skip: bool = False
+
+
+#: What runs through a pod connector, as `referenced_connector_slugs` names it.
+#: Such a part cannot be made without it, so one it runs through is never left
+#: out; a grant on it can simply be dropped. The server's plan says the same.
+_RUNS_THROUGH = ("schedules/", "surfaces/")
+
+
+def _can_go_without(connector: BundleConnector, used_by: list[str]) -> bool:
+    return not connector.required and not any(
+        where.startswith(_RUNS_THROUGH) for where in used_by
+    )
+
+
+def left_out(planned: list[_Planned]) -> frozenset[str]:
+    """The slugs this import leaves out, whose grants it drops."""
+    return frozenset(item.connector.slug for item in planned if item.skip)
 
 
 _MODE_WORDS = {
@@ -198,6 +226,7 @@ def plan_pod_connectors(
     }
     org_installations = _installations(pod_sdk)
     in_pod = _pod_accounts_by_account(pod_sdk) if share_accounts else {}
+    used_by = referenced_connector_slugs(source_dir)
     planned: list[_Planned] = []
     kept: list[str] = []
     for connector in connectors:
@@ -221,6 +250,19 @@ def plan_pod_connectors(
             for item in org_installations
             if str(item.get("connector_id")) == connector.connector
         ]
+        if (
+            not candidates
+            and not installations.get(connector.slug)
+            and not create_installations
+            and _can_go_without(connector, used_by.get(connector.slug, []))
+        ):
+            if share:
+                raise ValueError(
+                    f"connector '{connector.slug}': your organization has no "
+                    f"{connector.connector} installation to share an account on"
+                )
+            planned.append(_Planned(connector, None, None, skip=True))
+            continue
         planned.append(
             _Planned(
                 connector=connector,
@@ -259,6 +301,15 @@ def declare_pod_connectors(
     summary: list[str] = []
     for item in planned:
         connector = item.connector
+        if item.skip:
+            on_notice(
+                f"connector '{connector.slug}' ({connector.connector}) is optional "
+                "and your organization has no installation of it, so it was left "
+                "out and grants on it were dropped. Install it and re-import, or "
+                "pass --create-installations, to bring it in."
+            )
+            summary.append(f"skipped:{connector.slug}")
+            continue
         auth_config_id = item.auth_config_id or _created_installation(
             pod_sdk, connector
         )

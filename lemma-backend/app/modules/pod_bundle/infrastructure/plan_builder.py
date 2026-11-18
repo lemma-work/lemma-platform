@@ -21,10 +21,8 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
-from lemma_pod_bundle import (
-    diff_table_columns,
-    load_resource_payload,
-)
+from lemma_pod_bundle import check_one_schedule_per_global_workflow as one_schedule_each
+from lemma_pod_bundle import diff_table_columns, load_resource_payload
 from lemma_pod_bundle.diff import _order_table_dirs_by_dependency
 from lemma_pod_bundle.jsonc import loads_jsonc
 from lemma_pod_bundle.layout import (
@@ -254,6 +252,7 @@ class PlanBuilder:
         pod_manifest = self._read_pod_manifest(bundle_root)
         try:
             format_version = check_format_version(pod_manifest)
+            one_schedule_each(bundle_root)  # before anything is written, not after
         except ValueError as exc:
             raise BundleInvalidError(str(exc)) from exc
         bundle_name = pod_manifest.get("name")

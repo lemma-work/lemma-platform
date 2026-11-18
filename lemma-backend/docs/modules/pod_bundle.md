@@ -72,6 +72,24 @@ format handles pod connectors, tables/data, files, functions,
 agents/grants/toolsets, workflows, schedules, apps/source, surfaces, and pod
 metadata.
 
+**Apps** (`infrastructure/app_builder.py`) with a `package.json` are rebuilt in
+the importing user's sandbox, because the build bakes in the pod id: `pnpm
+install` (frozen when the app ships `pnpm-lock.yaml`), then `pnpm run build`
+with the target pod's `VITE_LEMMA_*` values. The sandbox's pnpm fails an install
+on a dependency install script nobody approved, and Vite brings one (esbuild),
+so an app that ships no `pnpm-workspace.yaml` is given one that allows
+esbuild's and lets the install go past the rest without running them. An app's
+own file is used as it is. A static site, a single `html.html`, or a bundle
+carrying only `dist.zip` deploys as it is.
+
+A failed build fails its step with `POD_BUNDLE_APP_BUILD_FAILED` and an error
+quoting the line of output that says why (`App build failed: <line>`). The end
+of what the build printed -- stdout and stderr, 4,000 characters between them
+-- is kept on the step as `detail.build_log`, which the import status returns
+with the plan; the step event carries only the error. A build still running
+after `LEMMA_POD_BUNDLE_APP_BUILD_TIMEOUT_SECONDS` (600 by default) fails the
+same way. Re-applying the import retries the step and drops the old log.
+
 **Pod connectors** (`connectors/<slug>/<slug>.json`) carry the catalog
 connector, mode, `required` and `purpose` -- never the installation or the
 account a SHARED one runs as, which the exporter refuses to write. The plan
@@ -86,6 +104,15 @@ or a slug the pod already uses for another connector (`CONFLICT`) refuses the
 apply with 422; a SHARED connector with no account imports `NEEDS_ACCOUNT`
 with a warning. CONNECTOR steps run first, so every schedule, surface and grant
 naming a slug finds it declared.
+
+A connector the bundle marks optional (`required: false`) that has no
+installation to map to, and that no bundled schedule or surface runs through
+-- only grants name it -- is `SKIPPED` rather than `NEEDS_INSTALLATION`: the
+import goes ahead without it, its CONNECTOR step is marked skipped, and grants
+on it are dropped with a warning (`connector_grants.resolve_connector_grants`).
+Choosing an installation or to create one brings it in. An importer may also
+leave out any other optional connector with `{"skip": true}`; a required one
+cannot be. lemma-cli applies the same rule (`pod_bundle_connectors.py`).
 
 A slug the pod already declares is kept only when it is the same catalog
 connector in the same mode (`EXISTS`); another connector or the other mode is
@@ -105,6 +132,23 @@ them here, or gone -- is planned as skipped with a warning
 (`infrastructure/account_checks.py`): at planning for an id in the bundle, when
 the apply is requested for one given as an import variable. The rest of the
 bundle imports.
+
+**One schedule per GLOBAL workflow.** The platform keeps a GLOBAL workflow
+(every workflow unless its manifest says `"mode": "USER"`) to one schedule per
+person in a pod and refuses the second when it is created -- after everything
+before it had been written. The plan refuses a bundle in which two schedules
+start one of its own GLOBAL workflows (`lemma_pod_bundle.workflow_schedules`,
+asked by `plan_builder` and by lemma-cli before either writes anything).
+
+**The app a pod opens on.** `pod.json -> home_app` names one of the bundle's
+apps (its `apps/<name>` directory); the exporter writes it from the pod's
+`config.home_app`. Once every step has landed, the import sets it on the pod
+(`infrastructure/bundle_home_app.py`, through `pod.contracts.home_app`, as the
+person importing) -- but only on a pod that has not chosen one and had no other
+apps before the import. A pod that already opens somewhere keeps it, and the
+import says so in its warnings. A reader that does not know the key skips it,
+so it does not move the format. lemma-cli does the same
+(`cli_app/pod_bundle_home_app.py`).
 
 **Format version.** `pod.json`'s `format_version` is 4 for a bundle that
 declares a pod connector, and 3 for one that does not
