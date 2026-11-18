@@ -1,14 +1,19 @@
 """Build an import plan by diffing a staged bundle against a pod's current state.
 
 The plan is the *resume mechanism* for the whole feature: it is a pure diff
-(CREATE / UPDATE / SKIP per resource) recomputed from the bundle + the pod's
-current resources, and apply steps are idempotent upserts. So a lost plan (Redis
+recomputed from the bundle + the pod's current resources, and every apply step
+creates only what is missing, so replaying one converges. A lost plan (Redis
 TTL) is never a problem — re-uploading and re-planning produces a plan that
 picks up from reality.
 
+What the pod already has is kept (``kept_parts``): planned SKIP with the reason
+on its step, except a table, which is planned UPDATE when it lacks some of the
+bundle's columns and gains only those. Nothing is planned to be removed or
+replaced, so no plan has a destructive step.
+
 :class:`PlanBuilder` is pure: it reads the staged bundle from disk and asks an
 :class:`ExistingResources` port for the pod's current resource names (and, for a
-table being updated, its columns). Production wires
+table it already has, its columns). Production wires
 :class:`ServiceExistingResources` (module services over a short UoW); unit tests
 inject a fake, so the diff logic is tested without a database.
 """
@@ -16,15 +21,12 @@ inject a fake, so the diff logic is tested without a database.
 from __future__ import annotations
 
 import csv
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
-from lemma_pod_bundle import (
-    diff_table_columns,
-    load_resource_payload,
-)
+from lemma_pod_bundle import load_resource_payload
 from lemma_pod_bundle.diff import _order_table_dirs_by_dependency
 from lemma_pod_bundle.jsonc import loads_jsonc
 from lemma_pod_bundle.layout import (
@@ -51,7 +53,11 @@ from app.modules.pod_bundle.infrastructure.connector_planning import (
     NoConnectorLookup,
     plan_connectors,
 )
-from app.modules.pod_bundle.infrastructure import account_checks, bundle_outcome
+from app.modules.pod_bundle.infrastructure import (
+    account_checks,
+    bundle_outcome,
+    kept_parts,
+)
 from app.modules.pod_bundle.infrastructure.grants import has_grants
 from app.modules.pod_bundle.infrastructure.plan_variables import (
     variables_from_manifest,
@@ -66,7 +72,6 @@ from app.modules.pod_bundle.domain.state import (
     PlanStep,
     StepAction,
     StepKind,
-    StepStatus,
 )
 
 logger = get_logger(__name__)
@@ -83,6 +88,9 @@ class ExistingResources(Protocol):
     async def schedule_names(self) -> set[str]: ...
     async def app_names(self) -> set[str]: ...
     async def surface_names(self) -> set[str]: ...
+    async def existing_paths(self, paths: Sequence[str]) -> set[str]:
+        """Which of these file and folder paths the pod already holds."""
+        ...
 
 
 def _resource_subdirs(bundle_root: Path, resource_type: str) -> list[Path]:
@@ -212,15 +220,44 @@ def _resolved_surface_name(payload: Mapping[str, object], dir_name: str) -> str:
     return str(payload.get("platform") or dir_name).lower()
 
 
+#: The step kind of each bundle directory planned by ``_create_or_keep``.
+_KINDS = {
+    "functions": StepKind.FUNCTION,
+    "agents": StepKind.AGENT,
+    "workflows": StepKind.WORKFLOW,
+}
+
+#: The bundle directory holding the manifest each grants step writes from.
+_GRANTS_FROM = {
+    StepKind.FUNCTION_GRANTS: "functions",
+    StepKind.AGENT_GRANTS: "agents",
+}
+
+
+def _create_or_keep(
+    bundle_root: Path, resource_type: str, existing: set[str]
+) -> list[PlanStep]:
+    """One step per bundled resource of this type: created, or kept."""
+    kind = _KINDS[resource_type]
+    return [
+        kept_parts.create_or_keep(kind, d.name, existing)
+        for d in _resource_subdirs(bundle_root, resource_type)
+    ]
+
+
+def _created(steps: Sequence[PlanStep]) -> set[str]:
+    """The names these steps create."""
+    return {step.name for step in steps if step.action is StepAction.CREATE}
+
+
 def _names_with_grants(bundle_root: Path, resource_type: str) -> list[str]:
     """Resources of this type whose manifest declares grants — the ones that
-    need a deferred grants step after every referenced resource exists.
+    need a deferred grants step after every referenced resource exists, when
+    the import creates them.
 
-    Uses :func:`grants.has_grants`, the same predicate the applier runs. A local
-    loose copy used to live here and treated an explicit ``{"grants": []}`` as a
-    no-op, so a bundle saying "this agent holds nothing" planned no grants step
-    and left a same-named agent's existing grants in place — the silent access
-    change the exporter goes out of its way to avoid."""
+    Uses :func:`grants.has_grants`, the same predicate the applier runs, so an
+    explicit ``{"grants": []}`` ("this workload holds nothing") is a write and
+    plans a step, while a manifest with no ``permissions`` key plans none."""
     return [
         d.name
         for d in _resource_subdirs(bundle_root, resource_type)
@@ -263,109 +300,39 @@ class PlanBuilder:
             bundle_root, self._connectors
         )
 
-        # --- tables (FK-ordered) + table_data --------------------------------
-        table_dirs = _order_table_dirs_by_dependency(
-            _resource_subdirs(bundle_root, "tables")
+        # --- tables (FK-ordered); their rows wait until everything exists ----
+        table_steps, data_steps = await self._table_steps(bundle_root, warnings)
+        steps += table_steps
+
+        # --- functions, agents, workflows, schedules -------------------------
+        functions = _create_or_keep(
+            bundle_root, "functions", await self._existing.function_names()
         )
-        existing_tables = await self._existing.table_names()
-        data_steps: list[tuple[str, dict[str, Any]]] = []
-        seeded_rows = 0
-        for table_dir in table_dirs:
-            name = table_dir.name
-            desired = load_resource_payload(table_dir, name, resource_type="tables")
-            is_update = name in existing_tables
-            detail: dict[str, Any] = {}
-            destructive = False
-            if is_update:
-                current = await self._existing.table_manifest(name)
-                if current is not None:
-                    table_diff = diff_table_columns(current, desired)
-                    detail = {
-                        "columns_to_add": [c.get("name") for c in table_diff.to_add],
-                        "columns_to_remove": list(table_diff.to_remove),
-                        "columns_incompatible": list(table_diff.incompatible),
-                    }
-                    if table_diff.to_remove or table_diff.incompatible:
-                        destructive = True
-                        changed = table_diff.to_remove + table_diff.incompatible
-                        warnings.append(
-                            f"Table '{name}' would drop or alter columns: "
-                            f"{', '.join(changed)}."
-                        )
-            steps.append(
-                PlanStep(
-                    index=0,
-                    kind=StepKind.TABLE,
-                    name=name,
-                    action=StepAction.UPDATE if is_update else StepAction.CREATE,
-                    destructive=destructive,
-                    detail=detail,
-                )
-            )
-            data_path = table_dir / TABLE_DATA_FILE
-            if data_path.is_file():
-                seeded_rows += _check_seed_rows(data_path, name, seeded_rows)
-                data_steps.append((name, {}))
-
-        # --- functions (+ deferred grants) -----------------------------------
-        existing_functions = await self._existing.function_names()
-        grant_functions = _names_with_grants(bundle_root, "functions")
-        for d in _resource_subdirs(bundle_root, "functions"):
-            steps.append(
-                self._simple_step(StepKind.FUNCTION, d.name, existing_functions)
-            )
-
-        # --- agents (+ deferred grants) --------------------------------------
-        existing_agents = await self._existing.agent_names()
-        grant_agents = _names_with_grants(bundle_root, "agents")
-        for d in _resource_subdirs(bundle_root, "agents"):
-            steps.append(self._simple_step(StepKind.AGENT, d.name, existing_agents))
-
-        # --- workflows -------------------------------------------------------
-        existing_workflows = await self._existing.workflow_names()
-        for d in _resource_subdirs(bundle_root, "workflows"):
-            steps.append(
-                self._create_once_step(
-                    StepKind.WORKFLOW,
-                    d.name,
-                    existing_workflows,
-                    reason=(
-                        "a workflow of this name already exists; importing a "
-                        "bundle does not replace it"
-                    ),
-                )
-            )
-
-        # --- schedules -------------------------------------------------------
+        agents = _create_or_keep(
+            bundle_root, "agents", await self._existing.agent_names()
+        )
+        steps += functions + agents
+        steps += _create_or_keep(
+            bundle_root, "workflows", await self._existing.workflow_names()
+        )
         existing_schedules = await self._existing.schedule_names()
         for d in _resource_subdirs(bundle_root, "schedules"):
-            step = self._create_once_step(
-                StepKind.SCHEDULE,
-                d.name,
-                existing_schedules,
-                reason=(
-                    "a schedule of this name already exists; importing a "
-                    "bundle does not replace it"
-                ),
+            step = kept_parts.create_or_keep(
+                StepKind.SCHEDULE, d.name, existing_schedules
             )
             payload = load_resource_payload(d, d.name, resource_type="schedules")
             steps.append(account_checks.noting_deprecated_account(step, payload))
 
-        # --- surfaces --------------------------------------------------------
+        # --- surfaces ------------------------------------------------------
         existing_surfaces = await self._existing.surface_names()
         for d in _resource_subdirs(bundle_root, "surfaces"):
             payload = load_resource_payload(d, d.name, resource_type="surfaces")
+            # Matched by the name the applier creates it under, and named by
+            # its directory, which the applier loads the manifest by.
+            here = _resolved_surface_name(payload, d.name) in existing_surfaces
             steps.append(
-                PlanStep(
-                    index=0,
-                    # The directory name: the applier loads the manifest by it.
-                    name=d.name,
-                    kind=StepKind.SURFACE,
-                    action=(
-                        StepAction.UPDATE
-                        if _resolved_surface_name(payload, d.name) in existing_surfaces
-                        else StepAction.CREATE
-                    ),
+                kept_parts.create_or_keep(
+                    StepKind.SURFACE, d.name, {d.name} if here else set()
                 )
             )
 
@@ -375,31 +342,29 @@ class PlanBuilder:
             steps.append(self._app_step(d, existing_apps))
 
         # --- files (folders parent-first, then file bytes) -------------------
-        steps.extend(_file_steps(bundle_root))
+        file_steps = _file_steps(bundle_root)
+        present = (
+            await self._existing.existing_paths(["/" + s.name for s in file_steps])
+            if file_steps
+            else set()
+        )
+        steps += kept_parts.keep_existing_files(file_steps, present)
 
         # --- grants (after every referenced resource exists) ------------------
         # Deferred for functions as well as agents: a function granted a folder,
         # an app, or another function that the same bundle creates would
         # otherwise be asked to resolve those names while its own FUNCTION step
         # runs — before files, apps, and the later functions exist.
-        for name in grant_functions:
-            steps.append(
-                PlanStep(
-                    index=0,
-                    kind=StepKind.FUNCTION_GRANTS,
-                    name=name,
-                    action=StepAction.UPDATE,
-                )
-            )
-        for name in grant_agents:
-            steps.append(
-                PlanStep(
-                    index=0,
-                    kind=StepKind.AGENT_GRANTS,
-                    name=name,
-                    action=StepAction.UPDATE,
-                )
-            )
+        grant_steps = kept_parts.grants_steps(
+            StepKind.FUNCTION_GRANTS,
+            _names_with_grants(bundle_root, "functions"),
+            _created(functions),
+        ) + kept_parts.grants_steps(
+            StepKind.AGENT_GRANTS,
+            _names_with_grants(bundle_root, "agents"),
+            _created(agents),
+        )
+        steps += grant_steps
         warnings += await plan_grant_conferral(bundle_root, steps, self._grants)
 
         if self._directory is not None:
@@ -407,18 +372,11 @@ class PlanBuilder:
                 bundle_root,
                 self._directory,
                 bundled={plan.slug for plan in connectors},
+                writing={(_GRANTS_FROM[s.kind], s.name) for s in grant_steps},
             )
 
         # --- table data (after tables exist) ---------------------------------
-        for name, _ in data_steps:
-            steps.append(
-                PlanStep(
-                    index=0,
-                    kind=StepKind.TABLE_DATA,
-                    name=name,
-                    action=StepAction.CREATE,
-                )
-            )
+        steps += data_steps
 
         _check_step_count(steps)
 
@@ -448,39 +406,41 @@ class PlanBuilder:
             outcome=outcome,
         )
 
-    def _simple_step(self, kind: StepKind, name: str, existing: set[str]) -> PlanStep:
-        return PlanStep(
-            index=0,
-            kind=kind,
-            name=name,
-            action=StepAction.UPDATE if name in existing else StepAction.CREATE,
-        )
-
-    def _create_once_step(
-        self, kind: StepKind, name: str, existing: set[str], *, reason: str
-    ) -> PlanStep:
-        """A step whose applier is create-once, planned SKIP rather than UPDATE.
-
-        `_apply_workflow` and `_apply_schedule` return immediately when the pod
-        already has the name. Planning those as UPDATE promised the user the
-        resource would be replaced and then checkpointed the step DONE having
-        changed nothing — so re-importing an updated bundle, the natural
-        "install the new version" flow, reported success and applied none of it.
-
-        Marked SKIPPED as well as SKIP, which is what keeps the apply loop from
-        running it: `next_pending_step` only hands back PENDING/RUNNING steps,
-        and progress already counts a SKIPPED step as accounted for.
-        """
-        if name not in existing:
-            return PlanStep(index=0, kind=kind, name=name, action=StepAction.CREATE)
-        return PlanStep(
-            index=0,
-            kind=kind,
-            name=name,
-            action=StepAction.SKIP,
-            status=StepStatus.SKIPPED,
-            error=reason,
-        )
+    async def _table_steps(
+        self, bundle_root: Path, warnings: list[str]
+    ) -> tuple[list[PlanStep], list[PlanStep]]:
+        """TABLE steps in foreign-key order, and the TABLE_DATA steps that run
+        last. A table the pod has only gains columns, and only a table this
+        import creates is seeded (``kept_parts.table_data_step``)."""
+        existing = await self._existing.table_names()
+        tables: list[PlanStep] = []
+        data: list[PlanStep] = []
+        seeded_rows = 0
+        for table_dir in _order_table_dirs_by_dependency(
+            _resource_subdirs(bundle_root, "tables")
+        ):
+            name = table_dir.name
+            step = PlanStep(
+                index=0, kind=StepKind.TABLE, name=name, action=StepAction.CREATE
+            )
+            if name in existing:
+                step, notes = kept_parts.existing_table_step(
+                    name,
+                    await self._existing.table_manifest(name),
+                    load_resource_payload(table_dir, name, resource_type="tables"),
+                )
+                warnings += notes
+            tables.append(step)
+            data_path = table_dir / TABLE_DATA_FILE
+            if data_path.is_file():
+                # Counted whether or not they load: the caps bound the bundle.
+                seeded_rows += _check_seed_rows(data_path, name, seeded_rows)
+                data.append(
+                    kept_parts.table_data_step(
+                        name, table_created=step.action is StepAction.CREATE
+                    )
+                )
+        return tables, data
 
     def _app_step(self, bundle_dir: Path, existing: set[str]) -> PlanStep:
         """An APP step, carrying the visibility the app will be created with.
@@ -488,11 +448,11 @@ class PlanBuilder:
         An imported app takes the app default (POD) when its manifest is
         silent, and whatever the manifest says otherwise -- which may be
         PUBLIC, serving its HTML/JS on a guessable host to anyone. The plan is
-        where the importer is supposed to see what will happen. An UPDATE
-        leaves the existing app's visibility alone, so it claims nothing.
+        where the importer is supposed to see what will happen. An app the pod
+        already has is kept with its own visibility, so it claims nothing.
         """
         name = bundle_dir.name
-        step = self._simple_step(StepKind.APP, name, existing)
+        step = kept_parts.create_or_keep(StepKind.APP, name, existing)
         if step.action is StepAction.CREATE:
             payload = load_resource_payload(bundle_dir, name, resource_type="apps")
             step.detail = {"visibility": _resolved_app_visibility(payload)}
@@ -579,10 +539,23 @@ class ServiceExistingResources:
             )
         )
 
+    async def existing_paths(self, paths: Sequence[str]) -> set[str]:
+        """One lookup per path, the question the FILE step asks again when it
+        runs. A plan carries at most ``MAX_IMPORT_PLAN_STEPS`` paths."""
+        from app.modules.datastore.contracts.provisioning import file_exists
+
+        return {
+            path
+            for path in paths
+            if await file_exists(
+                self._uow, pod_id=self._pod_id, path=path, ctx=self._ctx
+            )
+        }
+
     async def surface_names(self) -> set[str]:
-        """The pod's surface *names* — the key the applier upserts by, and the
+        """The pod's surface *names* — the key the applier creates by, and the
         one the exporter writes a directory per. Keyed by platform, the diff
-        called a second Slack surface an UPDATE of the first."""
+        called a second Slack surface the first one."""
         from app.modules.agent_surfaces.contracts.provisioning import list_surfaces
 
         try:

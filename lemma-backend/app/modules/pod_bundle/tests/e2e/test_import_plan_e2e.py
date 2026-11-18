@@ -140,10 +140,12 @@ async def test_plan_classifies_new_resources_as_create(
     assert plan["has_destructive_steps"] is False
 
 
-async def test_plan_flags_destructive_column_drop(
+async def test_plan_keeps_what_the_pod_already_has(
     authenticated_client, fixed_test_org, worker, tmp_path
 ):
-    # Pod already has a `leads` table with a `score` column the bundle omits.
+    """The pod's `leads` has a `score` column the bundle omits, and an agent of
+    the bundle's name. The table only gains the bundle's `stage`; nothing is
+    planned to be removed, and the agent is kept."""
     pod_id = await _new_pod(authenticated_client, fixed_test_org["id"])
     await _create_table(
         authenticated_client,
@@ -151,24 +153,36 @@ async def test_plan_flags_destructive_column_drop(
         "leads",
         [{"name": "score", "type": "INTEGER", "required": False}],
     )
+    made = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={"name": "assistant", "instruction": "Mine."},
+    )
+    assert made.status_code == status.HTTP_201_CREATED, made.text
     zip_bytes = _make_bundle(
         tmp_path,
         tables={
             "leads": [
                 {"name": "id", "type": "UUID", "required": True},
                 {"name": "title", "type": "TEXT", "required": True},
+                {"name": "stage", "type": "TEXT", "required": False},
             ]
         },
+        agents=["assistant"],
     )
     import_id = await _upload_import(authenticated_client, pod_id, zip_bytes)
     body = await _wait_for_plan(authenticated_client, pod_id, import_id)
 
-    step = next(s for s in body["plan"]["steps"] if s["kind"] == "TABLE")
-    assert step["action"] == "UPDATE"
-    assert step["destructive"] is True
-    assert "score" in step["detail"]["columns_to_remove"]
-    assert body["plan"]["has_destructive_steps"] is True
-    assert any("score" in w for w in body["plan"]["warnings"])
+    steps = {(s["kind"], s["name"]): s for s in body["plan"]["steps"]}
+    table = steps[("TABLE", "leads")]
+    assert table["action"] == "UPDATE"
+    assert table["destructive"] is False
+    assert table["detail"]["columns_to_add"] == ["stage"]
+    assert "columns_to_remove" not in table["detail"]
+    agent = steps[("AGENT", "assistant")]
+    assert (agent["action"], agent["status"]) == ("SKIP", "SKIPPED")
+    assert "kept as it is" in agent["error"]
+    assert body["plan"]["has_destructive_steps"] is False
+    assert not any("score" in w for w in body["plan"]["warnings"])
 
 
 async def test_get_import_expired_returns_410(authenticated_client, test_pod, worker):
