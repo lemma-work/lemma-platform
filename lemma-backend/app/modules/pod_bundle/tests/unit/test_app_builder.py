@@ -444,6 +444,17 @@ def test_an_only_built_dependencies_file_is_read_from_the_app():
     }
 
 
+def test_an_app_with_its_own_workspace_file_is_not_checked_for_one():
+    """It is built with its own file; a builds file pnpm 11 would ignore
+    anyway does not fail it."""
+    source = _zipped(
+        '{"pnpm": {"onlyBuiltDependenciesFile": "missing.json"}}',
+        {"pnpm-workspace.yaml": "allowBuilds:\n  esbuild: true\n"},
+    )
+
+    assert workspace_for(source) == DEFAULT_PNPM_WORKSPACE  # never written
+
+
 @pytest.mark.parametrize(
     ("named", "files", "why"),
     [

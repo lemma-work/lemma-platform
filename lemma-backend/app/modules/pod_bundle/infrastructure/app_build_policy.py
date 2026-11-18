@@ -49,9 +49,13 @@ _OWN_BUILD_POLICY = frozenset(
 def _package_pnpm(source_zip: bytes) -> tuple[dict[str, object], list[str]]:
     """``package.json -> pnpm``, and the names in the file its
     ``onlyBuiltDependenciesFile`` names; nothing for a ``package.json`` missing
-    or unreadable, which the install itself reports."""
+    or unreadable, which the install itself reports, and nothing for an app
+    that brings its own ``pnpm-workspace.yaml``: no file is written for it, so
+    what ``package.json`` says is neither read nor checked."""
     try:
         with zipfile.ZipFile(io.BytesIO(source_zip)) as archive:
+            if "pnpm-workspace.yaml" in archive.namelist():
+                return {}, []
             manifest = json.loads(archive.read("package.json"))
             pnpm = manifest.get("pnpm") if isinstance(manifest, dict) else None
             if not isinstance(pnpm, dict):

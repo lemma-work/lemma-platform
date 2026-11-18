@@ -84,7 +84,8 @@ sandbox's) no longer reads, is carried into that file as one `allowBuilds` map
 over the default's esbuild (`workspace_for`), with the names in the file
 `onlyBuiltDependenciesFile` points to; a file named there that is missing, not
 a JSON list, or outside the app fails the build before it starts. An app's own
-file is used as it is. A static site, a single `html.html`, or a bundle
+file is used as it is, and its `package.json` policy is then neither read nor
+checked. A static site, a single `html.html`, or a bundle
 carrying only `dist.zip` deploys as it is.
 
 A failed build fails its step with `POD_BUNDLE_APP_BUILD_FAILED` and an error
