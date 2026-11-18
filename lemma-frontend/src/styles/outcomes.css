@@ -671,6 +671,29 @@
     color: var(--ink);
 }
 
+/* A Lemma with apps lists them: the way to one more, then, below a
+   hairline, its own places. */
+.ox-srow--add {
+    width: 100%;
+    border: 0;
+    background: none;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 13.5px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.ox-srow--add:hover {
+    color: var(--ink);
+}
+
+.ox-group__rule {
+    height: 1px;
+    margin: 4px 10px 4px 44px;
+    background: var(--line-2);
+}
+
 .ox-side__foot {
     display: flex;
     align-items: center;

@@ -53,7 +53,9 @@ export type View =
      *  of its automations, on that tab. */
     | { name: "outcome"; podId: string; tab: OutcomeTab; section?: string }
     | { name: "run"; podId: string; runId: string }
-    | { name: "app"; podId: string; app: string }
+    /** `at` is where the app is inside itself: the page for one of its
+     *  records, as a rooted path. Absent on the app's one screen. */
+    | { name: "app"; podId: string; app: string; at?: string }
     | { name: "file"; podId: string; path: string }
     | { name: "table"; podId: string; table: string }
     | { name: "workflow"; podId: string; workflow: string }
@@ -84,6 +86,15 @@ export function outcomeView(podId: string, tab: OutcomeTab = "home", section: st
 /** A chat, open in the main area beside the sidebar that lists it. */
 export function chatView(open: OpenChat): View {
     return { name: "chats", open };
+}
+
+/** An app, at the path inside it the rest of an address names. A part that
+ *  holds a slash of its own, or steps up or stays put, is not a path an app
+ *  could have said it was at, so the address names nothing. */
+function appView(podId: string, app: string, inside: readonly string[]): View | null {
+    if (inside.length === 0) return { name: "app", podId, app };
+    if (inside.some((part) => part === "." || part === ".." || part.includes("/"))) return null;
+    return { name: "app", podId, app, at: "/" + inside.join("/") };
 }
 
 /** The outcome a view is about, when it is about one. */
@@ -138,7 +149,9 @@ function trialChatOf(podId: string, rest: readonly (string | undefined)[]): Chat
  * `/needs`, `/apps`, `/connectors`, `/people`, `/chats`, `/history` -- and everything
  * about one Lemma sits under `/l/{id}`, in plural words for its sections
  * and the same word with a name for one thing in it: `/l/{id}/apps` lists
- * them, `/l/{id}/apps/{name}` opens one. `/l` alone is every Lemma.
+ * them, `/l/{id}/apps/{name}` opens one. `/l` alone is every Lemma. What
+ * follows an app's name is the app's to mean -- the page for one of its
+ * records -- and is handed to it as it stands.
  *
  * The workspace's own addresses lived under `/l` before this; where a word
  * is in both, it means the same place, and a word only the workspace used
@@ -205,7 +218,7 @@ export function readView(pathname: string): View | null {
             return rest.length === 1 ? chatView({ kind: "contact", podId, id: one }) : null;
         case "apps":
             if (rest.length === 0) return outcomeView(podId, "apps");
-            return rest.length === 1 ? { name: "app", podId, app: one } : null;
+            return appView(podId, one, rest.slice(1));
         case "pages": return rest.length === 0 ? outcomeView(podId, "pages") : null;
         /* About alone is this app's page. With a part named after it, it is
            the workspace's old address, which its own grammar reads. */
@@ -283,7 +296,7 @@ export function writeView(view: View): string {
             return base + "/" + SECTION_WORDS[view.tab] + tail;
         }
         case "run": return LEMMAS + "/" + e(view.podId) + "/runs/" + e(view.runId);
-        case "app": return LEMMAS + "/" + e(view.podId) + "/apps/" + e(view.app);
+        case "app": return LEMMAS + "/" + e(view.podId) + "/apps/" + e(view.app) + (view.at ?? "").split("/").filter(Boolean).map((part) => "/" + e(part)).join("");
         case "table": return LEMMAS + "/" + e(view.podId) + "/tables/" + e(view.table);
         case "record": return LEMMAS + "/" + e(view.podId) + "/tables/" + e(view.table) + "/" + e(view.recordId);
         case "workflow": return LEMMAS + "/" + e(view.podId) + "/workflows/" + e(view.workflow);
