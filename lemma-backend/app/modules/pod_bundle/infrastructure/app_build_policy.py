@@ -12,6 +12,8 @@ import json
 import posixpath
 import zipfile
 
+from app.modules.pod_bundle.domain.errors import AppBuildFailedError
+
 #: What an app that brings no ``pnpm-workspace.yaml`` is built with. The
 #: sandbox's pnpm fails an install on any dependency whose install script it
 #: was not told about, and Vite brings one (esbuild), so a Vite app without a
@@ -46,8 +48,8 @@ _OWN_BUILD_POLICY = frozenset(
 
 def _package_pnpm(source_zip: bytes) -> tuple[dict[str, object], list[str]]:
     """``package.json -> pnpm``, and the names in the file its
-    ``onlyBuiltDependenciesFile`` names; nothing for what is missing or
-    unreadable."""
+    ``onlyBuiltDependenciesFile`` names; nothing for a ``package.json`` missing
+    or unreadable, which the install itself reports."""
     try:
         with zipfile.ZipFile(io.BytesIO(source_zip)) as archive:
             manifest = json.loads(archive.read("package.json"))
@@ -61,16 +63,34 @@ def _package_pnpm(source_zip: bytes) -> tuple[dict[str, object], list[str]]:
 
 def _listed_in(archive: zipfile.ZipFile, path: object) -> list[str]:
     """The names a JSON list file in the app holds, its path read from beside
-    ``package.json`` (the archive's root); one outside the app is not read."""
-    if not isinstance(path, str) or not path.strip():
+    ``package.json`` (the archive's root).
+
+    A file named but missing, outside the app, or not a JSON list fails the
+    build (:class:`AppBuildFailedError`) before it starts: built without them,
+    the scripts it allows would be skipped and the app would fail later, or
+    work wrongly, for a reason nobody was told."""
+    if path is None:
         return []
-    member = posixpath.normpath(path.strip().replace("\\", "/"))
-    if member.startswith(("/", "../")) or member == "..":
-        return []
+    named = path.strip() if isinstance(path, str) else ""
+    member = posixpath.normpath(named.replace("\\", "/")) if named else ""
+    if not member or member.startswith(("/", "../")) or member == "..":
+        raise _unreadable(path, "which is not a file in the app")
     try:
-        return _names(json.loads(archive.read(member)))
-    except KeyError, ValueError:
-        return []
+        listed = json.loads(archive.read(member))
+    except KeyError:
+        raise _unreadable(path, "which the app does not have") from None
+    except ValueError:
+        raise _unreadable(path, "which is not JSON") from None
+    if not isinstance(listed, list):
+        raise _unreadable(path, "which is not a JSON list of package names")
+    return _names(listed)
+
+
+def _unreadable(path: object, why: str) -> AppBuildFailedError:
+    return AppBuildFailedError(
+        f"package.json's pnpm.onlyBuiltDependenciesFile names {path!r}, {why}; "
+        "the packages it allows to run install scripts could not be read."
+    )
 
 
 def _names(value: object) -> list[str]:

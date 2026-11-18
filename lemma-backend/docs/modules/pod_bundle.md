@@ -81,8 +81,10 @@ so an app that ships no `pnpm-workspace.yaml` is given one that allows
 esbuild's and lets the install go past the rest without running them. A build
 policy the app gives under `package.json -> pnpm`, which pnpm 11 (the
 sandbox's) no longer reads, is carried into that file as one `allowBuilds` map
-over the default's esbuild (`workspace_for`). An app's own file is used as it
-is. A static site, a single `html.html`, or a bundle
+over the default's esbuild (`workspace_for`), with the names in the file
+`onlyBuiltDependenciesFile` points to; a file named there that is missing, not
+a JSON list, or outside the app fails the build before it starts. An app's own
+file is used as it is. A static site, a single `html.html`, or a bundle
 carrying only `dist.zip` deploys as it is.
 
 A failed build fails its step with `POD_BUNDLE_APP_BUILD_FAILED` and an error

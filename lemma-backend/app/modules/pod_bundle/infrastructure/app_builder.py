@@ -193,6 +193,9 @@ class AppSandboxBuilder:
         pod's ``VITE_*`` env, and return the built ``dist`` archive bytes. Raises
         :class:`AppBuildFailedError` on a non-zero build or a missing
         ``dist/index.html``."""
+        # Before the sandbox: a build policy the app names but cannot be read
+        # fails here, with nothing started.
+        workspace = workspace_for(source_zip)
         env = {
             "VITE_LEMMA_API_URL": settings.api_url,
             "VITE_LEMMA_AUTH_URL": settings.auth_frontend_url,
@@ -219,7 +222,7 @@ class AppSandboxBuilder:
                 session,
                 f"cd {shlex.quote(build_dir)} && unzip -oq source.zip -d src",
             )
-            await self._run_build(session, src_dir, workspace=workspace_for(source_zip))
+            await self._run_build(session, src_dir, workspace=workspace)
             dist_index = f"{src_dir}/dist/index.html"
             check = await session.exec_command(
                 cmd=f"test -f {shlex.quote(dist_index)}",

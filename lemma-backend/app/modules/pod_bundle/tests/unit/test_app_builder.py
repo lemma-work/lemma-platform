@@ -443,12 +443,24 @@ def test_an_only_built_dependencies_file_is_read_from_the_app():
         "sharp": True,
     }
 
-    outside = yaml.safe_load(
+
+@pytest.mark.parametrize(
+    ("named", "files", "why"),
+    [
+        ("builds.json", {}, "which the app does not have"),
+        ("builds.json", {"builds.json": "[sharp"}, "which is not JSON"),
+        ("builds.json", {"builds.json": '{"sharp": true}'}, "not a JSON list"),
+        ("../builds.json", {}, "not a file in the app"),
+    ],
+)
+def test_a_builds_file_that_cannot_be_read_fails_the_build_before_it_starts(
+    named, files, why
+):
+    """Built without it, the scripts it allows would be skipped unseen."""
+    with pytest.raises(AppBuildFailedError, match=why):
         workspace_for(
-            _zipped('{"pnpm": {"onlyBuiltDependenciesFile": "../builds.json"}}')
+            _zipped(json.dumps({"pnpm": {"onlyBuiltDependenciesFile": named}}), files)
         )
-    )
-    assert outside["allowBuilds"] == {"esbuild": True}
 
 
 def test_an_app_may_still_refuse_esbuild_by_name():
