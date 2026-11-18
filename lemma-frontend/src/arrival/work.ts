@@ -68,3 +68,12 @@ export function stillAsksWork(
     if (!Number.isFinite(made)) return false;
     return now - made < ASK_FOR_DAYS * 24 * 60 * 60 * 1000;
 }
+
+/** Where somebody who missed the question on their way in is asked it: on
+ *  Home, the front of the app, and nowhere a link took them. Somebody who
+ *  opened a chat from WhatsApp, an app from an email or a Lemma a colleague
+ *  sent came for that, and a full-page question in its place is the thing
+ *  they did not come for. They are asked when they next come to Home. */
+export function asksWorkOn(view: string): boolean {
+    return view === "today";
+}

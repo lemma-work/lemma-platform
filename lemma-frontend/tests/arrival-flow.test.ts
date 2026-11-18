@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { nextStep, stepsFor } from "../src/arrival/steps.ts";
-import { JOBS, OTHER_LIMIT, stillAsksWork, workAnswer, type JobId } from "../src/arrival/work.ts";
+import { JOBS, OTHER_LIMIT, asksWorkOn, stillAsksWork, workAnswer, type JobId } from "../src/arrival/work.ts";
 
 /** Every door walks the same steps after its own front: an organization,
  *  then (for one that already has people) its Lemmas to join, then the job
@@ -65,4 +65,13 @@ test("a server that does not ask the question never stops anybody", () => {
     assert.equal(stillAsksWork({ created_at: new Date(NOW - DAY).toISOString() }, NOW), false);
     assert.equal(stillAsksWork(undefined, NOW), false);
     assert.equal(stillAsksWork({ work: null, created_at: "not a date" }, NOW), false);
+});
+
+test("somebody who missed the question is asked it on Home, never over a link they followed", () => {
+    assert.equal(asksWorkOn("today"), true);
+    // A chat opened from WhatsApp, an app from an email, a Lemma a colleague
+    // sent: what they came for opens, and the question waits for Home.
+    for (const view of ["chats", "app", "outcome", "outcomes", "apps", "needs", "people"]) {
+        assert.equal(asksWorkOn(view), false, view);
+    }
 });

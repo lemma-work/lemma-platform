@@ -197,6 +197,9 @@ are shown with a retry action rather than an indefinite loading message.
   their own instead; otherwise it shall make or join without asking.
 - A name the account lacks shall be asked on the same screen as what they do,
   not again in a dialog over the Lemma they land in.
+- Somebody who came in another way (a chat app, an install page) and was not
+  asked what they do shall be asked when they next come to Home, never in place
+  of a chat, an app or a Lemma a link opened.
 
 **Contracts:** `users.ensure_first_workspace`, `users.work.set`
 

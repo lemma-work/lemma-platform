@@ -39,7 +39,7 @@ import { looksNamed, named, slug, unnamed, type Names } from "./named-address";
 import { appName as nameOfApp, appsOf } from "./lemma-apps";
 import { FrameArrival, firstLemma } from "./arrival";
 import { ArrivalFlow, type ArrivalStart, type Landing } from "@/arrival/flow";
-import { stillAsksWork } from "@/arrival/work";
+import { asksWorkOn, stillAsksWork } from "@/arrival/work";
 import { NewLemmaDialog } from "./new-lemma";
 import { Bars, Icon, Empty } from "./parts";
 import { Sidebar } from "./sidebar";
@@ -465,14 +465,21 @@ export function OutcomesShell() {
         if (firstArrival) setArriving((was) => was ?? "first");
     }, [firstArrival]);
     /* Somebody who came in another way -- a chat app, an install page -- and
-       has not been asked what they do, is asked once here. Ending the step any
-       way at all, a failed save included, stops it for this visit. */
+       has not been asked what they do, is asked once here, when they come to
+       Home. Never over a link to a chat, an app or a Lemma: they came for
+       that, as a link wins over a place of their own on the first arrival.
+       Ending the step any way at all, a failed save included, stops it for
+       this visit. */
     const asksWork = source.label === "live" && stillAsksWork(me.data);
     const asksName = Boolean(me.data) && !(me.data?.first_name ?? "").trim();
     const [workSettled, setWorkSettled] = useState(false);
+    /* Read off the address itself, not the view: while a named address waits
+       for its names, and while an old link is being rewritten, the view
+       stands at Home without the reader being there. */
+    const workHere = !unread && asksWorkOn(readView(plain)?.name ?? "");
     useEffect(() => {
-        if (asksWork && !workSettled && orgs.isSuccess && orgs.data.length > 0) setArriving((was) => was ?? { kind: "work" });
-    }, [asksWork, workSettled, orgs.isSuccess, orgs.data]);
+        if (asksWork && workHere && !workSettled && orgs.isSuccess && orgs.data.length > 0) setArriving((was) => was ?? { kind: "work" });
+    }, [asksWork, workHere, workSettled, orgs.isSuccess, orgs.data]);
     const showingArrival = arriving ?? (firstArrival ? "first" : null);
     /* A new Lemma is made in a dialog over wherever the reader is, as a chat
        app makes a channel; its old address (`/l/new`) opens the same dialog
