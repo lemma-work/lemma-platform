@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import posixpath
 import zipfile
 
 #: What an app that brings no ``pnpm-workspace.yaml`` is built with. The
@@ -38,19 +39,38 @@ _OWN_BUILD_POLICY = frozenset(
         "allowBuilds",
         "neverBuiltDependencies",
         "ignoredBuiltDependencies",
+        "onlyBuiltDependenciesFile",
     }
 )
 
 
-def _package_pnpm(source_zip: bytes) -> dict[str, object]:
-    """``package.json -> pnpm``, or nothing for a file missing or unreadable."""
+def _package_pnpm(source_zip: bytes) -> tuple[dict[str, object], list[str]]:
+    """``package.json -> pnpm``, and the names in the file its
+    ``onlyBuiltDependenciesFile`` names; nothing for what is missing or
+    unreadable."""
     try:
         with zipfile.ZipFile(io.BytesIO(source_zip)) as archive:
             manifest = json.loads(archive.read("package.json"))
+            pnpm = manifest.get("pnpm") if isinstance(manifest, dict) else None
+            if not isinstance(pnpm, dict):
+                return {}, []
+            return pnpm, _listed_in(archive, pnpm.get("onlyBuiltDependenciesFile"))
     except KeyError, ValueError, zipfile.BadZipFile:
-        return {}
-    pnpm = manifest.get("pnpm") if isinstance(manifest, dict) else None
-    return pnpm if isinstance(pnpm, dict) else {}
+        return {}, []
+
+
+def _listed_in(archive: zipfile.ZipFile, path: object) -> list[str]:
+    """The names a JSON list file in the app holds, its path read from beside
+    ``package.json`` (the archive's root); one outside the app is not read."""
+    if not isinstance(path, str) or not path.strip():
+        return []
+    member = posixpath.normpath(path.strip().replace("\\", "/"))
+    if member.startswith(("/", "../")) or member == "..":
+        return []
+    try:
+        return _names(json.loads(archive.read(member)))
+    except KeyError, ValueError:
+        return []
 
 
 def _names(value: object) -> list[str]:
@@ -63,15 +83,17 @@ def workspace_for(source_zip: bytes) -> str:
     """The ``pnpm-workspace.yaml`` an app that brings none is built with.
 
     The default, unless the app's ``package.json`` gives a build policy under
-    ``pnpm``: pnpm 10 read that and pnpm 11 ignores it, so it is carried into
+    ``pnpm`` (lists, the ``allowBuilds`` map, or ``onlyBuiltDependenciesFile``,
+    read from the app): pnpm 10 read that and pnpm 11 ignores it, so it is carried into
     the file, as one ``allowBuilds`` map (and pnpm 10's list), over the
     default's esbuild -- which the app may still refuse by name. An unlisted
     script still does not fail the install (``strictDepBuilds: false``)."""
-    policy = _package_pnpm(source_zip)
+    policy, from_file = _package_pnpm(source_zip)
     if _OWN_BUILD_POLICY.isdisjoint(policy):
         return DEFAULT_PNPM_WORKSPACE
     allow: dict[str, bool] = {"esbuild": True}
     allow.update(dict.fromkeys(_names(policy.get("onlyBuiltDependencies")), True))
+    allow.update(dict.fromkeys(from_file, True))
     for key in ("neverBuiltDependencies", "ignoredBuiltDependencies"):
         allow.update(dict.fromkeys(_names(policy.get(key)), False))
     own = policy.get("allowBuilds")

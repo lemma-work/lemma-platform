@@ -4355,6 +4355,29 @@ def test_an_sdk_that_cannot_change_a_column_is_refused_at_the_plan(
     assert writes == []
 
 
+def test_an_unreadable_table_manifest_is_an_issue_not_a_crash_on_an_older_sdk(
+    tmp_path: Path,
+):
+    """The SDK check reads existing tables' manifests again; one that does not
+    load is left to the manifest pass, which says so."""
+    resource_dir = tmp_path / "tables" / "deals"
+    resource_dir.mkdir(parents=True)
+    (resource_dir / "deals.json").write_text("{not json", encoding="utf-8")
+
+    client = _bare_pod_client()
+    client.tables = SimpleNamespace(  # no update_column: an older SDK
+        list=lambda pod_id, limit=1000: {"items": [{"name": "deals"}]},
+        get=lambda pod_id, name: {"name": name, "columns": []},
+    )
+
+    planned = import_pod_bundle(
+        client, pod_id="pod_1", source_dir=tmp_path, dry_run=True
+    )
+
+    assert planned["ok"] is False
+    assert any("deals" in error["path"] for error in planned["errors"])
+
+
 def test_two_schedules_on_one_global_workflow_stop_the_import_before_writing(
     tmp_path: Path,
 ):

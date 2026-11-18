@@ -368,12 +368,14 @@ def test_an_apps_own_workspace_file_is_left_as_it_is(tmp_path):
     assert calls == ["install --frozen-lockfile", "run build"]
 
 
-def _zipped(package_json: str | None) -> bytes:
+def _zipped(package_json: str | None, files: dict[str, str] | None = None) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("index.html", "<html></html>")
         if package_json is not None:
             archive.writestr("package.json", package_json)
+        for name, text in (files or {}).items():
+            archive.writestr(name, text)
     return buffer.getvalue()
 
 
@@ -422,6 +424,31 @@ def test_an_apps_pnpm_policy_is_carried_where_pnpm_11_reads_it():
         },
         "strictDepBuilds": False,
     }
+
+
+def test_an_only_built_dependencies_file_is_read_from_the_app():
+    """pnpm 11 has no `onlyBuiltDependenciesFile`: the names it lists are
+    carried; a path outside the app is not read."""
+    written = yaml.safe_load(
+        workspace_for(
+            _zipped(
+                '{"pnpm": {"onlyBuiltDependenciesFile": "./config/builds.json"}}',
+                {"config/builds.json": '["sharp", "@prisma/engines"]'},
+            )
+        )
+    )
+    assert written["allowBuilds"] == {
+        "@prisma/engines": True,
+        "esbuild": True,
+        "sharp": True,
+    }
+
+    outside = yaml.safe_load(
+        workspace_for(
+            _zipped('{"pnpm": {"onlyBuiltDependenciesFile": "../builds.json"}}')
+        )
+    )
+    assert outside["allowBuilds"] == {"esbuild": True}
 
 
 def test_an_app_may_still_refuse_esbuild_by_name():

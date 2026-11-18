@@ -39,7 +39,8 @@ export class DecisionsNamespace {
    * decision, not the probability of the whole selection). A value whose
    * `confidence` is `null` carries no measure -- every answer of the
    * language-model provider, and a `typesafe` scale read from its score alone
-   * -- so whether to act on it is yours to decide. A provider that could not
+   * -- so it is its own case, neither sure nor unsure, and where it goes is
+   * yours to decide. A provider that could not
    * answer rejects instead (503 or 429), so "unsure" and "failed" never look
    * alike.
    */

@@ -55,8 +55,8 @@ wants to route "not sure" somewhere treats an answer as unsure when `value` is
 `null`, or `confidence` is not `null` and below its own threshold -- one rule
 that holds on either provider. A value whose `confidence` is `null` carries no
 measure to compare -- every answer of the `model` provider, and a `typesafe`
-scale read from its score alone -- so whether to act on it is the caller's call
-per question, not "sure" by default. The threshold is the caller's because what a
+scale read from its score alone -- so it is a case of its own, neither sure nor
+unsure, and where it goes is the caller's call per question. The threshold is the caller's because what a
 wrong answer costs differs per question; a cut-off inside the provider would be
 one number nobody could tune per question, it would hide the best guess, and
 answering `null` would change what existing `typesafe` callers get back.

@@ -2248,10 +2248,13 @@ def _column_changes_the_sdk_cannot_make(
         table_name = resource_dir.name
         if table_name not in existing_tables:
             continue
-        payload = _sanitize_table_payload_for_import(
-            load_resource_payload(resource_dir, table_name)
-        )
-        payload["columns"] = canonical_columns(payload.get("columns") or [])
+        try:
+            payload = _sanitize_table_payload_for_import(
+                load_resource_payload(resource_dir, table_name)
+            )
+            payload["columns"] = canonical_columns(payload.get("columns") or [])
+        except Exception:
+            continue  # a manifest that does not load is the manifest pass's issue
         diff = diff_table_columns(to_plain(pod_sdk.tables.get(table_name)), payload)
         needed += [
             f"{table_name}.{column}"
