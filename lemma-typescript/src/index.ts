@@ -68,6 +68,19 @@ export type {
   MachineStartup,
   MachinesNamespace,
 } from "./namespaces/machines.js";
+export {
+  LEMMA_LOCATION_MESSAGE_TYPE,
+  LEMMA_OPEN_MESSAGE_TYPE,
+  LEMMA_OPEN_RESULT_MESSAGE_TYPE,
+  appAddressAt,
+  currentAppPath,
+  isFramedByHost,
+  moveAppTo,
+  normalizeAppPath,
+  openApp,
+  watchAppPath,
+} from "./browser-location.js";
+export type { AppAddressFinder } from "./browser-location.js";
 export type {
   DatastoreChangeFrame,
   ChangeStreamStatus,

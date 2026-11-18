@@ -9098,6 +9098,9 @@ var LemmaClient = (() => {
     LEMMA_APP_THEME_MESSAGE_TYPE: () => LEMMA_APP_THEME_MESSAGE_TYPE,
     LEMMA_COMPOSE_MESSAGE_TYPE: () => LEMMA_COMPOSE_MESSAGE_TYPE,
     LEMMA_COMPOSE_RESULT_MESSAGE_TYPE: () => LEMMA_COMPOSE_RESULT_MESSAGE_TYPE,
+    LEMMA_LOCATION_MESSAGE_TYPE: () => LEMMA_LOCATION_MESSAGE_TYPE,
+    LEMMA_OPEN_MESSAGE_TYPE: () => LEMMA_OPEN_MESSAGE_TYPE,
+    LEMMA_OPEN_RESULT_MESSAGE_TYPE: () => LEMMA_OPEN_RESULT_MESSAGE_TYPE,
     LEMMA_THEME_EVENT: () => LEMMA_THEME_EVENT,
     LemmaClient: () => LemmaClient,
     POD_DEFAULT_AGENT_SELECTOR: () => POD_DEFAULT_AGENT_SELECTOR,
@@ -9107,14 +9110,19 @@ var LemmaClient = (() => {
     canComposeInConversation: () => canComposeInConversation,
     clearTestingToken: () => clearTestingToken,
     composeInConversation: () => composeInConversation,
+    currentAppPath: () => currentAppPath,
     getLemmaHostTheme: () => getLemmaHostTheme,
     getTestingToken: () => getTestingToken,
     isConnectionRequiredError: () => isConnectionRequiredError,
     isEmbeddedInHost: () => isEmbeddedInHost,
+    isFramedByHost: () => isFramedByHost,
+    moveAppTo: () => moveAppTo,
+    openApp: () => openApp,
     resolveSafeRedirectUri: () => resolveSafeRedirectUri,
     setTestingToken: () => setTestingToken,
     startAppAccess: () => startAppAccess,
-    subscribeLemmaHostTheme: () => subscribeLemmaHostTheme
+    subscribeLemmaHostTheme: () => subscribeLemmaHostTheme,
+    watchAppPath: () => watchAppPath
   });
 
   // src/config.ts
@@ -12441,6 +12449,133 @@ var LemmaClient = (() => {
     }
   };
 
+  // src/browser-location.ts
+  var LEMMA_LOCATION_MESSAGE_TYPE = "lemma-location";
+  var LEMMA_OPEN_MESSAGE_TYPE = "lemma-open";
+  var LEMMA_OPEN_RESULT_MESSAGE_TYPE = "lemma-open-result";
+  var MAX_PATH_LENGTH = 512;
+  var HOST_ANSWER_TIMEOUT_MS = 1500;
+  function normalizeAppPath(value) {
+    if (typeof value !== "string" || !value.startsWith("/") || value.length > MAX_PATH_LENGTH) {
+      return null;
+    }
+    const trimmed = value.length > 1 && value.endsWith("/") ? value.slice(0, -1) : value;
+    if (trimmed === "/") return "/";
+    const segments = trimmed.slice(1).split("/");
+    const readable = segments.every(
+      (segment) => segment !== "" && segment !== "." && segment !== ".." && !/[?#\\\s]/.test(segment)
+    );
+    return readable ? `/${segments.join("/")}` : null;
+  }
+  function isFramedByHost() {
+    return typeof window !== "undefined" && window.parent !== window;
+  }
+  function currentAppPath() {
+    var _a;
+    if (typeof window === "undefined") return "/";
+    return (_a = normalizeAppPath(window.location.pathname)) != null ? _a : "/";
+  }
+  function appAddressAt(url, path) {
+    const at = normalizeAppPath(path);
+    if (at === null) return null;
+    let address;
+    try {
+      address = new URL(url);
+    } catch {
+      return null;
+    }
+    if (address.protocol !== "https:" && address.protocol !== "http:") return null;
+    address.pathname = address.pathname.replace(/\/$/, "") + at;
+    return address.href;
+  }
+  function writePath(path, push) {
+    const url = path + window.location.search + window.location.hash;
+    try {
+      if (push) window.history.pushState(window.history.state, "", url);
+      else window.history.replaceState(window.history.state, "", url);
+    } catch {
+    }
+  }
+  function moveAppTo(path) {
+    const next = normalizeAppPath(path);
+    if (next === null || typeof window === "undefined") return null;
+    if (!isFramedByHost()) {
+      if (next !== currentAppPath()) writePath(next, true);
+      return next;
+    }
+    writePath(next, false);
+    const message = { type: LEMMA_LOCATION_MESSAGE_TYPE, path: next };
+    try {
+      window.parent.postMessage(message, "*");
+    } catch {
+    }
+    return next;
+  }
+  function askHost2(app, path) {
+    const id = `open-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    const message = { type: LEMMA_OPEN_MESSAGE_TYPE, id, app, path };
+    return new Promise((resolve2) => {
+      let settled = false;
+      const finish = (took) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        window.removeEventListener("message", hear);
+        resolve2(took);
+      };
+      const hear = (event) => {
+        if (event.source !== window.parent) return;
+        const data = event.data;
+        if (data && typeof data === "object" && data.type === LEMMA_OPEN_RESULT_MESSAGE_TYPE && data.id === id) {
+          finish(true);
+        }
+      };
+      const timer = window.setTimeout(() => finish(false), HOST_ANSWER_TIMEOUT_MS);
+      window.addEventListener("message", hear);
+      try {
+        window.parent.postMessage(message, "*");
+      } catch {
+        finish(false);
+      }
+    });
+  }
+  async function openApp(app, path = "/", find) {
+    const name = typeof app === "string" ? app.trim() : "";
+    const at = normalizeAppPath(path);
+    if (!name || at === null || typeof window === "undefined") return false;
+    if (isFramedByHost() && await askHost2(name, at)) return true;
+    if (isEmbeddedInHost() || !find) return false;
+    let url;
+    try {
+      url = await find(name);
+    } catch {
+      return false;
+    }
+    const address = url ? appAddressAt(url, at) : null;
+    if (!address) return false;
+    window.location.assign(address);
+    return true;
+  }
+  function watchAppPath(listener) {
+    if (typeof window === "undefined") return () => void 0;
+    const fromHost = (event) => {
+      if (event.source !== window.parent || !isFramedByHost()) return;
+      const data = event.data;
+      if (!data || typeof data !== "object" || data.type !== LEMMA_LOCATION_MESSAGE_TYPE) return;
+      const path = normalizeAppPath(data.path);
+      if (path === null) return;
+      writePath(path, false);
+      listener(path);
+    };
+    const popped = () => listener(currentAppPath());
+    window.addEventListener("message", fromHost);
+    window.addEventListener("popstate", popped);
+    return () => {
+      window.removeEventListener("message", fromHost);
+      window.removeEventListener("popstate", popped);
+    };
+  }
+
   // src/namespaces/apps.ts
   var AppsNamespace = class {
     constructor(client, http, podId) {
@@ -12477,6 +12612,14 @@ var LemmaClient = (() => {
     }
     delete(name) {
       return this.client.request(() => AppsService.appDelete(this.podId(), name));
+    }
+    /**
+     * Open another app of this Lemma at `path` (`/` is its one screen). Inside
+     * Lemma the host switches to it; on its own in a tab, the page goes to that
+     * app's address. Resolves false when it could not be opened.
+     */
+    open(name, path = "/") {
+      return openApp(name, path, async (app) => (await this.get(app)).url);
     }
     /** Promote a conversation widget into a persisted app (save as app). */
     createFromWidget(payload) {
@@ -23605,6 +23748,14 @@ var LemmaClient = (() => {
       LEMMA_COMPOSE_RESULT_MESSAGE_TYPE,
       canComposeInConversation,
       composeInConversation,
+      LEMMA_LOCATION_MESSAGE_TYPE,
+      LEMMA_OPEN_MESSAGE_TYPE,
+      LEMMA_OPEN_RESULT_MESSAGE_TYPE,
+      currentAppPath,
+      isFramedByHost,
+      moveAppTo,
+      openApp,
+      watchAppPath,
       isEmbeddedInHost
     };
     if (!scope.LemmaClient) {

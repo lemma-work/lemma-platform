@@ -41,6 +41,14 @@ describe("browser bundle globals", () => {
     expect(g.LemmaClient.LEMMA_COMPOSE_MESSAGE_TYPE).toBe("lemma-compose");
     expect(typeof g.LemmaClient.composeInConversation).toBe("function");
     expect(typeof g.LemmaClient.canComposeInConversation).toBe("function");
+    // Where a framed app says it is, and how it asks for another app. The host
+    // owns the address; the app only reports and asks.
+    expect(g.LemmaClient.LEMMA_LOCATION_MESSAGE_TYPE).toBe("lemma-location");
+    expect(g.LemmaClient.LEMMA_OPEN_MESSAGE_TYPE).toBe("lemma-open");
+    expect(typeof g.LemmaClient.moveAppTo).toBe("function");
+    expect(typeof g.LemmaClient.openApp).toBe("function");
+    expect(g.LemmaClient.LEMMA_OPEN_RESULT_MESSAGE_TYPE).toBe("lemma-open-result");
+    expect(typeof g.LemmaClient.watchAppPath).toBe("function");
     // Back-compat alias for widgets authored against `new Lemma.LemmaClient()`.
     expect(g.Lemma).toBeDefined();
     expect(g.Lemma.LemmaClient).toBe(g.LemmaClient.LemmaClient);

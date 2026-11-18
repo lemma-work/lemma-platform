@@ -226,6 +226,30 @@ reaches its viewer's own machine (`"me"`) -- that is not the pod's to offer --
 and the browser, its logins, a `home` reset, and creating, changing or granting
 machines stay the person's own.
 
+## Addresses — a record's page, and other apps
+
+Inside a Lemma an app is framed: it has no address bar or history of its own.
+Keep the record that is open in Lemma's address, so a copied link lands on it and
+Back steps out of it. All of these come from `lemma-sdk` (and `window.LemmaClient`
+in the HTML bundle):
+
+- `currentAppPath()`: where the app was opened (`/`, or `/1042` for a record).
+  Read it at start-up to pick the first screen.
+- `moveAppTo("/1042")` when the person opens a record, `moveAppTo("/")` when they
+  go back to the list. Lemma writes `…/apps/<name>/1042` and makes it a step of
+  Back.
+- `watchAppPath(path => …)` for Back, Forward, or an address followed in Lemma.
+  It is never called for the app's own `moveAppTo`, so route from it without a
+  guard.
+- `client.apps.open("people", "/1042")` to open another app of the same Lemma at
+  a record. Inside Lemma, Lemma switches; on its own in a tab, the page goes to
+  that app's address; inside an AI tool's conversation it resolves `false` and
+  does nothing.
+
+On its own in a tab the same calls use the page's own address and history, so one
+routing path serves both. Don't `history.pushState` inside a frame: Back would
+undo a step the address above never showed.
+
 ## Calling the API well — fetch once, subscribe, don't re-render the world
 
 Most app bugs are API-call discipline, not logic. Four rules:
@@ -301,6 +325,14 @@ adopt any one design system.
   borders (subtle/strong), text (primary/secondary/muted), one accent + hover, one
   color per status, a 4/8/12/16/24/32 spacing scale. A dominant base + one sharp
   accent beats a timid even palette.
+- **Follow the Lemma's light and dark.** Inside the Lemma web app an app is
+  framed and told the person's theme (`lemma-app-theme`, tokens named
+  `--lemma-app-bg`, `--lemma-app-text`, `--lemma-app-accent`, …) when it loads
+  and whenever it changes. Point your root variables at those tokens with your
+  own values as the fallback — `--surface: var(--lemma-app-surface, #fff)` — so
+  the app matches the Lemma around it and still stands alone in a tab. The HTML
+  bundle applies the message itself; a Vite app adds the short listener in the
+  SDK README ("Drawing in the Lemma's theme").
 - **Legibility & density.** Three font sizes max in dense UIs; tabular/mono figures
   for ids, timestamps, metadata so columns align; panel layouts with intentional
   widths; selected row = accent left-border, not a heavy fill.

@@ -110,6 +110,61 @@ For a no-build HTML app or a conversation widget, load the prebuilt bundle from 
 
 The bundle exposes the same client and namespaces as the npm package (a legacy `window.Lemma` alias also points at it). `import.meta.env`/`VITE_LEMMA_*` are only for the React/Vite path; the browser bundle resolves config from `window.__LEMMA_CONFIG__`.
 
+### Drawing in the Lemma's theme
+
+Inside the Lemma web app an app is framed on its own origin, so it inherits nothing from the page around it. The web app tells it its look instead: a `postMessage` from the parent window each time the app loads, and again whenever the person's appearance changes (the device flipping between light and dark included):
+
+```js
+{ type: "lemma-app-theme", theme: "light" | "dark", tokens: { "--lemma-app-bg": "…", "--lemma-app-text": "…", … } }
+```
+
+The tokens are semantic and prefixed `--lemma-app-`: `bg`, `surface`, `subtle`, `raised`, `text`, `muted`, `faint`, `border`, `border-strong`, `accent`, `accent-soft`, `success`, `warning`, `danger`, `info`, `radius-sm`, `radius-md`, `radius-lg`, `font`, and a few more.
+
+The browser bundle applies the message itself: it sets each token on `<html>`, sets `data-lemma-theme`, toggles the `dark` class and `color-scheme`, and dispatches a `lemma:theme` event. `window.LemmaClient.subscribeLemmaHostTheme(listener)` calls `listener` with the current theme and every change, and returns the way to stop; `window.LemmaClient.getLemmaHostTheme()` returns the latest message, or `null` before one arrives. Read every token with a fallback, so the app still looks right opened on its own, where no message comes:
+
+```css
+body { background: var(--lemma-app-bg, #fff); color: var(--lemma-app-text, #1c1c1c); font-family: var(--lemma-app-font, system-ui, sans-serif); }
+```
+
+The npm package does not listen for the message. A Vite app that wants the Lemma's look adds the listener itself, accepting only messages from the parent window and only `--lemma-app-` names:
+
+```ts
+window.addEventListener("message", (event) => {
+  const message = event.data;
+  if (event.source !== window.parent || message?.type !== "lemma-app-theme") return;
+  const root = document.documentElement;
+  for (const [name, value] of Object.entries(message.tokens ?? {})) {
+    if (name.startsWith("--lemma-app-") && typeof value === "string") root.style.setProperty(name, value);
+  }
+  root.classList.toggle("dark", message.theme === "dark");
+  root.style.colorScheme = message.theme;
+});
+```
+
+### Where the app is, and opening another app
+
+An app is often a list and a page for each of its records, and the record that is open is part of where the person is: a link they copy should land the next person on it. Framed inside Lemma the app has no address bar and no history of its own, so it says where it moved and Lemma writes the address (`/l/acme/sales/apps/people/1042`). Opened on its own in a tab, the same calls use the page's own address and history, so one routing path serves both.
+
+```ts
+import { currentAppPath, moveAppTo, watchAppPath } from "lemma-sdk";
+
+let path = currentAppPath();          // "/" or "/1042": where the app was opened
+moveAppTo("/1042");                   // the person opened a record; Back steps out of it
+const stop = watchAppPath((next) => { // Back, Forward, or an address followed in Lemma
+  path = next;                        // never called for the app's own moveAppTo
+});
+```
+
+A path is rooted and has one spelling: `/` is the app's one screen, and there is no trailing slash, query, fragment, `.` or `..`. `moveAppTo` returns the path as written, or `null` for something that is not one. Inside a frame, don't call `history.pushState` yourself: Back would undo a step the address above never showed.
+
+To open another app of the same Lemma, such as a deal naming its person, who lives in the People app:
+
+```ts
+const opened = await client.apps.open("people", "/1042"); // true once it is opening
+```
+
+Inside Lemma, Lemma switches to that app at that page, as a step Back undoes. On its own in a tab, the page goes to that app's own address. Inside an AI tool's conversation it does nothing and resolves `false`: the tool's frame hands this app its session, and another app loaded into it would arrive signed out. The browser bundle exposes the same functions on `window.LemmaClient` (`currentAppPath`, `moveAppTo`, `watchAppPath`, `openApp`, `isFramedByHost`).
+
 ### Agent web components (`lemma-ui.js`)
 
 For a drop-in agent UI in a no-build app, load the **opt-in** UI bundle *after* the client bundle. It registers two framework-agnostic custom elements that drive the same agent core, reuse `window.LemmaClient`, and read `window.__LEMMA_CONFIG__`:
