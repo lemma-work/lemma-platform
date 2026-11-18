@@ -8,4 +8,5 @@ export enum ConnectorPlanStatus {
     NEEDS_INSTALLATION = 'NEEDS_INSTALLATION',
     EXISTS = 'EXISTS',
     CONFLICT = 'CONFLICT',
+    SKIPPED = 'SKIPPED',
 }

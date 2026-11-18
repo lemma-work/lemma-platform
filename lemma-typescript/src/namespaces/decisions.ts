@@ -30,9 +30,13 @@ export class DecisionsNamespace {
   ) {}
 
   /**
-   * Answers come back per question key; `value` is `null` when the evidence did
-   * not support an answer. A provider that could not answer rejects instead
-   * (503, or 429 with Retry-After), so "unsure" and "failed" never look alike.
+   * Answers come back per question key. Treat one as unsure when `value` is
+   * `null`, or `confidence` is set and below your own threshold: the
+   * language-model provider answers `null` when the evidence did not support
+   * an answer, and the `typesafe` provider always answers its most probable
+   * value with that value's probability as `confidence`. A provider that could
+   * not answer rejects instead (503, or 429 with Retry-After), so "unsure" and
+   * "failed" never look alike.
    */
   make(payload: DecisionPayload) {
     // The literal `priority` is what goes on the wire; the generated enum

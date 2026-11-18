@@ -6,6 +6,7 @@ import type { WorkflowCreateRequest } from '../models/WorkflowCreateRequest.js';
 import type { WorkflowDetailResponse } from '../models/WorkflowDetailResponse.js';
 import type { WorkflowGraphUpdateRequest } from '../models/WorkflowGraphUpdateRequest.js';
 import type { WorkflowListResponse } from '../models/WorkflowListResponse.js';
+import type { WorkflowRunCreateRequest } from '../models/WorkflowRunCreateRequest.js';
 import type { WorkflowRunFormSubmitRequest } from '../models/WorkflowRunFormSubmitRequest.js';
 import type { WorkflowRunListResponse } from '../models/WorkflowRunListResponse.js';
 import type { WorkflowRunResponse } from '../models/WorkflowRunResponse.js';
@@ -420,10 +421,11 @@ export class WorkflowsService {
     }
     /**
      * Create Workflow Run
-     * Create a new run for this workflow. Takes no request body: if the workflow's entry node is a FORM node the run is created WAITING on it (see `active_wait` in the response) and input is submitted via `workflow.run.form.submit`; otherwise the run executes immediately. Trigger payloads for scheduled/event/datastore starts are supplied by the platform, not through this endpoint. Send an `Idempotency-Key` header to make a retry safe: the same key, from the same person, for the same workflow, returns the run it already created.
+     * Create a new run for this workflow. The body is optional and names at most the record the run is about (`about`): the record is read as you (404 when you cannot read it) and becomes `start.payload`, as a table trigger's change would. A run takes no other input: if the workflow's entry node is a FORM node the run is created WAITING on it (see `active_wait` in the response) and input is submitted via `workflow.run.form.submit`; otherwise the run executes immediately. Send an `Idempotency-Key` header to make a retry safe: the same key, from the same person, for the same workflow, returns the run it already created.
      * @param podId
      * @param workflowName
      * @param idempotencyKey
+     * @param requestBody
      * @returns WorkflowRunResponse Successful Response
      * @throws ApiError
      */
@@ -431,6 +433,7 @@ export class WorkflowsService {
         podId: string,
         workflowName: string,
         idempotencyKey?: (string | null),
+        requestBody?: (WorkflowRunCreateRequest | null),
     ): CancelablePromise<WorkflowRunResponse> {
         return __request(OpenAPI, {
             method: 'POST',
@@ -442,6 +445,8 @@ export class WorkflowsService {
             headers: {
                 'Idempotency-Key': idempotencyKey,
             },
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },

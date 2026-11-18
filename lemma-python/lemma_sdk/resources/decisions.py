@@ -31,11 +31,18 @@ class PodDecisions(BoundResource):
                 },
             },
         )
-        result.answers["category"].value  # "billing", or None when unsure
+        answer = result.answers["category"]
+        unsure = answer.value is None or (
+            answer.confidence is not None and answer.confidence < 0.7
+        )
 
-    An answer of `None` means the evidence did not support one. A provider that
-    could not answer raises instead (503, or 429 with a Retry-After), so
-    "unsure" and "failed" never look alike.
+    Treat an answer as unsure by that one rule, whichever provider the
+    deployment runs: the language-model provider answers `None` when the
+    evidence did not support an answer, and the `typesafe` provider always
+    answers its most probable value with that value's probability as
+    `confidence`. The threshold is yours, because what a wrong answer costs
+    differs per question. A provider that could not answer raises instead (503,
+    or 429 with a Retry-After), so "unsure" and "failed" never look alike.
     """
 
     def make(

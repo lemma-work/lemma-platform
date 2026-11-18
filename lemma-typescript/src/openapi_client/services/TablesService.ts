@@ -9,6 +9,7 @@ import type { OpenTablesResponse } from '../models/OpenTablesResponse.js';
 import type { TableDetailResponse } from '../models/TableDetailResponse.js';
 import type { TableListResponse } from '../models/TableListResponse.js';
 import type { TableOpeningResponse } from '../models/TableOpeningResponse.js';
+import type { UpdateColumnRequest } from '../models/UpdateColumnRequest.js';
 import type { UpdateTableRequest } from '../models/UpdateTableRequest.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
@@ -215,6 +216,37 @@ export class TablesService {
                 'table_name': tableName,
                 'column_name': columnName,
             },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Update Column
+     * Add options to an ENUM column, drop a column's foreign key, or both. `options` must include every option the column has now: removing one is refused (422), because rows may already hold it, as is any column that is not ENUM. Sending what the column already is changes nothing.
+     * @param podId
+     * @param tableName
+     * @param columnName
+     * @param requestBody
+     * @returns TableDetailResponse Successful Response
+     * @throws ApiError
+     */
+    public static tableColumnUpdate(
+        podId: string,
+        tableName: string,
+        columnName: string,
+        requestBody: UpdateColumnRequest,
+    ): CancelablePromise<TableDetailResponse> {
+        return __request(OpenAPI, {
+            method: 'PATCH',
+            url: '/pods/{pod_id}/datastore/tables/{table_name}/columns/{column_name}',
+            path: {
+                'pod_id': podId,
+                'table_name': tableName,
+                'column_name': columnName,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },
