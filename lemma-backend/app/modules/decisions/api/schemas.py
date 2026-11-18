@@ -103,8 +103,11 @@ class MakeDecisionRequest(BaseModel):
 class DecisionAnswerResponse(BaseModel):
     value: AnswerValueBody | None = Field(
         description=(
-            "The answer, or null when the evidence did not support one. Null is "
-            "an answer, not a failure: a failure is an error response."
+            "The answer, or null when the provider judged the evidence did not "
+            "support one (the model provider does; Typesafe always answers its "
+            "most probable value). Treat null, or a confidence below your own "
+            "threshold, as unsure. Null is an answer, not a failure: a failure "
+            "is an error response."
         )
     )
     confidence: float | None = Field(

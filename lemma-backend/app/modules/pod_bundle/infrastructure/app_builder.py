@@ -45,6 +45,11 @@ from app.core.concurrency.offload import run_blocking
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import AppBuildFailedError
+from app.modules.pod_bundle.domain.state import PlanStep
+from app.modules.pod_bundle.infrastructure.app_build_output import (
+    build_failed,
+    build_log_kept_on,
+)
 from sandbox_runtime.paths import WORKSPACE_ROOT
 
 logger = get_logger(__name__)
@@ -137,6 +142,40 @@ def slug_candidates(preferred: str | None, *, pod_id: UUID, app_name: str) -> li
     return candidates
 
 
+#: What an app that brings no ``pnpm-workspace.yaml`` is built with. The
+#: sandbox's pnpm fails an install on any dependency whose install script it
+#: was not told about, and Vite brings one (esbuild), so a Vite app without a
+#: file of its own failed before its build ran. esbuild's script is allowed,
+#: under pnpm 10's spelling and pnpm 11's (``packageManager`` can pick either).
+#: Any other script is still not run: ``strictDepBuilds: false`` only stops one
+#: from failing the install, because the Lemma SDK brings one too
+#: (browser-tabs-lock, through its sign-in client), and allowing esbuild alone
+#: still failed every app that uses the SDK.
+DEFAULT_PNPM_WORKSPACE = """\
+onlyBuiltDependencies:
+  - esbuild
+allowBuilds:
+  esbuild: true
+strictDepBuilds: false
+"""
+
+
+def build_script(src_dir: str) -> str:
+    """The shell that installs and builds the app in ``src_dir`` with pnpm, the
+    sandbox's package manager. An app's own ``pnpm-workspace.yaml`` is left as
+    it is: what it allows is its author's choice."""
+    return (
+        f"cd {shlex.quote(src_dir)} && "
+        "if [ ! -e pnpm-workspace.yaml ]; then "
+        f"printf '%s' {shlex.quote(DEFAULT_PNPM_WORKSPACE)} > pnpm-workspace.yaml; "
+        "fi && "
+        "if [ -f pnpm-lock.yaml ]; then "
+        "pnpm install --frozen-lockfile; "
+        "else pnpm install --no-frozen-lockfile; fi "
+        "&& pnpm run build"
+    )
+
+
 # --- sandbox build (no DB connection) ---------------------------------------
 
 
@@ -207,41 +246,29 @@ class AppSandboxBuilder:
             return await self._download(session, f"{build_dir}/dist.zip")
 
     async def _run_build(self, session: Any, src_dir: str) -> None:
-        # pnpm is the canonical JavaScript package manager in workspace images.
-        script = (
-            f"cd {shlex.quote(src_dir)} && "
-            "if [ -f pnpm-lock.yaml ]; then "
-            "pnpm install --frozen-lockfile; "
-            "else pnpm install --no-frozen-lockfile; fi "
-            "&& pnpm run build"
+        result = await session.exec_command(
+            cmd=build_script(src_dir), timeout=_BUILD_TIMEOUT_SECONDS
         )
-        result = await session.exec_command(cmd=script, timeout=_BUILD_TIMEOUT_SECONDS)
         if not result.get("success"):
-            raise AppBuildFailedError(
-                "App build failed.", details={"log": _tail(result)}
+            raise build_failed("App build failed", result)
+        # A command still running when the wait ends comes back successful but
+        # not completed. Read as a success, it surfaced as "no dist/index.html".
+        if result.get("completed") is False:
+            raise build_failed(
+                f"App build did not finish within {_BUILD_TIMEOUT_SECONDS} seconds",
+                result,
             )
 
     async def _sh(self, session: Any, cmd: str) -> None:
         result = await session.exec_command(cmd=cmd, timeout=_IO_TIMEOUT_SECONDS)
         if not result.get("success"):
-            raise AppBuildFailedError(
-                "App build step failed.", details={"log": _tail(result)}
-            )
+            raise build_failed("App build step failed", result)
 
     async def _upload(self, session: Any, data: bytes, remote_path: str) -> None:
         await session.write_file(remote_path, data, timeout=_IO_TIMEOUT_SECONDS)
 
     async def _download(self, session: Any, remote_path: str) -> bytes:
         return await session.read_file(remote_path, timeout=_IO_TIMEOUT_SECONDS)
-
-
-def _tail(result: dict[str, Any], limit: int = 4000) -> str:
-    text = (
-        (result.get("stderr") or "")
-        or (result.get("stdout") or "")
-        or (result.get("error") or "")
-    )
-    return text[-limit:]
 
 
 # --- step runner (owns the short UoW boundaries) -----------------------------
@@ -264,7 +291,25 @@ class AppStepRunner:
 
     async def run(
         self,
-        step: Any,
+        step: PlanStep,
+        *,
+        pod_id: UUID,
+        user_id: UUID,
+        bundle_root: Path,
+        replacements: dict[str, str],
+    ) -> None:
+        with build_log_kept_on(step):
+            await self._run(
+                step,
+                pod_id=pod_id,
+                user_id=user_id,
+                bundle_root=bundle_root,
+                replacements=replacements,
+            )
+
+    async def _run(
+        self,
+        step: PlanStep,
         *,
         pod_id: UUID,
         user_id: UUID,

@@ -28,6 +28,13 @@ execution service or fallback path.
 | `function_revisions` | One built, executable revision. The artifact and source bytes were always content-addressed; this row is what makes them findable, and it snapshots the schemas so promoting an old revision restores the contract its code actually implements |
 | `function_runs` | One durable attempt: input/output, status, logs, error, deadline, and job handle. The foreign key to `functions` is `SET NULL`, because a run is the record of what the function did and must outlive the definition; the delete path refuses while any run is still in flight |
 
+A new revision's schemas are read by the pod's function runtime
+(`application/function_schema_dispatcher.py`). A dead or moved runtime (a
+transport error, 404/410, 5xx) is asked once more on a fresh endpoint; an
+inspection the runtime refused because fetching the code failed in transit (a
+422 naming an httpx transport error such as `ReadError`) is asked once more on
+the same one. A function whose code does not load is refused at once.
+
 ## Runs on the work runtime
 
 | Kind | Class | Written by | Does |
