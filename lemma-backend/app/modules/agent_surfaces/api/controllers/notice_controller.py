@@ -7,6 +7,13 @@ is pushed to them like any line of theirs (``services.channel_deliveries``).
 
 A member sends at most ``NOTICES_PER_MINUTE`` a minute in a pod: a page that
 loops, or a script, cannot flood a colleague's channel and phone.
+
+``/members/me/notices`` is the same line to the caller themselves: the one
+way a named function or agent tells the person it runs as something -- a
+morning note, a brief the evening before. It takes ``channel.notify_self``,
+which such a workload can be granted on the pod, where ``channel.write`` (to
+anybody) cannot. It has no recipient to name: the line goes to whoever the
+request acts for, so a grant of it reaches that person and nobody else.
 """
 
 from __future__ import annotations
@@ -19,7 +26,9 @@ from fastapi import APIRouter, Header, HTTPException, Path, status
 from pydantic import AfterValidator, BaseModel, Field
 
 from app.core.api.dependencies import CurrentUser, UoWDep
-from app.core.authorization.dependencies import require_action
+from app.core.authorization.actor import WorkloadKind
+from app.core.authorization.dependencies import PodContextDep, require_action
+from app.core.authorization.function_run import NOBODY_USER_ID
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.redis.client import get_redis
 from app.core.infrastructure.redis.counters import incr_with_ttl
@@ -51,6 +60,79 @@ class NoticeRequest(BaseModel):
 class NoticeResponse(BaseModel):
     message_id: UUID
     channel_id: UUID
+
+
+# Before `/{member}/notices`, which would otherwise take "me" as a member to
+# look up -- and ask for `channel.write`, which a workload cannot hold.
+@router.post(
+    "/me/notices",
+    operation_id="agent.notice.send_self",
+    response_model=NoticeResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_action(Permissions.CHANNEL_NOTIFY_SELF)],
+    responses={
+        403: {"description": "The request acts for nobody in this pod."},
+        404: {"description": "The person it acts for is not in this pod."},
+        429: {"description": "Too many notices this minute; see Retry-After."},
+    },
+)
+async def send_self_notice(
+    pod_id: UUID,
+    body: NoticeRequest,
+    ctx: PodContextDep,
+    uow: UoWDep,
+    idempotency_key: str | None = Header(
+        default=None, alias="Idempotency-Key", min_length=1, max_length=255
+    ),
+) -> NoticeResponse:
+    """Tell the person this request acts for something, in their own channel:
+    a function or agent writing to the person it runs as, or a member writing
+    a note to themselves. There is no recipient to name. A workload needs
+    `channel.notify_self` granted on the pod (`resource_type` `pod`,
+    `resource_name` `/`); a member holds it with `channel.write`. Idempotency
+    and the per-minute cap are the same as for a notice to another member."""
+    person = ctx.user_id
+    if person is None or person == NOBODY_USER_ID:
+        # A run for a contact or an anonymous form has nobody to tell; its
+        # token never reaches here (`function_run.allows_path`), and this says
+        # so again rather than trusting that it cannot.
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Only a request acting for a member of this pod has someone to tell.",
+        )
+    await _within_rate(pod_id, person)
+    messages = build_direct_messages(uow)
+    recipient = await messages.membership.resolve_pod_recipient(
+        pod_id=pod_id, reference=str(person)
+    )
+    if recipient is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail="The person this acts for is not a member of this pod.",
+        )
+    workload = ctx.workload
+    try:
+        line = await messages.send(
+            DirectMessage(
+                pod_id=pod_id,
+                recipient_user_id=recipient,
+                text=body.text,
+                actor_user_id=person,
+                # An agent says it as itself; a function as the pod's agent.
+                actor_agent_id=(
+                    workload.workload_id
+                    if workload is not None and workload.kind is WorkloadKind.AGENT
+                    else None
+                ),
+                key=keyed_client_id(idempotency_key, user_id=person),
+            )
+        )
+    except AgentSurfaceValidationError as refused:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, detail=refused.message
+        ) from refused
+    await uow.commit()
+    return NoticeResponse(message_id=line.id, channel_id=line.channel_id)
 
 
 @router.post(

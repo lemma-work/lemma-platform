@@ -359,3 +359,13 @@ async def test_a_workflow_node_still_gets_the_json_envelope():
     assert draft.text.startswith("Workflow input JSON:")
     conversation = starts.conversations.create_conversation.await_args.args[0]
     assert conversation.title == "Workflow run: triage"
+
+
+def test_a_run_of_the_lemmas_own_assistant_is_titled_by_its_name_not_its_id():
+    from app.core.authorization.delegation import DEFAULT_RESPONDER_NAME
+    from app.modules.agent.domain.automation_prompts import conversation_title
+
+    assert conversation_title("pod_default", {}, False) == (
+        f"Workflow run: {DEFAULT_RESPONDER_NAME}"
+    )
+    assert conversation_title("triage", {}, True) == "Scheduled run: triage"

@@ -143,6 +143,18 @@ adapter is consolidated.
 | `/organizations/{org}/agent-runtime/profiles` | Discover/create model runtime profiles |
 | `/me/runtime/agent-hosts...`, `/agent-host/link`, `/agent-host/transfers/{id}`, `/agent-host/runs/{run_id}/blobs/{sha256}` | Agent Host pairing and management; the host's link WebSocket (commands, events, harnesses, Lemma MCP), and the host-authenticated HTTP routes its bulk bytes take instead (file chunks, event images) |
 | `/tools/*` | Server-side web search and feedback endpoints used by runtimes |
+
+Starting the pod's own assistant (a conversation with no `agent_name`, or
+`pod_default`) is authorized against the pod, not its row
+(`services/conversation_access.py`): the row's id is the pod's, and an
+AGENT-typed check would hand the resource-owner shortcut to whoever made the
+pod. A named function or agent starts it with the pod's `agent.execute`
+granted to it (`{"resource_type": "pod", "resource_name": "/"}` -- the grant a
+pod link holds), still bounded by the person it runs as. A grant written as
+`agent:pod_default:execute` is stored as that same grant
+(`core/authorization/assistant_grants.py`). A conversation an automation
+starts is titled by the agent's display name, so the assistant's reads
+"Workflow run: Lem", not its stored id.
 | `/public/widgets/serve...`, `/pods/{pod}/widgets...` | Render/submit a tool widget and mint an authenticated embed URL (`/widgets/serve...` is a legacy alias until 2026-11-08) |
 
 ## Run lifecycle
