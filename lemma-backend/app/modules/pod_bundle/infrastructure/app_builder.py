@@ -34,7 +34,6 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import io
-import json
 import os
 import shlex
 import zipfile
@@ -50,6 +49,10 @@ from app.modules.pod_bundle.domain.state import PlanStep
 from app.modules.pod_bundle.infrastructure.app_build_output import (
     build_failed,
     build_log_kept_on,
+)
+from app.modules.pod_bundle.infrastructure.app_build_policy import (
+    DEFAULT_PNPM_WORKSPACE,
+    workspace_for,
 )
 from sandbox_runtime.paths import WORKSPACE_ROOT
 
@@ -143,62 +146,15 @@ def slug_candidates(preferred: str | None, *, pod_id: UUID, app_name: str) -> li
     return candidates
 
 
-#: What an app that brings no ``pnpm-workspace.yaml`` is built with. The
-#: sandbox's pnpm fails an install on any dependency whose install script it
-#: was not told about, and Vite brings one (esbuild), so a Vite app without a
-#: file of its own failed before its build ran. esbuild's script is allowed,
-#: under pnpm 10's spelling and pnpm 11's (``packageManager`` can pick either).
-#: Any other script is still not run: ``strictDepBuilds: false`` only stops one
-#: from failing the install, because the Lemma SDK brings one too
-#: (browser-tabs-lock, through its sign-in client), and allowing esbuild alone
-#: still failed every app that uses the SDK.
-DEFAULT_PNPM_WORKSPACE = """\
-onlyBuiltDependencies:
-  - esbuild
-allowBuilds:
-  esbuild: true
-strictDepBuilds: false
-"""
-
-
-#: The keys of ``package.json -> pnpm`` that already say which install scripts
-#: run. An app that says so there has made the choice the default file would
-#: otherwise replace; the same names anywhere else in the file say nothing.
-_OWN_BUILD_POLICY = frozenset(
-    {
-        "onlyBuiltDependencies",
-        "allowBuilds",
-        "neverBuiltDependencies",
-        "ignoredBuiltDependencies",
-    }
-)
-
-
-def has_own_build_policy(source_zip: bytes) -> bool:
-    """Whether the app's ``package.json`` says under ``pnpm`` which install
-    scripts run. A file that is missing or unreadable says nothing."""
-    try:
-        with zipfile.ZipFile(io.BytesIO(source_zip)) as archive:
-            manifest = json.loads(archive.read("package.json"))
-    except KeyError, ValueError, zipfile.BadZipFile:
-        return False
-    pnpm = manifest.get("pnpm") if isinstance(manifest, dict) else None
-    return isinstance(pnpm, dict) and not _OWN_BUILD_POLICY.isdisjoint(pnpm)
-
-
-def build_script(src_dir: str, *, own_policy: bool = False) -> str:
+def build_script(src_dir: str, *, workspace: str = DEFAULT_PNPM_WORKSPACE) -> str:
     """The shell that installs and builds the app in ``src_dir`` with pnpm, the
-    sandbox's package manager. An app's own ``pnpm-workspace.yaml``, or a build
-    policy in its ``package.json`` (``own_policy``), is left as it is: what it
-    allows is its author's choice."""
+    sandbox's package manager. An app's own ``pnpm-workspace.yaml`` is left as
+    it is: what it allows is its author's choice. Without one, ``workspace``
+    (``workspace_for``) is written."""
     default_policy = (
-        ""
-        if own_policy
-        else (
-            "if [ ! -e pnpm-workspace.yaml ]; then "
-            f"printf '%s' {shlex.quote(DEFAULT_PNPM_WORKSPACE)} > pnpm-workspace.yaml; "
-            "fi && "
-        )
+        "if [ ! -e pnpm-workspace.yaml ]; then "
+        f"printf '%s' {shlex.quote(workspace)} > pnpm-workspace.yaml; "
+        "fi && "
     )
     return (
         f"cd {shlex.quote(src_dir)} && "
@@ -263,9 +219,7 @@ class AppSandboxBuilder:
                 session,
                 f"cd {shlex.quote(build_dir)} && unzip -oq source.zip -d src",
             )
-            await self._run_build(
-                session, src_dir, own_policy=has_own_build_policy(source_zip)
-            )
+            await self._run_build(session, src_dir, workspace=workspace_for(source_zip))
             dist_index = f"{src_dir}/dist/index.html"
             check = await session.exec_command(
                 cmd=f"test -f {shlex.quote(dist_index)}",
@@ -282,10 +236,10 @@ class AppSandboxBuilder:
             return await self._download(session, f"{build_dir}/dist.zip")
 
     async def _run_build(
-        self, session: Any, src_dir: str, *, own_policy: bool = False
+        self, session: Any, src_dir: str, *, workspace: str = DEFAULT_PNPM_WORKSPACE
     ) -> None:
         result = await session.exec_command(
-            cmd=build_script(src_dir, own_policy=own_policy),
+            cmd=build_script(src_dir, workspace=workspace),
             timeout=_BUILD_TIMEOUT_SECONDS,
         )
         if not result.get("success"):

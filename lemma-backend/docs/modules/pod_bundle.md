@@ -78,8 +78,11 @@ install` (frozen when the app ships `pnpm-lock.yaml`), then `pnpm run build`
 with the target pod's `VITE_LEMMA_*` values. The sandbox's pnpm fails an install
 on a dependency install script nobody approved, and Vite brings one (esbuild),
 so an app that ships no `pnpm-workspace.yaml` is given one that allows
-esbuild's and lets the install go past the rest without running them. An app's
-own file is used as it is. A static site, a single `html.html`, or a bundle
+esbuild's and lets the install go past the rest without running them. A build
+policy the app gives under `package.json -> pnpm`, which pnpm 11 (the
+sandbox's) no longer reads, is carried into that file as one `allowBuilds` map
+over the default's esbuild (`workspace_for`). An app's own file is used as it
+is. A static site, a single `html.html`, or a bundle
 carrying only `dist.zip` deploys as it is.
 
 A failed build fails its step with `POD_BUNDLE_APP_BUILD_FAILED` and an error

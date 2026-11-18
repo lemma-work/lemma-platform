@@ -4303,11 +4303,12 @@ def test_a_foreign_key_the_bundle_no_longer_declares_is_dropped(tmp_path: Path):
     assert "foreign-key-dropped:deals.customer_id" in result["summary"]["tables"]
 
 
-def test_an_sdk_that_cannot_change_a_column_stops_before_any_table_write(
+def test_an_sdk_that_cannot_change_a_column_is_refused_at_the_plan(
     tmp_path: Path,
 ):
     """An older lemma-sdk has no column update: the import used to fail at
-    that column, after the table's other changes had been written."""
+    that column, after the pod and its connectors and the table's other
+    changes had been written. The plan says so, dry run or not."""
     resource_dir = tmp_path / "tables" / "deals"
     resource_dir.mkdir(parents=True)
     (resource_dir / "deals.json").write_text(
@@ -4322,6 +4323,7 @@ def test_an_sdk_that_cannot_change_a_column_stops_before_any_table_write(
         ),
         encoding="utf-8",
     )
+    (tmp_path / "pod.json").write_text(json.dumps({"name": "Deals"}), encoding="utf-8")
     writes: list[str] = []
 
     client = _bare_pod_client()
@@ -4332,12 +4334,24 @@ def test_an_sdk_that_cannot_change_a_column_stops_before_any_table_write(
             "columns": [{"name": "stage", "type": "ENUM", "options": ["lead"]}],
             "enable_rls": False,
         },
-        update=lambda pod_id, name, payload: writes.append("update"),
-        add_column=lambda pod_id, name, request: writes.append("add_column"),
+        update=lambda pod_id, name, payload: writes.append("table"),
+        add_column=lambda pod_id, name, request: writes.append("column"),
+    )
+    client.pods = SimpleNamespace(
+        get=lambda pod_id: {"id": pod_id, "config": {}},
+        update=lambda pod_id, request: writes.append("pod"),
     )
 
-    with pytest.raises(ValueError, match=r"deals\.stage.*no table was changed"):
-        import_pod_bundle(client, pod_id="pod_1", source_dir=tmp_path)
+    planned = import_pod_bundle(
+        client, pod_id="pod_1", source_dir=tmp_path, dry_run=True
+    )
+    assert planned["ok"] is False
+    assert "deals.stage" in planned["errors"][0]["message"]
+
+    with pytest.raises(ValueError, match=r"deals\.stage"):
+        import_pod_bundle(
+            client, pod_id="pod_1", source_dir=tmp_path, set_pod_meta=True
+        )
     assert writes == []
 
 

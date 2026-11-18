@@ -20979,9 +20979,12 @@ var LemmaClient = (() => {
      * an answer, and the `typesafe` provider always answers the value it judged
      * most likely, with that value's probability as `confidence` where it reports
      * one (for several choices, the confidence of the least certain per-option
-     * decision, not the probability of the whole selection). A provider that could
-     * not answer rejects instead (503 or 429), so "unsure" and "failed" never
-     * look alike.
+     * decision, not the probability of the whole selection). A value whose
+     * `confidence` is `null` carries no measure -- every answer of the
+     * language-model provider, and a `typesafe` scale read from its score alone
+     * -- so whether to act on it is yours to decide. A provider that could not
+     * answer rejects instead (503 or 429), so "unsure" and "failed" never look
+     * alike.
      */
     make(payload) {
       return this.client.request(

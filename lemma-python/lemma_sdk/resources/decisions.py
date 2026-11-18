@@ -32,9 +32,12 @@ class PodDecisions(BoundResource):
             },
         )
         answer = result.answers["category"]
-        unsure = answer.value is None or (
-            answer.confidence is not None and answer.confidence < 0.7
-        )
+        if answer.value is None:
+            unsure = True  # the provider judged the evidence supports none
+        elif answer.confidence is None:
+            unsure = False  # no measure to compare: your call, per question
+        else:
+            unsure = answer.confidence < 0.7
 
     Treat an answer as unsure by that one rule, whichever provider the
     deployment runs: the language-model provider answers `None` when the
@@ -42,8 +45,10 @@ class PodDecisions(BoundResource):
     answers the value it judged most likely, with that value's probability as
     `confidence` where it reports one (for several choices, the confidence of
     the least certain per-option decision, not the probability of the whole
-    selection). The threshold is yours, because what a wrong answer costs differs
-    per question. A provider that could not answer raises instead (503 or 429),
+    selection). A value with no `confidence` carries no measure -- every
+    answer of the language-model provider, and a `typesafe` scale read from its
+    score alone -- so whether to act on it is yours to decide. The threshold is
+    yours too, because what a wrong answer costs differs per question. A provider that could not answer raises instead (503 or 429),
     so "unsure" and "failed" never look alike.
     """
 

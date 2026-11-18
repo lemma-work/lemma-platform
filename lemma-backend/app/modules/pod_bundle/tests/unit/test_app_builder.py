@@ -31,7 +31,7 @@ from app.modules.pod_bundle.infrastructure.app_builder import (
     _clean_slug,
     build_script,
     classify_source_dir,
-    has_own_build_policy,
+    workspace_for,
     slug_candidates,
     zip_dir,
 )
@@ -323,7 +323,7 @@ def test_a_failure_with_no_build_output_adds_nothing_to_the_step():
 
 
 def _run_build_script(
-    src: Path, tmp_path: Path, *, own_policy: bool = False
+    src: Path, tmp_path: Path, *, workspace: str = DEFAULT_PNPM_WORKSPACE
 ) -> list[str]:
     """Run the real script with a ``pnpm`` that records what it was asked."""
     bin_dir = tmp_path / "bin"
@@ -333,7 +333,7 @@ def _run_build_script(
     pnpm.write_text(f'#!/bin/sh\necho "$*" >> {shlex.quote(str(calls))}\n')
     pnpm.chmod(0o755)
     subprocess.run(
-        ["bash", "-c", build_script(str(src), own_policy=own_policy)],
+        ["bash", "-c", build_script(str(src), workspace=workspace)],
         check=True,
         env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
     )
@@ -378,31 +378,71 @@ def _zipped(package_json: str | None) -> bytes:
 
 
 @pytest.mark.parametrize(
-    ("package_json", "own"),
+    "package_json",
     [
-        ('{"pnpm": {"onlyBuiltDependencies": ["sharp", "esbuild"]}}', True),
-        ('{"pnpm": {"allowBuilds": {"sharp": true}}}', True),
         # The same names outside `pnpm` say nothing about install scripts.
-        ('{"config": {"allowBuilds": false}}', False),
-        ('{"name": "onlyBuiltDependencies"}', False),
-        ('{"pnpm": "onlyBuiltDependencies"}', False),
-        ("not json", False),
-        (None, False),
+        '{"config": {"allowBuilds": false}}',
+        '{"name": "onlyBuiltDependencies"}',
+        '{"pnpm": "onlyBuiltDependencies"}',
+        '{"pnpm": {"overrides": {"a": "1"}}}',
+        "not json",
+        None,
     ],
 )
-def test_only_a_policy_under_pnpm_is_the_apps_own(package_json, own):
-    assert has_own_build_policy(_zipped(package_json)) is own
+def test_an_app_with_no_policy_of_its_own_gets_the_default(package_json):
+    assert workspace_for(_zipped(package_json)) == DEFAULT_PNPM_WORKSPACE
 
 
-def test_an_apps_build_policy_in_package_json_is_left_as_it_is(tmp_path):
-    """pnpm reads `pnpm.onlyBuiltDependencies` from package.json; a default
-    workspace file would replace that list with esbuild alone."""
+def test_an_apps_pnpm_policy_is_carried_where_pnpm_11_reads_it():
+    """pnpm 11 ignores `package.json -> pnpm`; the policy it gave there is
+    written to the workspace file, over the default's esbuild."""
+    written = yaml.safe_load(
+        workspace_for(
+            _zipped(
+                json.dumps(
+                    {
+                        "pnpm": {
+                            "onlyBuiltDependencies": ["sharp"],
+                            "neverBuiltDependencies": ["core-js"],
+                            "allowBuilds": {"@swc/core": True, "odd": "yes"},
+                        }
+                    }
+                )
+            )
+        )
+    )
+
+    assert written == {
+        "onlyBuiltDependencies": ["@swc/core", "esbuild", "sharp"],
+        "allowBuilds": {
+            "@swc/core": True,
+            "core-js": False,
+            "esbuild": True,
+            "sharp": True,
+        },
+        "strictDepBuilds": False,
+    }
+
+
+def test_an_app_may_still_refuse_esbuild_by_name():
+    written = yaml.safe_load(
+        workspace_for(_zipped('{"pnpm": {"allowBuilds": {"esbuild": false}}}'))
+    )
+    assert written["allowBuilds"] == {"esbuild": False}
+    assert written["onlyBuiltDependencies"] == []
+
+
+def test_the_carried_policy_is_written_when_the_app_brings_no_file(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
+    carried = workspace_for(
+        _zipped('{"pnpm": {"onlyBuiltDependencies": ["sharp", "esbuild"]}}')
+    )
 
-    calls = _run_build_script(src, tmp_path, own_policy=True)
+    calls = _run_build_script(src, tmp_path, workspace=carried)
 
-    assert not (src / "pnpm-workspace.yaml").exists()
+    assert (src / "pnpm-workspace.yaml").read_text() == carried
+    assert yaml.safe_load(carried)["allowBuilds"] == {"esbuild": True, "sharp": True}
     assert calls == ["install --no-frozen-lockfile", "run build"]
 
 

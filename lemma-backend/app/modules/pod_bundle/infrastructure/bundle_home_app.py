@@ -15,8 +15,11 @@ no longer has is no choice: the pod opens on its first app, as it would.
 Set as the person importing, through the pod's own update, once every step has
 landed, and only if the choice is still the one read: a person who chooses
 while the import runs keeps theirs. A write the pod refuses (the person lost
-``pod.update`` meanwhile, say) is a warning, not a failed import: the steps
-before it have landed.
+``pod.update`` meanwhile, say), or one a database error such as a deadlock
+stops, is a warning, not a failed import: the steps before it have landed. The
+database being unavailable is not the work failing, and goes to the work item,
+which retries the apply; its landed steps are skipped and its warnings said
+once.
 """
 
 from __future__ import annotations
@@ -27,16 +30,21 @@ from uuid import UUID
 
 from lemma_pod_bundle.jsonc import loads_jsonc
 from lemma_pod_bundle.layout import POD_MANIFEST_FILE
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.concurrency.offload import run_blocking
 from app.core.domain.errors import DomainError
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.state import (
     ImportState,
     StepAction,
     StepKind,
     StepStatus,
 )
+
+logger = get_logger(__name__)
 
 
 def read_bundle_home_app(bundle_root: Path) -> str | None:
@@ -191,6 +199,19 @@ async def carry_to_pod(
         notes = await carry_home_app(wanted, target, created=created_apps(state))
     except DomainError as refused:
         notes = [f"The app this Lemma opens on was not set: {refused.message}"]
+    except SQLAlchemyError as failed:
+        raise_if_database_unavailable(failed)
+        logger.warning(
+            "pod_bundle.home_app.write_failed.degraded",
+            import_id=str(state.import_id),
+            exc_info=True,
+        )
+        notes = [
+            (
+                f"The app this Lemma opens on was not set; choose '{wanted}' "
+                "from its apps to open there."
+            )
+        ]
     for note in notes:
         if note not in state.warnings:  # a resumed apply says it once
             state.warnings.append(note)

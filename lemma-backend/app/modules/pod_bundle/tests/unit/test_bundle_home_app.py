@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -45,11 +46,13 @@ class _Pod:
         apps: set[str],
         chosen_meanwhile: str | None = None,
         refuse: bool = False,
+        fail_with: BaseException | None = None,
     ):
         self.home: str | None = chosen
         self.apps = apps
         self._meanwhile = chosen_meanwhile
         self._refuse = refuse
+        self._fail_with = fail_with
 
     async def chosen(self) -> str | None:
         return self.home
@@ -64,6 +67,8 @@ class _Pod:
             from app.core.domain.errors import DomainError
 
             raise DomainError("You cannot change this Lemma", status_code=403)
+        if self._fail_with is not None:
+            raise self._fail_with
         if self.home != unless_not:
             return self.home
         self.home = app_name
@@ -129,6 +134,55 @@ async def test_a_refused_write_is_a_warning_not_a_failed_import(
     assert state.warnings == [
         "The app this Lemma opens on was not set: You cannot change this Lemma"
     ]
+
+
+def _db_error(sqlstate: str):
+    from sqlalchemy.exc import DBAPIError
+
+    return DBAPIError("UPDATE pods", {}, SimpleNamespace(sqlstate=sqlstate), False)
+
+
+async def test_a_database_error_in_the_write_is_a_warning(tmp_path: Path) -> None:
+    """A deadlock here used to fail an import whose steps had all landed."""
+    (tmp_path / "pod.json").write_text(
+        json.dumps({"name": "x", "home_app": "today"}), encoding="utf-8"
+    )
+    pod = _Pod(apps={"today"}, fail_with=_db_error("40P01"))
+    state = ImportState(
+        import_id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        source=BundleSource(kind=BundleSourceKind.URL),
+    )
+
+    await carry_to_pod(object(), state, tmp_path, target=pod)  # type: ignore[arg-type]
+
+    note = state.warnings[0]
+    assert len(state.warnings) == 1
+    assert note.startswith("The app this Lemma opens on was not set;")
+    assert "choose 'today' from its apps" in note
+
+
+async def test_the_database_being_unavailable_goes_to_the_work_item(
+    tmp_path: Path,
+) -> None:
+    """Retried by the work item, uncharged: its landed steps are skipped."""
+    from sqlalchemy.exc import DBAPIError
+
+    (tmp_path / "pod.json").write_text(
+        json.dumps({"name": "x", "home_app": "today"}), encoding="utf-8"
+    )
+    pod = _Pod(apps={"today"}, fail_with=_db_error("57P01"))
+    state = ImportState(
+        import_id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        source=BundleSource(kind=BundleSourceKind.URL),
+    )
+
+    with pytest.raises(DBAPIError):
+        await carry_to_pod(object(), state, tmp_path, target=pod)  # type: ignore[arg-type]
+    assert state.warnings == []
 
 
 async def test_a_pod_that_had_apps_keeps_opening_on_its_first() -> None:

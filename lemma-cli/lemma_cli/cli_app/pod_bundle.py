@@ -1469,6 +1469,15 @@ def _build_import_plan(
                 )
         else:
             summary["tables"].append(f"created:{table_name}")
+    column_refusal = _column_changes_the_sdk_cannot_make(
+        pod_sdk, source_dir, existing_tables
+    )
+    if column_refusal is not None:
+        issues.append(
+            BundleValidationIssue(
+                path=str(source_dir / "tables"), message=column_refusal
+            )
+        )
 
     existing_functions = _build_existing_map(
         list_items(pod_sdk.functions.list(limit=1000))
@@ -2224,15 +2233,16 @@ def _column_updates_supported(pod_sdk: Any) -> bool:
     return callable(getattr(pod_sdk.tables, "update_column", None))
 
 
-def _refuse_column_changes_the_sdk_cannot_make(
+def _column_changes_the_sdk_cannot_make(
     pod_sdk: Any, source_dir: Path, existing_tables: dict[str, Any]
-) -> None:
-    """Stop before the first table write when an existing column must change
-    and the installed SDK cannot change it; otherwise the import would fail
-    part-way, at that column, with the tables before it already written. Reads
-    the existing tables only when the SDK is that old."""
+) -> str | None:
+    """Why the import cannot run when an existing column must change and the
+    installed SDK cannot change it, or ``None``. Asked by the plan, so a dry
+    run says so and an import stops before it writes anything; otherwise it
+    failed part-way, at that column. Reads the existing tables only when the
+    SDK is that old."""
     if _column_updates_supported(pod_sdk):
-        return
+        return None
     needed: list[str] = []
     for resource_dir in _resource_dirs(source_dir, "tables"):
         table_name = resource_dir.name
@@ -2249,12 +2259,12 @@ def _refuse_column_changes_the_sdk_cannot_make(
                 set(diff.options_to_add) | set(diff.foreign_keys_to_drop)
             )
         ]
-    if needed:
-        raise ValueError(
-            f"This bundle changes existing column(s) {', '.join(needed)}, which "
-            "the installed lemma-sdk cannot do. Upgrade lemma-cli and import "
-            "again; no table was changed."
-        )
+    if not needed:
+        return None
+    return (
+        f"This bundle changes existing column(s) {', '.join(needed)}, which "
+        "the installed lemma-sdk cannot do. Upgrade lemma-cli and import again."
+    )
 
 
 def _change_existing_columns(
@@ -2272,8 +2282,8 @@ def _change_existing_columns(
     if columns:
         # Imported only when a column changes: the model is newer than the
         # route-less SDKs this CLI still imports beside, and an import that
-        # needs it on such an SDK stopped before its first table write
-        # (`_refuse_column_changes_the_sdk_cannot_make`).
+        # needs it on such an SDK was refused at its plan
+        # (`_column_changes_the_sdk_cannot_make`).
         from lemma_sdk.openapi_client.models.update_column_request import (
             UpdateColumnRequest,
         )
@@ -2696,7 +2706,6 @@ def import_pod_bundle(
     summary["connectors"].extend(f"kept:{slug}" for slug in kept_connectors)
 
     existing_tables = _build_existing_map(list_items(pod_sdk.tables.list(limit=1000)))
-    _refuse_column_changes_the_sdk_cannot_make(pod_sdk, source_dir, existing_tables)
     for resource_dir in _order_table_dirs_by_dependency(
         _resource_dirs(source_dir, "tables")
     ):
