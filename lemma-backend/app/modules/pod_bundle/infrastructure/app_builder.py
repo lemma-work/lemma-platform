@@ -294,6 +294,8 @@ class AppStepRunner:
         user_id: UUID,
         bundle_root: Path,
         replacements: dict[str, str],
+        created: CreatedParts | None = None,
+        resumed: bool = False,
     ) -> None:
         with build_log_kept_on(step):
             await self._run(
@@ -302,6 +304,8 @@ class AppStepRunner:
                 user_id=user_id,
                 bundle_root=bundle_root,
                 replacements=replacements,
+                created=created,
+                resumed=resumed,
             )
 
     async def _run(
