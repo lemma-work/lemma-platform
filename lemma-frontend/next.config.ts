@@ -70,6 +70,12 @@ const config: NextConfig = {
       },
       { source: "/ingest/array/:path*", destination: assets + "/array/:path*" },
       { source: "/ingest/:path*", destination: ingest + "/:path*" },
+      /* A plugin's try-it demo (`public/plugins/<slug>/demo/`, written by
+         the plugins' `_build/site_catalog.py`) moves between its apps by
+         folder, `./` and `./page/?k=…`, the way a static host serves it.
+         These answer such a folder with its `index.html`. */
+      { source: "/plugins/:slug/demo/", destination: "/plugins/:slug/demo/index.html" },
+      { source: "/plugins/:slug/demo/:app/", destination: "/plugins/:slug/demo/:app/index.html" },
     ];
   },
   transpilePackages: ["lemma-sdk"],

@@ -1,0 +1,90 @@
+/* The plugin pages wear the website's own frame (`app/(marketing)/
+   landing.module.css`'s `.page`), whose palette is fixed light. A plugin's
+   pictures come in light and dark, so on these pages the same tokens have a
+   dark rendition too, taken when the visitor's theme (or, with no choice
+   made, their system) is dark: the same warm ground and violet, lowered. In
+   light nothing here applies and the page is the home page's to the pixel. */
+.themed {
+    --scrawl: var(--violet);
+}
+
+:global(:root[data-theme="dark"]) .themed {
+    --cream: #151411;
+    --paper: #1e1d19;
+    --ink: #f1efe8;
+    --ink-2: #c6c4bb;
+    --ink-3: #9d9b92;
+    --violet: #6a52ea;
+    --violet-deep: #5b43dd;
+    --violet-soft: #221f33;
+    --line: #f1efe81a;
+    --line-2: #f1efe830;
+    --shadow-card: 0 1px 2px rgb(0 0 0 / .4), 0 24px 60px -30px rgb(0 0 0 / .75);
+    --scrawl: #b6aaff;
+    color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme="light"])) .themed {
+        --cream: #151411;
+        --paper: #1e1d19;
+        --ink: #f1efe8;
+        --ink-2: #c6c4bb;
+        --ink-3: #9d9b92;
+        --violet: #6a52ea;
+        --violet-deep: #5b43dd;
+        --violet-soft: #221f33;
+        --line: #f1efe81a;
+        --line-2: #f1efe830;
+        --shadow-card: 0 1px 2px rgb(0 0 0 / .4), 0 24px 60px -30px rgb(0 0 0 / .75);
+        --scrawl: #b6aaff;
+        color-scheme: dark;
+    }
+}
+
+/* The pinned nav's glass and the site footer are written in light colours
+   (the product stylesheet, `site/footer.module.css`); in dark they take the
+   dark ground and inks instead. The footer's own classes are hashed, so it
+   is reached as the frame's last footer and by element. */
+:global(:root[data-theme="dark"]) .themed > header {
+    background: rgb(21 20 17 / .88);
+}
+:global(:root[data-theme="dark"]) .themed > footer {
+    /* The footer sets its own ink token, so it is set again here. */
+    --ink: #f1efe8;
+    background: var(--cream);
+    color: var(--ink);
+    border-top-color: var(--line-2);
+}
+:global(:root[data-theme="dark"]) .themed > footer :is(p, h3, small),
+:global(:root[data-theme="dark"]) .themed > footer > div:last-child {
+    color: var(--ink-3);
+    border-color: var(--line-2);
+}
+:global(:root[data-theme="dark"]) .themed > footer :global(.lemma-wordmark) {
+    color: var(--ink);
+}
+:global(:root[data-theme="dark"]) .themed > footer > div:first-child > div:first-child > a:last-child {
+    color: var(--scrawl) !important;
+}
+@media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme="light"])) .themed > header {
+        background: rgb(21 20 17 / .88);
+    }
+    :global(:root:not([data-theme="light"])) .themed > footer {
+        --ink: #f1efe8;
+        background: var(--cream);
+        color: var(--ink);
+        border-top-color: var(--line-2);
+    }
+    :global(:root:not([data-theme="light"])) .themed > footer :is(p, h3, small),
+    :global(:root:not([data-theme="light"])) .themed > footer > div:last-child {
+        color: var(--ink-3);
+        border-color: var(--line-2);
+    }
+    :global(:root:not([data-theme="light"])) .themed > footer :global(.lemma-wordmark) {
+        color: var(--ink);
+    }
+    :global(:root:not([data-theme="light"])) .themed > footer > div:first-child > div:first-child > a:last-child {
+        color: var(--scrawl) !important;
+    }
+}
