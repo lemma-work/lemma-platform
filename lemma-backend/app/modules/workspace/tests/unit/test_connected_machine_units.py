@@ -235,9 +235,9 @@ async def test_a_machine_that_never_reported_its_runtime_port_is_not_connected()
 
 
 @pytest.mark.asyncio
-async def test_a_machine_is_running_only_once_it_has_reported_its_runtime() -> None:
+async def test_a_machine_is_running_only_once_it_has_reported_its_runtime_up() -> None:
     """Running is what lets ``ensure`` reuse an instance without ``wait_ready``:
-    a machine that has not reported its runtime must go through that gate."""
+    a machine whose runtime is not reported up must go through that gate."""
     import dataclasses
     from datetime import datetime, timedelta, timezone
 
@@ -246,11 +246,21 @@ async def test_a_machine_is_running_only_once_it_has_reported_its_runtime() -> N
     unreported = await provider.inspect("m", deadline_at=deadline)
     assert unreported is not None and not unreported.running
 
-    reported = ConnectedMachineProvider(
-        dataclasses.replace(provider.connection, capabilities={"runtime_port": 18080}),
-        RuntimeCredentialSigner(key=_KEY.encode()),
+    def reporting(**capabilities: object) -> ConnectedMachineProvider:
+        return ConnectedMachineProvider(
+            dataclasses.replace(provider.connection, capabilities=capabilities),
+            RuntimeCredentialSigner(key=_KEY.encode()),
+        )
+
+    # The port arrives with the hello, before the runtime has come up.
+    starting = await reporting(runtime_port=18080, runtime_ready=False).inspect(
+        "m", deadline_at=deadline
     )
-    found = await reported.inspect("m", deadline_at=deadline)
+    assert starting is not None and not starting.running
+
+    found = await reporting(runtime_port=18080, runtime_ready=True).inspect(
+        "m", deadline_at=deadline
+    )
     assert found is not None and found.running
 
 
