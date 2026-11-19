@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.core.authorization.outside_text import OUTSIDE_TEXT_REQUIRES_APPROVAL
+from app.core.authorization.permissions import Permissions
 from app.core.domain.errors import DomainError
 
 
@@ -25,6 +27,28 @@ class MachineAccessDenied(DomainError):
             f"You can see '{ref}' but not {needs} it. Ask a pod editor.",
             code="MACHINE_ACCESS_DENIED",
             status_code=403,
+        )
+
+
+class MachineHeldForApproval(MachineAccessDenied):
+    """A run reading what people outside the pod wrote, asking to use a
+    machine: its person approves first, as for anything else such a run does
+    beyond the pod's own records and files (``outside_text_gate``).
+
+    The authorizer's own refusal code and the permission it is for, so an
+    approval card -- the agent's ``request_approval``, or the one a delegated
+    token's refusal is recorded for -- lends exactly ``machine.use``.
+    """
+
+    def __init__(self, ref: str) -> None:
+        DomainError.__init__(
+            self,
+            f"This run is reading what people outside the pod wrote, so the "
+            f"person it acts for approves using '{ref}' first. Ask them with "
+            "request_approval for this same call.",
+            code=OUTSIDE_TEXT_REQUIRES_APPROVAL,
+            status_code=403,
+            details={"permission_ids": [Permissions.MACHINE_USE]},
         )
 
 
@@ -53,6 +77,18 @@ class MachineCapabilityMissing(DomainError):
         super().__init__(
             f"'{ref}' has no {capability}.",
             code="MACHINE_CAPABILITY_MISSING",
+            status_code=409,
+        )
+
+
+class MachineMoving(DomainError):
+    """The machine is being moved to a new size; using it now would lose work."""
+
+    def __init__(self, ref: str) -> None:
+        super().__init__(
+            f"'{ref}' is being moved to a new size and cannot be used until the "
+            "move ends. Try again later.",
+            code="MACHINE_MOVING",
             status_code=409,
         )
 

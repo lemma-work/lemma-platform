@@ -87,6 +87,9 @@ class _Facts:
     async def pods_named(self, caller: MachineCaller, name: str) -> list[UUID]:
         return self.named.get(name.lower(), [])
 
+    async def held_for_outside_text(self, caller: MachineCaller) -> bool:
+        return False
+
 
 class _NoDatabase:
     session = None

@@ -57,14 +57,28 @@ MACHINE_WORK_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("GET", f"{_MACHINE}/files:stat"),
         ("GET", f"{_MACHINE}/files:content"),
         ("PUT", f"{_MACHINE}/files:content"),
-        # The write's first spelling, deprecated for one release.
-        ("PUT", f"{_MACHINE}/files/content"),
         ("DELETE", f"{_MACHINE}/files"),
         ("POST", f"{_MACHINE}/files:move"),
         ("POST", f"{_MACHINE}/files:sync"),
         ("POST", f"{_MACHINE}/previews"),
         ("GET", f"{_MACHINE}/previews"),
         ("DELETE", f"{_MACHINE}/previews/{{preview_id}}"),
+    }
+)
+
+#: A machine's processes as a terminal sees them: starting one, typing into
+#: one, and stopping one. An app's page reaches a pod machine as its viewer,
+#: but its script is the app author's: a process it started would be that
+#: author's code running beside everybody else's on a machine where anything
+#: reads everything, and typing into a member's terminal is acting as them.
+#: Reading what runs is left to it; running is not.
+_MACHINE_TERMINAL_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("POST", f"{_MACHINE}/processes"),
+        ("GET", f"{_MACHINE}/processes/{{process_id}}/output"),
+        ("POST", f"{_MACHINE}/processes/{{process_id}}:input"),
+        ("POST", f"{_MACHINE}/processes/{{process_id}}:resize"),
+        ("DELETE", f"{_MACHINE}/processes/{{process_id}}"),
     }
 )
 
@@ -237,9 +251,10 @@ APP_ROUTES: frozenset[tuple[str, str]] = frozenset(
             "GET",
             f"{_ORG_CONNECTORS}/{{auth_config_name}}/triggers/{{trigger_name}}",
         ),
-        # Running code as its viewer on a machine of the app's own pod. Never
-        # the viewer's own machine: that is not the pod's to offer.
-        *MACHINE_WORK_ROUTES,
+        # A machine of the app's own pod, as its viewer: its files, previews
+        # and what runs there. Never the viewer's own machine, which is not
+        # the pod's to offer, and never a terminal (``_MACHINE_TERMINAL_ROUTES``).
+        *(MACHINE_WORK_ROUTES - _MACHINE_TERMINAL_ROUTES),
     }
 )
 

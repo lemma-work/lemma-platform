@@ -12,8 +12,10 @@ the way every other browser WebSocket in this codebase does, because browsers
 cannot set headers on a handshake.
 
 Who reaches it is the machine resolver's to decide, like every other machine
-route: the ref names the machine and the session says who is asking. Driving
-needs use of the machine; watching needs to see it.
+route: the ref names the machine and the session says who is asking. Both
+watching and driving need use of the machine: the screen shows whatever is
+signed in there, which is not a machine's status. A caller with status only
+gets the pane's state without who is watching or who holds the size.
 """
 
 from __future__ import annotations
@@ -176,6 +178,10 @@ async def browser_status(
         )
     finally:
         await service.close()
+    if resolved.access < MachineAccess.USE:
+        # Who is watching names other people, and the lease names one of
+        # them; neither is the machine's status.
+        found = {k: v for k, v in found.items() if k not in ("watching", "lease")}
     return BrowserStatusResponse.model_validate({"state": "unavailable", **found})
 
 
@@ -408,7 +414,7 @@ async def browser_view(
         websocket,
         ref,
         UUID(user_id),
-        need=MachineAccess.USE if mode == MODE_CONTROL else MachineAccess.STATUS,
+        need=MachineAccess.USE,
         refuse=_refuse,
     )
     if resolved is None:

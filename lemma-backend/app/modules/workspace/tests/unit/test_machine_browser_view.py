@@ -1036,3 +1036,69 @@ def test_webrtc_refused_after_the_early_accept_still_reaches_the_pane(
     assert refusal["type"] == "websocket.close"
     assert refusal["code"] == CLOSE_USE_VNC
     assert service.closed
+
+
+def test_watching_needs_use_of_the_machine_not_just_its_status() -> None:
+    """The screen shows whatever is signed in there.
+
+    A view-only socket used to be resolved at `STATUS`, so any pod reader
+    could watch a pod machine's signed-in browser live -- and was handed TURN
+    credentials to do it. The resolver is asked for `USE` in either mode.
+    """
+    from app.modules.workspace.domain.machine_access import MachineAccess
+
+    asked: list[MachineAccess] = []
+
+    async def _status_only(websocket, ref, user_id, *, need, refuse):
+        asked.append(need)
+        await refuse(websocket, view.CLOSE_UNAUTHENTICATED)
+
+    service = _FakeService()
+    client = _signed_in_client(service)
+    client.app.dependency_overrides[view_machine_resolver] = lambda: _status_only
+    with client.websocket_connect(
+        "/machines/me/browser/view?mode=view",
+        headers={"Origin": "https://app.lemma.test"},
+    ) as socket:
+        refusal = socket.receive()
+
+    assert asked == [MachineAccess.USE]
+    assert refusal["type"] == "websocket.close"
+
+
+async def test_a_status_caller_is_not_told_who_is_watching() -> None:
+    """Watcher names are other people, and the lease names one of them."""
+    from types import SimpleNamespace
+
+    from app.modules.workspace.domain.machine_access import MachineAccess
+
+    class _Service:
+        async def status(self, machine_id, *, viewer):
+            return {
+                "state": "running",
+                "size": "1280x800",
+                "lease": "someone:pane",
+                "watching": [
+                    {"viewer": "someone:pane", "mode": "control", "transport": "rtc"}
+                ],
+            }
+
+        async def close(self) -> None:
+            return None
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(machine_caller=SimpleNamespace(user_id=uuid4()))
+    )
+
+    async def _status(access: MachineAccess):
+        resolved = SimpleNamespace(
+            machine=SimpleNamespace(id=_MACHINE_ID), access=access
+        )
+        return await view.browser_status(request, resolved, _Service())
+
+    reader = await _status(MachineAccess.STATUS)
+    user = await _status(MachineAccess.USE)
+
+    assert reader.state == "running" and reader.size == "1280x800"
+    assert reader.watching == [] and reader.lease is None
+    assert user.lease == "someone:pane" and len(user.watching) == 1

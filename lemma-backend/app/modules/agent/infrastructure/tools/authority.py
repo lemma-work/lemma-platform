@@ -161,9 +161,14 @@ def workspace_principal(deps: ToolContext) -> WorkspacePrincipal:
     An approved command used to get a session minted for the person, with no
     workload -- their whole authority, in a shell the agent goes on using, for
     the price of one approved ``ls`` (H7).
+
+    An agent run with no id of its own is the pod's assistant, from before it
+    had a row, and is minted as one -- by its pod's id. Minted with no
+    workload at all, the token was the person's unscoped session, which every
+    co-tenant on a pod machine can read.
     """
-    return WorkspacePrincipal(
-        getattr(deps, "workload_type", None),
-        getattr(deps, "workload_id", None),
-        deps.agent_name,
-    )
+    workload_type = getattr(deps, "workload_type", None)
+    workload_id = getattr(deps, "workload_id", None)
+    if workload_type == "agent" and workload_id is None:
+        workload_id = deps.pod_id
+    return WorkspacePrincipal(workload_type, workload_id, deps.agent_name)

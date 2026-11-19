@@ -93,12 +93,19 @@ def _install_uv_command() -> str:
 
 
 #: The Go toolchain the streamer is built with in the template, pinned and
-#: checksummed like Node and the GitHub CLI. Removed again after the build:
-#: the sandbox runs the binary, not the compiler.
-GO_VERSION = "1.26.10"
+#: checksummed like Node and the GitHub CLI. The same release as the pinned
+#: `golang` image `Dockerfile.workspace` and the streamer's own Dockerfile
+#: build with, so one binary has one compiler on both fabrics
+#: (`test_e2b_templates` holds the two together). Removed again after the
+#: build: the sandbox runs the binary, not the compiler.
+GO_VERSION = "1.25.14"
 GO_LINUX_AMD64_SHA256 = (
-    "ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5"
+    "a21ae5633a269bcd7e90cf767e48225633795e99d831742cbf3397064fee7712"
 )
+
+#: What the template installs only to build the streamer. x264 and libvpx are
+#: linked statically, so none of it is needed to run it.
+STREAMER_BUILD_PACKAGES = ("gcc", "libc6-dev", "libvpx-dev", "libx264-dev")
 
 
 def _install_go_command() -> str:
@@ -116,7 +123,13 @@ def _build_streamer_command() -> str:
         "cd /tmp/lemma-streamer-src && CGO_ENABLED=1 /usr/local/go/bin/go build "
         "-trimpath -ldflags='-s -w' -o /usr/local/bin/lemma-streamer "
         "./cmd/lemma-streamer && "
-        "rm -rf /tmp/lemma-streamer-src /usr/local/go /root/go /root/.cache/go-build"
+        "rm -rf /tmp/lemma-streamer-src /usr/local/go /root/go /root/.cache/go-build && "
+        # Marked automatic rather than purged: autoremove then takes only what
+        # nothing else in the template depends on, so a package that needs
+        # one of these keeps it.
+        f"apt-mark auto {' '.join(STREAMER_BUILD_PACKAGES)} >/dev/null && "
+        "DEBIAN_FRONTEND=noninteractive apt-get autoremove -y && "
+        "rm -rf /var/lib/apt/lists/*"
     )
 
 
@@ -188,11 +201,9 @@ def workspace_template():
                 "tigervnc-scraping-server",
                 "xclip",
                 # Building the WebRTC streamer in the template, against this
-                # template's own libraries; see `_install_streamer_commands`.
-                "gcc",
-                "libc6-dev",
-                "libvpx-dev",
-                "libx264-dev",
+                # template's own libraries, and removed once it is built; see
+                # `_build_streamer_command`.
+                *STREAMER_BUILD_PACKAGES,
                 "xz-utils",
                 "xvfb",
             ],

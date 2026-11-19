@@ -16,12 +16,19 @@ from uuid import UUID
 from app.core.domain.generation import GenerationSettings
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.errors import AgentNotFoundError
+from app.modules.agent.domain.outsiders import OUTSIDE_ROW_KEY
 from app.modules.agent.domain.value_objects import ConversationOrigin
 from app.modules.agent.infrastructure.repositories import AgentRepository
 from app.modules.workflow.contracts import AgentPort
 
 #: The run source a schedule starts with; every other source is a workflow's.
 SCHEDULE_SOURCE = "SCHEDULE"
+
+#: Set in ``conversation_metadata`` when what starts the run was written by
+#: somebody outside the pod -- a row a contact wrote. The run is then marked
+#: as reading outside text for as long as that message is in its history
+#: (``services/outside_text``).
+OUTSIDE_ROW = OUTSIDE_ROW_KEY
 
 
 class _AgentDriver(AgentPort):
@@ -113,4 +120,4 @@ def build_agent_control_adapter(uow: SqlAlchemyUnitOfWork) -> AgentPort:
     return _AgentDriver(uow)
 
 
-__all__ = ["SCHEDULE_SOURCE", "build_agent_control_adapter"]
+__all__ = ["OUTSIDE_ROW", "SCHEDULE_SOURCE", "build_agent_control_adapter"]

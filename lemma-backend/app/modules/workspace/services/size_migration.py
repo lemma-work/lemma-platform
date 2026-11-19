@@ -5,8 +5,10 @@ property of the next container: the machine is rebuilt on the same volume and
 nothing has to move. Where the sandbox *is* the disk (E2B) the home has to be
 carried: packed into a tarball on the old machine, streamed to object storage,
 unpacked onto the new one -- package caches left behind, since they are most
-of the bytes and rebuilt by the next install. The logins travel the way they
-travel everywhere: a fresh encrypted copy before, restored after.
+of the bytes and rebuilt by the next install. The home holds SSH keys and
+``.env`` files, so it is sealed the way the logins are (`sealed_stream`)
+before it leaves the machine. The logins travel the way they travel
+everywhere: a fresh encrypted copy before, restored after.
 
 A move is a sequence of steps that can each take an hour, and the one in the
 middle destroys a disk. So it is a state on the machine row, written before
@@ -24,10 +26,20 @@ each step's effects can be lost, and a job of its own resumes it from there
    logins restored, the machine released, and the state cleared -- and only
    then is the carried copy deleted.
 
+While a move is marked the machine is refused to everyone (`MachineMoving`,
+from the resolver): a write after the pack would be lost with the old disk,
+and the new disk is empty until the home is unpacked onto it. So the sweep
+marks a move only when no other is waiting, and nobody is kept off their
+machine behind someone else's move.
+
 A step that fails is retried on the job's next run, up to ``MAX_ATTEMPTS``;
 a move that never got past ``started`` is then abandoned (nothing was lost),
 and one past it is left for a person to look at, with its home still in
-object storage and the row naming it. Behind ``MACHINE_SIZE_MIGRATION_ENABLED``.
+object storage and the row naming it. An abandoned move -- a home too big or
+that will not pack, or logins that will not copy -- keeps its target on the
+row with no state, so the sweep does not mark the same move again and the
+machine is released like any other; a different target is a new move.
+Behind ``MACHINE_SIZE_MIGRATION_ENABLED``.
 """
 
 from __future__ import annotations
@@ -38,7 +50,7 @@ from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import func, or_, select, update
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -49,6 +61,7 @@ from app.modules.workspace.infrastructure.models import SandboxModel
 from app.modules.workspace.providers.base import ProviderStorageKind, storage_kind_for
 from app.modules.workspace.services.login_backup import LoginBackups
 from app.modules.workspace.services.machine_shell import run_on_machine
+from app.modules.workspace.services.sealed_stream import open_sealed, seal
 from sandbox_runtime.paths import CACHE_PATHS, HOME_ROOT, PROTECTED_PATHS
 
 logger = get_logger(__name__)
@@ -67,6 +80,9 @@ _LOCK = "machine:size-move:v1:{machine_id}"
 #: Moves looked at per job; the job starts new ones only in its first half
 #: hour, so more than this could never begin in one run anyway.
 _PENDING_PAGE = 50
+#: Moves marked at once. A marked machine is refused to its owner until the
+#: move ends, so a move waits to be marked rather than queueing behind others.
+MARKED_AT_ONCE = 1
 
 
 class MoveState(StrEnum):
@@ -113,13 +129,18 @@ class SizeMigration:
     # --- the state on the row -------------------------------------------------
 
     async def begin(self, machine: Machine, *, to: MachineSize) -> bool:
-        """Mark a move. False when one is already marked."""
+        """Mark a move. False when one is already marked, or this same move
+        was abandoned: it would only fail the same way again."""
         async with self._uow_factory() as uow:
             marked = await uow.session.execute(
                 update(SandboxModel)
                 .where(
                     SandboxModel.id == machine.id,
                     SandboxModel.size_migration_state.is_(None),
+                    or_(
+                        SandboxModel.size_migration_target.is_(None),
+                        SandboxModel.size_migration_target != to.label,
+                    ),
                 )
                 .values(
                     size_migration_state=MoveState.STARTED.value,
@@ -143,6 +164,19 @@ class SizeMigration:
             )
             found = row.first()
         return found is not None and found[0] is not None and found[1] < MAX_ATTEMPTS
+
+    async def waiting(self) -> int:
+        """Moves marked and still the job's: what a new one would wait behind."""
+        async with self._uow_factory() as uow:
+            counted = await uow.session.scalar(
+                select(func.count())
+                .select_from(SandboxModel)
+                .where(
+                    SandboxModel.size_migration_state.is_not(None),
+                    SandboxModel.size_migration_attempts < MAX_ATTEMPTS,
+                )
+            )
+        return int(counted or 0)
 
     async def pending(self) -> list[UUID]:
         async with self._uow_factory() as uow:
@@ -233,7 +267,7 @@ class SizeMigration:
         if carries_disk:
             carry_key = await self._pack(machine_id, acting_user)
             if carry_key is None:
-                await self._abandon(machine_id)
+                await self._abandon(machine_id, reason="home_not_carried")
                 return False, None
         await self._set(
             machine_id,
@@ -299,13 +333,19 @@ class SizeMigration:
         if carry_key is not None:
             await _forget_carry(carry_key)
 
-    async def _abandon(self, machine_id: UUID) -> None:
+    async def _abandon(self, machine_id: UUID, *, reason: str) -> None:
+        """Give the move up, keeping its target: the row then says this move
+        was tried and failed, which `begin` will not mark again."""
         await self._set(
             machine_id,
             size_migration_state=None,
-            size_migration_target=None,
             size_migration_carry_key=None,
             size_migration_started_at=None,
+        )
+        logger.warning(
+            "workspace.size_migration.abandoned.degraded",
+            sandbox_id=str(machine_id),
+            reason=reason,
         )
 
     async def _pack(self, machine_id: UUID, acting_user: UUID) -> str | None:
@@ -337,12 +377,14 @@ class SizeMigration:
                 timeout_seconds=30,
             )
             return None
-        object_key = f"{machine_id}/{datetime.now(timezone.utc):%Y%m%dT%H%M%S}.tgz"
+        object_key = (
+            f"{machine_id}/{datetime.now(timezone.utc):%Y%m%dT%H%M%S}.tgz.sealed"
+        )
         client = build_local_client()
         async with client.stream_file(
             machine_id, _PACKED, deadline_at=_deadline(3600)
         ) as stream:
-            await _store().put_async(object_key, stream)
+            await _store().put_async(object_key, seal(stream, context=machine_id.bytes))
         return object_key
 
     async def _unpack(
@@ -353,8 +395,13 @@ class SizeMigration:
         )
 
         result = await _store().get_async(object_key)
+        # A carry that does not authenticate stops the write part-way, and the
+        # tar below never runs on it.
         await build_local_client().write_file_stream(
-            machine_id, _PACKED, _chunks(result), deadline_at=_deadline(3600)
+            machine_id,
+            _PACKED,
+            open_sealed(_chunks(result), context=machine_id.bytes),
+            deadline_at=_deadline(3600),
         )
         unpacked = await run_on_machine(
             machine_id,
@@ -462,7 +509,7 @@ async def _note_failure(
     state = row.size_migration_state if row else None
     if attempts >= MAX_ATTEMPTS and state == MoveState.STARTED.value:
         # Nothing destroyed yet: give the move up and keep the machine as it is.
-        await migration._abandon(machine_id)
+        await migration._abandon(machine_id, reason=type(exc).__name__)
     elif attempts >= MAX_ATTEMPTS:
         # Past the destroy: the home is in object storage under the key on the
         # row, and a person has to finish this.

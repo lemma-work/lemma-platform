@@ -99,3 +99,20 @@ def test_a_member_row_is_not_marked():
     change = trigger_change(_change(ChangeOp.INSERT), table_name="t")
     assert not change.from_outside
     assert "untrusted_row" not in change.metadata
+
+
+def test_a_batch_holding_one_outside_row_is_marked_untrusted():
+    """A batch fires once for many rows; one stranger's among them is still a
+    stranger's words in front of the run, and it is labelled as that row is."""
+    from app.modules.schedule.services.trigger_delivery import _outside_marks
+
+    member = trigger_change(_change(ChangeOp.INSERT), table_name="t")
+    outside = trigger_change(
+        _change(ChangeOp.INSERT, outside_actor="visitor:session-1"), table_name="t"
+    )
+
+    marks = _outside_marks([member, outside])
+
+    assert marks["untrusted_row"] is True
+    assert marks["row_notice"] == OUTSIDE_ROW_NOTICE
+    assert _outside_marks([member]) == {}

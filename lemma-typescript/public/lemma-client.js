@@ -22783,11 +22783,7 @@ var LemmaClient = (() => {
      */
     async readWhole(ref, path, sizeBytes = 0, chunk = MAX_READ_BYTES) {
       const step = Math.min(Math.max(Math.floor(chunk), 1), MAX_READ_BYTES);
-      if (sizeBytes > 0 && sizeBytes <= step) {
-        const only = await this.read(ref, path);
-        if (only.size !== MAX_READ_BYTES) return only;
-        return new Blob([only, await this.readFrom(ref, path, only.size, step)]);
-      }
+      if (sizeBytes > 0 && sizeBytes <= step) return this.read(ref, path);
       return this.readFrom(ref, path, 0, step);
     }
     /** Everything from byte `start` on, in ranges of `step`. */

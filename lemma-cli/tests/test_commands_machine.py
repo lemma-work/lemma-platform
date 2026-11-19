@@ -82,6 +82,16 @@ def _patch(patch_run, state, machines: FakeMachines) -> None:
         ("pod:abc/builder:/home/user/x", ("pod:abc/builder", "/home/user/x")),
         ("pod:abc:builder:/home/user/x", ("pod:abc:builder", "/home/user/x")),
         ("pod:builder:dist/app.zip", ("pod:builder", "dist/app.zip")),
+        # A path may hold colons too: the ref ends where its grammar does.
+        ("me:/home/user/a:b", ("me", "/home/user/a:b")),
+        ("mine:mac:/a:b", ("mine:mac", "/a:b")),
+        ("mine:mac:notes:v2.txt", ("mine:mac", "notes:v2.txt")),
+        ("pod:p:n:/path", ("pod:p:n", "/path")),
+        ("pod:p:n:/a:b", ("pod:p:n", "/a:b")),
+        ("pod:n:/a:b", ("pod:n", "/a:b")),
+        ("pod:abc/builder:a:b", ("pod:abc/builder", "a:b")),
+        ("pod:Team Pod:builder:x.txt", ("pod:Team Pod:builder", "x.txt")),
+        ("pod:builder:My File:1.txt", ("pod:builder", "My File:1.txt")),
         (
             "11111111-1111-1111-1111-111111111111:/home/user/a",
             ("11111111-1111-1111-1111-111111111111", "/home/user/a"),
@@ -92,9 +102,10 @@ def test_machine_paths_split_into_ref_and_path(spec, expected) -> None:
     assert split_machine_path(spec) == expected
 
 
-def test_a_ref_with_no_path_is_a_usage_error() -> None:
+@pytest.mark.parametrize("spec", ["pod:builder", "mine:mac"])
+def test_a_ref_with_no_path_is_a_usage_error(spec) -> None:
     with pytest.raises(typer.BadParameter):
-        split_machine_path("pod:builder")
+        split_machine_path(spec)
 
 
 def test_exec_streams_output_and_exits_with_the_commands_code(

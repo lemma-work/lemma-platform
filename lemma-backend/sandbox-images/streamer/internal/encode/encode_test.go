@@ -5,6 +5,7 @@ package encode
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"lemma-streamer/internal/convert"
 )
@@ -83,4 +84,52 @@ func TestVP8KeyframesOnDemand(t *testing.T) {
 	if !isKey(k) {
 		t.Fatal("forced frame not a keyframe")
 	}
+}
+
+// Both encoders spend bits per second, not per frame: at half the frame rate
+// each frame gets about twice the bits, so the stream holds its bitrate when
+// the capture loop slows down under CPU pressure.
+func TestBitrateHoldsWhenTheFrameRateDrops(t *testing.T) {
+	defer func(saved func() time.Time) { now = saved }(now)
+	for _, codec := range []string{H264, VP8} {
+		bytesAt := func(fps int) int {
+			at := time.Unix(0, 0)
+			now = func() time.Time { return at }
+			enc, err := New(codec, 320, 240, 30, 200_000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer enc.Close()
+			total := 0
+			for i := 0; i < 90; i++ {
+				out, err := enc.Encode(busy(320, 240, i), false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if i >= 30 {
+					total += len(out)
+				}
+				at = at.Add(time.Second / time.Duration(fps))
+			}
+			return total
+		}
+		full, slow := bytesAt(30), bytesAt(15)
+		if float64(slow) < 1.4*float64(full) {
+			t.Errorf("%s: %d bytes a frame at 15 fps against %d at 30; the bitrate fell with the frame rate", codec, slow/60, full/60)
+		}
+	}
+}
+
+// busy is a moving picture with grain: more than the bitrate can carry at
+// full quality, less than its floor, so the rate control is what decides.
+func busy(w, h, seed int) *convert.I420 {
+	f := frame(w, h, seed*3)
+	x := uint32(seed*2654435761 + 1)
+	for i := range f.Y {
+		x ^= x << 13
+		x ^= x >> 17
+		x ^= x << 5
+		f.Y[i] += byte(x % 24)
+	}
+	return f
 }

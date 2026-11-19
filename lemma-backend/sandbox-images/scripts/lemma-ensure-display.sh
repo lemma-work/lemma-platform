@@ -2,6 +2,8 @@
 set -euo pipefail
 
 DISPLAY_VALUE="${DISPLAY:-:99}"
+DISPLAY_NUMBER="${DISPLAY_VALUE#:}"
+DISPLAY_NUMBER="${DISPLAY_NUMBER%%.*}"
 # The framebuffer Xvfb allocates. It is both the size the display starts at
 # and the ceiling on every later resize: RandR can pick a smaller mode out of a
 # big framebuffer but cannot grow one, so a viewer asking for a display that
@@ -29,34 +31,70 @@ START_SCREEN="${WORKSPACE_XVFB_SCREEN:-1440x960x24}"
 # on a high-density screen reads text at its own pixels instead of a 1x
 # picture scaled up. Twice the pixels to render and encode, so only on a
 # machine with a second vCPU -- Chrome at DPR 2 takes a whole one on its own
-# -- and only when the server allows it, in the file it delivers beside the
-# relay token (`browser_view_service._relay`).
+# -- and only when the server allows it, in the file it delivers on every
+# session beside the browser proxy decision
+# (`workspace_runtime_bundle._ensure_browser_proxy`).
 #
-# The framebuffer ceiling follows the CPUs, not the flag: Xvfb's ceiling is
-# fixed when it starts, and the flag can turn on later. A two-vCPU machine
-# allocates room for a doubled preset from the start.
+# **Decided once, when the display is created, and fixed for its life.**
+# Density rides in the browser's launch digest below, and a digest change
+# restarts Chrome with `close --all`. It used to be re-decided on every run
+# from a file only the view path delivered, so a person opening the screen
+# changed the answer and the agent's next command restarted its Chrome
+# mid-task, tabs and all. Now the decision is written beside the X server
+# when this script starts one, and every later run reads it back while that
+# server lives: opening, closing or reconnecting a view never changes it, and
+# a server-side change to the flag reaches a machine when its display is next
+# created (a resume, a new machine).
+#
+# The cost is the agent's too: it is the agent's Chrome, so its screenshots
+# are taken at the same density. See docs/architecture/sandbox/live-browser-view.md.
+#
+# The framebuffer ceiling follows the CPUs, not the flag: it is fixed when
+# Xvfb starts, so a two-vCPU machine allocates room for a doubled preset.
 cpus_x100() {
   local quota period
-  if read -r quota period < /sys/fs/cgroup/cpu.max 2>/dev/null && [ "$quota" != "max" ]; then
+  if read -r quota period < "${LEMMA_CPU_MAX_FILE:-/sys/fs/cgroup/cpu.max}" 2>/dev/null && [ "$quota" != "max" ]; then
     echo $((quota * 100 / period))
   else
     echo $(($(nproc 2>/dev/null || echo 1) * 100))
   fi
 }
-DENSITY=1
-if [ "$(cpus_x100)" -ge 200 ]; then
+DISPLAY_DECISION_FILE="${LEMMA_DISPLAY_DECISION_FILE:-/tmp/lemma-relay/display.json}"
+# Beside the X server's own lock, not under /tmp/lemma-browser: quiesce
+# sweeps that directory while an E2B pause can keep Xvfb alive, and the
+# stamp is only ever believed while the server it describes is running.
+DISPLAY_DENSITY_FILE="${LEMMA_DISPLAY_DENSITY_FILE:-/tmp/.X${DISPLAY_NUMBER}-lemma-density}"
+DENSITY_STAMP="${LEMMA_BROWSER_DENSITY_STAMP:-/tmp/lemma-browser/density.active}"
+DENSE=0
+[ "$(cpus_x100)" -ge 200 ] && DENSE=1
+if [ "$DENSE" = "1" ]; then
   SCREEN="${WORKSPACE_XVFB_DENSE_MAX_SCREEN:-2880x2400x24}"
-  if grep -Eq '"native_density": *true' /tmp/lemma-relay/display.json 2>/dev/null; then
+fi
+read_density() {
+  local value=""
+  [ -r "$1" ] && { IFS= read -r value < "$1" || true; }
+  [ "$value" = "2" ] && echo 2 || echo 1
+}
+if pgrep -f "Xvfb ${DISPLAY_VALUE} " >/dev/null 2>&1; then
+  # The display exists: keep what it was created with. A display started by
+  # an older copy of this script has no stamp, and what its Chrome was
+  # launched at is the next best record -- either way nothing restarts.
+  if [ -r "$DISPLAY_DENSITY_FILE" ]; then
+    DENSITY="$(read_density "$DISPLAY_DENSITY_FILE")"
+  else
+    DENSITY="$(read_density "$DENSITY_STAMP")"
+  fi
+else
+  DENSITY=1
+  if [ "$DENSE" = "1" ] \
+    && grep -Eq '"native_density": *true' "$DISPLAY_DECISION_FILE" 2>/dev/null; then
     DENSITY=2
   fi
 fi
-DENSITY_STAMP="/tmp/lemma-browser/density.active"
 PROFILE_DIR="${AGENT_BROWSER_PROFILE:-/home/user/.lemma/browser/profile}"
 RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/lemma-browser/runtime}"
 CONFIG_PATH="${AGENT_BROWSER_CONFIG:-/tmp/lemma-browser/config.json}"
 EXECUTABLE_PATH="${AGENT_BROWSER_EXECUTABLE_PATH:-/usr/local/bin/workspace-chrome}"
-DISPLAY_NUMBER="${DISPLAY_VALUE#:}"
-DISPLAY_NUMBER="${DISPLAY_NUMBER%%.*}"
 HOME_DIR="${HOME:-/home/user}"
 if ! mkdir -p "$HOME_DIR" 2>/dev/null || [ ! -w "$HOME_DIR" ]; then
   HOME_DIR="/tmp/lemma-home-${UID:-10001}"
@@ -384,6 +422,8 @@ if ! pgrep -f "Xvfb ${DISPLAY_VALUE} " >/dev/null 2>&1; then
   # the viewer's shape is the whole point of `/display:resize`.
   setsid nohup Xvfb "$DISPLAY_VALUE" -screen 0 "$SCREEN" -ac +extension RANDR \
     >/tmp/lemma-xvfb.log 2>&1 < /dev/null &
+  # The density this display is created with, for every later run to keep.
+  printf '%s\n' "$DENSITY" > "$DISPLAY_DENSITY_FILE" 2>/dev/null || true
   # Waited for, not slept through. Xvfb binds in ~23ms on an idle native
   # container, so 0.4s looked generous -- but it is a fixed guess either way,
   # and on a loaded or emulated machine losing that guess costs a failed browser

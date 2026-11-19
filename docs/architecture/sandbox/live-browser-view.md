@@ -60,8 +60,10 @@ The pane picks a transport per mount (`stream.ts`, `chooseTransport`):
 | `webrtc` | yes | WebRTC only, retried; for testing the streamer alone |
 
 An image built before the streamer existed answers `/rtc` with close code
-**4427**, and so does the API when no TURN relay is configured; the pane
-treats 4427 as "use VNC" and says nothing.
+**4427**, and so does a machine whose streamer would not start, and the API
+when no TURN relay is configured; the pane treats 4427 as "use VNC" and says
+nothing. A streamer that failed is not 1011: the pane retries 1011, and each
+retry ran the start again and minted TURN credentials for it.
 
 ## Opening the view
 
@@ -113,18 +115,46 @@ message set, and a watcher has no input path at all.**
   control ticket only for a viewer who may drive.
 - In the streamer, a `view` peer's `input` data channel is **closed unread**.
   The controller's channel accepts only `m` (pointer), `b` (button), `w`
-  (wheel), `k` (keysym), `txt` (composed text), `paste` (clipboard, then
-  Ctrl+V) and `size` (a preset): strict JSON, unknown fields refused, sizes
+  (wheel), `k` (keysym), `txt` (composed text) and `paste` (clipboard, then
+  Ctrl+V; its own budget of two a second, and the text leaves the machine's
+  clipboard ten seconds later): strict JSON, unknown fields refused, sizes
   capped, rate-limited, keys released when control changes. Nothing in the set
-  runs a command, reaches a file or speaks CDP. One controller at a time; a
-  newer control ticket revokes the older one.
+  runs a command, reaches a file or speaks CDP. There is no size message: the
+  display's size goes through the resize lease below, on either transport.
+  One controller at a time; a newer control ticket revokes the older one, and
+  a control ticket must name the same viewer as the socket's first ticket.
+- `/signal` refuses any request carrying an `Origin` header. The relay sends
+  none; a page in the machine's own Chrome, which can reach that loopback
+  port, always does.
+- **Clipboard over VNC is inbound only.** RFB is shared, so the VNC server's
+  clipboard updates (ServerCutText) reached every socket, watchers included.
+  The server is started with `-SendCutText=0` (TigerVNC) or `-seldir recv`
+  (x11vnc): a controller can paste in, and nothing the agent or a driver
+  copies is sent out to anyone watching.
+
+**Watching needs `use`.** The screen shows whatever is signed in, so the view
+socket — either mode, and the TURN credentials it hands out — needs `use` of
+the machine; a pod member with `status` only sees whether the browser runs,
+not the picture, not who is watching and not who holds the size
+([machines.md](../machines.md#who-may-do-what)).
 
 ## TURN
 
 Both ends are **relay-only**: the streamer and the browser each allocate on
 TURN and offer no host candidate. Credentials are minted per connection by a
 `TurnProvider` (`browser_stream_turn.py`) and expire
-(`TURN_CREDENTIAL_TTL_SECONDS`); the long-lived secret never leaves the API.
+(`TURN_CREDENTIAL_TTL_SECONDS`, an hour by default); the long-lived secret
+never leaves the API. A relay re-checks them when an allocation is refreshed,
+so a view that outlives them reconnects and is minted fresh ones. A viewer
+reconnecting to the same machine within a minute is handed the same ones
+again (`browser_view_rtc.ICE_REUSE_SECONDS`, in Redis) rather than costing two
+more provider calls.
+
+**Relay-only is a cost as well as a default.** Every byte of every WebRTC view
+crosses the TURN provider, both legs, and a hosted provider bills that egress;
+there is no direct path to fall back on that would be cheaper. It is the right
+security default — a sandbox's addresses are nobody's business — and it is the
+rollout's running cost, which grows with viewers × minutes watched × bitrate.
 
 - `TURN_PROVIDER=cloudflare`: Cloudflare Realtime TURN
   (`CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN`).
@@ -147,17 +177,45 @@ connecting or from the toolbar.
 
 A preset is applied by the viewer **holding the resize lease**: the relay, the
 one process that sees every viewer's socket, gives it to the first controlling
-viewer to ask and keeps it while that viewer's socket is open and in control.
-A watcher is told to take control first; a second controller is told somebody
-else holds the size. When the last viewer leaves the display goes back to its
+viewer to ask and keeps it while that viewer's socket is open and in control,
+until somebody else takes control. That last clause is for VNC: a VNC control
+socket is in control for as long as it is open, because RFB input cannot be
+taken back, and without it would hold the size against a WebRTC viewer who had
+since taken the wheel. A watcher is told to take control first; a second
+controller is told somebody else holds the size. The lease is the only way to
+change the size: the streamer takes no size message. When the last viewer leaves the display goes back to its
 resting size, the Desktop preset, so an agent's screenshots never inherit a
 phone's shape.
 
 **Native density.** On a machine with at least two vCPUs, and when
 `BROWSER_NATIVE_DENSITY` allows it, Chrome runs at a device scale factor of 2
 and a preset is doubled in device pixels. The server's half of the decision is
-delivered as `/tmp/lemma-relay/display.json`; the machine's half is its own
-CPU quota (`lemma-ensure-display`). It takes effect at the next browser start.
+delivered as `/tmp/lemma-relay/display.json` on every session, on the agent's
+path as well as the viewer's (`workspace_runtime_bundle._ensure_browser_proxy`);
+the machine's half is its own CPU quota.
+
+**Density is fixed per machine when its display is created.**
+`lemma-ensure-display` decides it when it starts Xvfb, writes it beside the X
+server's lock, and every later run reads it back for as long as that server
+lives. Density is part of the browser's launch digest, and a digest change
+restarts Chrome (`close --all`), so a density that could change under a running
+display restarted the agent's Chrome mid-task — tabs and all — the first time
+somebody opened the screen. Now opening, closing or reconnecting a view never
+changes it; a change to `BROWSER_NATIVE_DENSITY` reaches a machine the next
+time its display is made (a resume, a new machine).
+
+It is the agent's Chrome too: there is one browser, so on a dense machine the
+agent's screenshots are taken at twice the pixels in each direction, which a
+vision model pays for. That is the trade `BROWSER_NATIVE_DENSITY` controls.
+
+**One encoder per codec.** Every viewer of a codec shares one encoder, whose
+bitrate is the minimum of the viewers' congestion estimates: one viewer on a
+poor link lowers the picture for everybody watching that machine, in exchange
+for the machine's CPU staying flat as viewers join. **H.264** is preferred
+because Safari and iOS decode it in hardware; it is patent-encumbered, which
+is a licensing question for whoever ships the encoder. VP8 is royalty-free,
+mandatory in every WebRTC stack, and already the fallback
+([streamer README](../../../lemma-backend/sandbox-images/streamer/README.md)).
 
 ## The toolbar
 

@@ -166,14 +166,16 @@ func (h *Hub) Serve(ctx context.Context, ws *websocket.Conn) {
 			_ = pc.AddICECandidate(webrtc.ICECandidateInit{Candidate: *msg.Candidate, SDPMid: msg.SDPMid, SDPMLineIndex: msg.SDPMLineIndex})
 		case "control":
 			c, err := h.cfg.Verifier.Verify(msg.Ticket)
-			if err != nil || c.Mode != ticket.ModeControl {
+			if err == nil {
+				err = controlFor(p.claims, c)
+			}
+			if err != nil {
 				log.Printf("refusing control for %s: %v", p.claims.Sub, err)
 				p.fail("ticket", "control ticket refused")
 				return
 			}
 			p.mu.Lock()
 			p.control = true
-			p.claims.Sub = c.Sub
 			p.mu.Unlock()
 			h.takeControl(p)
 			p.send(signal{T: "mode", Mode: ticket.ModeControl})
@@ -191,6 +193,19 @@ func (h *Hub) Serve(ctx context.Context, ws *websocket.Conn) {
 			return
 		}
 	}
+}
+
+// controlFor checks a control ticket against the viewer this socket already
+// is. A ticket for somebody else must not turn this socket into theirs: the
+// viewer name is what the relay's resize lease and every log line follow.
+func controlFor(current, next ticket.Claims) error {
+	if next.Mode != ticket.ModeControl {
+		return errors.New("not a control ticket")
+	}
+	if next.Sub != current.Sub {
+		return errors.New("a control ticket for a different viewer")
+	}
+	return nil
 }
 
 func iceConfig(hello signal) (webrtc.Configuration, error) {

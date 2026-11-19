@@ -66,3 +66,36 @@ async def outside_text_decision(
     return AuthorizationDecision(
         False, OUTSIDE_TEXT_REQUIRES_APPROVAL, permission_id, resource
     )
+
+
+async def outside_text_hold(
+    ctx: Context,
+    permission_id: str,
+    resource: ResourceRef | None = None,
+) -> AuthorizationDecision | None:
+    """The gate with the person's approvals as the authorizer reads them: a
+    refusal their approval answers, or ``None`` to go on.
+
+    The authorizer asks it of every check a delegated context makes. It is
+    public for an access decided *without* the authorizer -- a person's own
+    machine, which is no pod's resource -- so a run reading strangers' words
+    is held there exactly as on a pod machine: the same mark, the same
+    approvals, one-time and for the conversation alike.
+    """
+    # Lazily: the authorizer imports this module.
+    from app.core.authorization.authorizer import _session_approval
+
+    delegation = ctx.delegation
+    if delegation is None:
+        return None
+    session_id = delegation.session_id
+
+    async def approved(permission: str) -> bool:
+        return await _session_approval(
+            ctx,
+            session_id=session_id,
+            workload_actor_id=ctx.actor_id,
+            permission_id=permission,
+        )
+
+    return await outside_text_decision(ctx, permission_id, resource, approved=approved)

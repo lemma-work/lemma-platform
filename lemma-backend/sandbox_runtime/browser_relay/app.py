@@ -492,20 +492,22 @@ def create_app() -> FastAPI:
         """One WebRTC viewer's signalling, carried to the streamer.
 
         The same admission as `/vnc` -- token, mode, a running browser -- and
-        then the streamer instead of the VNC chain. An image built before the
-        streamer existed closes with `CLOSE_NO_STREAMER`, which the pane reads
-        as "use VNC" rather than as a fault.
+        then the streamer instead of the VNC chain. No streamer -- an image
+        built before it existed, or one that would not start -- closes with
+        `CLOSE_NO_STREAMER`, which the pane reads as "use VNC" rather than as
+        a fault.
+
+        A streamer that *failed* closes the same way, not with 1011. 1011 is
+        the code the pane retries, and every retry ran the start again (up to
+        `_START_TIMEOUT_SECONDS`) and minted fresh TURN credentials, for ever,
+        for a machine VNC could have shown on the first attempt.
         """
         session_name = await _admit(websocket, mode=mode, session=session)
         if session_name is None:
             return
         state = await ensure_streamer()
         if state != "ready":
-            await _refuse(
-                websocket,
-                CLOSE_NO_STREAMER if state == "absent" else CLOSE_UPSTREAM_GONE,
-                f"the streamer is {state}",
-            )
+            await _refuse(websocket, CLOSE_NO_STREAMER, f"the streamer is {state}")
             return
         await websocket.accept()
         name = viewer_name(viewer)

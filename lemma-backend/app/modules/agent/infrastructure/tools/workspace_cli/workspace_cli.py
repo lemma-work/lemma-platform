@@ -3,12 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import NAMESPACE_URL, uuid5
 
+from pydantic import BaseModel
+
+from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger
 from app.modules.agent.domain.outsiders import refuse_owner_workspace
 from app.modules.agent.infrastructure.tools.authority import workspace_principal
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.services.run_phase_spans import run_phase
+from app.modules.agent.infrastructure.tools.approval.denials import remember_denial
 from app.modules.agent.infrastructure.tools.tool_errors import (
+    APPROVAL_CODES,
+    approval_error_result,
     safe_described_error,
 )
 from app.modules.agent.infrastructure.tools.workspace_cli.models import (
@@ -394,6 +400,7 @@ async def exec_command_internal(
             error=result.get("error"),
         )
     except Exception as exc:
+        await _remember_if_held(ctx, exc, tool_name="exec_command", request=request)
         return _workspace_tool_failure(
             exc,
             operation="exec_command",
@@ -538,7 +545,22 @@ async def execute_python_internal(ctx: ToolContext, request: ExecutePythonReques
         trimmed.stdout = _with_notice(trimmed.stdout, notice=project_notice)
         return trimmed
     except Exception as exc:
+        await _remember_if_held(ctx, exc, tool_name="execute_python", request=request)
         return _python_workspace_tool_failure(exc, operation="execute_python")
+
+
+async def _remember_if_held(
+    ctx: ToolContext, exc: Exception, *, tool_name: str, request: BaseModel
+) -> None:
+    """A refusal the person can answer -- a machine held while the run reads
+    what people outside the pod wrote -- written down for this exact call, so
+    the ``request_approval`` it leads to lends what was refused and nothing
+    the model copied into it (``approval/denials``)."""
+    if isinstance(exc, DomainError) and exc.code in APPROVAL_CODES:
+        await remember_denial(
+            ctx,
+            approval_error_result(exc, tool_name=tool_name, args=request.model_dump()),
+        )
 
 
 # Re-exported: `view_image` lives in its own module for size, and every caller

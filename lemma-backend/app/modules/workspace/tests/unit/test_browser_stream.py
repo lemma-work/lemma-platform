@@ -285,3 +285,63 @@ def test_the_browser_is_never_handed_a_ticket() -> None:
     hello = json.loads(hello_message(_VIEWER, servers))
     assert _verify(hello["ticket"], stream_key("sbx-1"))["mode"] == "view"
     assert hello["policy"] == "relay"
+
+
+class _CountingTurn:
+    """A provider that mints a different credential every time it is asked."""
+
+    def __init__(self) -> None:
+        self.minted = 0
+
+    async def ice_servers(self, *, label: str, ttl_seconds: int):
+        self.minted += 1
+        return [{"urls": ["turns:t.test:443"], "username": label, "credential": "c"}]
+
+
+def _ice_reuse():
+    """A real reuse cache, on a Redis that lives in this process."""
+    from fakeredis import aioredis as fake_aioredis
+
+    from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+
+    cache = RedisJsonCache("redis://unused", "test:ice", ttl_seconds=60)
+    cache._redis = fake_aioredis.FakeRedis(decode_responses=True)
+    return cache
+
+
+async def test_a_reconnecting_viewer_is_handed_the_same_credentials() -> None:
+    """Every socket open minted two credentials -- two Cloudflare calls -- and a
+    pane reconnecting after a blip opens several in a row."""
+    from app.modules.workspace.services.browser_view_rtc import ice_for
+
+    provider, reuse = _CountingTurn(), _ice_reuse()
+    first = await ice_for(_VIEWER, provider=provider, reuse=reuse)
+    again = await ice_for(_VIEWER, provider=provider, reuse=reuse)
+
+    assert provider.minted == 2
+    assert again == first
+
+
+async def test_credentials_are_never_shared_between_viewers_or_machines() -> None:
+    from dataclasses import replace
+
+    from app.modules.workspace.services.browser_view_rtc import ice_for
+
+    provider, reuse = _CountingTurn(), _ice_reuse()
+    mine = await ice_for(_VIEWER, provider=provider, reuse=reuse)
+    theirs = await ice_for(
+        replace(_VIEWER, sub="someone:else"), provider=provider, reuse=reuse
+    )
+    other_machine = await ice_for(
+        replace(_VIEWER, provider_id="sbx-2"), provider=provider, reuse=reuse
+    )
+
+    assert provider.minted == 6
+    assert mine != theirs and mine != other_machine
+
+
+def test_turn_credentials_are_short_lived_by_default() -> None:
+    from app.modules.workspace.config import WorkspaceSettings
+
+    field = WorkspaceSettings.model_fields["turn_credential_ttl_seconds"]
+    assert field.default <= 3600

@@ -10,6 +10,7 @@ package encode
 
 import (
 	"errors"
+	"time"
 
 	"lemma-streamer/internal/convert"
 )
@@ -48,4 +49,34 @@ func New(codec string, w, h, fps, bps int) (Encoder, error) {
 		return newVP8(w, h, fps, bps)
 	}
 	return nil, errors.New("unknown codec " + codec)
+}
+
+// now is the encoders' clock; a test replaces it to play a frame rate.
+var now = time.Now
+
+// frameClock stamps frames in milliseconds of real time, so both encoders'
+// rate control spends bits per second rather than per frame. The capture rate
+// changes under CPU pressure (`rate.FPSFor`) without the encoder being
+// reopened, and a frame count read as a fixed rate under-spent the bitrate
+// by the same factor the capture had dropped.
+type frameClock struct {
+	start time.Time
+	last  int64
+}
+
+func newFrameClock() frameClock { return frameClock{start: now(), last: -1} }
+
+// next is this frame's timestamp and how long since the previous one, both
+// in milliseconds, strictly increasing and at least one apart.
+func (c *frameClock) next() (pts, duration int64) {
+	pts = now().Sub(c.start).Milliseconds()
+	if pts <= c.last {
+		pts = c.last + 1
+	}
+	duration = pts - c.last
+	if c.last < 0 {
+		duration = 1
+	}
+	c.last = pts
+	return pts, duration
 }

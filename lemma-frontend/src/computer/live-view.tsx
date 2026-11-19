@@ -8,7 +8,10 @@ import { LiveScreen } from "./live-screen";
 import { LiveScreenRtc } from "./live-screen-rtc";
 import { newViewerId, presetNamed, type PresetName } from "./presets";
 import { sendStreamBeacon, useBrowserResize } from "./queries";
-import { chooseTransport, rtcSupported, type FallbackReason, type StreamSetting, type Transport } from "./stream";
+import {
+    RTC_FAILURES_BEFORE_VNC, chooseTransport, connectMode, rtcFailureGoesToVnc, rtcSupported,
+    type FallbackReason, type StreamSetting, type Transport,
+} from "./stream";
 
 /** The machine's screen, over whichever transport this person gets.
  *
@@ -29,7 +32,7 @@ import { chooseTransport, rtcSupported, type FallbackReason, type StreamSetting,
  */
 export function LiveView({
     mode, origin, conversationId, reopen = 0, setting, density = 1, preset, wantControl,
-    onState, onControl, onAgentDriving, onResizeRefused, onTransport,
+    onState, onControl, onAgentDriving, onResizeRefused, onTransport, onRevoked, onMachineClipboard,
 }: {
     /** What the pane is for: watching or, for a sign-in, typing. */
     mode: "view" | "control";
@@ -51,6 +54,10 @@ export function LiveView({
     onAgentDriving?: (driving: boolean) => void;
     onResizeRefused?: (reason: string) => void;
     onTransport?: (transport: Transport, fallback: FallbackReason | null) => void;
+    /** Somebody else took control from this pane (WebRTC only). */
+    onRevoked?: () => void;
+    /** The machine's latest clipboard, for a "Copy from machine" action. */
+    onMachineClipboard?: (text: string) => void;
 }) {
     const viewer = useMemo(() => newViewerId(), []);
     const choice = useMemo(
@@ -88,19 +95,27 @@ export function LiveView({
         };
     }, [choice, density]);
 
+    /* WebRTC asked for alone retries in place; this counts how often in a
+       row, so it too ends on VNC rather than retrying forever. */
+    const forcedFailures = useRef(0);
+
     const reportState = (next: LiveState) => {
-        if (next === "live") report.current?.firstFrame();
+        if (next === "live") {
+            report.current?.firstFrame();
+            forcedFailures.current = 0;
+        }
         setState(next);
         handlers.current.onState(next);
     };
 
-    const fellBack = (reason: FallbackReason) => {
-        if (choice.fallback) {
+    const fellBack = (reason: FallbackReason, gaveUp = false) => {
+        const done = gaveUp || (!choice.fallback && ++forcedFailures.current >= RTC_FAILURES_BEFORE_VNC);
+        if (rtcFailureGoesToVnc(reason, { fallback: choice.fallback, gaveUp: done })) {
             report.current?.fellBack(reason);
             setTransport("vnc");
             return;
         }
-        /* WebRTC was asked for alone: no VNC to fall to, so try again. */
+        /* WebRTC was asked for alone and may still work: try it again. */
         reportState("lost");
         setTimeout(() => setRetry((n) => n + 1), retryDelay(1));
     };
@@ -120,7 +135,6 @@ export function LiveView({
             {setting === undefined ? null : transport === "webrtc" ? (
                 <LiveScreenRtc
                     key={retry}
-                    mode={mode}
                     origin={origin}
                     conversationId={conversationId}
                     reopen={reopen}
@@ -134,14 +148,17 @@ export function LiveView({
                     }}
                     onAgentDriving={onAgentDriving}
                     onStats={(stats) => report.current?.sample(stats)}
+                    onRevoked={onRevoked}
+                    onMachineClipboard={onMachineClipboard}
                 />
             ) : (
                 <LiveScreen
-                    mode={wantsControl ? "control" : "view"}
+                    mode={connectMode(wantsControl)}
                     origin={origin}
                     conversationId={conversationId}
                     reopen={reopen}
                     viewer={viewer}
+                    onMachineClipboard={onMachineClipboard}
                     onState={(next) => {
                         reportState(next);
                         if (next === "live") handlers.current.onControl?.(wantsControl, true);

@@ -84,3 +84,39 @@ export function socketUrl(
     if (options.accessToken) query.set("access_token", options.accessToken);
     return `${base}/machines/me/browser/view?${query.toString()}`;
 }
+
+/** How long the page may be hidden before its screen disconnects. */
+export const HIDDEN_DISCONNECT_MS = 60_000;
+
+interface HidingDocument {
+    hidden: boolean;
+    addEventListener(type: "visibilitychange", listener: () => void): void;
+    removeEventListener(type: "visibilitychange", listener: () => void): void;
+}
+
+/** Calls `onAway(true)` once the document has been hidden for `delayMs`, and
+ *  `onAway(false)` as soon as it is shown again after that.
+ *
+ *  An open screen is a socket that keeps the machine awake and a stream the
+ *  machine keeps encoding, so a tab left in the background spends compute and
+ *  relay traffic on nobody. A minute, not at once, so switching tabs to copy
+ *  something does not cost a reconnect. Returns the cleanup.
+ */
+export function watchHidden(doc: HidingDocument, onAway: (away: boolean) => void, delayMs = HIDDEN_DISCONNECT_MS): () => void {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let away = false;
+    const update = () => {
+        if (doc.hidden) {
+            if (!timer && !away) timer = setTimeout(() => { timer = null; away = true; onAway(true); }, delayMs);
+            return;
+        }
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (away) { away = false; onAway(false); }
+    };
+    doc.addEventListener("visibilitychange", update);
+    update();
+    return () => {
+        doc.removeEventListener("visibilitychange", update);
+        if (timer) clearTimeout(timer);
+    };
+}

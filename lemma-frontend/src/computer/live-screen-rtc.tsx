@@ -6,8 +6,8 @@ import { copyText } from "@/desktop/clipboard";
 import { isSettled, retryDelay, socketUrl, stateFromClose, type LiveState } from "./live";
 import { RtcSession, type CursorShape, type StreamStats } from "./rtc-session";
 import {
-    WheelSteps, buttonFor, isMac, keyBelongsToMachine, keysymFor, pasteMessage, textPieces, toScreen,
-    type FallbackReason,
+    MachineClipboard, WheelSteps, afterRtcClose, buttonFor, connectMode, isCopyChord, isMac, keyBelongsToMachine, keysymFor,
+    pasteMessage, textPieces, toScreen, type FallbackReason,
 } from "./stream";
 
 /** The machine's screen over WebRTC: a video, and a data channel for input.
@@ -30,29 +30,41 @@ import {
  *  makes a remote screen feel remote.
  */
 export function LiveScreenRtc({
-    mode, origin, conversationId, reopen = 0, viewer, wantControl, onState, onFallback, onControl, onAgentDriving, onStats,
+    origin, conversationId, reopen = 0, viewer, wantControl, onState, onFallback, onControl, onAgentDriving, onStats,
+    onRevoked, onMachineClipboard,
 }: {
-    mode: "view" | "control";
     origin?: string | null;
     conversationId?: string | null;
     reopen?: number;
     viewer: string;
     /** Whether this pane wants to drive. Changing it takes or gives back
-     *  control on the open connection; nothing reconnects. */
+     *  control on the open connection; nothing reconnects. A reconnect asks
+     *  for whatever it is then (`connectMode`), never for more. */
     wantControl: boolean;
     onState: (state: LiveState) => void;
-    onFallback: (reason: FallbackReason) => void;
+    /** WebRTC is not working here. `gaveUp` when it is because connects kept
+     *  failing, rather than one reason the machine gave. */
+    onFallback: (reason: FallbackReason, gaveUp?: boolean) => void;
     onControl?: (driving: boolean, mayDrive: boolean) => void;
     onAgentDriving?: (driving: boolean) => void;
     /** Sampled while live, for the beacon. */
     onStats?: (stats: StreamStats) => void;
+    /** Somebody else took control from this pane. */
+    onRevoked?: () => void;
+    /** The machine's clipboard changed. Held, never written here unasked. */
+    onMachineClipboard?: (text: string) => void;
 }) {
     const holder = useRef<HTMLDivElement>(null);
     const video = useRef<HTMLVideoElement>(null);
     const keyboard = useRef<HTMLTextAreaElement>(null);
     const session = useRef<RtcSession | null>(null);
-    const handlers = useRef({ onState, onFallback, onControl, onAgentDriving, onStats });
-    handlers.current = { onState, onFallback, onControl, onAgentDriving, onStats };
+    const handlers = useRef({ onState, onFallback, onControl, onAgentDriving, onStats, onRevoked, onMachineClipboard });
+    handlers.current = { onState, onFallback, onControl, onAgentDriving, onStats, onRevoked, onMachineClipboard };
+    /* Read at each connect, not a dependency of it: changing it on an open
+       connection is a take or a release, not a reconnect. */
+    const wants = useRef(wantControl);
+    wants.current = wantControl;
+    const clipboard = useRef(new MachineClipboard());
     const screen = useRef({ width: 0, height: 0 });
     const cursors = useRef(new Map<number, CursorShape>());
     const [cursor, setCursor] = useState<CursorShape | null>(null);
@@ -63,6 +75,7 @@ export function LiveScreenRtc({
     useEffect(() => {
         let stopped = false;
         let attempt = 0;
+        let failures = 0;
         let timer: ReturnType<typeof setTimeout> | null = null;
         let sampler: ReturnType<typeof setInterval> | null = null;
 
@@ -70,7 +83,7 @@ export function LiveScreenRtc({
             if (stopped) return;
             handlers.current.onState("connecting");
             const url = socketUrl(apiUrl(), {
-                mode, origin, conversationId, accessToken: sessionToken(), transport: "rtc", viewer,
+                mode: connectMode(wants.current), origin, conversationId, accessToken: sessionToken(), transport: "rtc", viewer,
             });
             const current: RtcSession = new RtcSession(url, {
                 onStream: (stream) => {
@@ -97,20 +110,39 @@ export function LiveScreenRtc({
                 },
                 onPointer: (x, y) => setPointer({ x, y }),
                 onScreenSize: (width, height) => { screen.current = { width, height }; },
-                onClipboard: (text) => { void copyText(text).catch(() => undefined); },
+                onClipboard: (text) => {
+                    handlers.current.onMachineClipboard?.(text);
+                    const asked = clipboard.current.received(text, Date.now());
+                    if (asked !== null) void copyText(asked).catch(() => undefined);
+                },
                 onAgentDriving: (isDriving) => handlers.current.onAgentDriving?.(isDriving),
+                onRevoked: () => {
+                    /* So a reconnect before the pane hears about it asks to
+                       watch, not to take the keyboard straight back. */
+                    wants.current = false;
+                    handlers.current.onRevoked?.();
+                },
                 onFallback: (reason) => {
                     if (stopped) return;
                     handlers.current.onFallback(reason);
                 },
-                onClosed: (code) => {
+                onClosed: (code, wasLive) => {
                     if (stopped || session.current !== current) return;
                     session.current = null;
                     if (sampler) clearInterval(sampler);
                     setDriving(false);
+                    /* The last frame stays on the video element after its
+                       media stops; a still picture is not a live one. */
+                    if (video.current) video.current.srcObject = null;
                     const state = stateFromClose(code);
+                    const next = afterRtcClose({ settled: isSettled(state), noBrowser: state === "no-browser", wasLive, failures });
+                    failures = next.failures;
+                    if (next.action === "vnc") {
+                        handlers.current.onFallback("error", true);
+                        return;
+                    }
                     handlers.current.onState(state);
-                    if (!isSettled(state)) timer = setTimeout(connect, retryDelay(attempt++));
+                    if (next.action !== "settle") timer = setTimeout(connect, retryDelay(attempt++));
                 },
             });
             session.current = current;
@@ -135,7 +167,7 @@ export function LiveScreenRtc({
             session.current?.close();
             session.current = null;
         };
-    }, [mode, origin, conversationId, reopen, viewer]);
+    }, [origin, conversationId, reopen, viewer]);
 
     /* Take or give back control on the connection that is already open. */
     useEffect(() => {
@@ -155,7 +187,7 @@ export function LiveScreenRtc({
         return () => element.removeEventListener("loadeddata", shown);
     }, []);
 
-    useInput({ holder, video, keyboard, session, screen, driving, setTyping });
+    useInput({ holder, video, keyboard, session, screen, clipboard, driving, setTyping });
 
     const hotspot = cursor ? `${cursor.x} ${cursor.y}` : "";
     const cursorStyle = driving && cursor?.png ? `url(data:image/png;base64,${cursor.png}) ${hotspot}, default` : undefined;
@@ -184,7 +216,7 @@ export function LiveScreenRtc({
                 spellCheck={false}
                 tabIndex={-1}
             />
-            {mode === "control" && driving && !typing && <p className="screen-hint">Click the page to type in it</p>}
+            {driving && !typing && <p className="screen-hint">Click the page to type in it</p>}
         </div>
     );
 }
@@ -218,12 +250,13 @@ function RemotePointer({ cursor, pointer, screen, holder }: {
  *  only here: a pinch is how a person reads small text on a phone, not
  *  something the page should see.
  */
-function useInput({ holder, video, keyboard, session, screen, driving, setTyping }: {
+function useInput({ holder, video, keyboard, session, screen, clipboard, driving, setTyping }: {
     holder: React.RefObject<HTMLDivElement | null>;
     video: React.RefObject<HTMLVideoElement | null>;
     keyboard: React.RefObject<HTMLTextAreaElement | null>;
     session: React.RefObject<RtcSession | null>;
     screen: React.RefObject<{ width: number; height: number }>;
+    clipboard: React.RefObject<MachineClipboard>;
     driving: boolean;
     setTyping: (typing: boolean) => void;
 }) {
@@ -308,7 +341,11 @@ function useInput({ holder, video, keyboard, session, screen, driving, setTyping
             event.preventDefault();
             send({ t: "k", k: keysym, d: down });
         };
-        const onKeyDown = (event: KeyboardEvent) => sendKey(event, true);
+        const onKeyDown = (event: KeyboardEvent) => {
+            /* The one moment the machine's next clipboard may come here. */
+            if (isCopyChord(event, { mac })) clipboard.current.arm(Date.now());
+            sendKey(event, true);
+        };
         const onKeyUp = (event: KeyboardEvent) => sendKey(event, false);
         /* What a keydown could not say: an IME's composed text, and a phone's
            on-screen keyboard, which reports "Unidentified" keys and delivers
@@ -369,5 +406,5 @@ function useInput({ holder, video, keyboard, session, screen, driving, setTyping
             keys.removeEventListener("focus", onFocus);
             keys.removeEventListener("blur", onBlur);
         };
-    }, [holder, video, keyboard, session, screen, driving, setTyping]);
+    }, [holder, video, keyboard, session, screen, clipboard, driving, setTyping]);
 }

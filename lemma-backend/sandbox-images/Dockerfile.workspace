@@ -24,6 +24,8 @@ ARG STREAMER_GO_IMAGE=golang:1.25-trixie@sha256:2c4c60ef415fbfa5e90300722293bef3
 FROM ${UV_IMAGE} AS uv-runtime
 
 # The WebRTC streamer behind the live browser view (`sandbox-images/streamer`).
+# Go 1.25.14 at that digest, the same release the E2B template downloads
+# (`templates/e2b/build_templates.py`, `GO_VERSION`).
 # Go with cgo for x264 and libvpx, both linked statically, so the binary needs
 # only libc at run time. Built here rather than downloaded: it is our code, and
 # the image is where its version and the relay's are pinned together.

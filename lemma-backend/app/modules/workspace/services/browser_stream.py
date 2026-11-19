@@ -118,8 +118,9 @@ def transport_for(user_id: UUID) -> Transport:
 
 
 #: Where the sandbox reads whether it may stream at native density. A file
-#: delivered beside the relay token, so turning the setting off reaches a
-#: running machine at its next browser start without a new image.
+#: delivered on every session (and again beside the relay token), read once,
+#: when the display is created: turning the setting off reaches a machine the
+#: next time its display is made, never under a running browser.
 DISPLAY_DECISION_PATH = "/tmp/lemma-relay/display.json"
 
 
@@ -128,7 +129,8 @@ def display_decision() -> bytes:
 
     The machine's half is its CPU count, which only it knows for certain (a
     container's quota is not its host's core count), so the sandbox decides
-    density 2 itself from this and from that (`lemma-ensure-display`).
+    density 2 itself from this and from that (`lemma-ensure-display`), once
+    per display, and keeps it until that display goes.
     """
     return json.dumps(
         {"native_density": workspace_settings.browser_native_density}

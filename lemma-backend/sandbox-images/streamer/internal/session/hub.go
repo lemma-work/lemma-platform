@@ -41,15 +41,21 @@ const agentWindow = 4 * time.Second
 // Config is what main supplies.
 type Config struct {
 	Display  string
-	Presets  []input.Preset
 	Verifier *ticket.Verifier
+}
+
+// injector is what the hub needs of `inject.Injector`: the one path to the
+// display, and letting go of whatever a controller left held.
+type injector interface {
+	Apply(input.Command) error
+	ReleaseAll()
 }
 
 type Hub struct {
 	cfg   Config
 	media *mediaAPI
 	cap   *capture.Capturer
-	inj   *inject.Injector
+	inj   injector
 
 	mu         sync.Mutex
 	peers      map[*Peer]bool
@@ -79,11 +85,12 @@ func NewHub(cfg Config) (*Hub, error) {
 	if err != nil {
 		return nil, err
 	}
-	h.inj, err = inject.New(cfg.Display)
+	inj, err := inject.New(cfg.Display)
 	if err != nil {
 		h.cap.Close()
 		return nil, err
 	}
+	h.inj = inj
 	go h.watchAgent()
 	go h.watchCPU()
 	return h, nil
@@ -130,7 +137,7 @@ func (h *Hub) IdleSince() time.Time {
 
 func (h *Hub) screen() input.Screen {
 	w, hh := h.cap.Size()
-	return input.Screen{W: w, H: hh, Presets: h.cfg.Presets}
+	return input.Screen{W: w, H: hh}
 }
 
 // ---- pipelines ------------------------------------------------------------

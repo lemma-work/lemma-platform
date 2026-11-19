@@ -17,7 +17,7 @@ import { useBrowserCommand, type BrowserCommand, type BrowserTab } from "./queri
  *  a person about to click knows somebody else's click may land first.
  */
 export function ScreenToolbar({
-    live, driving, mayDrive, agentDriving, watching, preset, sizeNote, onPreset, onTake, onGiveBack,
+    live, driving, mayDrive, agentDriving, watching, preset, sizeNote, onPreset, onTake, onGiveBack, onCopyFromMachine,
 }: {
     live: boolean;
     driving: boolean;
@@ -31,6 +31,9 @@ export function ScreenToolbar({
     onPreset: (preset: PresetName) => void;
     onTake: () => void;
     onGiveBack: () => void;
+    /** Copy the machine's clipboard to this computer's. Absent until the
+     *  machine has said what its clipboard holds. */
+    onCopyFromMachine?: () => void;
 }) {
     const command = useBrowserCommand();
     /* Its own mutation, so the five-second refresh never greys out the
@@ -129,6 +132,11 @@ export function ScreenToolbar({
                 <span className="screen-bar__watching" title={`${watching} panes are watching this screen`}>
                     <PeopleIcon size={14} /> {watching}
                 </span>
+            )}
+            {onCopyFromMachine && (
+                <button className="screen-bar__control" title="Copy what the machine last copied to this computer" onClick={onCopyFromMachine}>
+                    Copy from machine
+                </button>
             )}
             {mayDrive && (driving ? (
                 <button className="screen-bar__control" onClick={onGiveBack}>Give back</button>

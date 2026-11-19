@@ -2,9 +2,14 @@
 //
 // It is a closed set on purpose. The CDP relay this design replaced leaked its
 // input boundary because its vocabulary was Chrome's, and Chrome's grows. This
-// one is ours: a pointer, buttons, a wheel, keys, typed text, a paste and a
-// request for one of a few screen sizes. Nothing here runs a command, opens a
-// file or reaches the page's script. Adding a message is a code review.
+// one is ours: a pointer, buttons, a wheel, keys, typed text and a paste.
+// Nothing here runs a command, opens a file or reaches the page's script.
+// Adding a message is a code review.
+//
+// There is no screen size here. It used to be a `size` message that ran
+// `set-display-size` directly, around the relay's resize lease
+// (`browser_relay/display.py`), which is meant to be the one door: the pane
+// changes the size through the API, under the lease, on either transport.
 //
 // Parsing is strict: one JSON object, no unknown fields, no trailing bytes,
 // every value range-checked. Anything else is dropped and counted.
@@ -15,8 +20,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
-	"strings"
 	"unicode"
 	"unicode/utf8"
 )
@@ -29,7 +32,6 @@ const (
 	Key    = "k"
 	Text   = "txt"
 	Paste  = "paste"
-	Size   = "size"
 )
 
 // Frame size ceilings. The ordinary messages are tiny; only text and paste
@@ -53,38 +55,14 @@ type Command struct {
 	DY   int
 	Sym  uint32
 	S    string
+}
+
+// Screen is what the pointer must stay inside.
+type Screen struct {
 	W, H int
 }
 
-// Screen is what the pointer must stay inside and which sizes may be asked for.
-type Screen struct {
-	W, H    int
-	Presets []Preset
-}
-
-type Preset struct{ W, H int }
-
 var ErrRejected = errors.New("input rejected")
-
-// ParsePresets reads `1280x800,1440x900`. Malformed entries are skipped.
-func ParsePresets(s string) []Preset {
-	var out []Preset
-	for _, part := range strings.Split(s, ",") {
-		w, h, ok := strings.Cut(strings.TrimSpace(part), "x")
-		if !ok {
-			continue
-		}
-		wi, err1 := strconv.Atoi(w)
-		hi, err2 := strconv.Atoi(h)
-		if err1 != nil || err2 != nil || wi < 320 || hi < 240 || wi > 4096 || hi > 4096 {
-			continue
-		}
-		out = append(out, Preset{wi, hi})
-	}
-	return out
-}
-
-const DefaultPresets = "1280x800,1440x900,820x1180,390x844"
 
 // wire is every field any message may carry. Unknown fields fail decoding;
 // fields that belong to another kind are refused after it.
@@ -98,8 +76,6 @@ type wire struct {
 	DY *int    `json:"dy"`
 	K  *uint32 `json:"k"`
 	S  *string `json:"s"`
-	W  *int    `json:"w"`
-	H  *int    `json:"h"`
 }
 
 func reject(why string) error { return fmt.Errorf("%w: %s", ErrRejected, why) }
@@ -142,7 +118,6 @@ func Parse(raw []byte, screen Screen) (Command, error) {
 	has := map[string]bool{
 		"x": w.X != nil, "y": w.Y != nil, "b": w.B != nil, "d": w.D != nil,
 		"dx": w.DX != nil, "dy": w.DY != nil, "k": w.K != nil, "s": w.S != nil,
-		"w": w.W != nil, "h": w.H != nil,
 	}
 	only := func(fields ...string) error {
 		allowed := map[string]bool{}
@@ -228,16 +203,6 @@ func Parse(raw []byte, screen Screen) (Command, error) {
 			return Command{}, reject("paste empty or too large")
 		}
 		return Command{Kind: Paste, S: *w.S}, nil
-	case Size:
-		if err := only("w", "h"); err != nil {
-			return Command{}, err
-		}
-		for _, p := range screen.Presets {
-			if p.W == *w.W && p.H == *w.H {
-				return Command{Kind: Size, W: p.W, H: p.H}, nil
-			}
-		}
-		return Command{}, reject("size is not a preset")
 	}
 	return Command{}, reject("unknown type")
 }

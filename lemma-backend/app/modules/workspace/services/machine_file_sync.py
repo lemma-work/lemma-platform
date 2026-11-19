@@ -18,8 +18,10 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.workspace.domain.machine_errors import MachineConflict
-from app.modules.workspace.providers.runtime_client import WorkspaceRuntimeError
-from sandbox_runtime.errors import SandboxError
+from app.modules.workspace.providers.runtime_errors import (
+    WorkspaceRuntimeFileNotFound,
+)
+from sandbox_runtime.errors import SandboxPathNotFound
 from sandbox_runtime.protocol import FileKind
 
 
@@ -73,20 +75,25 @@ async def sync_from_pod(
         if facts is not None and facts.size_bytes > max_bytes:
             raise _too_large(max_bytes)
         found = await read_pod_file(uow, pod_id=pod_id, path=pod_path, ctx=ctx)
-    target = machine_path
     client = _client()
+    target = await _landing(client, machine_id, machine_path, found.name)
+    await client.write_file(machine_id, target, found.content, deadline_at=_deadline())
+    return [target], len(found.content)
+
+
+async def _landing(client, machine_id: UUID, machine_path: str, name: str) -> str:
+    """Where a file copied to ``machine_path`` lands: inside it when it is a
+    directory, at it otherwise -- absent being the ordinary case. Any other
+    failure, the machine itself not there among them, is not an answer."""
     try:
         stat = await client.stat_file(
             machine_id, machine_path, deadline_at=_deadline(30)
         )
-        if getattr(stat, "kind", None) == FileKind.DIRECTORY:
-            target = posixpath.join(machine_path, found.name)
-    except (SandboxError, WorkspaceRuntimeError) as exc:
-        # Absent is the ordinary case: the copy lands at the path given.
-        if "NotFound" not in type(exc).__name__:
-            raise
-    await client.write_file(machine_id, target, found.content, deadline_at=_deadline())
-    return [target], len(found.content)
+    except SandboxPathNotFound, WorkspaceRuntimeFileNotFound:
+        return machine_path
+    if getattr(stat, "kind", None) == FileKind.DIRECTORY:
+        return posixpath.join(machine_path, name)
+    return machine_path
 
 
 async def sync_to_pod(

@@ -26,8 +26,9 @@ static int lemma_vp8_open(lemma_vp8 *e, int w, int h, int fps, int kbps) {
 	if (vpx_codec_enc_config_default(vpx_codec_vp8_cx(), &e->cfg, 0)) return -1;
 	e->cfg.g_w = w;
 	e->cfg.g_h = h;
+	// Milliseconds, with each frame's real duration: see `frameClock`.
 	e->cfg.g_timebase.num = 1;
-	e->cfg.g_timebase.den = fps;
+	e->cfg.g_timebase.den = 1000;
 	e->cfg.rc_target_bitrate = kbps;
 	e->cfg.rc_end_usage = VPX_CBR;
 	e->cfg.g_lag_in_frames = 0;
@@ -58,9 +59,9 @@ static int lemma_vp8_open(lemma_vp8 *e, int w, int h, int fps, int kbps) {
 static uint8_t *lemma_vp8_plane(lemma_vp8 *e, int i) { return e->img.planes[i]; }
 
 // Encodes the wrapped image and gathers every frame packet into one buffer.
-static int lemma_vp8_encode(lemma_vp8 *e, int force, uint8_t **out) {
+static int lemma_vp8_encode(lemma_vp8 *e, int force, int64_t pts, unsigned long duration, uint8_t **out) {
 	vpx_enc_frame_flags_t flags = force ? VPX_EFLAG_FORCE_KF : 0;
-	if (vpx_codec_encode(&e->ctx, &e->img, e->pts++, 1, flags, VPX_DL_REALTIME)) return -1;
+	if (vpx_codec_encode(&e->ctx, &e->img, pts, duration, flags, VPX_DL_REALTIME)) return -1;
 	vpx_codec_iter_t iter = NULL;
 	const vpx_codec_cx_pkt_t *pkt;
 	size_t n = 0;
@@ -107,6 +108,7 @@ type vp8 struct {
 	e      *C.lemma_vp8
 	w, h   int
 	planes [3][]byte
+	clock  frameClock
 }
 
 func newVP8(w, h, fps, bps int) (Encoder, error) {
@@ -116,7 +118,7 @@ func newVP8(w, h, fps, bps int) (Encoder, error) {
 		C.free(unsafe.Pointer(e))
 		return nil, errors.New("libvpx VP8 would not open")
 	}
-	v := &vp8{e: e, w: w, h: h}
+	v := &vp8{e: e, w: w, h: h, clock: newFrameClock()}
 	v.planes[0] = unsafe.Slice((*byte)(unsafe.Pointer(C.lemma_vp8_plane(e, 0))), w*h)
 	v.planes[1] = unsafe.Slice((*byte)(unsafe.Pointer(C.lemma_vp8_plane(e, 1))), (w/2)*(h/2))
 	v.planes[2] = unsafe.Slice((*byte)(unsafe.Pointer(C.lemma_vp8_plane(e, 2))), (w/2)*(h/2))
@@ -130,7 +132,8 @@ func (v *vp8) Encode(f *convert.I420, forceKey bool) ([]byte, error) {
 	if forceKey {
 		force = 1
 	}
-	n := C.lemma_vp8_encode(v.e, force, &out)
+	pts, duration := v.clock.next()
+	n := C.lemma_vp8_encode(v.e, force, C.int64_t(pts), C.ulong(duration), &out)
 	if n < 0 {
 		return nil, errors.New("VP8 encode failed")
 	}

@@ -34,7 +34,7 @@ from app.core.authorization.delegation import (
     DESTRUCTIVE_ACTIONS,
     WorkloadPrincipalType,
 )
-from app.core.authorization.outside_text_gate import outside_text_decision
+from app.core.authorization.outside_text_gate import outside_text_hold
 from app.core.authorization.session_approvals import has_session_approval
 
 
@@ -426,21 +426,9 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         destructive = await self._destructive_delegated_decision(
             ctx, permission_id, resource
         )
-        if destructive is not None or ctx.delegation is None:
+        if destructive is not None:
             return destructive
-        session_id = ctx.delegation.session_id
-
-        async def approved(permission: str) -> bool:
-            return await _session_approval(
-                ctx,
-                session_id=session_id,
-                workload_actor_id=ctx.actor_id,
-                permission_id=permission,
-            )
-
-        return await outside_text_decision(
-            ctx, permission_id, resource, approved=approved
-        )
+        return await outside_text_hold(ctx, permission_id, resource)
 
     @staticmethod
     def _is_read_permission(permission_id: str) -> bool:

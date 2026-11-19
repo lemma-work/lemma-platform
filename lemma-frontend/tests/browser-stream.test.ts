@@ -1,15 +1,16 @@
-import test, { mock } from "node:test";
+import test, { mock, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
     WheelSteps, buttonFor, chooseTransport, keyBelongsToMachine, keysymFor, pasteMessage, rtcSupported,
-    textPieces, toScreen, MAX_PASTE_BYTES,
+    textPieces, toScreen, MAX_PASTE_BYTES, COPY_WINDOW_MS, MachineClipboard, RTC_FAILURES_BEFORE_VNC, afterRtcClose,
+    connectMode, drivesAtFirst, isCopyChord, peerStateAction, rtcFailureGoesToVnc,
 } from "../src/computer/stream.ts";
 import { PRESETS, presetForSize, presetNamed } from "../src/computer/presets.ts";
 import { SessionReport } from "../src/computer/beacon.ts";
 import { CLOSE_USE_VNC, RtcSession, type RtcHandlers } from "../src/computer/rtc-session.ts";
-import { socketUrl } from "../src/computer/live.ts";
+import { HIDDEN_DISCONNECT_MS, socketUrl, watchHidden } from "../src/computer/live.ts";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const source = (file: string) => readFileSync(path.join(ROOT, file), "utf8");
@@ -226,7 +227,8 @@ function handlers(log: string[]): RtcHandlers {
         onClipboard: (text) => log.push(`clip:${text}`),
         onAgentDriving: (driving) => log.push(`agent:${driving}`),
         onFallback: (reason) => log.push(`fallback:${reason}`),
-        onClosed: (code) => log.push(`closed:${code}`),
+        onClosed: (code, wasLive) => log.push(`closed:${code}${wasLive ? ":live" : ""}`),
+        onRevoked: () => log.push("revoked"),
     };
 }
 
@@ -336,6 +338,211 @@ test("the pane never sends a ticket or a mode", () => {
     const sent = Array.from(code.matchAll(/this\.signal\(\{\s*t: "(\w+)"/g), ([, kind]) => kind);
     assert.deepEqual([...new Set(sent)].sort(), ["bye", "candidate", "offer", "release", "take"]);
     assert.doesNotMatch(code, /ticket\s*:/, "no message this side builds carries a ticket");
+});
+
+/* --- watching or driving, across reconnects ----------------------------- */
+
+test("a reconnect asks for what the pane wants now, never for control it gave back", () => {
+    assert.equal(connectMode(true), "control");
+    assert.equal(connectMode(false), "view");
+});
+
+test("your own machine opens driving; a pod's opens watching", () => {
+    assert.equal(drivesAtFirst("mine"), true);
+    assert.equal(drivesAtFirst("pod"), false);
+});
+
+test("the socket's mode is read from the wish at connect time, not fixed at mount", () => {
+    const code = source("src/computer/live-screen-rtc.tsx");
+    assert.match(code, /mode: connectMode\(wants\.current\)/);
+});
+
+/* --- giving up on WebRTC ------------------------------------------------ */
+
+test("connects that keep failing end on VNC instead of retrying forever", () => {
+    let failures = 0;
+    const actions: string[] = [];
+    for (let i = 0; i < RTC_FAILURES_BEFORE_VNC; i++) {
+        const next = afterRtcClose({ settled: false, noBrowser: false, wasLive: false, failures });
+        failures = next.failures;
+        actions.push(next.action);
+    }
+    assert.deepEqual(actions, ["retry", "retry", "vnc"]);
+});
+
+test("a connection that had a picture resets the count; a settled close is never retried", () => {
+    assert.deepEqual(afterRtcClose({ settled: false, noBrowser: false, wasLive: true, failures: 2 }), { action: "retry", failures: 0 });
+    assert.equal(afterRtcClose({ settled: true, noBrowser: false, wasLive: false, failures: 2 }).action, "settle");
+    /* No browser yet is waiting, not failing: VNC would hear the same. */
+    assert.deepEqual(afterRtcClose({ settled: false, noBrowser: true, wasLive: false, failures: 2 }), { action: "wait", failures: 0 });
+});
+
+test("a missing streamer or a pane that gave up goes to VNC even where WebRTC was asked for alone", () => {
+    assert.equal(rtcFailureGoesToVnc("ice-timeout", { fallback: true, gaveUp: false }), true);
+    assert.equal(rtcFailureGoesToVnc("ice-timeout", { fallback: false, gaveUp: false }), false);
+    assert.equal(rtcFailureGoesToVnc("no-streamer", { fallback: false, gaveUp: false }), true);
+    assert.equal(rtcFailureGoesToVnc("error", { fallback: false, gaveUp: true }), true);
+});
+
+/* --- a dropped connection is not a live one ---------------------------- */
+
+test("a peer's states, read for the pane", () => {
+    assert.equal(peerStateAction("connected"), "live");
+    assert.equal(peerStateAction("disconnected"), "grace");
+    assert.equal(peerStateAction("failed"), "lost");
+    assert.equal(peerStateAction("closed"), "lost");
+    assert.equal(peerStateAction("connecting"), "none");
+    assert.equal(peerStateAction("new"), "none");
+});
+
+/** A peer whose connection state the test drives. */
+class LivePeer extends FakePeer {
+    static last: LivePeer | null = null;
+    connectionState = "new";
+    closed = false;
+    private changes: (() => void)[] = [];
+    constructor() { super(); LivePeer.last = this; }
+    override addEventListener(type?: string, listener?: () => void) {
+        if (type === "connectionstatechange" && listener) this.changes.push(listener);
+    }
+    override close() { this.closed = true; }
+    become(state: string) { this.connectionState = state; for (const change of this.changes) change(); }
+}
+
+async function connectedSession(t: TestContext, log: string[]) {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
+    globalThis.RTCPeerConnection = LivePeer as unknown as typeof RTCPeerConnection;
+    new RtcSession("wss://api.test/view", handlers(log));
+    FakeSocket.last!.emit("message", { data: CONFIG });
+    await new Promise((resolve) => setImmediate(resolve));
+    LivePeer.last!.become("connected");
+}
+
+function withGlobals(run: () => Promise<void>) {
+    return async () => {
+        const original = globalThis.WebSocket;
+        const originalPeer = globalThis.RTCPeerConnection;
+        try { await run(); } finally {
+            globalThis.WebSocket = original;
+            globalThis.RTCPeerConnection = originalPeer;
+        }
+    };
+}
+
+test("the signalling socket closing after connecting is a reconnect, not a frozen picture", async (t) => {
+    await withGlobals(async () => {
+        const log: string[] = [];
+        await connectedSession(t, log);
+        FakeSocket.last!.emit("close", { code: 1012 });
+        assert.deepEqual(log, ["live", "closed:1012:live"]);
+        assert.equal(LivePeer.last!.closed, true, "the peer is torn down with it");
+        FakeSocket.last!.emit("close", { code: 1006 });
+        assert.equal(log.length, 2, "said once");
+    })();
+});
+
+test("a peer disconnected past the grace is lost; one that recovers is not", async (t) => {
+    await withGlobals(async () => {
+        const log: string[] = [];
+        await connectedSession(t, log);
+        LivePeer.last!.become("disconnected");
+        t.mock.timers.tick(2_000);
+        LivePeer.last!.become("connected");
+        t.mock.timers.tick(10_000);
+        assert.deepEqual(log, ["live"], "a hiccup ICE recovered from");
+        LivePeer.last!.become("disconnected");
+        t.mock.timers.tick(2_999);
+        assert.deepEqual(log, ["live"]);
+        t.mock.timers.tick(1);
+        assert.deepEqual(log, ["live", "closed:1006:live"]);
+    })();
+});
+
+test("a peer that closes after connecting is lost at once", async (t) => {
+    await withGlobals(async () => {
+        const log: string[] = [];
+        await connectedSession(t, log);
+        LivePeer.last!.become("closed");
+        assert.deepEqual(log, ["live", "closed:1006:live"]);
+    })();
+});
+
+test("4427 still means VNC after connecting", async (t) => {
+    await withGlobals(async () => {
+        const log: string[] = [];
+        await connectedSession(t, log);
+        FakeSocket.last!.emit("close", { code: CLOSE_USE_VNC });
+        assert.deepEqual(log, ["live", "fallback:no-streamer"]);
+    })();
+});
+
+/* --- the machine's clipboard ------------------------------------------- */
+
+test("the machine's clipboard is written here only right after a copy chord in the pane", () => {
+    const clip = new MachineClipboard();
+    assert.equal(clip.received("set by a page", 1_000), null, "unasked: held, not written");
+    assert.equal(clip.latest, "set by a page");
+    clip.arm(5_000);
+    assert.equal(clip.received("what they copied", 5_000 + COPY_WINDOW_MS), "what they copied");
+    assert.equal(clip.received("and then a page", 5_000 + COPY_WINDOW_MS), null, "one write per chord");
+    clip.arm(10_000);
+    assert.equal(clip.received("too late", 10_001 + COPY_WINDOW_MS), null);
+    assert.equal(clip.latest, "too late");
+});
+
+test("copy chords: Ctrl+C/X, or Cmd on a Mac", () => {
+    const key = (k: string, mods: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {}) =>
+        ({ key: k, ctrlKey: false, metaKey: false, ...mods });
+    assert.equal(isCopyChord(key("c", { ctrlKey: true }), { mac: false }), true);
+    assert.equal(isCopyChord(key("X", { ctrlKey: true }), { mac: false }), true);
+    assert.equal(isCopyChord(key("c", { metaKey: true }), { mac: false }), false);
+    assert.equal(isCopyChord(key("c", { metaKey: true }), { mac: true }), true);
+    assert.equal(isCopyChord(key("v", { ctrlKey: true }), { mac: false }), false);
+    assert.equal(isCopyChord(key("c"), { mac: false }), false);
+    assert.equal(isCopyChord(key("c", { ctrlKey: true, altKey: true }), { mac: false }), false);
+});
+
+test("no pane writes the machine's clipboard unguarded", () => {
+    for (const file of ["src/computer/live-screen-rtc.tsx", "src/computer/live-screen.tsx"]) {
+        const code = source(file);
+        for (const [call] of code.matchAll(/copyText\([^)]*\)/g)) assert.equal(call, "copyText(asked)", file);
+    }
+});
+
+/* --- a hidden page ------------------------------------------------------ */
+
+class FakeDocument {
+    hidden = false;
+    private listeners: (() => void)[] = [];
+    addEventListener(_type: "visibilitychange", listener: () => void) { this.listeners.push(listener); }
+    removeEventListener(_type: "visibilitychange", listener: () => void) { this.listeners = this.listeners.filter((l) => l !== listener); }
+    set(hidden: boolean) { this.hidden = hidden; for (const listener of this.listeners) listener(); }
+}
+
+test("a page hidden for a minute lets its screen go, and gets it back when shown", (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const doc = new FakeDocument();
+    const said: boolean[] = [];
+    const stop = watchHidden(doc, (away) => said.push(away));
+    doc.set(true);
+    t.mock.timers.tick(HIDDEN_DISCONNECT_MS - 1);
+    assert.deepEqual(said, []);
+    doc.set(false);
+    doc.set(true);
+    t.mock.timers.tick(HIDDEN_DISCONNECT_MS - 1);
+    assert.deepEqual(said, [], "a look away resets the minute");
+    t.mock.timers.tick(1);
+    assert.deepEqual(said, [true]);
+    doc.set(true);
+    t.mock.timers.tick(HIDDEN_DISCONNECT_MS * 2);
+    assert.deepEqual(said, [true], "said once");
+    doc.set(false);
+    assert.deepEqual(said, [true, false]);
+    stop();
+    doc.set(true);
+    t.mock.timers.tick(HIDDEN_DISCONNECT_MS);
+    assert.deepEqual(said, [true, false], "nothing after cleanup");
 });
 
 void mock;

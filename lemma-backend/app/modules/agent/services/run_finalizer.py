@@ -15,7 +15,7 @@ of a 350-line method.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Iterable
 from uuid import UUID
 
 
@@ -29,6 +29,7 @@ from app.modules.agent.infrastructure.harness.lemma.run_failure_classification i
     run_failure_reason as run_failure_reason,
 )
 from app.modules.agent.domain.entities import Message
+from app.modules.agent.domain.pauses import Pause
 from app.modules.agent.domain.events import AgentRunCompletedEvent
 from app.modules.agent.domain.value_objects import (
     AgentRunUsage,
@@ -38,6 +39,7 @@ from app.modules.agent.domain.value_objects import (
     JsonValue,
 )
 from app.modules.agent.domain.state_kinds import PauseKind
+from app.modules.agent.domain.wait import AgentWaitType
 from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories.run_last_words import (
@@ -111,6 +113,33 @@ async def waiting_on_work(uow: Any, conversation_id: UUID) -> bool:
     reading back: only this one has a run coming that it should follow.
     """
     return bool(await Pauses(uow).pending(conversation_id, kinds=(PauseKind.WAIT,)))
+
+
+async def waiting_on_own_process(uow: Any, conversation_id: UUID) -> bool:
+    """Whether a WAITING conversation waits on a process it started -- the
+    one wait whose work runs on a machine, under the slot it holds there.
+
+    An approval, a question, a held message, a timer or a sub-agent runs
+    nothing on the machine: parking the slot for those kept a pod machine
+    busy, billed and refusing every other run for the length of the park."""
+    return waits_on_a_process(
+        await Pauses(uow).pending(conversation_id, kinds=(PauseKind.WAIT,))
+    )
+
+
+async def _parks_machine_slots(
+    uow: Any, conversation_id: UUID, status: ConversationStatus | None
+) -> bool:
+    return status is ConversationStatus.WAITING and await waiting_on_own_process(
+        uow, conversation_id
+    )
+
+
+def waits_on_a_process(pauses: Iterable[Pause]) -> bool:
+    return any(
+        pause.kind is PauseKind.WAIT and pause.wait_type is AgentWaitType.PROCESS
+        for pause in pauses
+    )
 
 
 def completed_event(
@@ -187,22 +216,23 @@ async def _redraw(run: RunIdentity, message: Message | None) -> None:
 
 async def _end_machine_work(
     conversation_id: UUID,
-    status: ConversationStatus | None,
     *,
+    waits_on_own_process: bool,
     park: Callable[[UUID], Awaitable[None]] | None = None,
     end: Callable[[UUID], Awaitable[object]] | None = None,
 ) -> None:
     """Free the conversation's slots on shared machines and stop what it left
-    running there. Not while it waits on its own work: that work is what a
-    waiting conversation is waiting for, so its slots are parked instead --
-    held past the ordinary lease until it resumes."""
+    running there. Not while it waits on its own process: that process is
+    what the conversation is waiting for, so its slots are parked instead --
+    held past the ordinary lease until it resumes. Any other wait frees
+    them (``waiting_on_own_process``)."""
     from app.modules.workspace.contracts.agent_machines import end_run, park_run
     from app.modules.workspace.contracts.runtime_errors import machine_runtime_errors
 
     from redis.exceptions import RedisError
 
     try:
-        if status is ConversationStatus.WAITING:
+        if waits_on_own_process:
             await (park or park_run)(conversation_id)
             return
         await (end or end_run)(conversation_id)
@@ -295,6 +325,11 @@ class RunFinalizer:
                     )
                     # Analytics only now; every follow-up is staged below.
                     uow.collect_events([event])
+                parks_machine_slots = finish_result is not None and (
+                    await _parks_machine_slots(
+                        uow, run.conversation_id, conversation_status
+                    )
+                )
                 if finish_result is not None:
                     await self.stage_followups(
                         uow,
@@ -307,7 +342,9 @@ class RunFinalizer:
                         ),
                     )
             if finish_result is not None:
-                await _end_machine_work(run.conversation_id, conversation_status)
+                await _end_machine_work(
+                    run.conversation_id, waits_on_own_process=parks_machine_slots
+                )
                 # A retry must repair receipts even when the run is terminal.
                 # The stored outcome wins over a retry's fallback failure status.
                 await self.usage_recorder.finalize_metered(

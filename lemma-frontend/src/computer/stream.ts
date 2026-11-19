@@ -204,3 +204,129 @@ export function pasteMessage(text: string): InputMessage | null {
 export function isMac(platform: string | undefined = globalThis.navigator?.platform): boolean {
     return /Mac|iPhone|iPad|iPod/.test(platform ?? "");
 }
+
+/* --- connecting, watching or driving ------------------------------------ */
+
+/** The mode a connection asks for: what this pane wants *now*.
+ *
+ *  Asked again on every connect and every reconnect. A ticket that says
+ *  `control` makes the streamer hand this pane the keyboard and take it from
+ *  whoever had it, so a pane that had given control back — or had it taken —
+ *  must reconnect as a watcher, or a network blip silently puts it back in
+ *  charge of somebody else's browser.
+ */
+export function connectMode(wantControl: boolean): "view" | "control" {
+    return wantControl ? "control" : "view";
+}
+
+/** Whether a pane starts out asking to drive.
+ *
+ *  On your own machine you are the only person there, so yes. On a pod
+ *  machine a teammate or the agent may be at the keyboard, and merely
+ *  opening its screen must not take it from them: you watch until you press
+ *  "Take control".
+ */
+export function drivesAtFirst(machine: "mine" | "pod"): boolean {
+    return machine === "mine";
+}
+
+/** How many WebRTC connects in a row may fail before the pane gives up on
+ *  WebRTC and uses VNC. Each one re-runs the machine's streamer start and
+ *  mints TURN credentials, so "forever" is not free. */
+export const RTC_FAILURES_BEFORE_VNC = 3;
+
+/** What a WebRTC pane does once its connection ended with `state`.
+ *
+ *  - `settle`: nothing a retry can fix (`live.ts`'s settled states).
+ *  - `wait`: no browser yet — a retry is worth it, and VNC would hear the same.
+ *  - `retry`: try WebRTC again; `failures` is the new count of connects in a
+ *    row that never got a picture.
+ *  - `vnc`: that count reached the limit; stop retrying WebRTC.
+ *
+ *  A connection that did reach a picture resets the count: dropping after
+ *  working is a blip, not a streamer that cannot start.
+ */
+export function afterRtcClose(options: { settled: boolean; noBrowser: boolean; wasLive: boolean; failures: number }):
+    { action: "settle" | "wait" | "retry" | "vnc"; failures: number } {
+    if (options.settled) return { action: "settle", failures: options.failures };
+    if (options.noBrowser) return { action: "wait", failures: 0 };
+    const failures = options.wasLive ? 0 : options.failures + 1;
+    return { action: failures >= RTC_FAILURES_BEFORE_VNC ? "vnc" : "retry", failures };
+}
+
+/** Whether a WebRTC pane that failed should become VNC, or try WebRTC again.
+ *
+ *  Always VNC where the server allows the fallback (`auto`). Where WebRTC was
+ *  asked for alone, still VNC when the machine has no streamer to retry, or
+ *  after the pane already gave up on it: a picture over the slower transport
+ *  beats a "Trying again…" that never ends.
+ */
+export function rtcFailureGoesToVnc(reason: FallbackReason, options: { fallback: boolean; gaveUp: boolean }): boolean {
+    return options.fallback || reason === "no-streamer" || options.gaveUp;
+}
+
+/** How long a peer may sit `disconnected` before it is treated as lost. ICE
+ *  often recovers from a short network hiccup on its own; a picture frozen
+ *  longer than this is not live. */
+export const PEER_DISCONNECT_GRACE_MS = 3_000;
+
+/** What a peer connection's state means for the pane.
+ *
+ *  - `live`: connected (again).
+ *  - `grace`: disconnected — wait `PEER_DISCONNECT_GRACE_MS`, then `lost`.
+ *  - `lost`: the media is gone; reconnect (or fall back, before it ever worked).
+ *  - `none`: nothing to do yet.
+ */
+export function peerStateAction(state: RTCPeerConnectionState | string): "live" | "grace" | "lost" | "none" {
+    if (state === "connected") return "live";
+    if (state === "disconnected") return "grace";
+    if (state === "failed" || state === "closed") return "lost";
+    return "none";
+}
+
+/* --- the machine's clipboard ------------------------------------------- */
+
+/** How long after a local copy chord the machine's clipboard may land here.
+ *  Inside a browser's transient user activation (about five seconds), so the
+ *  write is still the gesture's. */
+export const COPY_WINDOW_MS = 2_000;
+
+/** Ctrl+C (Cmd+C on a Mac) or Ctrl+X: the chords that mean "copy this to me". */
+export function isCopyChord(event: { key: string; metaKey: boolean; ctrlKey: boolean; altKey?: boolean }, options: { mac: boolean }): boolean {
+    if (event.altKey) return false;
+    const key = event.key.length === 1 ? event.key.toLowerCase() : "";
+    if (key !== "c" && key !== "x") return false;
+    return options.mac ? event.metaKey || event.ctrlKey : event.ctrlKey;
+}
+
+/** The machine's clipboard, held rather than written.
+ *
+ *  The machine says whenever its clipboard changes, and writing that into
+ *  this computer's clipboard unasked would let any page in the machine's
+ *  browser put text there for the next paste. So it is kept, and copied here
+ *  only when the person asked: a copy chord inside the pane (`arm`), after
+ *  which the machine's next clipboard is written, or "Copy from machine",
+ *  which writes the latest one.
+ */
+export class MachineClipboard {
+    private armedUntil = 0;
+    private text: string | null = null;
+
+    /** A copy chord was pressed in the pane, now. */
+    arm(now: number): void {
+        this.armedUntil = now + COPY_WINDOW_MS;
+    }
+
+    /** The machine's clipboard changed. Returns the text to write here, or
+     *  null when nobody asked for it. Writes once per chord. */
+    received(text: string, now: number): string | null {
+        this.text = text;
+        if (now > this.armedUntil) return null;
+        this.armedUntil = 0;
+        return text;
+    }
+
+    get latest(): string | null {
+        return this.text;
+    }
+}

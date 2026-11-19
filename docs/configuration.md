@@ -433,7 +433,8 @@ origin so hot reload and root-absolute assets work:
 
 ```dotenv
 # Unset (the default) turns previews off; the API says so in a sentence.
-MACHINE_PREVIEW_DOMAIN=machines.example.com
+# A registrable domain of its own, never a subdomain of Lemma's (see below).
+MACHINE_PREVIEW_DOMAIN=previews.example-usercontent.com
 # https, or http for a local stack on *.localhost.
 MACHINE_PREVIEW_SCHEME=https
 # The longest a `link` preview lives before it stops answering.
@@ -444,6 +445,19 @@ The domain needs a wildcard DNS record and a wildcard certificate, both pointing
 at the API. A `private` preview asks the visitor to be signed in to Lemma and
 allowed on the machine; a `link` preview works for anyone until it expires.
 Either can be revoked, and a revoked one answers 404 at once.
+
+**Serve previews from a registrable domain of their own**, the way GitHub
+serves user content from `githubusercontent.com` rather than a subdomain of
+`github.com`. A preview runs whatever JavaScript is on the machine — anything
+anyone with use of it put there, or a page an agent fetched. Under a subdomain
+of Lemma's own domain (`machines.example.com` beside `app.example.com`), that
+script is *same-site* with Lemma: the browser sends Lemma's `SameSite`
+cookies with its requests to the API, it can set cookies on the parent domain
+that Lemma then reads (cookie tossing), and every same-site check treats it
+as a sibling. On a domain of its own, every preview is cross-site to Lemma.
+Listing that domain on the [Public Suffix List](https://publicsuffix.org/)
+also makes previews cross-site to each other. `machines.localhost` under
+`make dev` is a local exception.
 
 ### Shared machines' disk
 

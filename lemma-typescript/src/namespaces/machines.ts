@@ -656,14 +656,7 @@ export class MachineFilesApi {
     const step = Math.min(Math.max(Math.floor(chunk), 1), MAX_READ_BYTES);
     // An unranged read follows a truncation it is told about (see `read`),
     // so a stale hint costs nothing: a file that grew is still read whole.
-    if (sizeBytes > 0 && sizeBytes <= step) {
-      const only = await this.read(ref, path);
-      // Exactly the ceiling is a server that cut the file without saying so
-      // (one older than the 206): read on from there. A 416 there means the
-      // file really was exactly that long.
-      if (only.size !== MAX_READ_BYTES) return only;
-      return new Blob([only, await this.readFrom(ref, path, only.size, step)]);
-    }
+    if (sizeBytes > 0 && sizeBytes <= step) return this.read(ref, path);
     return this.readFrom(ref, path, 0, step);
   }
 

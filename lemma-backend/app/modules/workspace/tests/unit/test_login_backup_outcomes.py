@@ -183,3 +183,71 @@ async def test_a_home_reset_keeps_the_disk_when_the_logins_cannot_be_copied() ->
 
     assert refused.value.code == "MACHINE_LOGIN_BACKUP_FAILED"
     assert service.destroyed == []
+
+
+class _HasACopy(LoginBackups):
+    """A machine with a copy on file, restoring nothing for real."""
+
+    restored: bool = False
+
+    async def latest(self, sandbox_id):
+        return SimpleNamespace(id=uuid4())
+
+    async def restore(self, sandbox_id, *, acting_user):
+        self.restored = True
+        return True
+
+
+@pytest.mark.parametrize("probe_exit", [None, 1, 124, 255])
+async def test_a_failed_login_probe_never_restores_over_the_profile(
+    probe_exit,
+) -> None:
+    """A probe that did not answer says nothing about the profile; reading it
+    as "no logins" put the copy back over a login made since."""
+    backups = _HasACopy(
+        None,  # type: ignore[arg-type]
+        shell=_shell({"for p in": ShellOutcome(probe_exit, "", "")}),
+    )
+
+    assert not await backups.restore_if_lost(uuid4(), acting_user=uuid4())
+    assert not backups.restored
+
+
+async def test_a_probe_that_finds_no_login_restores_the_copy() -> None:
+    backups = _HasACopy(
+        None,  # type: ignore[arg-type]
+        shell=_shell({"for p in": ShellOutcome(3, "", "")}),
+    )
+
+    assert await backups.restore_if_lost(uuid4(), acting_user=uuid4())
+    assert backups.restored
+
+
+async def test_a_profile_holding_a_login_is_left_alone() -> None:
+    backups = _HasACopy(
+        None,  # type: ignore[arg-type]
+        shell=_shell({"for p in": ShellOutcome(0, "", "")}),
+    )
+
+    assert not await backups.restore_if_lost(uuid4(), acting_user=uuid4())
+    assert not backups.restored
+
+
+async def test_the_login_probe_says_3_for_an_empty_profile_and_0_for_a_login(
+    tmp_path: Path,
+) -> None:
+    captured: list[str] = []
+
+    async def record(machine_id, *, acting_user, command, timeout_seconds):
+        captured.append(command)
+        return ShellOutcome(0, "", "")
+
+    await _HasACopy(None, shell=record).restore_if_lost(  # type: ignore[arg-type]
+        uuid4(), acting_user=uuid4()
+    )
+    [probe] = captured
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert _sh(probe, profile=empty, stage="") == 3
+    assert _sh(probe, profile=tmp_path / "missing", stage="") == 3
+    assert _sh(probe, profile=_profile(tmp_path), stage="") == 0

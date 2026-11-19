@@ -11,9 +11,13 @@ from __future__ import annotations
 
 import posixpath
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.modules.workspace.domain.machine_errors import MachineConflict
+
+if TYPE_CHECKING:
+    from app.modules.workspace.services.machine_processes import StartProcess
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +39,9 @@ class AgentService:
     conversation_id: UUID | None
     #: The run's delegation scope; empty when it is unscoped.
     scope: tuple[str, ...] = ()
+    #: The session the run's token was minted under. A restart mints under
+    #: the same one, so the approvals the person gave there still answer.
+    session_id: str | None = None
 
 
 def _cwd(service: AgentService) -> str:
@@ -51,34 +58,39 @@ def _cwd(service: AgentService) -> str:
     return target
 
 
-async def start_agent_service(service: AgentService) -> str:
-    """Start it, and return its process id."""
-    from app.modules.workspace.services.machine_processes import (
-        MachineProcesses,
-        StartProcess,
-    )
+def _start_request(service: AgentService) -> StartProcess:
+    from app.modules.workspace.services.machine_processes import StartProcess
     from app.modules.workspace.services.machine_services import TokenClaims
 
-    record = await MachineProcesses().start_process(
-        service.machine_id,
-        StartProcess(
-            command=service.command,
-            cwd=_cwd(service),
-            service=service.name,
-            restart_on_resume=True,
-            started_by=service.user_id,
-            claims=TokenClaims(
-                user_id=service.user_id,
-                pod_id=service.pod_id,
-                organization_id=service.organization_id,
-                workload_type=service.workload_type,
-                workload_id=service.workload_id,
-                workload_name=service.workload_name,
-                conversation_id=service.conversation_id,
-                scope=service.scope or None,
-            ),
+    return StartProcess(
+        command=service.command,
+        cwd=_cwd(service),
+        service=service.name,
+        restart_on_resume=True,
+        started_by=service.user_id,
+        claims=TokenClaims(
+            user_id=service.user_id,
+            pod_id=service.pod_id,
+            organization_id=service.organization_id,
+            workload_type=service.workload_type,
+            workload_id=service.workload_id,
+            workload_name=service.workload_name,
+            conversation_id=service.conversation_id,
+            # Empty is unscoped, in the token as in the authorizer
+            # (`workload_authority`): None says the same, and is what
+            # the run's own shell token was minted with.
+            scope=service.scope or None,
+            session_id=service.session_id,
         ),
-        base_env=service.base_env,
+    )
+
+
+async def start_agent_service(service: AgentService) -> str:
+    """Start it, and return its process id."""
+    from app.modules.workspace.services.machine_processes import MachineProcesses
+
+    record = await MachineProcesses().start_process(
+        service.machine_id, _start_request(service), base_env=service.base_env
     )
     return record.process_id
 

@@ -98,7 +98,24 @@ type x264 struct {
 	w, h   int
 	fps    int
 	planes [3][]byte
+
+	// x264's ABR spends `bitrate / fps` on every frame, at the rate it was
+	// opened with. The capture loop drops to 15 or 5 fps under CPU pressure
+	// without reopening it, which left the stream at half or a sixth of its
+	// target exactly when it was already starved. So the frame rate actually
+	// arriving is measured, and the bitrate x264 is given is scaled by how
+	// far it is from the opened one. Not x264's own VFR mode: that holds
+	// every frame back by one to learn its duration, a frame of latency on
+	// a screen somebody is driving.
+	clock   frameClock
+	target  int     // bps the caller asked for
+	arrival float64 // smoothed milliseconds between frames
+	scaled  float64 // the frame rate the bitrate was last scaled for
 }
+
+// rateDrift is how far the arriving frame rate may move before the bitrate is
+// scaled again: reconfiguring on every frame's jitter would be its own cost.
+const rateDrift = 0.2
 
 func newX264(w, h, fps, bps int) (Encoder, error) {
 	e := (*C.lemma_x264)(C.calloc(1, C.size_t(unsafe.Sizeof(C.lemma_x264{}))))
@@ -107,7 +124,7 @@ func newX264(w, h, fps, bps int) (Encoder, error) {
 		C.free(unsafe.Pointer(e))
 		return nil, errors.New("x264 would not open")
 	}
-	x := &x264{e: e, w: w, h: h, fps: fps}
+	x := &x264{e: e, w: w, h: h, fps: fps, clock: newFrameClock(), target: bps, arrival: 1000 / float64(fps), scaled: float64(fps)}
 	x.planes[0] = unsafe.Slice((*byte)(unsafe.Pointer(e.planes[0])), w*h)
 	x.planes[1] = unsafe.Slice((*byte)(unsafe.Pointer(e.planes[1])), (w/2)*(h/2))
 	x.planes[2] = unsafe.Slice((*byte)(unsafe.Pointer(e.planes[2])), (w/2)*(h/2))
@@ -115,6 +132,7 @@ func newX264(w, h, fps, bps int) (Encoder, error) {
 }
 
 func (x *x264) Encode(f *convert.I420, forceKey bool) ([]byte, error) {
+	x.followFrameRate()
 	copyPlanes(f, x.planes, x.w, x.h)
 	var out *C.uint8_t
 	force := C.int(0)
@@ -131,7 +149,28 @@ func (x *x264) Encode(f *convert.I420, forceKey bool) ([]byte, error) {
 	return C.GoBytes(unsafe.Pointer(out), n), nil
 }
 
-func (x *x264) SetBitrate(bps int) { C.lemma_x264_bitrate(x.e, C.int(bps/1000), C.int(x.fps)) }
+func (x *x264) SetBitrate(bps int) {
+	x.target = bps
+	x.applyBitrate()
+}
+
+func (x *x264) followFrameRate() {
+	pts, d := x.clock.next()
+	if pts == 0 {
+		return
+	}
+	x.arrival = 0.8*x.arrival + 0.2*float64(d)
+	arriving := min(max(1000/x.arrival, 1), float64(x.fps))
+	if arriving < x.scaled*(1-rateDrift) || arriving > x.scaled*(1+rateDrift) {
+		x.scaled = arriving
+		x.applyBitrate()
+	}
+}
+
+func (x *x264) applyBitrate() {
+	kbps := float64(x.target) / 1000 * float64(x.fps) / x.scaled
+	C.lemma_x264_bitrate(x.e, C.int(kbps), C.int(x.fps))
+}
 
 func (x *x264) Close() {
 	if x.e != nil {

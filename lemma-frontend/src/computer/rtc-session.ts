@@ -14,7 +14,7 @@
  *  closes it unread.
  */
 
-import { ICE_DEADLINE_MS, type FallbackReason, type InputMessage } from "./stream";
+import { ICE_DEADLINE_MS, PEER_DISCONNECT_GRACE_MS, peerStateAction, type FallbackReason, type InputMessage } from "./stream";
 
 export interface RtcConfig {
     t: "config";
@@ -38,10 +38,13 @@ export interface RtcHandlers {
     onScreenSize(width: number, height: number): void;
     onClipboard(text: string): void;
     onAgentDriving(driving: boolean): void;
+    /** Somebody else took control from this pane. */
+    onRevoked?(): void;
     /** WebRTC did not work here; the pane should use VNC. */
     onFallback(reason: FallbackReason): void;
-    /** The socket closed with a code the pane reads (`live.ts`). */
-    onClosed(code: number): void;
+    /** The connection ended, with a code the pane reads (`live.ts`), and
+     *  whether it had a picture first. Called once; the session is finished. */
+    onClosed(code: number, wasLive: boolean): void;
 }
 
 export interface StreamStats {
@@ -64,6 +67,7 @@ export class RtcSession {
     private connected = false;
     private finished = false;
     private deadline: ReturnType<typeof setTimeout> | undefined;
+    private grace: ReturnType<typeof setTimeout> | undefined;
     private lastBytes = 0;
     private lastStatsAt = 0;
     private readonly handlers: RtcHandlers;
@@ -77,13 +81,12 @@ export class RtcSession {
         this.socket.addEventListener("close", (event) => {
             if (this.finished) return;
             if (event.code === CLOSE_USE_VNC) return this.fallBack("no-streamer");
-            /* A close after the peer connected is the socket's business, not
-               the picture's: media goes over the peer, which carries on. */
-            if (!this.connected) {
-                this.finished = true;
-                clearTimeout(this.deadline);
-                handlers.onClosed(event.code);
-            }
+            /* Even after the peer connected: the relay closes the streamer's
+               side when this socket goes, and the streamer then closes the
+               peer, so the picture stops with it — and so does the keep-awake
+               this socket held. A picture left on screen now is a frozen one
+               shown as live, so this is a reconnect. */
+            this.end(event.code);
         });
     }
 
@@ -128,6 +131,7 @@ export class RtcSession {
         if (this.finished) return;
         this.finished = true;
         clearTimeout(this.deadline);
+        clearTimeout(this.grace);
         this.signal({ t: "bye" });
         this.peer?.close();
         try { this.socket.close(1000); } catch { /* already closed */ }
@@ -175,10 +179,22 @@ export class RtcSession {
         if (this.socket.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(message));
     }
 
+    /** The connection is over: tear down both halves and say so, once. */
+    private end(code: number): void {
+        if (this.finished) return;
+        this.finished = true;
+        clearTimeout(this.deadline);
+        clearTimeout(this.grace);
+        this.peer?.close();
+        try { this.socket.close(1000); } catch { /* already closed */ }
+        this.handlers.onClosed(code, this.connected);
+    }
+
     private fallBack(reason: FallbackReason): void {
         if (this.finished) return;
         this.finished = true;
         clearTimeout(this.deadline);
+        clearTimeout(this.grace);
         this.peer?.close();
         try { this.socket.close(1000); } catch { /* already closed */ }
         this.handlers.onFallback(reason);
@@ -250,19 +266,33 @@ export class RtcSession {
             });
         });
         peer.addEventListener("connectionstatechange", () => {
-            if (peer.connectionState === "connected" && !this.connected) {
-                this.connected = true;
-                clearTimeout(this.deadline);
-                this.handlers.onLive();
-            }
-            if (peer.connectionState === "failed") {
-                if (this.connected) this.handlers.onClosed(1006);
-                else this.fallBack("ice-failed");
+            if (this.finished) return;
+            const action = peerStateAction(peer.connectionState);
+            if (action === "live") {
+                clearTimeout(this.grace);
+                this.grace = undefined;
+                if (!this.connected) {
+                    this.connected = true;
+                    clearTimeout(this.deadline);
+                    this.handlers.onLive();
+                }
+            } else if (action === "grace") {
+                /* Often a hiccup ICE recovers from by itself; past the grace
+                   the picture is frozen, not live. */
+                if (this.grace === undefined) this.grace = setTimeout(() => this.lost(), PEER_DISCONNECT_GRACE_MS);
+            } else if (action === "lost") {
+                this.lost();
             }
         });
         const offer = await peer.createOffer();
         await peer.setLocalDescription(offer);
         this.signal({ t: "offer", sdp: peer.localDescription?.sdp ?? offer.sdp });
+    }
+
+    /** The media is gone: reconnect if it ever worked, else WebRTC did not. */
+    private lost(): void {
+        if (this.connected) this.end(1006);
+        else this.fallBack("ice-failed");
     }
 
     /** The input channel, created on this side once driving is granted.
@@ -320,6 +350,7 @@ export class RtcSession {
                 break;
             case "revoked":
                 this.setDriving(false);
+                this.handlers.onRevoked?.();
                 break;
             case "clip":
                 if (typeof event.s === "string") this.handlers.onClipboard(event.s);

@@ -457,20 +457,6 @@ async def write_file(
     return _entry(stat)
 
 
-# The route's first spelling, before it matched `GET files:content`. Kept for
-# one release so a client built against it keeps writing; first-party clients
-# all use the colon form.
-router.add_api_route(
-    "/machines/{ref}/files/content",
-    write_file,
-    methods=["PUT"],
-    response_model=MachineFileEntry,
-    operation_id="machine.files.write_legacy",
-    summary="Write a file on a machine (deprecated: use PUT files:content)",
-    deprecated=True,
-)
-
-
 @router.delete(
     "/machines/{ref}/files",
     status_code=status.HTTP_204_NO_CONTENT,

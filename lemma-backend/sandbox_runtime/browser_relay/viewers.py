@@ -49,8 +49,17 @@ class Viewers:
     """The live sockets, by viewer name."""
 
     _live: dict[str, _Viewer] = field(default_factory=dict)
+    #: Bumped whenever somebody takes control, with who it was. The resize
+    #: lease reads both: a claim made before somebody *else* took control has
+    #: lapsed, so a VNC control socket -- whose mode is fixed for its life,
+    #: because RFB input cannot be taken back -- does not hold the size
+    #: against a WebRTC viewer who has since taken the wheel.
+    control_generation: int = 0
+    last_to_take_control: str | None = None
 
     def join(self, name: str, *, mode: str, transport: str) -> None:
+        if mode == CONTROL:
+            self._took_control(name)
         current = self._live.get(name)
         if current is None:
             self._live[name] = _Viewer(mode=mode, transport=transport)
@@ -58,6 +67,10 @@ class Viewers:
         current.sockets += 1
         current.mode = mode
         current.transport = transport
+
+    def _took_control(self, name: str) -> None:
+        self.control_generation += 1
+        self.last_to_take_control = name
 
     def leave(self, name: str) -> None:
         current = self._live.get(name)
@@ -79,6 +92,7 @@ class Viewers:
         if current is None:
             return
         if mode == CONTROL:
+            self._took_control(name)
             for other_name, other in self._live.items():
                 if other_name != name and other.transport == "rtc":
                     other.mode = VIEW

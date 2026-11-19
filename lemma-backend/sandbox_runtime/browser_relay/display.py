@@ -14,10 +14,14 @@ an older frontend still asking to fit its pane; it is clamped to the resting
 size, as it always was, so it keeps working while the rollout reaches it.
 
 **The lease.** Only a viewer in control may resize, and the first one to do
-so holds the size until its socket closes or it stops being in control. A
-second controller (VNC is shared, so there can be two) is told who has it
-instead of silently undoing their choice. The lease lives here because the
-relay is per-sandbox: it is the one process that sees every viewer's socket.
+so holds the size until its socket closes, it stops being in control, or
+somebody else takes control after it. A second controller (VNC is shared, so
+there can be two) is told who has it instead of silently undoing their
+choice. The lease lives here because the relay is per-sandbox: it is the one
+process that sees every viewer's socket.
+
+This is the only door. The streamer once took a `size` message of its own
+and ran `set-display-size` around the lease; it has no such message now.
 """
 
 from __future__ import annotations
@@ -49,7 +53,7 @@ _PRESET_SIZES = frozenset(PRESETS.values())
 #: Who holds the size right now, by viewer name. Only meaningful while that
 #: viewer is live and in control; checked on every use rather than cleared by
 #: a callback, so a socket that died without a goodbye cannot keep it.
-_lease: dict[str, str | None] = {"holder": None}
+_lease: dict[str, str | int | None] = {"holder": None, "generation": 0}
 
 
 class DisplayResizeRequest(BaseModel):
@@ -84,11 +88,22 @@ class DisplayState(BaseModel):
 
 
 def lease_holder() -> str | None:
-    """The live controlling viewer who holds the size, or nobody."""
+    """The live controlling viewer who holds the size, or nobody.
+
+    A claim lapses when somebody else takes control after it. A VNC control
+    socket stays "in control" for as long as it is open -- RFB input cannot
+    be revoked -- so without this it held the size for its whole life, and a
+    WebRTC viewer who had since taken control was told somebody else had it.
+    """
     holder = _lease["holder"]
-    if holder and VIEWERS.mode_of(holder) == CONTROL:
-        return holder
-    return None
+    if not isinstance(holder, str) or VIEWERS.mode_of(holder) != CONTROL:
+        return None
+    if (
+        _lease["generation"] != VIEWERS.control_generation
+        and VIEWERS.last_to_take_control != holder
+    ):
+        return None
+    return holder
 
 
 #: What the running browser was launched at: written by `lemma-ensure-display`
@@ -146,6 +161,7 @@ def _claim(viewer: str | None) -> None:
             detail="somebody else is controlling the screen size",
         )
     _lease["holder"] = viewer
+    _lease["generation"] = VIEWERS.control_generation
 
 
 def register(app: FastAPI, require_token: Callable[..., Awaitable[None]]) -> None:

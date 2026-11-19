@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-var screen = Screen{W: 1280, H: 800, Presets: ParsePresets(DefaultPresets)}
+var screen = Screen{W: 1280, H: 800}
 
 func TestParse(t *testing.T) {
 	long := strings.Repeat("a", MaxTextRunes+1)
@@ -42,8 +42,8 @@ func TestParse(t *testing.T) {
 		{`{"t":"txt","s":""}`, nil},
 		{`{"t":"txt","s":"` + long + `"}`, nil},
 		{`{"t":"paste","s":"anything \u0007 at all"}`, &Command{Kind: Paste, S: "anything \a at all"}},
-		{`{"t":"size","w":1440,"h":900}`, &Command{Kind: Size, W: 1440, H: 900}},
-		{`{"t":"size","w":1441,"h":900}`, nil},
+		// The size is the relay's, under its lease; never the streamer's.
+		{`{"t":"size","w":1440,"h":900}`, nil},
 		{`{"t":"exec","s":"rm -rf /"}`, nil},
 		{`{"t":"m","x":1,"y":1,"cmd":"x"}`, nil},
 		{`{"t":"m","x":1,"y":1}{"t":"k","k":97,"d":true}`, nil},
@@ -71,10 +71,25 @@ func TestParse(t *testing.T) {
 	}
 }
 
-func TestParsePresets(t *testing.T) {
-	got := ParsePresets("1280x800, 10x10,abc,1440x900,5000x10")
-	if len(got) != 2 || got[0] != (Preset{1280, 800}) || got[1] != (Preset{1440, 900}) {
-		t.Fatalf("got %v", got)
+func TestPasteHasItsOwnBudget(t *testing.T) {
+	now := time.Unix(0, 0)
+	l := NewLimiter(func() time.Time { return now })
+	pastes := 0
+	for i := 0; i < 50; i++ {
+		if l.Allow(Command{Kind: Paste, S: "x"}) {
+			pastes++
+		}
+	}
+	if pastes != PastePerSecond {
+		t.Fatalf("allowed %d pastes in an instant, want %d", pastes, PastePerSecond)
+	}
+	// Refused pastes did not spend the input budget meant for keys.
+	if !l.Allow(Command{Kind: Key, Sym: 97, Down: true}) {
+		t.Fatal("a key was refused after pastes were")
+	}
+	now = now.Add(time.Second)
+	if !l.Allow(Command{Kind: Paste, S: "x"}) {
+		t.Fatal("the paste budget did not refill")
 	}
 }
 
@@ -145,14 +160,6 @@ func FuzzParse(f *testing.F) {
 		case Paste:
 			if len(c.S) > MaxPasteBytes {
 				t.Fatal("paste over cap")
-			}
-		case Size:
-			ok := false
-			for _, p := range screen.Presets {
-				ok = ok || (p.W == c.W && p.H == c.H)
-			}
-			if !ok {
-				t.Fatalf("size %dx%d", c.W, c.H)
 			}
 		default:
 			t.Fatalf("kind %q accepted", c.Kind)

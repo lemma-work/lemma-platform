@@ -47,7 +47,14 @@ async def resolve_run_machine(ctx: ToolContext, machine: str | None):
         # build ends one run and starts another when the build is done, and
         # both must find the same directory, slot and processes.
         run_id=ctx.conversation_id,
+        approved=_approved(ctx),
     )
+
+
+def _approved(ctx: ToolContext) -> frozenset[str]:
+    """What the person approved for this one call, if it is an approved one."""
+    approved = getattr(ctx, "approved_execution", None)
+    return frozenset(approved.permission_ids) if approved is not None else frozenset()
 
 
 async def _named_machine(ctx: ToolContext, machine: str | None):
@@ -56,12 +63,24 @@ async def _named_machine(ctx: ToolContext, machine: str | None):
     The person's own is the run's workspace, as it always was: every run a
     member owns may use it, and a run answering somebody outside the pod has
     no WORKSPACE_CLI to get here with (``refuse_owner_workspace`` is the
-    backstop). Any other machine goes through the machine resolver.
+    backstop). Any other machine goes through the machine resolver -- and so
+    does the person's own while the run reads what people outside the pod
+    wrote, which holds it for their approval as a pod machine is held.
     """
     ref = (machine or getattr(ctx, "machine", None) or "").strip()
     if ref in ("", "me", "default"):
+        if await _reads_outside_text(ctx):
+            await resolve_run_machine(ctx, "me")
         return None
     return await resolve_run_machine(ctx, ref)
+
+
+async def _reads_outside_text(ctx: ToolContext) -> bool:
+    """One read of the conversation's mark: a run with nothing from outside
+    in front of it asks the resolver nothing more than it did."""
+    from app.core.authorization.outside_text import has_read_outside_text
+
+    return await has_read_outside_text(str(ctx.conversation_id))
 
 
 async def place_on_machine(

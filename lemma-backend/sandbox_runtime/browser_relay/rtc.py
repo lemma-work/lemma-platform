@@ -36,8 +36,8 @@ from .viewers import CONTROL, VIEW, VIEWERS
 
 STREAM_PORT = int(os.environ.get("LEMMA_BROWSER_STREAM_PORT", "4860"))
 
-#: The image has no streamer: built before it existed. The pane reads this as
-#: "use VNC", which every image has.
+#: There is no streamer to talk to: the image was built before it existed, or
+#: it would not start. The pane reads this as "use VNC", which every image has.
 CLOSE_NO_STREAMER = 4427
 
 #: `start-streamer` says the binary is missing with this exit code, so that

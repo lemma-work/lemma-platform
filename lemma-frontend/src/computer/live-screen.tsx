@@ -6,6 +6,7 @@ import type RFBClient from "@novnc/novnc";
 import { apiUrl, sessionToken } from "@/session/client";
 import { isSettled, retryDelay, socketUrl, stateFromClose, type LiveState } from "./live";
 import { copyText } from "@/desktop/clipboard";
+import { MachineClipboard, isCopyChord, isMac } from "./stream";
 
 /** The sandbox's own display, live, in this pane.
  *
@@ -49,7 +50,7 @@ function sendCtrlV(rfb: RFBClient): void {
     rfb.sendKey(XK_CONTROL_L, "ControlLeft", false);
 }
 
-export function LiveScreen({ mode, origin, conversationId, reopen = 0, viewer, onState }: {
+export function LiveScreen({ mode, origin, conversationId, reopen = 0, viewer, onState, onMachineClipboard }: {
     mode: "view" | "control";
     /** A site to steer the browser to before attaching. Naming one means a
      *  sign-in, and the steer repeats on every connect. */
@@ -68,6 +69,8 @@ export function LiveScreen({ mode, origin, conversationId, reopen = 0, viewer, o
      *  the picture is rescaled here, locally, whatever shape the pane is. */
     viewer?: string | null;
     onState: (state: LiveState) => void;
+    /** The machine's clipboard changed. Held, never written here unasked. */
+    onMachineClipboard?: (text: string) => void;
 }) {
     const holder = useRef<HTMLDivElement>(null);
     const surfaces = useRef<HTMLDivElement>(null);
@@ -76,6 +79,9 @@ export function LiveScreen({ mode, origin, conversationId, reopen = 0, viewer, o
        new closure does not tear down a live connection and start another. */
     const report = useRef(onState);
     report.current = onState;
+    const reportClipboard = useRef(onMachineClipboard);
+    reportClipboard.current = onMachineClipboard;
+    const clipboard = useRef(new MachineClipboard());
     /* Whether keystrokes are actually going to the page. RFB moves focus to
        the remote session when the picture is clicked, and "this pane can
        drive" is not the same claim as "this element has the keyboard" —
@@ -158,14 +164,18 @@ export function LiveScreen({ mode, origin, conversationId, reopen = 0, viewer, o
                 }
             });
             /* The other half of the clipboard: the far side telling us what it
-               just copied. Without this, copying something inside the
-               teammate's browser puts it precisely nowhere a person can reach.
-               `writeText` wants the document focused and may be refused
-               outright, which is a fact about this page's permissions and not
-               a broken pane, so it fails quietly. */
+               just copied. Written here only right after a copy chord in this
+               pane (`MachineClipboard`) — the machine's clipboard changes
+               whenever any page in its browser says so, and that must not
+               reach this computer's next paste unasked. `writeText` may still
+               be refused, which is this page's permissions and not a broken
+               pane, so it fails quietly. */
             rfb.addEventListener("clipboard", (event?: { detail?: { text?: string } }) => {
                 const text = event?.detail?.text;
-                if (text) void copyText(text).catch(() => undefined);
+                if (!text) return;
+                reportClipboard.current?.(text);
+                const asked = clipboard.current.received(text, Date.now());
+                if (asked !== null) void copyText(asked).catch(() => undefined);
             });
             rfb.addEventListener("disconnect", () => {
                 /* Guarded on identity: a teardown starts nothing new, but a
@@ -209,6 +219,7 @@ export function LiveScreen({ mode, origin, conversationId, reopen = 0, viewer, o
 
 
     const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+        if (isCopyChord(event, { mac: isMac() })) clipboard.current.arm(Date.now());
         handleBrowserKeyDown(event, client.current);
     }, []);
 

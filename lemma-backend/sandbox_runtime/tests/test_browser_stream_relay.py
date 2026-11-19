@@ -31,7 +31,10 @@ def _fresh_registry(monkeypatch):
     """Each test starts with nobody watching and nobody holding the size."""
     fresh = Viewers()
     monkeypatch.setattr(VIEWERS, "_live", fresh._live)
+    monkeypatch.setattr(VIEWERS, "control_generation", 0)
+    monkeypatch.setattr(VIEWERS, "last_to_take_control", None)
     monkeypatch.setitem(display._lease, "holder", None)
+    monkeypatch.setitem(display._lease, "generation", 0)
 
 
 def _client(monkeypatch, tmp_path) -> TestClient:
@@ -185,6 +188,36 @@ def test_giving_back_control_gives_back_the_size(monkeypatch, tmp_path):
     assert display.lease_holder() is None
 
 
+def test_a_vnc_controller_loses_the_size_when_somebody_takes_control(
+    monkeypatch, tmp_path
+):
+    """A VNC control socket is "in control" for its whole life: RFB input
+    cannot be taken back. Its claim on the size must not outlive somebody
+    else taking control over WebRTC, or the new driver is told somebody else
+    has the screen for as long as that tab stays open."""
+    asked = _resizes(monkeypatch)
+    VIEWERS.join("me/vnc", mode="control", transport="vnc")
+    VIEWERS.join("you/rtc", mode="view", transport="rtc")
+    client = _client(monkeypatch, tmp_path)
+    client.post(
+        "/display:resize",
+        json={"width": 1440, "height": 900, "viewer": "me/vnc"},
+        headers=HEADERS,
+    )
+    assert display.lease_holder() == "me/vnc"
+
+    VIEWERS.set_mode("you/rtc", "control")
+    response = client.post(
+        "/display:resize",
+        json={"width": 390, "height": 844, "viewer": "you/rtc"},
+        headers=HEADERS,
+    )
+
+    assert display.lease_holder() == "you/rtc"
+    assert response.status_code == 200
+    assert asked[-1] == (390, 844)
+
+
 def test_resetting_frees_the_lease(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_XVFB_SCREEN", "1280x800x24")
     asked = _resizes(monkeypatch)
@@ -271,6 +304,24 @@ def test_an_image_without_a_streamer_says_so(monkeypatch, tmp_path):
     """4427 is "use VNC", which the pane does without telling anyone."""
     monkeypatch.setattr(relay_app, "live_port", _async_value(1234))
     monkeypatch.setattr(rtc, "STREAM_PORT", _free_port())
+    monkeypatch.setattr(rtc, "sandbox_command", lambda name: str(tmp_path / name))
+    client = _client(monkeypatch, tmp_path)
+
+    with client.websocket_connect("/rtc?mode=view", headers=HEADERS) as socket:
+        with pytest.raises(WebSocketDisconnect) as closed:
+            socket.receive_text()
+
+    assert closed.value.code == rtc.CLOSE_NO_STREAMER
+
+
+def test_a_streamer_that_will_not_start_falls_back_to_vnc(monkeypatch, tmp_path):
+    """Not 1011. The pane retries 1011, and every retry re-ran a start that
+    was going to fail and minted TURN credentials for it, for ever."""
+    monkeypatch.setattr(relay_app, "live_port", _async_value(1234))
+    monkeypatch.setattr(rtc, "STREAM_PORT", _free_port())
+    script = tmp_path / "start-streamer"
+    script.write_text("#!/bin/sh\necho 'no encoder' >&2\nexit 1\n")
+    script.chmod(0o755)
     monkeypatch.setattr(rtc, "sandbox_command", lambda name: str(tmp_path / name))
     client = _client(monkeypatch, tmp_path)
 

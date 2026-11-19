@@ -5,9 +5,13 @@
 #
 # Dockerfile.workspace carries the same stage; this file is for building and
 # testing the streamer on its own. trixie, because the workspace image is
-# python:3.14-slim on trixie. x264 and libvpx are linked statically, so the
-# binary needs only libc and libm at run time -- the same file runs on the
-# Docker image and on the E2B template's Ubuntu.
+# python:3.14-slim on trixie and E2B's `code-interpreter-v1` base is Debian 13
+# (trixie) too. x264 and libvpx are linked statically, so the binary needs
+# only libc and libm at run time.
+#
+# One Go for both fabrics: this digest is Go 1.25.14, and the E2B template
+# (`templates/e2b/build_templates.py`, `GO_VERSION`) downloads the same
+# release. Move them together.
 ARG GO_IMAGE=golang:1.25-trixie@sha256:2c4c60ef415fbfa5e90300722293bef36c5e63fae17570ce18f580af933dbd73
 
 FROM ${GO_IMAGE} AS build

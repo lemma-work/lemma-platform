@@ -121,9 +121,16 @@ if ! port_answers "$VNC_PORT" && ! vnc_server_running; then
     # from 127.0.0.1 through websockify, and one host blacklisted is all of
     # them. It follows a RandR resize on its own, telling viewers through
     # ExtendedDesktopSize, so there is no `-xrandr` to pass.
+    #
+    # `-SendCutText=0`: RFB is shared, so ServerCutText -- every clipboard
+    # change on the machine -- went to every socket, watchers included, and
+    # the relay's view-mode filter only sees what viewers send. A watcher
+    # could read whatever the agent or the driver copied, passwords included.
+    # Pasting *in* (ClientCutText) is unaffected and still only reaches the
+    # server from a control socket.
     setsid nohup X0tigervnc -display "$DISPLAY_VALUE" -rfbport "$VNC_PORT" \
       -localhost -interface 127.0.0.1 -SecurityTypes None -AlwaysShared \
-      -UseBlacklist=0 -AcceptSetDesktopSize=0 -SendPrimary=0 \
+      -UseBlacklist=0 -AcceptSetDesktopSize=0 -SendPrimary=0 -SendCutText=0 \
       >"$VNC_LOG" 2>&1 < /dev/null &
   else
     VNC_SERVER=x11vnc
@@ -135,8 +142,11 @@ if ! port_answers "$VNC_PORT" && ! vnc_server_running; then
     # serving the geometry it saw at startup. Without it a `/display:resize`
     # leaves x11vnc describing a screen that no longer exists, and the viewer
     # gets a picture that does not match the framebuffer behind it.
+    # `-seldir recv`: viewers may paste in, the machine's clipboard is never
+    # sent out -- the same reason as `-SendCutText=0` above.
     setsid nohup x11vnc -display "$DISPLAY_VALUE" -noshm -forever -shared -nopw \
       -rfbport "$VNC_PORT" -listen 127.0.0.1 -noxdamage -quiet -xrandr resize \
+      -seldir recv \
       >"$VNC_LOG" 2>&1 < /dev/null &
   fi
 fi

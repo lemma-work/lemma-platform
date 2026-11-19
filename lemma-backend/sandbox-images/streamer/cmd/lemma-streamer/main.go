@@ -21,7 +21,6 @@ import (
 
 	"github.com/coder/websocket"
 
-	"lemma-streamer/internal/input"
 	"lemma-streamer/internal/session"
 	"lemma-streamer/internal/ticket"
 )
@@ -42,10 +41,9 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	log.SetPrefix("lemma-streamer: ")
 	addr := net.JoinHostPort("127.0.0.1", env("LEMMA_BROWSER_STREAM_PORT", "4860"))
-	presets := input.ParsePresets(env("LEMMA_STREAM_PRESETS", input.DefaultPresets))
 	verifier := ticket.NewVerifier(&ticket.FileSource{Path: env("LEMMA_STREAM_KEY_FILE", "/tmp/lemma-relay/stream.json")})
 
-	hub, err := session.NewHub(session.Config{Display: env("DISPLAY", ":99"), Presets: presets, Verifier: verifier})
+	hub, err := session.NewHub(session.Config{Display: env("DISPLAY", ":99"), Verifier: verifier})
 	if err != nil {
 		log.Fatalf("cannot open the display: %v", err)
 	}
@@ -56,8 +54,15 @@ func main() {
 		_ = json.NewEncoder(w).Encode(hub.Health())
 	})
 	mux.HandleFunc("GET /signal", func(w http.ResponseWriter, r *http.Request) {
+		// The relay sends no Origin; a browser always does. A page in the
+		// machine's own Chrome can reach this loopback port, so a request
+		// carrying an Origin is refused before the upgrade rather than
+		// left to the ticket check alone.
+		if refuseBrowsers(w, r) {
+			return
+		}
 		ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			// Loopback only, and dialled by the relay, which sends no Origin.
+			// Origin is refused above; there is none left to verify.
 			InsecureSkipVerify: true,
 			CompressionMode:    websocket.CompressionDisabled,
 		})
@@ -101,4 +106,13 @@ func main() {
 	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+// refuseBrowsers answers 403 to a request that came from a web page.
+func refuseBrowsers(w http.ResponseWriter, r *http.Request) bool {
+	if _, ok := r.Header["Origin"]; !ok {
+		return false
+	}
+	http.Error(w, "signalling is for the relay, not for pages", http.StatusForbidden)
+	return true
 }

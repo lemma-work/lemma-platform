@@ -545,6 +545,35 @@ async def test_a_session_tells_the_sandbox_whether_to_use_a_proxy(
     )
 
 
+async def test_a_session_tells_the_sandbox_its_display_density_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On the agent's path, not only the viewer's.
+
+    The display is decided once, when it is created, and the agent's first
+    browser command creates it as often as a viewer does. Delivered only when
+    somebody opened the screen, the decision changed under the agent's
+    running Chrome, and `lemma-ensure-display` restarted it mid-task.
+    """
+    import json
+
+    from app.modules.workspace.services.browser_stream import DISPLAY_DECISION_PATH
+
+    user_id = uuid4()
+    sandbox = _FakeSandbox()
+    manager_client = _FakeManagerClient()
+
+    _mint_session_tokens(monkeypatch)
+    service = _service(sandbox, manager_client=manager_client)
+
+    await service.get_session(user_id=user_id, pod_id=None, session_id="conversation")
+
+    assert DISPLAY_DECISION_PATH in manager_client.files
+    assert set(json.loads(manager_client.files[DISPLAY_DECISION_PATH])) == {
+        "native_density"
+    }
+
+
 @pytest.mark.asyncio
 async def test_an_exhausted_ensure_stops_believing_what_it_knew(
     monkeypatch: pytest.MonkeyPatch,

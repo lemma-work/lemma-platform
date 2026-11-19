@@ -29,7 +29,10 @@ from app.modules.workspace.domain.machine_access import (
     MachineAccess,
     MachineCaller,
 )
-from app.modules.workspace.domain.machine_errors import MachineNotFound
+from app.modules.workspace.domain.machine_errors import (
+    MachineAccessDenied,
+    MachineNotFound,
+)
 from sandbox_runtime.paths import RUNS_ROOT
 
 _SLUG = re.compile(r"[^a-z0-9-]+")
@@ -72,9 +75,12 @@ async def resolve_agent_machine(
     agent_name: str | None,
     conversation_id: UUID | None,
     run_id: UUID | None,
+    approved: frozenset[str] = frozenset(),
 ) -> AgentMachine:
     """The machine for this run's next command, refused with a sentence if the
-    run may not use it."""
+    run may not use it -- or held for its person's approval while it reads
+    what people outside the pod wrote. ``approved`` is what the person
+    approved for this one call."""
     from app.core.api.dependencies import get_uow_factory
     from app.modules.workspace.services.machine_resolver import MachineResolver
 
@@ -84,6 +90,7 @@ async def resolve_agent_machine(
         pod_id=pod_id,
         workload_id=agent_id or pod_id,
         conversation_id=conversation_id,
+        approved=approved,
     )
     target = (ref or "me").strip() or "me"
     async with get_uow_factory()() as uow:
@@ -370,7 +377,9 @@ async def machine_brief(
             conversation_id=conversation_id,
             run_id=run_id,
         )
-    except MachineNotFound:
+    except MachineNotFound, MachineAccessDenied:
+        # Held for approval included: the brief says nothing of a machine the
+        # run cannot use yet, and building it must not fail the run.
         return None
     machine = target.machine
     compute_left = None

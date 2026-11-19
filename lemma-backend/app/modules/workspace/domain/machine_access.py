@@ -68,8 +68,12 @@ class MachineCaller:
     workload_id: UUID | None = None
     app_id: UUID | None = None
     #: The run's conversation, for an agent: whom it answers decides whether
-    #: it may use its person's own machine.
+    #: it may use its person's own machine, and whether it is reading what
+    #: people outside the pod wrote (``outside_text``).
     conversation_id: UUID | None = None
+    #: What the person approved for this one call, after it was held for
+    #: approval: answered as approved for this caller alone.
+    approved: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +84,9 @@ class PodAccess:
     use: bool = False
     #: May read the pod the machine is in (``pod.read``).
     see: bool = False
+    #: Use was refused only because the run is reading what people outside
+    #: the pod wrote: its person's approval lifts it.
+    held: bool = False
 
     @property
     def level(self) -> MachineAccess:

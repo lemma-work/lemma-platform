@@ -2,8 +2,7 @@
 //
 // It only ever receives what `input.Parse` admitted, and it only ever does
 // what a keyboard and a mouse plugged into the machine could do -- plus
-// setting the clipboard before a paste and asking for one of the preset
-// screen sizes.
+// setting the clipboard before a paste.
 package inject
 
 import (
@@ -11,8 +10,8 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"strconv"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -189,12 +188,6 @@ func (in *Injector) Apply(cmd input.Command) error {
 		in.key(xkV, true)
 		in.key(xkV, false)
 		in.key(xkControlL, false)
-	case input.Size:
-		in.c.Sync()
-		in.mu.Unlock()
-		err := resize(cmd.W, cmd.H)
-		in.mu.Lock()
-		return err
 	}
 	in.c.Sync()
 	return nil
@@ -284,21 +277,54 @@ func (in *Injector) ReleaseAll() {
 	in.c.Sync()
 }
 
+// pasteHold is how long a pasted string stays on the machine's clipboard.
+// The Ctrl+V that follows reads it within milliseconds; after that it is a
+// person's text -- often a password -- sitting where the agent's shell and
+// every later page can read it, held by an xclip nobody owns.
+const pasteHold = 10 * time.Second
+
+var clipboardOwner struct {
+	sync.Mutex
+	group int
+	timer *time.Timer
+}
+
 func setClipboard(s string) error {
 	if !utf8.ValidString(s) {
 		return fmt.Errorf("clipboard text is not utf-8")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	// xclip stays behind as the selection owner; no pipes are attached to its
-	// output, so waiting for it returns as soon as it has read stdin.
+	// xclip forks a child that stays behind as the selection owner, and the
+	// parent exits once the selection is taken, so Run returns when Ctrl+V
+	// can safely follow. The child keeps the parent's process group, which
+	// is how it is found again to be ended after `pasteHold`.
 	cmd := exec.CommandContext(ctx, "xclip", "-i", "-selection", "clipboard")
 	cmd.Stdin = bytes.NewReader([]byte(s))
-	return cmd.Run()
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	holdClipboard(cmd.Process.Pid)
+	return nil
 }
 
-func resize(w, h int) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	return exec.CommandContext(ctx, "set-display-size", strconv.Itoa(w), strconv.Itoa(h)).Run()
+// holdClipboard ends the previous paste's owner now -- the new one has taken
+// the selection, so it is only a process -- and this one after `pasteHold`.
+func holdClipboard(group int) {
+	clipboardOwner.Lock()
+	defer clipboardOwner.Unlock()
+	if clipboardOwner.timer != nil {
+		clipboardOwner.timer.Stop()
+		_ = syscall.Kill(-clipboardOwner.group, syscall.SIGTERM)
+	}
+	clipboardOwner.group = group
+	clipboardOwner.timer = time.AfterFunc(pasteHold, func() {
+		clipboardOwner.Lock()
+		defer clipboardOwner.Unlock()
+		if clipboardOwner.group == group {
+			_ = syscall.Kill(-group, syscall.SIGTERM)
+			clipboardOwner.timer = nil
+		}
+	})
 }

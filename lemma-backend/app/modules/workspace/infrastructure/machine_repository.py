@@ -249,12 +249,21 @@ class MachineRepository:
         The id stays because the sweep reclaims a deleted machine's provider
         objects by it; giving the revived row a new id would orphan them.
         Revoking here is the smaller change: the deleted machine's grants go,
-        and so do any previews its delete did not already revoke.
+        and so do any previews its delete did not already revoke, and any
+        service definitions -- a service is never started on a life it was not
+        started on, with a token minted for whoever started it there.
         """
         from app.core.authorization.context import ResourceType
         from app.core.authorization.models import ResourcePermissionGrantModel
         from app.modules.workspace.infrastructure.machine_models import (
             MachinePreviewModel,
+            MachineServiceModel,
+        )
+
+        await self.session.execute(
+            delete(MachineServiceModel).where(
+                MachineServiceModel.sandbox_id == machine_id
+            )
         )
 
         await self.session.execute(
@@ -330,6 +339,7 @@ def to_machine(row: SandboxModel, instance: SandboxInstanceModel | None) -> Mach
         run_slots=row.run_slots,
         status=_status(row, instance),
         last_used_at=row.last_used_at,
+        moving=row.size_migration_state is not None,
     )
 
 

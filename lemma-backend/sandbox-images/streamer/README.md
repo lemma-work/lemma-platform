@@ -15,7 +15,7 @@ after two minutes with nobody watching.
 |---|---|
 | `internal/ticket` | Verifies the per-viewer ticket the API mints |
 | `internal/input` | The closed input set: strict parsing, ranges, rate limits |
-| `internal/inject` | XTest injection of parsed commands; clipboard and resize helpers |
+| `internal/inject` | XTest injection of parsed commands; the paste's clipboard handover |
 | `internal/capture` | XShm (or GetImage) grabs, XDamage, XFixes cursor and clipboard |
 | `internal/convert` | BGRA → I420, pure Go |
 | `internal/encode` | libx264 (constrained baseline) and libvpx (VP8), cgo, linked statically |
@@ -44,7 +44,11 @@ set, and a viewer who is only watching has no input path at all.**
   Any other label is closed.
 - **One controller.** The newest control ticket wins; the previous controller
   receives `{"t":"revoked"}`, loses its input channel, and every key or button
-  it held is released.
+  it held is released. A `control` ticket must name the same viewer (`sub`)
+  as the socket's `hello` ticket; one naming anybody else ends the session.
+- **No pages.** `/signal` answers 403 to any request carrying an `Origin`
+  header. The relay sends none; a page in the machine's own Chrome, which can
+  reach this loopback port, always does.
 - **Closed set.** Each `input` message is one strict JSON object, no unknown
   fields, no trailing data, at most 128 bytes (text 4 KiB, paste 1 MiB):
 
@@ -56,11 +60,17 @@ set, and a viewer who is only watching has no input path at all.**
   | `k` | `k`, `d` | keysym: Latin-1, the 0xfe00–0xffff block, or Unicode keysyms |
   | `txt` | `s` | ≤ 256 code points, no control characters but `\n` `\t` |
   | `paste` | `s` | ≤ 1 MiB; sets the clipboard, then Ctrl+V |
-  | `size` | `w`, `h` | one of `LEMMA_STREAM_PRESETS` |
 
   Binary frames and everything else are dropped and counted. 1000 messages/s,
-  120 wheel notches/s. Nothing here runs a command, opens a file or reaches
-  the page's script.
+  120 wheel notches/s, and 2 pastes/s on a budget of their own (a refused
+  paste costs the keyboard nothing). A paste's text stays on the machine's
+  clipboard for 10 s, long enough for the Ctrl+V, and its `xclip` is then
+  ended. Nothing here runs a command, opens a file or reaches the page's
+  script.
+
+  There is no screen-size message. The display's size belongs to the relay's
+  resize lease (`browser_relay/display.py`), which the pane reaches through
+  the API on either transport; a second door here would go around it.
 
 ## Signalling
 
@@ -85,7 +95,19 @@ Streamer → viewer: `ready {mode}`, `answer {sdp, codec}`, `candidate {…}`
 Media: H.264 constrained baseline (`profile-level-id=42e01f`,
 `packetization-mode=1`) when the offer has it, else VP8. NACK, PLI/FIR (a
 keyframe, at most one per 300 ms), and transport-wide congestion control
-feeding the encoder's bitrate (the slowest viewer of a codec sets it).
+feeding the encoder's bitrate.
+
+**One encoder per codec, shared.** Every viewer of a codec gets the same
+encoded frames, so the bitrate is the *minimum* of their congestion
+estimates: one viewer on a bad link lowers the picture for everybody
+watching that machine. That is the price of encoding once rather than once
+per viewer, which is what keeps the machine's CPU flat as viewers join.
+
+**H.264 and patents.** H.264 is preferred because Safari and iOS decode it in
+hardware; it is a patent-encumbered format, and shipping an encoder for it is
+a licensing question as much as a technical one. VP8 is royalty-free, every
+WebRTC stack must support it, and it is already the fallback here: preferring
+it is a one-line change to the codec choice in `codecFor`.
 
 Events on the `events` channel: `hello {w,h,codec}`, `size {w,h}`,
 `cursor {id,x,y,w,h,png}` (the PNG only the first time an id is sent; `x`,`y`
@@ -103,12 +125,16 @@ takes from a one-frame slot: a frame that arrives while the encoder is busy
 replaces the waiting one, so a slow encode drops frames and never queues.
 When the machine's spare CPU (cgroup `cpu.max`/`cpu.stat`, else `/proc/stat`,
 over 5 s) falls below 0.25 core the frame rate steps to 15, below 0.1 to 5,
-and climbs back with hysteresis.
+and climbs back with hysteresis. The encoders follow the frame rate that
+actually arrives, so the bitrate holds when it drops: VP8 is given each
+frame's real duration, and x264's bitrate is scaled by how far the measured
+rate is from the one it was opened at (x264's own VFR mode would hold every
+frame back by one to learn its duration).
 
 ## Build and test
 
 ```bash
-# unit tests (pure packages; anywhere with Go 1.25)
+# unit tests (pure packages; anywhere with the Go in the Dockerfile)
 go test ./internal/ticket ./internal/input ./internal/rate ./internal/convert
 go test ./internal/input -run x -fuzz FuzzParse -fuzztime 60s
 go test ./internal/ticket -run x -fuzz FuzzVerify -fuzztime 60s
@@ -116,9 +142,14 @@ go test ./internal/ticket -run x -fuzz FuzzVerify -fuzztime 60s
 # everything, encoders included, and both binaries into ./out
 docker build --target out -o type=local,dest=out .
 
-# integration: a workspace image + coturn, see the script's header
-integration/run.sh [lemma-workspace:<tag>]
+# end to end, from lemma-backend/: a real workspace image, coturn, and
+# `streamcheck` as the viewer, through the API's view socket
+uv run pytest app/modules/workspace/tests/e2e/test_browser_stream_e2e.py
 ```
+
+What it costs -- frame rate, latency, CPU, bytes, per transport and network
+-- is the stream bench's to say, not a test's: see "Measuring it" in
+`docs/architecture/sandbox/live-browser-view.md`.
 
 The encoders link x264 and libvpx statically, so the binary needs only libc
 and libm and runs on both the Debian image and the E2B template.

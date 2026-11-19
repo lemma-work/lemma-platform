@@ -5,7 +5,9 @@ import { usePictureInPicture } from "./use-picture-in-picture";
 import { CloseIcon, ExternalIcon } from "@/ui/icons";
 import { LiveView } from "./live-view";
 import { loadLastFrame } from "./last-frame";
-import { type LiveState } from "./live";
+import { watchHidden, type LiveState } from "./live";
+import { drivesAtFirst } from "./stream";
+import { copyText } from "@/desktop/clipboard";
 import { screenSay, type BrowserState, type MachineState } from "./machine";
 import { storePreset, storedPreset, type PresetName } from "./presets";
 import { useBrowserDetails } from "./queries";
@@ -53,12 +55,18 @@ function liveNote(state: LiveState): string {
  *  they cannot dismiss on a machine that is theirs. A watch/drive toggle would
  *  only move that cost onto somebody who forgot to press it.
  *
+ *  On a pod machine the screen opens watching instead: somebody else — a
+ *  teammate, the agent — may be at its keyboard, and opening the screen must
+ *  not take it from them. Either way the choice survives a reconnect.
+ *
  *  Connecting is always a click. Attaching starts a browser if none is running
  *  and holds the sandbox awake for as long as the socket is open, so a screen
  *  that connected on render would run a machine for anybody who left the tab
- *  open. It disconnects the moment this pane stops being the one on screen.
+ *  open. It disconnects the moment this pane stops being the one on screen,
+ *  or once the whole page has been in the background for a minute, and
+ *  reconnects — watching or driving as before — when it is back.
  */
-export function Screen({ state, browser, conversationId, visible, busy, onWake, onOpenTab, fill = false }: {
+export function Screen({ state, browser, conversationId, visible, busy, onWake, onOpenTab, fill = false, machine = "mine" }: {
     state: MachineState;
     browser: BrowserState | undefined;
     /** The screen is the whole view, not a card beside some text.
@@ -74,6 +82,8 @@ export function Screen({ state, browser, conversationId, visible, busy, onWake, 
      *  a top-level page is not a framed one, so the proxy's `frame-ancestors`
      *  has nothing to say about it and it works where the socket does not. */
     onOpenTab: () => void;
+    /** Whose machine this is: your own, or one the pod shares. */
+    machine?: "mine" | "pod";
 }) {
     const say = screenSay(state, browser);
     const [watching, setWatching] = useState(false);
@@ -103,14 +113,23 @@ export function Screen({ state, browser, conversationId, visible, busy, onWake, 
         setWatching(true);
     }, [fill, stopped, visible, say.action, watching]);
 
-    const showing = watching && visible;
+    /* The page itself in the background for a while: the socket goes, and
+       comes back with the page. */
+    const [away, setAway] = useState(false);
+    useEffect(() => {
+        if (typeof document === "undefined") return;
+        return watchHidden(document, setAway);
+    }, []);
+
+    const showing = watching && visible && !away;
     const pip = usePictureInPicture(showing);
     const details = useBrowserDetails(showing);
     const [preset, setPreset] = useState<PresetName>(storedPreset);
     /* Driving is the default on your own machine — nothing to arm first, as
        above — and giving it back is one click when the agent should work
-       undisturbed. */
-    const [wantControl, setWantControl] = useState(true);
+       undisturbed. Watching is the default on a pod's. */
+    const [wantControl, setWantControl] = useState(() => drivesAtFirst(machine));
+    const [machineClipboard, setMachineClipboard] = useState<string | null>(null);
     const [driving, setDriving] = useState(false);
     const [mayDrive, setMayDrive] = useState(true);
     const [agentFromStream, setAgentFromStream] = useState<boolean | null>(null);
@@ -136,6 +155,10 @@ export function Screen({ state, browser, conversationId, visible, busy, onWake, 
             onControl={(isDriving, may) => { setDriving(isDriving); setMayDrive(may); }}
             onAgentDriving={setAgentFromStream}
             onResizeRefused={setSizeNote}
+            /* Somebody took the keyboard: watch from here on, so a reconnect
+               does not quietly take it back from them. */
+            onRevoked={() => setWantControl(false)}
+            onMachineClipboard={setMachineClipboard}
         />
     );
 
@@ -153,6 +176,7 @@ export function Screen({ state, browser, conversationId, visible, busy, onWake, 
                     onPreset={choosePreset}
                     onTake={() => { setSizeNote(null); setWantControl(true); }}
                     onGiveBack={() => setWantControl(false)}
+                    onCopyFromMachine={machineClipboard === null ? undefined : () => void copyText(machineClipboard).catch(() => undefined)}
                 />
             )}
             <div className="screen-glass">

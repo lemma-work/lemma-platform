@@ -392,7 +392,7 @@ class WorkspaceSettings(BaseSettings):
         description="coturn's `static-auth-secret`, for REST credentials",
     )
     turn_credential_ttl_seconds: int = Field(
-        default=4 * 3600,
+        default=3600,
         ge=60,
         le=86_400,
         validation_alias=AliasChoices("TURN_CREDENTIAL_TTL_SECONDS"),
@@ -400,8 +400,10 @@ class WorkspaceSettings(BaseSettings):
             "How long the TURN credentials minted for one connection last, on "
             "both ends. A relay may check them again when an allocation is "
             "refreshed, so this bounds how long one view can stay connected "
-            "before it has to reconnect; short enough that a credential "
-            "copied out of a browser is soon worthless."
+            "before it reconnects, which mints fresh ones; short enough that a "
+            "credential copied out of a browser is soon worthless. A view "
+            "reconnecting within a minute is handed the same ones again "
+            "rather than minting more."
         ),
     )
 

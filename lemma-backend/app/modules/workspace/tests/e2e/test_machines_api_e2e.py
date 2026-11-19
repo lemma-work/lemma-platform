@@ -235,7 +235,7 @@ async def test_the_browser_profile_cannot_be_read_deleted_or_overwritten(
     )
     assert made["exit_code"] == 0, made["text"]
     through = await client.put(
-        "/machines/me/files/content",
+        "/machines/me/files:content",
         params={"path": f"{link}/planted"},
         content=b"x",
     )
@@ -367,16 +367,3 @@ async def test_the_old_workspace_routes_say_where_they_went(machine) -> None:
 
     assert retired.status_code == status.HTTP_410_GONE, retired.text
     assert retired.json()["details"] == {"replacement": "GET /machines/me/files"}
-
-
-async def test_the_old_write_path_still_writes(machine) -> None:
-    path = f"{WORKSPACE_ROOT}/legacy-{uuid4().hex[:6]}.txt"
-    written = await machine["client"].put(
-        "/machines/me/files/content", params={"path": path}, content=b"old client"
-    )
-    assert written.status_code == status.HTTP_200_OK, written.text
-
-    read = await machine["client"].get(
-        "/machines/me/files:content", params={"path": path}
-    )
-    assert read.content == b"old client"

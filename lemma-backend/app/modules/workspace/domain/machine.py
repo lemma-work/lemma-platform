@@ -307,6 +307,9 @@ class Machine:
     home: str = HOME_ROOT
     status: MachineStatus = MachineStatus.STOPPED
     last_used_at: datetime | None = None
+    #: A size move is under way (`size_migration`): its home is being carried
+    #: to a new disk, and nothing may use it until the move ends.
+    moving: bool = False
 
     @property
     def ref(self) -> str:

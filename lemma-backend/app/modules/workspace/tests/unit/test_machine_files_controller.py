@@ -557,20 +557,17 @@ class TestLoginsCannotBeChangedThroughTheFileApi:
         assert files.deleted == ["/home/user/lemma/old.log"]
 
 
-# --- the write's two spellings ------------------------------------------------
+# --- the write's one spelling --------------------------------------------------
 
 
-def test_the_write_is_files_colon_content_and_the_old_path_is_deprecated() -> None:
-    """`PUT files:content` matches `GET files:content`; the first spelling
-    still writes, for one release, marked deprecated where a client reads it."""
+def test_the_write_is_only_files_colon_content() -> None:
+    """`PUT files:content` matches `GET files:content`, and is the only way to
+    write: the slash spelling never shipped in a release."""
     writes = {
         route.path: route
         for route in controller.router.routes
         if "PUT" in getattr(route, "methods", set())
     }
 
+    assert set(writes) == {"/machines/{ref}/files:content"}
     assert writes["/machines/{ref}/files:content"].endpoint is controller.write_file
-    legacy = writes["/machines/{ref}/files/content"]
-    assert legacy.endpoint is controller.write_file
-    assert legacy.deprecated is True
-    assert not writes["/machines/{ref}/files:content"].deprecated

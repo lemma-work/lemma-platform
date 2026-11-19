@@ -29,13 +29,17 @@ import secrets
 from typing import Literal
 
 from fastapi import WebSocket
+from redis.exceptions import RedisError
 
+from app.core.config import settings
+from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.services.browser_stream import Mode, mint_ticket
 from app.modules.workspace.services.browser_stream_turn import (
     IceServer,
+    TurnProvider,
     TurnUnavailable,
     turn_provider,
 )
@@ -72,17 +76,83 @@ class RtcUnavailable(RuntimeError):
     """WebRTC cannot be set up for this view; the pane should use VNC."""
 
 
-async def ice_for(viewer: RtcViewer) -> tuple[list[IceServer], list[IceServer]]:
+#: How long one viewer's minted credentials are handed out again. A pane
+#: reconnecting -- a blip, a retry, the API rolling -- opens its socket again
+#: within seconds, and each open minted two credentials from the provider
+#: (Cloudflare: two API calls). Short against the credentials' own lifetime,
+#: so what is reused still has nearly all of it left.
+ICE_REUSE_SECONDS = 60
+
+_ice_cache: RedisJsonCache[dict[str, list[IceServer]]] | None = None
+
+
+def _ice_reuse() -> RedisJsonCache[dict[str, list[IceServer]]]:
+    global _ice_cache
+    if _ice_cache is None:
+        _ice_cache = RedisJsonCache(
+            settings.redis_url, "browser-view:ice:v1", ttl_seconds=ICE_REUSE_SECONDS
+        )
+    return _ice_cache
+
+
+async def ice_for(
+    viewer: RtcViewer,
+    *,
+    provider: TurnProvider | None = None,
+    reuse: RedisJsonCache[dict[str, list[IceServer]]] | None = None,
+) -> tuple[list[IceServer], list[IceServer]]:
     """TURN credentials for the machine's end and the browser's, minted together.
 
     Different usernames for the two ends, so a relay's logs can tell a
     machine's allocation from a viewer's. The rest of each username is random
     per session: the relay is a third party, and its logs have no use for which
     person or sandbox was on the other end.
+
+    Reused for `ICE_REUSE_SECONDS` by the same viewer of the same machine, so
+    a reconnect does not mint again. Keyed by both, never shared between
+    people: a credential is only as private as the pane it was handed to.
+
+    `provider` and `reuse` default to the configured ones; a caller passes
+    its own to test the reuse without a relay or a Redis.
     """
-    provider = turn_provider()
+    provider = provider or turn_provider()
     if provider is None:
         raise RtcUnavailable("no TURN relay is configured")
+    reuse = reuse or _ice_reuse()
+    key = f"{viewer.provider_id}:{viewer.sub}"
+    reused = await _reused_ice(reuse, key)
+    if reused is not None:
+        return reused
+    machine, browser = await _mint_ice(provider)
+    try:
+        await reuse.set_json(key, {"machine": machine, "browser": browser})
+    except RedisError, OSError:
+        logger.warning("workspace.browser_view.ice_cache_unavailable.degraded")
+    return machine, browser
+
+
+async def _reused_ice(
+    reuse: RedisJsonCache[dict[str, list[IceServer]]], key: str
+) -> tuple[list[IceServer], list[IceServer]] | None:
+    """What this viewer was minted moments ago, if it is still on hand.
+
+    Read back from Redis, so checked rather than trusted: anything not in
+    the shape written is a miss, and a Redis that cannot answer is one too.
+    """
+    try:
+        cached = await reuse.get_json(key)
+    except RedisError, OSError:
+        logger.warning("workspace.browser_view.ice_cache_unavailable.degraded")
+        return None
+    if not isinstance(cached, dict):
+        return None
+    machine, browser = cached.get("machine"), cached.get("browser")
+    if isinstance(machine, list) and isinstance(browser, list) and machine and browser:
+        return machine, browser
+    return None
+
+
+async def _mint_ice(provider: TurnProvider) -> tuple[list[IceServer], list[IceServer]]:
     ttl = workspace_settings.turn_credential_ttl_seconds
     try:
         machine, browser = await asyncio.gather(

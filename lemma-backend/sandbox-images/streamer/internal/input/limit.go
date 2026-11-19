@@ -7,18 +7,25 @@ import (
 
 // Rates a controller may send at. Well above anything a hand produces, and
 // low enough that a hostile client cannot turn the X server into a busy loop.
+//
+// A paste is not a keystroke: it is up to a megabyte, an `xclip` and a
+// clipboard handover, so it has a budget of its own -- a person pastes a few
+// times a minute, not a thousand times a second -- and is checked before the
+// shared one so a refused paste costs the keyboard nothing.
 const (
 	MessagesPerSecond = 1000
 	WheelPerSecond    = 120
+	PastePerSecond    = 2
 )
 
-// Limiter is two token buckets: everything, and wheel notches on their own,
-// because a wheel event is a press and a release per notch.
+// Limiter is token buckets: everything, wheel notches on their own (a wheel
+// event is a press and a release per notch), and pastes on their own.
 type Limiter struct {
 	mu    sync.Mutex
 	now   func() time.Time
 	all   bucket
 	wheel bucket
+	paste bucket
 }
 
 type bucket struct {
@@ -47,7 +54,12 @@ func NewLimiter(now func() time.Time) *Limiter {
 	if now == nil {
 		now = time.Now
 	}
-	return &Limiter{now: now, all: bucket{rate: MessagesPerSecond}, wheel: bucket{rate: WheelPerSecond}}
+	return &Limiter{
+		now:   now,
+		all:   bucket{rate: MessagesPerSecond},
+		wheel: bucket{rate: WheelPerSecond},
+		paste: bucket{rate: PastePerSecond},
+	}
 }
 
 // Allow reports whether one more message (and, for a wheel, its notches) fits.
@@ -55,6 +67,9 @@ func (l *Limiter) Allow(c Command) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
+	if c.Kind == Paste && !l.paste.take(now, 1) {
+		return false
+	}
 	if !l.all.take(now, 1) {
 		return false
 	}
