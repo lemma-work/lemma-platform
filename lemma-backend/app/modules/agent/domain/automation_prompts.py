@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 
+from app.core.authorization.delegation import agent_display_name
 from app.modules.agent.domain.run_state import ScheduleFiring
 
 #: Keys of a firing's ``input_data["metadata"]`` that describe the *firing*,
@@ -58,13 +59,16 @@ def step_output(output: object) -> dict[str, object]:
 def conversation_title(
     agent_name: str, input_data: dict[str, object], started_by_schedule: bool
 ) -> str:
+    # The assistant's stored name (`pod_default`) is an identifier; the title
+    # is read by people, so it says the name they know it by.
+    shown = agent_display_name(agent_name)
     if started_by_schedule:
         metadata = input_data.get("metadata")
         name = metadata.get("schedule_name") if isinstance(metadata, dict) else None
         if isinstance(name, str) and name.strip():
             return f"Schedule: {name.strip()}"
-        return f"Scheduled run: {agent_name}"
-    return f"Workflow run: {agent_name}"
+        return f"Scheduled run: {shown}"
+    return f"Workflow run: {shown}"
 
 
 def workflow_input_prompt(input_data: dict[str, object]) -> str:

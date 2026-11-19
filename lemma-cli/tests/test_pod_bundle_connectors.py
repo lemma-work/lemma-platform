@@ -15,6 +15,7 @@ import pytest
 from lemma_cli.cli_app.pod_bundle_connectors import (
     declare_pod_connectors,
     export_pod_connectors,
+    left_out,
     plan_pod_connectors,
 )
 
@@ -337,3 +338,69 @@ def test_an_account_shared_with_only_some_people_is_refused_before_anything(
             share_accounts={"support-inbox": "acct-mine"},
         )
     assert connectors.calls == []
+
+
+def _with_optional_meet(root: Path, *, runs_through: bool = False) -> Path:
+    _write(
+        root / "connectors" / "meet" / "meet.json",
+        {"connector": "googlemeet", "mode": "PER_MEMBER", "required": False},
+    )
+    _write(
+        root / "functions" / "due" / "due.json",
+        {
+            "name": "due",
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "connector",
+                        "resource_name": "meet",
+                        "permission_ids": ["connector.use"],
+                    }
+                ]
+            },
+        },
+    )
+    if runs_through:
+        _write(
+            root / "schedules" / "on_meet" / "on_meet.json",
+            {"name": "on_meet", "schedule_type": "WEBHOOK", "pod_connector": "meet"},
+        )
+    return root
+
+
+def test_an_optional_connector_nobody_installed_is_left_out(tmp_path: Path):
+    connectors = _Connectors(installations=_INSTALLS)
+    notices: list[str] = []
+
+    pod_sdk, planned, _ = plan_pod_connectors(
+        _Client(connectors),
+        pod_id="pod-1",
+        source_dir=_with_optional_meet(_bundle(tmp_path)),
+    )
+    summary = declare_pod_connectors(pod_sdk, planned, on_notice=notices.append)
+
+    assert left_out(planned) == {"meet"}
+    assert "skipped:meet" in summary
+    assert not any(call[:2] == ("declare", "meet") for call in connectors.calls)
+    assert any("'meet'" in note and "left out" in note for note in notices)
+
+
+def test_an_optional_connector_something_runs_through_still_stops_the_import(
+    tmp_path: Path,
+):
+    with pytest.raises(ValueError, match="no googlemeet installation"):
+        plan_pod_connectors(
+            _Client(_Connectors(installations=_INSTALLS)),
+            pod_id="pod-1",
+            source_dir=_with_optional_meet(_bundle(tmp_path), runs_through=True),
+        )
+
+
+def test_an_optional_connector_comes_in_when_asked_to_install_it(tmp_path: Path):
+    _, planned, _ = plan_pod_connectors(
+        _Client(_Connectors(installations=_INSTALLS)),
+        pod_id="pod-1",
+        source_dir=_with_optional_meet(_bundle(tmp_path)),
+        create_installations=True,
+    )
+    assert left_out(planned) == frozenset()

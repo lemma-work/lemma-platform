@@ -169,6 +169,14 @@ export function startedByLemma(conversation: Pick<ConversationRef, "origin">): b
     return kind ? STARTED_BY_LEMMA.has(kind) : false;
 }
 
+/** `apps` with the one a Lemma opens on first: `home`, an app's name (its tab
+ *  id without `app:`), when the Lemma still has it. Otherwise as given, and
+ *  the first of those is the one it opens on. */
+export function homeFirst<T>(apps: readonly T[], home: string | undefined, idOf: (app: T) => string): T[] {
+    const chosen = home ? apps.findIndex((app) => idOf(app) === "app:" + home) : -1;
+    return chosen > 0 ? [apps[chosen], ...apps.slice(0, chosen), ...apps.slice(chosen + 1)] : [...apps];
+}
+
 function localDay(ms: number): string {
     const at = new Date(ms);
     const month = String(at.getMonth() + 1).padStart(2, "0");

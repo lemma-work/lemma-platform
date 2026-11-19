@@ -76,6 +76,8 @@ Rules:
   - `"config": {"$json_file": "config.json"}` — parsed as JSON
 - `visibility` (`PERSONAL|POD|RESTRICTED|PUBLIC`, default `POD`) is a first-class field on tables/functions/agents/workflows/schedules and round-trips through export/import.
 - `pod.json` is metadata plus the portability variables: `{"name": ..., "description": ..., "icon_url": ..., "format_version": 3, "variables": {...}}`; `format_version` is `4` when the bundle declares a pod connector under `connectors/`, which readers of 3 would skip. A bundle of a newer format than your CLI reads is refused up front: update the CLI.
+- **One schedule per GLOBAL workflow.** A GLOBAL workflow takes one schedule per person. A bundle whose new schedules would put two on one new GLOBAL workflow is refused before anything is written: `lemma pods import` creates a workflow with no `mode` as GLOBAL, the server's import as USER. Give each schedule its own small workflow.
+- `"home_app": "<app name>"` in `pod.json` is the app the Lemma opens on (otherwise its oldest app). An import sets it only on a Lemma that has no choice and had no other apps; a Lemma that already opens somewhere keeps it, and people change it from the Lemma's Apps tab ("Make it first").
 - `payloads/` and `README.md` are ignored by pod import, but they are part of a high-quality handoff: keep sample function/workflow inputs, seed records, and the end-to-end smoke test there.
 
 ### Per-resource JSON shapes
@@ -242,8 +244,13 @@ lemma pods import . --values ./vars.json                  # or a file
 lemma pods import . --pod-member <member-id>              # fills pod-member vars
 ```
 
-Pod-member variables default to the importing user's own membership, so a
-single-user import usually needs nothing.
+Pod-member variables default to the importing user's own membership, and any
+other variable with a `default` (an app slug) to that default, so a
+single-user import usually needs nothing. Importing one part on its own
+(`lemma pods import functions/<name>`, or `apps/`) reads the variables declared
+in the bundle root's `pod.json` and brings along the connectors that part
+names; nothing that acts on the whole Lemma (its name, outcome, home app)
+comes with it.
 
 ## Pod connectors in a bundle
 
@@ -265,6 +272,11 @@ Import declares them **first**, then everything that names their slug. For each:
   imports needing an account — a warning, not a failure: somebody shares one
   later from the pod's Connections page.
 - **PER_MEMBER + required**: members who have no account are asked to connect.
+- **Optional (`required: false`) with no installation, and only grants name
+  it** (no schedule or surface runs through it): it is **left out** rather than
+  stopping the import, and grants on it are dropped with a warning. Pass
+  `--create-installations` (or choose an installation) to bring it in. A
+  schedule or surface running through it makes it needed after all.
 - A slug the pod already declares for the same connector in the same mode is
   kept as the pod has it; one declared for a different connector, or in the
   other mode, stops the import.

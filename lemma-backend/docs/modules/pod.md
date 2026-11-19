@@ -121,6 +121,20 @@ brings them.
 `since` is stamped the day it is first set and kept while only the wording,
 target or measure change. Every change emits `PodOutcomeChanged`.
 
+### The app a pod opens on
+
+`PodConfig.home_app` is the name of the app a pod opens on. Its apps are listed
+oldest first, an order nobody chose, and without a choice a pod opens on the
+first of them; the frontend reads `home_app` before that order and puts the
+chosen app first wherever one pod's apps are shown. Anyone who may update the
+pod sets it with `PUT /pods/{pod_id}` (`config.home_app`); `null` hands it back
+to the apps' own order. It is always serialized, unlike the empty defaults
+beside it, because an update merges the config key by key and a dropped `null`
+could never clear it. A name no app has any longer is no choice. A stored value
+of the wrong shape reads as none rather than costing the rest of the config.
+`contracts/home_app.py` reads and sets it for `pod_bundle`, which carries a
+bundle's `pod.json -> home_app` onto the pod it imports into.
+
 ## Dependencies
 
 The module uses identity's organization/user models and the icon service. It is

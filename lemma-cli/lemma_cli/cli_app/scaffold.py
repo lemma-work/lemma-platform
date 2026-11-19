@@ -684,6 +684,13 @@ PERMISSION_PRESETS: dict[str, dict[str, list[str]]] = {
         "publish": ["app.publish"],
         "delete": ["app.delete"],
     },
+    # The pod itself, named `/`: what a workload may do for the person it runs
+    # as -- tell them something, or start the pod's own assistant.
+    "pod": {
+        "notify-self": ["channel.notify_self"],
+        "notify_self": ["channel.notify_self"],
+        "assistant": ["agent.execute"],
+    },
 }
 _GRANT_TYPE_ALIASES = {
     "table": "datastore_table",
@@ -698,6 +705,7 @@ _GRANT_TYPE_ALIASES = {
     "agent": "agent",
     "workflow": "workflow",
     "schedule": "schedule",
+    "pod": "pod",
 }
 GRANT_TYPE_TOKENS = tuple(sorted(_GRANT_TYPE_ALIASES))
 _ACCOUNT_TOKENS = frozenset({"account", "connector_account"})
@@ -767,6 +775,11 @@ def parse_grant_spec(spec: str) -> dict:
     name = name.strip()
     if not name:
         raise ScaffoldError(f"Bad grant {spec!r}: no resource name.")
+    if rtype == "pod" and name != "/":
+        raise ScaffoldError(
+            f"Bad grant {spec!r}: a pod grant names the pod as `/` "
+            "(e.g. pod:/:notify-self)."
+        )
     presets = PERMISSION_PRESETS[rtype]
     perm_ids: list[str] = []
     for token in perms.split(","):

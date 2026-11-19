@@ -206,6 +206,41 @@ def _missing_installation_message(connector: BundleConnector, can_create: bool) 
     )
 
 
+#: What runs through a pod connector, as `referenced_connector_slugs` names
+#: it: such a part cannot be made without the connector, so one it runs
+#: through is never left out. A grant on it can simply be dropped.
+_RUNS_THROUGH = ("schedules/", "surfaces/")
+
+
+def _can_go_without(connector: BundleConnector, used_by: list[str]) -> bool:
+    """Whether the import works without this connector: the bundle says it is
+    optional, and nothing it brings runs through it."""
+    return not connector.required and not any(
+        where.startswith(_RUNS_THROUGH) for where in used_by
+    )
+
+
+def _left_out_message(
+    connector: BundleConnector, used_by: list[str], can_create: bool
+) -> str:
+    granted = ", ".join(used_by)
+    without = (
+        f" {granted} {'is' if len(used_by) == 1 else 'are'} imported without "
+        "access to it."
+        if used_by
+        else ""
+    )
+    install = (
+        f" Choose to install Lemma's {connector.connector} app to bring it in."
+        if can_create
+        else ""
+    )
+    return (
+        f"Optional, and your organization has no {connector.connector} "
+        f"installation, so it is left out.{without}{install}"
+    )
+
+
 async def _plan_one(
     connector: BundleConnector,
     *,
@@ -256,7 +291,10 @@ async def _plan_one(
         "auth_config_id": default,
         "can_create_installation": can_create,
     }
-    if default is None:
+    if default is None and _can_go_without(connector, used_by):
+        update["status"] = ConnectorPlanStatus.SKIPPED
+        update["message"] = _left_out_message(connector, used_by, can_create)
+    elif default is None:
         update["status"] = ConnectorPlanStatus.NEEDS_INSTALLATION
         update["message"] = _missing_installation_message(connector, can_create)
     elif connector.is_shared:
@@ -278,6 +316,8 @@ async def _plan_one(
 
 def _warning_for(plan: ConnectorPlan) -> str | None:
     label = f"Connector '{plan.slug}' ({plan.connector})"
+    if plan.status is ConnectorPlanStatus.SKIPPED:
+        return f"{label}: {plan.message}"
     if plan.status is ConnectorPlanStatus.NEEDS_ACCOUNT:
         return (
             f"{label} is shared: unless you share one of your accounts for it, "
@@ -302,10 +342,11 @@ def _step_for(plan: ConnectorPlan) -> PlanStep:
             action=StepAction.CREATE,
             detail=detail,
         )
-    if plan.status is ConnectorPlanStatus.EXISTS:
+    if plan.status in (ConnectorPlanStatus.EXISTS, ConnectorPlanStatus.SKIPPED):
         # Writes nothing, but still runs: the apply checks the pod's own
         # declaration again, so one changed since the plan is refused there
-        # for the reason the plan would have given.
+        # for the reason the plan would have given -- and a SKIPPED one is
+        # declared after all when the importer chose an installation for it.
         return PlanStep(
             index=0,
             kind=StepKind.CONNECTOR,

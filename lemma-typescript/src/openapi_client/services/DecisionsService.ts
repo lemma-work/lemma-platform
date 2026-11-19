@@ -10,7 +10,7 @@ import { request as __request } from '../core/request.js';
 export class DecisionsService {
     /**
      * Make a decision
-     * Answer closed questions -- a choice, several choices, yes or no, a point on a scale -- about one piece of evidence. Nothing is stored: record the answer wherever it matters to you. An answer of null means the evidence did not support one. 422 means the request cannot be asked as sent; 429 and 503 mean ask again later.
+     * Answer closed questions -- a choice, several choices, yes or no, a point on a scale -- about one piece of evidence. Nothing is stored: record the answer wherever it matters to you. Treat an answer of null, or a confidence below your own threshold, as unsure. 422 means the request cannot be asked as sent; 429 and 503 mean ask again later.
      * @param podId
      * @param requestBody
      * @returns DecisionResponse Successful Response

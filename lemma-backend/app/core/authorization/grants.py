@@ -19,6 +19,8 @@ from app.core.authorization.grant_generation import (
 )
 from app.core.domain.errors import BadRequestError
 from app.core.authorization.models import ResourcePermissionGrantModel
+from app.core.authorization.permission_rows import ensure_permission_rows
+from app.core.authorization.assistant_grants import split_assistant_grant
 from app.core.authorization.permissions import PERMISSION_BY_ID
 from app.core.authorization.resource_actions import RESOURCE_ACTIONS
 from app.core.authorization.resource_names import (
@@ -160,14 +162,24 @@ async def normalize_pod_resource_grants(
         pod_id=pod_id,
         refs=[(grant.resource_type, grant.resource_name) for grant in grants],
     )
-    return [
-        NormalizedResourceGrant(
-            resource_type=grant.resource_type,
-            resource_id=resolved[(grant.resource_type, grant.resource_name)],
-            permission_ids=list(grant.permission_ids),
+    normalized: list[NormalizedResourceGrant] = []
+    for grant in grants:
+        resource_id = resolved[(grant.resource_type, grant.resource_name)]
+        permission_ids = list(grant.permission_ids)
+        # Running the assistant is stored where it is checked: see the module.
+        split = split_assistant_grant(
+            grant.resource_type, resource_id, permission_ids, pod_id=pod_id
         )
-        for grant in grants
-    ]
+        if split is not None:
+            on_pod, permission_ids = split
+            normalized.append(NormalizedResourceGrant(ResourceType.POD, pod_id, on_pod))
+        if permission_ids:
+            normalized.append(
+                NormalizedResourceGrant(
+                    grant.resource_type, resource_id, permission_ids
+                )
+            )
+    return normalized
 
 
 async def replace_grantee_resource_grants(
@@ -212,6 +224,7 @@ async def replace_grantee_resource_grants(
         for grant in grants
         for permission_id in grant.permission_ids
     }
+    await ensure_permission_rows(session, {row[2] for row in grant_rows})
     for resource_type, resource_id, permission_id in sorted(
         grant_rows,
         key=lambda item: (item[0].value, str(item[1]), item[2]),
@@ -252,6 +265,7 @@ async def replace_resource_grantee_grant(
             ResourcePermissionGrantModel.grantee_id == grantee_id,
         )
     )
+    await ensure_permission_rows(session, set(permission_ids))
     for permission_id in sorted(set(permission_ids)):
         session.add(
             ResourcePermissionGrantModel(

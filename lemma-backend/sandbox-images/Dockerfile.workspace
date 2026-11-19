@@ -287,6 +287,13 @@ RUN apt-get update \
         ripgrep \
         socat \
         tini \
+        # The tz database's old names (`Asia/Calcutta`, `Europe/Kiev`,
+        # `US/Eastern`), which Debian 13 moved out of `tzdata`. Browsers still
+        # report some of them, and Python here reads the system zones -- the
+        # PyPI `tzdata` fallback is not installed on Linux -- so without this
+        # an agent's `ZoneInfo("Asia/Calcutta")` fails. See
+        # `Dockerfile.function`, which needs it for the same reason.
+        tzdata-legacy \
         # Somebody has to place the windows. Chrome is told its own size, but
         # the OAuth popup a real sign-in opens is placed by the X server's
         # default -- possibly off-screen, where the person watching sees

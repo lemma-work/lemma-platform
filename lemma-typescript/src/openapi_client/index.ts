@@ -619,6 +619,7 @@ export type { UpdateAgentHostRuntimeProfileRequest } from './models/UpdateAgentH
 export type { UpdateAgentRequest } from './models/UpdateAgentRequest.js';
 export type { UpdateAnthropicCompatibleRuntimeProfileRequest } from './models/UpdateAnthropicCompatibleRuntimeProfileRequest.js';
 export type { UpdateAppRequest } from './models/UpdateAppRequest.js';
+export type { UpdateColumnRequest } from './models/UpdateColumnRequest.js';
 export type { UpdateConversationRequest } from './models/UpdateConversationRequest.js';
 export type { UpdateFunctionRequest } from './models/UpdateFunctionRequest.js';
 export type { UpdateMemberRoleRequest } from './models/UpdateMemberRoleRequest.js';
@@ -668,6 +669,8 @@ export type { WorkflowEdge } from './models/WorkflowEdge.js';
 export type { WorkflowGraphUpdateRequest } from './models/WorkflowGraphUpdateRequest.js';
 export type { WorkflowListResponse } from './models/WorkflowListResponse.js';
 export { WorkflowMode } from './models/WorkflowMode.js';
+export type { WorkflowRunAbout } from './models/WorkflowRunAbout.js';
+export type { WorkflowRunCreateRequest } from './models/WorkflowRunCreateRequest.js';
 export type { WorkflowRunFormSubmitRequest } from './models/WorkflowRunFormSubmitRequest.js';
 export type { WorkflowRunListResponse } from './models/WorkflowRunListResponse.js';
 export type { WorkflowRunResponse } from './models/WorkflowRunResponse.js';
