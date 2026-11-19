@@ -65,6 +65,14 @@ def upgrade() -> None:
 def downgrade() -> None:
     for table in reversed(TABLES):
         op.execute(f"DROP TABLE {table}")
+    # A connection approved but never claimed is revoked below; its machine row
+    # is retired with it, as revoking does, so the name is free again after a
+    # re-upgrade -- with the pairing table gone nothing else would expire it.
+    op.execute(
+        "UPDATE sandboxes SET desired_state = 'deleted', "
+        "slug = '~' || replace(id::text, '-', ''), updated_at = now() "
+        "WHERE id IN (SELECT id FROM machine_connections WHERE secret_hash IS NULL)"
+    )
     op.execute(
         "UPDATE machine_connections SET secret_hash = 'unclaimed:' || id::text, "
         "revoked_at = coalesce(revoked_at, now()) WHERE secret_hash IS NULL"

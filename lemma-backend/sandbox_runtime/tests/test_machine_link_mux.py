@@ -338,9 +338,12 @@ async def test_splice_carries_a_stream_to_a_local_port_and_back() -> None:
 
 
 async def test_a_reset_after_the_peers_fin_ends_the_splice_of_an_idle_port() -> None:
+    got_fin = asyncio.Event()
+
     async def serve_idle(reader, writer) -> None:
         # Reads to EOF (the peer's FIN), then neither writes nor closes.
         await reader.read()
+        got_fin.set()
         await asyncio.Event().wait()
 
     server = await asyncio.start_server(serve_idle, "127.0.0.1", 0)
@@ -359,7 +362,8 @@ async def test_a_reset_after_the_peers_fin_ends_the_splice_of_an_idle_port() -> 
             stream = await opener.open({"kind": "port", "port": port})
             await stream.write_eof()
             splicing = await spliced.get()
-            await asyncio.sleep(0.05)
+            # The FIN has crossed the splice: what follows is a reset after it.
+            await asyncio.wait_for(got_fin.wait(), 2)
             assert not splicing.done(), "half close keeps the other direction open"
             await stream.reset()
             with pytest.raises(StreamReset):

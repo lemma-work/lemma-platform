@@ -235,6 +235,26 @@ async def test_a_machine_that_never_reported_its_runtime_port_is_not_connected()
 
 
 @pytest.mark.asyncio
+async def test_a_machine_is_running_only_once_it_has_reported_its_runtime() -> None:
+    """Running is what lets ``ensure`` reuse an instance without ``wait_ready``:
+    a machine that has not reported its runtime must go through that gate."""
+    import dataclasses
+    from datetime import datetime, timedelta, timezone
+
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=5)
+    provider = _provider("/Users/me/lemma-machine")
+    unreported = await provider.inspect("m", deadline_at=deadline)
+    assert unreported is not None and not unreported.running
+
+    reported = ConnectedMachineProvider(
+        dataclasses.replace(provider.connection, capabilities={"runtime_port": 18080}),
+        RuntimeCredentialSigner(key=_KEY.encode()),
+    )
+    found = await reported.inspect("m", deadline_at=deadline)
+    assert found is not None and found.running
+
+
+@pytest.mark.asyncio
 async def test_a_connected_machine_is_refused_while_connected_machines_are_off(
     monkeypatch,
 ) -> None:

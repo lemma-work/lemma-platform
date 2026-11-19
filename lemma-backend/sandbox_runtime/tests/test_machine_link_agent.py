@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import stat
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -107,13 +108,27 @@ def quick(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(machine_agent, "RUNTIME_MAX_BACKOFF_SECONDS", 0.02)
 
 
+async def _until(condition: Callable[[], object], timeout: float = 2) -> None:
+    """Wait on a condition, never on the clock: poll it until it holds."""
+    async with asyncio.timeout(timeout):
+        while not condition():
+            await asyncio.sleep(0.005)
+
+
 async def test_a_server_that_never_welcomes_ends_the_link_attempt(
     tmp_path: Path, quick: None
 ) -> None:
     link = _Link(make_agent(tmp_path), ScriptedSocket())
 
+    # The link's own deadline, not this test's: the attempt must have ended.
+    serving = asyncio.ensure_future(link.serve())
+    done, _ = await asyncio.wait({serving}, timeout=2)
+    if not done:
+        serving.cancel()
+        await asyncio.gather(serving, return_exceptions=True)
+    assert serving in done, "the handshake deadline never fired"
     with pytest.raises(TimeoutError):
-        await asyncio.wait_for(link.serve(), 2)
+        serving.result()
 
 
 async def test_a_link_that_goes_silent_is_given_up_to_reconnect(
@@ -153,9 +168,7 @@ async def test_a_runtime_that_fails_to_start_is_tried_again(
 
     supervising = asyncio.ensure_future(link._supervise_runtime("t", expected="v1"))
     try:
-        async with asyncio.timeout(2):
-            while not runtime.starts:
-                await asyncio.sleep(0.01)
+        await _until(lambda: runtime.starts)
     finally:
         supervising.cancel()
         await asyncio.gather(supervising, return_exceptions=True)
@@ -172,11 +185,9 @@ async def test_a_runtime_that_exits_later_is_started_again(
     supervising = asyncio.ensure_future(link._supervise_runtime("t", expected="v1"))
     try:
         async with asyncio.timeout(2):
-            while not runtime.starts:
-                await asyncio.sleep(0.01)
+            await _until(lambda: runtime.starts)
             runtime.alive = False
-            while runtime.starts < 2:
-                await asyncio.sleep(0.01)
+            await _until(lambda: runtime.starts >= 2)
     finally:
         supervising.cancel()
         await asyncio.gather(supervising, return_exceptions=True)
@@ -212,8 +223,7 @@ async def test_a_push_cut_short_leaves_no_partial_archive(tmp_path: Path) -> Non
             {"kind": "runtime_bundle", "version": "v2", "sha256": "x", "size": 10}
         )
         await stream.write(b"half")
-        await asyncio.sleep(0.05)
-        assert list(agent.config.state_directory.glob("runtime-*.zip"))
+        await _until(lambda: list(agent.config.state_directory.glob("runtime-*.zip")))
         await stream.reset()
         await asyncio.wait_for(link._pushed.wait(), 2)
     finally:

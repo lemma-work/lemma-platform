@@ -191,7 +191,10 @@ class ConnectedMachineProvider(DockerOpsMixin):
     async def inspect(
         self, name: str, *, deadline_at: datetime
     ) -> ProviderInstance | None:
-        return self._instance(name, running=True)
+        # Not running until the machine has reported its runtime: ``ensure``
+        # then takes the start path, which is ``wait_ready``, rather than
+        # adopting an instance whose first create stopped at that same gate.
+        return self._instance(name, running=self._port("runtime_port") is not None)
 
     async def release(
         self, instance: ProviderInstance, *, kind: SandboxKind, deadline_at: datetime

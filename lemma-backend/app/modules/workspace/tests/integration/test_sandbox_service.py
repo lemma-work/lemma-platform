@@ -666,3 +666,37 @@ async def test_a_slow_create_does_not_let_a_second_caller_provision_again(
 
     assert len(provider.created) == 1, provider.created
     assert len({handle.provider_id for handle in handles}) == 1
+
+
+@dataclass
+class _UnreportedMachine(FakeProvider):
+    """A provider whose instance is not running until its runtime answers, and
+    whose runtime never answers: a connected machine before its first report."""
+
+    gate_calls: int = 0
+
+    async def wait_ready(self, instance, *, kind, deadline_at) -> None:
+        from app.modules.workspace.domain.machine_errors import MachineNotConnected
+
+        self.gate_calls += 1
+        raise MachineNotConnected("laptop")
+
+
+async def test_every_ensure_waits_for_a_machine_that_has_not_reported(
+    sandbox_uow_factory,
+) -> None:
+    """The first ensure stops at the readiness gate and leaves its instance
+    claimed; the second must reach the same gate, not adopt that instance."""
+    from app.modules.workspace.domain.machine_errors import MachineNotConnected
+
+    SandboxService._inflight.clear()
+    provider = _UnreportedMachine()
+    service = SandboxService(provider=provider, uow_factory=sandbox_uow_factory)
+    sandbox = await _workspace(service)
+
+    with pytest.raises(MachineNotConnected):
+        await service.ensure(sandbox.id)
+    with pytest.raises(MachineNotConnected):
+        await service.ensure(sandbox.id)
+
+    assert provider.gate_calls == 2
