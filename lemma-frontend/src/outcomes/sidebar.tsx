@@ -333,6 +333,7 @@ function Section({ pod, items, waiting, unfolded, view, here, onFold, apps, onAd
                 <a className="ox-group__name" {...to(outcomeView(pod.id), go, LANDING)} aria-current={here ? "page" : undefined}>
                     <span className="ox-group__face"><TeammateFace pod={pod} size={26} /></span>
                     <span className="ox-group__t">{pod.name}</span>
+                    {pod.everyone && <span className="ox-everyone" title={`Everyone in the organization is in ${pod.name}`}>Everyone</span>}
                 </a>
                 {(items.length > 0 || withApps) && (
                     <button type="button" className="ox-group__chev" aria-expanded={unfolded} aria-label={unfolded ? `Fold ${pod.name}` : withApps ? `Show ${pod.name}’s apps` : `Show ${pod.name}’s chats`} onClick={onFold}>

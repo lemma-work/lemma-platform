@@ -9,7 +9,7 @@ import { isLandingPreview } from "@/marketing/preview-mode";
 import { Modal } from "@/shell/modal";
 import { CheckCircleIcon, RefreshIcon } from "@/ui/icons";
 import { lemma } from "./client";
-import { asksFirstProfile, canDismissFirstProfile, firstProfileNeeds, needsTimezoneSync, settledKey, syncDetectedTimezone } from "./first-profile";
+import { asksFirstProfile, canDismissFirstProfile, firstProfileNeeds, nameAskedKey, needsTimezoneSync, settledKey, syncDetectedTimezone } from "./first-profile";
 import { Code, Countdown, OpenWhatsApp } from "./mobile-verification";
 import { currentZoneName } from "@/data/time-zone";
 import { changes, draftOf, localTimezone, timezones } from "./profile-edit";
@@ -19,6 +19,14 @@ import { arrivedFromInstall } from "@/site/import/pending-install";
 function readSettled(userId: string): boolean {
     try {
         return localStorage.getItem(settledKey(userId)) === "1";
+    } catch {
+        return false;
+    }
+}
+
+function readNameAsked(userId: string): boolean {
+    try {
+        return localStorage.getItem(nameAskedKey(userId)) === "1";
     } catch {
         return false;
     }
@@ -70,7 +78,7 @@ export function FirstProfileStep() {
         setDecision({
             /* Not on the visit an install opens: that person came to use what
                they installed, and is asked on their next visit instead. */
-            open: !arrivedFromInstallHere() && asksFirstProfile(user.data, { whatsApp: canWhatsApp, settled: readSettled(user.data.id) }),
+            open: !arrivedFromInstallHere() && asksFirstProfile(user.data, { whatsApp: canWhatsApp, settled: readSettled(user.data.id), nameAsked: readNameAsked(user.data.id) }),
             askPhone: firstProfileNeeds(user.data, { whatsApp: canWhatsApp }).phone,
         });
     }

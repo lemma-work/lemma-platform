@@ -3,7 +3,7 @@ import { readOrigins, type Contact, type ContactReach, type ContactsCap, type We
 import type { Audience, OfferedColumn, TableOpening } from "./public-rows";
 import { NEW_CONVERSATION } from "./types";
 import type { AgentSurfaceResponse, AvailableSurfaceChannelsResponse, SurfaceSetupResponse } from "lemma-sdk";
-import type { Conversation, FileContent, Invitation, LibraryItem, LinkShare, Member, Message, NewOrg, Org, Profile, Pod, PodSource, SharedLink, SlackAppWorkspace, SlackManagedWorkspace, SlackPersonLink, Surface, Tab } from "./types";
+import type { Conversation, FileContent, Invitation, LibraryItem, LinkShare, Member, Message, NewOrg, Org, FirstWorkspace, Profile, Pod, PodSource, SharedLink, SlackAppWorkspace, SlackManagedWorkspace, SlackPersonLink, Surface, Tab } from "./types";
 import { displayAgentName, isPodDefaultAgent } from "./agent-names";
 import { originOf } from "@/thread/conversation-origin";
 import { sampleListing } from "@/thread/memory-notes";
@@ -3164,9 +3164,19 @@ export const fixtureSource: PodSource = {
         await wait(200);
         return true;
     },
-    async ensureFirstWorkspace() {
+    async ensureFirstWorkspace(): Promise<FirstWorkspace> {
         await wait(400);
-        return { orgId: ORGS[0].id };
+        const shared = PODS.find((pod) => pod.orgId === ORGS[0].id) ?? null;
+        return {
+            orgId: ORGS[0].id,
+            orgName: ORGS[0].name,
+            entry: "existing",
+            orgCreated: false,
+            podId: shared?.id ?? null,
+            podName: shared?.name ?? null,
+            orgPodId: shared?.id ?? null,
+            openToDomain: null,
+        };
     },
     async startSlackInstall() {
         await wait(400);

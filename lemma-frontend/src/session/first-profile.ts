@@ -46,16 +46,20 @@ export function firstProfileNeeds(
     };
 }
 
-/** Whether to show the step to this person, now. */
+/** Whether to show the step to this person, now.
+ *
+ *  `nameAsked`: the way in already offered the name field and they moved on
+ *  without filling it. Asking again over the Lemma they land in is the same
+ *  question twice, so then only a phone to prove opens the step. */
 export function asksFirstProfile(
     user: Pick<UserResponse, "first_name" | "mobile_number" | "created_at">,
-    { whatsApp, settled, now = Date.now() }: { whatsApp: boolean; settled: boolean; now?: number },
+    { whatsApp, settled, nameAsked = false, now = Date.now() }: { whatsApp: boolean; settled: boolean; nameAsked?: boolean; now?: number },
 ): boolean {
     if (settled) return false;
     const created = Date.parse(user.created_at);
     if (Number.isNaN(created) || now - created > NEW_ACCOUNT_MS) return false;
     const needs = firstProfileNeeds(user, { whatsApp });
-    return needs.name || needs.phone;
+    return (needs.name && !nameAsked) || needs.phone;
 }
 
 /** Whether to write the browser's zone onto a new account that still has none.
@@ -120,4 +124,10 @@ export function syncDetectedTimezone<T>(
  *  same first week. */
 export function settledKey(userId: string): string {
     return key("first-profile:" + userId);
+}
+
+/** The way in asked this account's name, per person and per browser, like
+ *  `settledKey`. */
+export function nameAskedKey(userId: string): string {
+    return key("first-profile-name:" + userId);
 }

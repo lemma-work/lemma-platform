@@ -242,6 +242,11 @@ function CreateOrganization() {
         setBusy(true);
         try {
             const org = await data.createOrg({ name: name.trim() });
+            /* Every new organization opens in a Lemma everyone in it shares,
+               named after it, whichever page made it. Loaded here, on the one
+               action that needs it, not by every page this host draws. */
+            const { firstLemma } = await import("@/outcomes/first-lemma");
+            await firstLemma(org.id, org.name);
             window.location.assign(
                 afterNewOrganization(org.id, window.location.search),
             );
