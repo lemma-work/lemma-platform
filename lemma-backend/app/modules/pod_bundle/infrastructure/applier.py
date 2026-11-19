@@ -1,9 +1,11 @@
 """Apply one plan step to the pod.
 
-Every applier is an **idempotent upsert against the pod's current state, not the
-plan**: it re-checks existence by name at apply time and creates or updates
-accordingly. That is what makes a crash between a step's DB commit and its Redis
-checkpoint safe to replay — re-running the step converges instead of duplicating.
+Every applier **creates what is missing against the pod's current state, not
+the plan**: it re-checks existence by name at apply time and leaves whatever is
+already there as it is -- a table only gains the columns it lacks. That is what
+makes a crash between a step's DB commit and its Redis checkpoint safe to
+replay, and it holds the rule the plan states (``kept_parts``) even for a part
+that appeared between plan and apply: an import never replaces anything.
 
 Each ``apply_step`` runs inside a short UoW + ``Context`` opened by the job; the
 applier never opens its own transaction.
@@ -107,7 +109,6 @@ class BundleApplier:
             add_table_column,
             create_table,
             get_table,
-            remove_table_column,
         )
 
         payload = self._load("tables", step.name)
@@ -132,10 +133,10 @@ class BundleApplier:
                 ctx=self._ctx,
             )
             return
-        # Update: add any new columns; drop removed columns only when the plan
-        # marked this step destructive (i.e. the importer confirmed).
+        # The table is the pod's: it gains the bundle's columns it lacks, and no
+        # column is dropped, retyped or altered -- whatever the step says, since
+        # a plan made before this rule could still carry `destructive`.
         existing_names = {c.name for c in existing.columns}
-        desired_names = {c.name for c in columns}
         for column in columns:
             if column.name not in existing_names:
                 await add_table_column(
@@ -143,18 +144,6 @@ class BundleApplier:
                     pod_id=self._pod_id,
                     table_name=step.name,
                     column=column,
-                    ctx=self._ctx,
-                )
-        if step.destructive:
-            pk = existing.primary_key_column
-            for name in existing_names - desired_names:
-                if name == pk or _is_system_column({"name": name}):
-                    continue
-                await remove_table_column(
-                    self._uow,
-                    pod_id=self._pod_id,
-                    table_name=step.name,
-                    column_name=name,
                     ctx=self._ctx,
                 )
 
@@ -246,51 +235,35 @@ class BundleApplier:
     # --- agents ----------------------------------------------------------
 
     async def _apply_agent(self, step: PlanStep) -> None:
-        from app.modules.agent.contracts.provisioning import (
-            create_agent,
-            get_agent,
-            update_agent,
-        )
+        from app.modules.agent.contracts.provisioning import create_agent, get_agent
 
-        payload = self._load("agents", step.name)
-        runtime = _agent_runtime(payload)
-        # Toolsets are what let an imported agent actually *use* tools (POD,
-        # WEB_SEARCH, …). Without them, a granted agent still can't act — so they
-        # travel with the agent, not the deferred grants step.
-        toolsets = _agent_toolsets(payload)
-        common = {
-            "description": payload.get("description"),
-            "icon_url": payload.get("icon_url"),
-            "agent_runtime": runtime,
-            "toolsets": toolsets,
-            "input_schema": payload.get("input_schema"),
-            "output_schema": payload.get("output_schema"),
-            "metadata": payload.get("metadata"),
-        }
         existing = await get_agent(
             self._uow, pod_id=self._pod_id, name=step.name, ctx=self._ctx
         )
-        if existing is None:
-            await create_agent(
-                self._uow,
-                pod_id=self._pod_id,
-                user_id=self._user_id,
-                name=step.name,
-                instruction=str(payload.get("instruction") or ""),
-                visibility=payload.get("visibility"),
-                ctx=self._ctx,
-                **common,
-            )
-        else:
-            await update_agent(
-                self._uow,
-                pod_id=self._pod_id,
-                name=step.name,
-                instruction=payload.get("instruction"),
-                user_id=self._user_id,
-                ctx=self._ctx,
-                **common,
-            )
+        if existing is not None:
+            # Kept as it is. The plan keeps an agent the pod had, so this one
+            # is this import's own from before a crash, or arrived since.
+            return
+        payload = self._load("agents", step.name)
+        await create_agent(
+            self._uow,
+            pod_id=self._pod_id,
+            user_id=self._user_id,
+            name=step.name,
+            instruction=str(payload.get("instruction") or ""),
+            visibility=payload.get("visibility"),
+            ctx=self._ctx,
+            description=payload.get("description"),
+            icon_url=payload.get("icon_url"),
+            agent_runtime=_agent_runtime(payload),
+            # Toolsets are what let an imported agent actually *use* tools
+            # (POD, WEB_SEARCH, …). Without them, a granted agent still can't
+            # act — so they travel with the agent, not the deferred grants step.
+            toolsets=_agent_toolsets(payload),
+            input_schema=payload.get("input_schema"),
+            output_schema=payload.get("output_schema"),
+            metadata=payload.get("metadata"),
+        )
 
     async def _connector_step(self, step: PlanStep) -> None:
         """The dispatch table's uniform shape over `connector_apply`."""
@@ -318,7 +291,8 @@ class BundleApplier:
 
     async def _apply_function_grants(self, step: PlanStep) -> None:
         """Deferred grant step: replace a function's resource permission grants
-        once every resource it references has been applied.
+        once every resource it references has been applied. Planned only for a
+        function this import creates; one the pod had keeps its own.
 
         Functions used to have their grants written inline by the FUNCTION step's
         own runner, which runs before agents, apps, and files. A function granted

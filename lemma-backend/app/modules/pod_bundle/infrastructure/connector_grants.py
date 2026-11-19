@@ -50,15 +50,23 @@ class ConnectorDirectory(Protocol):
     async def installation_for(self, name: str) -> UUID | None: ...
 
 
-def connector_grant_names(bundle_root: Path) -> dict[str, list[str]]:
+def connector_grant_names(
+    bundle_root: Path, writing: Collection[tuple[str, str]] | None = None
+) -> dict[str, list[str]]:
     """Every connector a bundled agent or function is granted, by the name the
-    bundle uses, with who holds a grant on it ("agent 'triage'")."""
+    bundle uses, with who holds a grant on it ("agent 'triage'").
+
+    ``writing`` narrows it to the holders whose grants the import writes, as
+    ``(directory, name)``: one the pod already has keeps its own access, so
+    what its bundled copy was granted names nothing the import must declare."""
     found: dict[str, list[str]] = {}
     for directory, label in _HOLDERS:
         type_dir = bundle_root / directory
         if not type_dir.is_dir():
             continue
         for resource_dir in sorted(p for p in type_dir.iterdir() if p.is_dir()):
+            if writing is not None and (directory, resource_dir.name) not in writing:
+                continue
             payload = load_resource_payload(
                 resource_dir, resource_dir.name, resource_type=directory
             )
@@ -76,6 +84,7 @@ async def plan_connector_grants(
     directory: ConnectorDirectory,
     *,
     bundled: Collection[str] = (),
+    writing: Collection[tuple[str, str]] | None = None,
 ) -> list[str]:
     """Refuse a bundle granting a connector nobody can declare; warn of the rest.
 
@@ -84,10 +93,13 @@ async def plan_connector_grants(
     declared by the pod nor installed in the organization, naming each. A
     connector the bundle declares itself (``bundled``, its ``connectors/``) is
     ``connector_planning``'s, which declares it before any grant names it.
+    Only the grants the import writes count (``writing``, as in
+    :func:`connector_grant_names`).
     """
     warnings: list[str] = []
     unknown: list[str] = []
-    for name, holders in sorted(connector_grant_names(bundle_root).items()):
+    granted = connector_grant_names(bundle_root, writing)
+    for name, holders in sorted(granted.items()):
         if name in bundled or await directory.declares(name):
             continue
         who = ", ".join(holders)
