@@ -4,7 +4,7 @@ import type { MetadataRoute } from 'next';
 import { collectionLastModified, listContent } from '@/site/content/loader';
 import { docsPages } from '@/site/data/docs';
 import { publicSiteUrl } from '@/site/seo/site-url';
-import { installHref, PLUGINS } from '@/site/plugins/catalog';
+import { BUILT } from '@/site/plugins/catalog';
 import { PUBLIC_TEMPLATES, templateRunHref } from '@/site/templates/catalog';
 
 export default function sitemap(): MetadataRoute.Sitemap {
@@ -29,10 +29,11 @@ export default function sitemap(): MetadataRoute.Sitemap {
     // A GitHub template's `/templates/<slug>` is a noindex redirect stub; the
     // page it resolves to is its import URL, which renders the repository's
     // README server-side and is the thing worth ranking for the problem the
-    // pod solves. A plugin's `/templates/<slug>` is a page of its own, indexed
-    // once the plugin can be installed (see its `robots` metadata).
+    // pod solves. A built plugin's `/templates/<slug>` is a page of its own,
+    // with the real app's pictures; one not built yet is a noindex line (see
+    // the `robots` in its metadata), so it is left out.
     const templates: MetadataRoute.Sitemap = [
-        ...PLUGINS.filter((plugin) => installHref(plugin)).map((plugin) => ({
+        ...BUILT.map((plugin) => ({
             url: `${base}/templates/${plugin.slug}`,
             changeFrequency: 'weekly' as const,
             priority: 0.8,

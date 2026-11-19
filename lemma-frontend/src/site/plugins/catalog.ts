@@ -1,547 +1,291 @@
-import { CATALOG_ORDER, MORE_PLUGINS } from "./more";
-import { PARTS } from "./parts";
-import type {
-    BundleParts,
-    Gap,
-    Plugin,
-    PluginSlug,
-    Stage,
-    TableKind,
-} from "./types";
+import catalog from "./generated/catalog.json" with { type: "json" };
 
-/**
- * The first plugins: each a Lemma that already runs, with the apps it starts
- * with. What it is made of is in `parts.ts`, read from its bundle; this file
- * holds what it is for, which shared tables it makes and uses, how it stands
- * with the other plugins, and what it still lacks.
- *
- * `makes` and `uses` say what the bundle does today, not what the catalog
- * hopes for: a link that is drawn but not built is a `planned` link and a gap.
- */
-const TEN: Plugin[] = [
-    {
-        slug: "people-map",
-        name: "People map",
-        kind: "base",
-        jobs: ["everyone", "sales", "founder"],
-        headline: "Everyone you deal with, kept for you",
-        lede: "Reads your mail and calendar and keeps the people and companies you work with: who they are, when you last spoke, and what each of you owes the other.",
-        does: [
-            "A page for each person: where things stand, with sources",
-            "Promises both ways, read from mail, with the reply drafted",
-            "A brief before every meeting with someone outside",
-        ],
-        makes: ["person", "company", "touch", "commitment", "meeting"],
-        uses: [],
-        install: null,
-        links: [
-            {
-                slug: "deal-tracker",
-                state: "works",
-                why: "Its deals name the people and companies kept here.",
-            },
-            {
-                slug: "smart-inbox",
-                state: "clashes",
-                why: "Same mail engine under the same names; whichever installs last overwrites the other.",
-            },
-            {
-                slug: "booking-page",
-                state: "planned",
-                why: "A booking should land here as a person and a meeting.",
-            },
-        ],
-        gaps: [
-            {
-                kind: "split-from-bundle",
-                text: "People map and Deal tracker are one bundle today. Splitting them means Deal tracker's deal signals stop being written by People map's triage.",
-            },
-            {
-                kind: "table-mismatch",
-                text: "Conversations are two tables, thread and message, and only from mail. Chats are not conversations yet.",
-            },
-            {
-                kind: "not-yet-shared",
-                text: "Follow-ups and Meetings ride inside this plugin rather than standing as their own.",
-            },
-        ],
-    },
-    {
-        slug: "deal-tracker",
-        name: "Deal tracker",
-        kind: "job",
-        jobs: ["sales", "founder"],
-        headline: "Deals that move when the conversation does",
-        lede: "Proposes a new deal or a stage change from what was said in mail, shows the sentence it came from, and waits for your yes. The board is the team's; the mail stays yours.",
-        does: [
-            "The team's deals on a board you drag",
-            "Changes read from conversations, waiting for a yes",
-            "Each deal marked on track, quiet or at risk every night",
-        ],
-        makes: ["deal"],
-        uses: ["person", "company", "touch"],
-        install: null,
-        basis: [
-            {
-                template: "smart-inbox",
-                text: "An earlier Smart Inbox, for Gmail only, installs from GitHub today.",
-            },
-        ],
-        missing: ["Pipedrive"],
-        links: [
-            {
-                slug: "people-map",
-                state: "works",
-                why: "Needs it: deals are proposed from its conversations and name its people.",
-            },
-        ],
-        gaps: [
-            {
-                kind: "split-from-bundle",
-                text: "Has no agent or function of its own yet: People map's triage writes its signals and People map's nightly pass sets deal health.",
-            },
-            {
-                kind: "name-collision",
-                text: "Its signal table holds proposed deal changes, but signal is the shared name for engineering alerts, which PR review also makes.",
-            },
-        ],
-    },
-    {
-        slug: "deck-maker",
-        name: "Deck maker",
-        kind: "tool",
-        jobs: ["everyone", "sales", "founder", "marketing"],
-        headline: "A deck from a sentence, edited by asking",
-        lede: "Give it a topic. It drafts an outline for you to approve, writes the deck card by card, changes the whole deck when you ask in plain words, and exports PowerPoint.",
-        does: [
-            "An outline first, so you agree on the story",
-            "Cards written one at a time as you watch",
-            "Restyle, retone or reorder the deck by asking",
-        ],
-        makes: [],
-        uses: [],
-        install: null,
-        links: [
-            {
-                slug: "brand-kit",
-                state: "planned",
-                why: "Decks keep their own themes; reading your Brand is not built.",
-            },
-        ],
-        gaps: [
-            {
-                kind: "set-up-outside-import",
-                text: "Agent permissions live in loose payload files applied by hand, not in the agents themselves.",
-            },
-        ],
-    },
-    {
-        slug: "brand-kit",
-        name: "Brand kit",
-        kind: "base",
-        jobs: ["everyone", "marketing"],
-        headline: "Your brand, learned from your website",
-        lede: "Give it your site. It comes back with your colours, type, logos and voice, each with where it found them, then makes on-brand pieces from a chat or the studio.",
-        does: [
-            "Colours, fonts and logos read from your own pages",
-            "Every choice shows the page it came from",
-            "One-pagers and social posts made on the brand",
-        ],
-        makes: ["brand"],
-        uses: [],
-        install: { owner: "deepak-jha-kgp", repo: "draper" },
-        links: [
-            {
-                slug: "deck-maker",
-                state: "planned",
-                why: "Decks should read the brand instead of their own themes.",
-            },
-            {
-                slug: "content-calendar",
-                state: "planned",
-                why: "Posts should be drafted on the brand's voice.",
-            },
-        ],
-        gaps: [
-            {
-                kind: "set-up-outside-import",
-                text: "Its playbooks and starter templates are copied in by a script, not by the import.",
-            },
-        ],
-    },
-    {
-        slug: "content-calendar",
-        name: "Content calendar",
-        kind: "job",
-        jobs: ["marketing", "founder"],
-        headline: "From a passing idea to a post",
-        lede: "Catch an idea in a few words. It links it to what you said before, researches it, drafts in your voice and adapts the draft for each channel. You approve every step.",
-        does: [
-            "Ideas linked to what you've already said",
-            "Research with quotes and sources before drafting",
-            "One draft, adapted for LinkedIn, X and a newsletter",
-        ],
-        makes: ["content"],
-        uses: [],
-        install: null,
-        basis: [
-            {
-                text: "Lemma's Content starter, offered in a new Lemma, keeps two posts going out every week.",
-            },
-        ],
-        links: [
-            {
-                slug: "brand-kit",
-                state: "planned",
-                why: "Drafts should follow the brand's voice; today it keeps its own.",
-            },
-        ],
-        gaps: [
-            {
-                kind: "missing-piece",
-                text: "No calendar yet: drafts carry no publish date and nothing schedules a post.",
-            },
-            {
-                kind: "missing-piece",
-                text: "Nothing runs on its own: no workflows or schedules, so agents work only when the app asks.",
-            },
-            {
-                kind: "undeclared-account",
-                text: "Capture from Telegram or voice and posting to LinkedIn or X are described but not connected.",
-            },
-            {
-                kind: "set-up-outside-import",
-                text: "The voice guide is a seed file outside the import.",
-            },
-        ],
-    },
-    {
-        slug: "user-feedback",
-        name: "User feedback",
-        kind: "job",
-        jobs: ["product", "founder"],
-        headline: "What people say about your product",
-        lede: "Listens on YouTube, Reddit, TikTok, X and LinkedIn for your product and its rivals, pulls out every opinion in the speaker's own words, and files it under the feature it is about.",
-        does: [
-            "Every opinion with its exact words and source",
-            "Features ranked by what people like and dislike",
-            "A weekly listen, with shifts flagged when they happen",
-        ],
-        makes: ["feedback", "feature", "mention"],
-        uses: [],
-        install: null,
-        links: [
-            {
-                slug: "people-map",
-                state: "planned",
-                why: "Feedback isn't tied yet to the people and companies who gave it.",
-            },
-        ],
-        gaps: [
-            {
-                kind: "missing-piece",
-                text: "Feedback comes only from public posts. Support tickets, sales calls and app reviews are not read yet.",
-            },
-        ],
-    },
-    {
-        slug: "pr-review",
-        name: "PR review",
-        kind: "job",
-        jobs: ["dev"],
-        headline: "Every pull request read before you are",
-        lede: "Reviews each pull request against your team's own guidelines, sorts it by risk, and sends it to the one person who has to decide. Each finding is a card to call.",
-        does: [
-            "Pull requests sorted by who has to act",
-            "Reviewed against the guidelines your team writes",
-            "Findings fixed by an agent when you say so",
-        ],
-        makes: ["repo", "pr", "signal"],
-        uses: [],
-        install: null,
-        basis: [
-            {
-                text: "Lemma's Reviews starter, offered in a new Lemma, gets every pull request a review on the day it opens.",
-            },
-        ],
-        missing: ["GitLab"],
-        links: [
-            {
-                slug: "people-map",
-                state: "clashes",
-                why: "Its person table is your team, under the same name as People map's.",
-            },
-        ],
-        gaps: [
-            {
-                kind: "name-collision",
-                text: "Its person table holds the team's GitHub and Slack handles, under the same name as People map's person, with different access rules.",
-            },
-            {
-                kind: "made-for-one-person",
-                text: "Some parts are one team's own: a check for internal data in pull requests and a seeded list of automations.",
-            },
-            {
-                kind: "set-up-outside-import",
-                text: "Automations and settings are written by a script after the import.",
-            },
-        ],
-    },
-    {
-        slug: "project-management",
-        name: "Project management",
-        kind: "job",
-        jobs: ["pm", "ops"],
-        headline: "Work handed to people and agents alike",
-        lede: "Projects and issues on one board, where an issue can go to a person or to an agent. Agents post progress as comments and hand the issue back when they need you.",
-        does: [
-            "Projects and issues, assigned to people or agents",
-            "Progress, files and questions kept on the issue",
-            "Reply to an issue and the agent picks up again",
-        ],
-        makes: ["project", "task"],
-        uses: [],
-        install: { owner: "deepak-jha-kgp", repo: "roundtable" },
-        links: [],
-        gaps: [
-            {
-                kind: "table-mismatch",
-                text: "Assignees are names, not People, so a person here is not a person anywhere else.",
-            },
-            {
-                kind: "set-up-outside-import",
-                text: "Knowledge and playbooks sit in a seed folder outside the import.",
-            },
-            {
-                kind: "missing-piece",
-                text: "Its app manifest is in the older format, with no description.",
-            },
-        ],
-    },
-    {
-        slug: "smart-inbox",
-        name: "Smart inbox",
-        kind: "tool",
-        jobs: ["everyone", "founder", "sales"],
-        headline: "Mail sorted the way you'd sort it",
-        lede: "Sorts Gmail and Outlook into groups you describe in plain words, drafts replies in your voice, brings threads back when a follow-up is due, and briefs you before meetings.",
-        does: [
-            "Groups you write in a sentence, not filters",
-            "Replies drafted in your voice; nothing sends alone",
-            "Follow-ups timed, and a brief before each meeting",
-        ],
-        makes: ["person", "touch", "commitment", "meeting"],
-        uses: [],
-        private: true,
-        install: null,
-        links: [
-            {
-                slug: "people-map",
-                state: "clashes",
-                why: "Should use People map's tables; today it makes its own copies under the same names.",
-            },
-        ],
-        gaps: [
-            {
-                kind: "table-mismatch",
-                text: "Its person table is a smaller copy of People map's. Installed after People map, the import plans to drop 13 columns and stops unless you confirm.",
-            },
-            {
-                kind: "name-collision",
-                text: "15 functions, 4 agents, 10 workflows and 2 schedules share names with People map's; 6 of the functions and the triage agent differ, so whichever installs last wins.",
-            },
-        ],
-    },
-    {
-        slug: "booking-page",
-        name: "Booking page",
-        kind: "tool",
-        jobs: ["everyone", "sales", "founder"],
-        headline: "A page where people book your time",
-        lede: "Shows open times from your calendar, asks the person to confirm their email, sends the invite, and writes you a short brief on who's coming.",
-        does: [
-            "Open times kept in step with your calendar",
-            "An email code before anything is booked",
-            "A brief on who's coming, before the call",
-        ],
-        makes: [],
-        uses: [],
-        install: null,
-        links: [
-            {
-                slug: "people-map",
-                state: "planned",
-                why: "A booking should add the person and the meeting there.",
-            },
-        ],
-        gaps: [
-            {
-                kind: "made-for-one-person",
-                text: "Made for one person: the app, a file and two agents' instructions name its maker.",
-            },
-            {
-                kind: "set-up-outside-import",
-                text: "The booking rules are written by a set-up script, not the import.",
-            },
-        ],
-    },
+/* The plugin catalog the site draws `/templates` from. Every word and picture
+   here is generated from the plugins themselves by
+   `awesome-lemma/_build/site_catalog.py` (each plugin's `listing.json`, its
+   `plugin.json`, its tables against the shared contract, its memory block and
+   its pictures, and `_catalog/planned.json` for the ones not built yet), so
+   this module only reads and relates them. Run that script again rather than
+   editing the JSON. */
+
+/** One picture of a plugin's app, in the site's light and dark. */
+export interface Picture {
+    light: string;
+    dark: string;
+    width: number;
+    height: number;
+    caption: string;
+}
+
+/** An account a plugin asks each person for: any one of `any` will do. */
+export interface Account {
+    any: string[];
+    why: string;
+    optional: boolean;
+}
+
+/** Something a plugin puts on a person's Today, by what they do about it. */
+export interface DayItem {
+    verb: string;
+    line: string;
+}
+
+/** One theme's files of a capture: the picture, and for a loop its video. */
+export interface VisualFiles {
+    /** A close-up, or a loop's poster: its first frame worth stopping on. */
+    still: string;
+    mp4?: string;
+    webm?: string;
+}
+
+/** A capture of the plugin's real app on its sample, sized in CSS pixels
+ *  (the files are 2x). */
+export interface VisualSize {
+    width: number;
+    height: number;
+    /** "bottom" when the crop cuts through something there; the page lets it run off its frame. */
+    bleed: string | null;
+    light: VisualFiles;
+    dark: VisualFiles;
+}
+
+/** A close-up or a short loop, with the same moment in the app's phone
+ *  layout when the wide one would be too small to read on a phone. */
+export interface Visual extends VisualSize {
+    /** "still" or "loop" (the generated JSON types it as a plain string). */
+    kind: string;
+    alt: string;
+    /** The view it shows, for the title bar of the window it is framed in. */
+    window: string | null;
+    phone: VisualSize | null;
+}
+
+/** A plugin's landing page, written in its `listing.json`. A plugin without
+ *  one keeps the older page. */
+export interface Landing {
+    /** `eyebrow` follows "Plugins ·" in the label over the headline. */
+    hero: { eyebrow: string; headline: string; sub: string; visual: Visual };
+    /** The headings over how it works, better with, trust and questions. */
+    headings: { how: string; better: string; trust: string; faq: string };
+    steps: Array<{ title: string; body: string | null; visual: Visual }>;
+    /** One claim each: what it does and how, with the piece of the app that
+     *  shows it and a few words in the margin on the detail that proves it. */
+    moments: Array<{ label: string; title: string; body: string; note: string; visual: Visual }>;
+    /** Plugins that build on this one, each with what it adds. */
+    betterWith: Array<{ slug: string; line: string }>;
+    /** What stays private, each line true of the code. */
+    trust: Array<{ title: string; body: string }>;
+    faq: Array<{ q: string; a: string }>;
+    /** The closing band's one line. */
+    closing: string;
+}
+
+export interface BuiltPlugin {
+    slug: string;
+    /** Its folder in the plugins repository. */
+    folder: string;
+    name: string;
+    line: string;
+    /** Where it sits in the build order, 1 first. */
+    position: number;
+    /** The one-line job: its headline. */
+    job: string;
+    intro: string;
+    does: string[];
+    /** The server's job ids (`Job` on `PUT /users/me/work`) it is for. */
+    jobs: string[];
+    accounts: Account[];
+    setup: string[];
+    today: DayItem[];
+    pictures: Picture[];
+    /** Every plugin adding it also adds, bases first. */
+    carries: string[];
+    /** The plugins it names in its own `plugin.json`. */
+    carriesDirect: string[];
+    /** Shared tables it writes first (keys of `TABLES`). */
+    makes: string[];
+    /** Shared tables it reads that another plugin makes. */
+    reads: string[];
+    /** Whether it writes to the day's shared list, or reads it (Today). */
+    day: string | null;
+    /** The note every agent in a Lemma reads once it is installed. */
+    memory: string | null;
+    /** The note in each person's own memory, for the one plugin with one. */
+    memoryPersonal: string | null;
+    /** A try-it demo on made-up data, served from `public/plugins`. */
+    demo: string | null;
+    /** The apps the demo's own bar switches between, first the one it opens on. */
+    demoViews: Array<{ label: string; src: string }>;
+    /** Its landing page, once it has moments to show; null keeps the older page. */
+    landing: Landing | null;
+    /** Where adding it starts; null until it is published. */
+    install: string | null;
+}
+
+export interface PlannedPlugin {
+    slug: string;
+    name: string;
+    line: string;
+    position: number;
+    /** What it will do, in one line. */
+    one: string;
+    /** Plugins it will build on, built or not. */
+    buildsOn: string[];
+    /** Older catalog entries folded into it. */
+    merges: string[];
+}
+
+export interface Line {
+    id: string;
+    name: string;
+}
+
+interface Catalog {
+    lines: Line[];
+    tables: Record<string, { name: string; line: string }>;
+    built: BuiltPlugin[];
+    planned: PlannedPlugin[];
+}
+
+const DATA: Catalog = catalog;
+
+export const LINES: readonly Line[] = DATA.lines;
+export const TABLES = DATA.tables;
+/** The plugins that are built, in build order. */
+export const BUILT: readonly BuiltPlugin[] = DATA.built;
+/** The rest of the catalog, in build order. */
+export const PLANNED: readonly PlannedPlugin[] = DATA.planned;
+/** How many plugins the catalog holds, built or not. */
+export const CATALOG_SIZE = BUILT.length + PLANNED.length;
+
+export type AnyPlugin =
+    | ({ kind: "built" } & BuiltPlugin)
+    | ({ kind: "planned" } & PlannedPlugin);
+
+export function getBuilt(slug: string): BuiltPlugin | undefined {
+    return BUILT.find((p) => p.slug === slug);
+}
+
+export function getPlanned(slug: string): PlannedPlugin | undefined {
+    return PLANNED.find((p) => p.slug === slug);
+}
+
+export function getPlugin(slug: string): AnyPlugin | undefined {
+    const built = getBuilt(slug);
+    if (built) return { kind: "built", ...built };
+    const planned = getPlanned(slug);
+    return planned ? { kind: "planned", ...planned } : undefined;
+}
+
+/** A plugin's name from its slug; the slug itself if the catalog lacks it. */
+export function nameOf(slug: string): string {
+    return getBuilt(slug)?.name ?? getPlanned(slug)?.name ?? slug;
+}
+
+export function lineName(id: string): string {
+    return LINES.find((l) => l.id === id)?.name ?? id;
+}
+
+/** Names joined the way a sentence lists them: "A", "A and B", "A, B and C". */
+export function listed(names: readonly string[], last = "and"): string {
+    if (names.length <= 1) return names.join("");
+    return `${names.slice(0, -1).join(", ")} ${last} ${names[names.length - 1]}`;
+}
+
+/** The sections of Today, by what a person does, in the order Today shows
+ *  them. The verbs are the shared list's (`needs_you.verb`). */
+export const DAY_SECTIONS: ReadonlyArray<{ verb: string; name: string }> = [
+    { verb: "decide", name: "To decide" },
+    { verb: "attend", name: "Meetings" },
+    { verb: "do", name: "To do" },
+    { verb: "answer", name: "To answer" },
+    { verb: "waiting", name: "Waiting on others" },
+    { verb: "drifting", name: "Gone quiet" },
 ];
 
-/** Every plugin, in the catalog's order. */
-export const PLUGINS: Plugin[] = CATALOG_ORDER.map((slug) => {
-    const plugin = [...TEN, ...MORE_PLUGINS].find((p) => p.slug === slug);
-    if (!plugin) throw new Error(`Plugin "${slug}" is ordered but not written.`);
-    return plugin;
-});
-
-export function getPlugin(slug: string | null | undefined): Plugin | null {
-    return PLUGINS.find((p) => p.slug === slug) ?? null;
-}
-
-/** What its bundle holds, for the plugins whose bundle has been read. */
-export function partsOf(plugin: Plugin): BundleParts | null {
-    return PARTS[plugin.slug] ?? null;
-}
-
-export function stageOf(plugin: Plugin): Stage {
-    if (plugin.install) return "ready";
-    if (partsOf(plugin) || plugin.runs) return "runs";
-    if (plugin.basis?.length) return "partly";
-    return "planned";
-}
-
-export const STAGE_NAME: Record<Stage, string> = {
-    ready: "Ready to install",
-    runs: "Runs today",
-    partly: "Partly built",
-    planned: "Not built yet",
+/** The words for the server's job ids, as the job question on the way in
+ *  shows them. */
+const JOB_NAMES: Record<string, string> = {
+    SALES: "Sales",
+    MARKETING: "Marketing",
+    PRODUCT: "Product",
+    FOUNDER: "Founders",
+    OPERATIONS: "Operations",
+    HR: "HR",
+    PROJECT_MANAGEMENT: "Project management",
+    ENGINEERING: "Engineering",
+    SUPPORT: "Customer support",
 };
 
-const STAGE_RANK: Record<Stage, number> = {
-    ready: 0,
-    runs: 1,
-    partly: 2,
-    planned: 3,
-};
-
-/** Closest to installing first, then the catalog's order. */
-export function byStage(a: Plugin, b: Plugin): number {
-    return (
-        STAGE_RANK[stageOf(a)] - STAGE_RANK[stageOf(b)] ||
-        PLUGINS.indexOf(a) - PLUGINS.indexOf(b)
-    );
+export function jobName(id: string): string {
+    return JOB_NAMES[id] ?? id;
 }
 
-/** Plugins that bring a table of this kind, closest to installing first. */
-export function makersOf(kind: TableKind): Plugin[] {
-    return PLUGINS.filter((p) => p.makes.includes(kind)).sort(byStage);
+/** The plugin that makes a shared table, if one is built. */
+export function makerOf(table: string): BuiltPlugin | undefined {
+    return BUILT.find((p) => p.makes.includes(table));
 }
 
-/** Plugins that use or read a table of this kind. */
-export function usersOf(kind: TableKind): Plugin[] {
-    return PLUGINS.filter(
-        (p) => p.uses.includes(kind) || p.reads?.includes(kind),
-    ).sort(byStage);
+/** Built plugins whose own `plugin.json` carries this one. */
+export function carriedBy(slug: string): BuiltPlugin[] {
+    return BUILT.filter((p) => p.carriesDirect.includes(slug));
 }
 
-/** The import address the install button opens, or null until the plugin is
- *  published somewhere the install flow can read. */
-export function installHref(plugin: Plugin): string | null {
-    if (!plugin.install) return null;
-    const { owner, repo } = plugin.install;
-    return `/import/github/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+/** The plugin that reads the day's shared list rather than writing to it. */
+export function dayReader(): BuiltPlugin | undefined {
+    return BUILT.find((p) => p.day === "reads");
 }
 
-/** Everything a plugin lacks: the gaps written down, plus the ones the data
- *  already shows (not built, a service Lemma can't reach, a plugin it needs
- *  that can't install, no install source, an app outside the bundle, an
- *  account used but not asked for, an app with no cover). */
-export function gapsOf(plugin: Plugin): Gap[] {
-    const parts = partsOf(plugin);
-    const stage = stageOf(plugin);
-    const derived: Gap[] = [];
-    if (stage === "planned")
-        derived.push({
-            kind: "not-built",
-            text: "Not built yet: nothing here runs today.",
-        });
-    if (stage === "partly")
-        derived.push({
-            kind: "not-built",
-            text: "Only part of it is built, so there is no plugin to install yet.",
-        });
-    if (plugin.missing?.length)
-        derived.push({
-            kind: "no-connector",
-            text: `Lemma can't connect to ${list(plugin.missing)} yet.`,
-        });
-    const unready = (plugin.needs ?? [])
-        .map((slug) => getPlugin(slug)!)
-        .filter((p) => !p.install);
-    if (unready.length)
-        derived.push({
-            kind: "needs-unready",
-            text: `Needs ${list(unready.map((p) => p.name))}, which can't be installed yet.`,
-        });
-    if (stage === "runs" && !plugin.install)
-        derived.push({
-            kind: "no-install-source",
-            text: "Not published anywhere the install flow can read, so it cannot be installed yet.",
-        });
-    if (parts) {
-        const outside = parts.apps.filter((a) => !a.inBundle);
-        if (outside.length)
-            derived.push({
-                kind: "app-outside-bundle",
-                text: `${list(outside.map((a) => a.title))} ${outside.length > 1 ? "live" : "lives"} beside the bundle, not in it, so an install brings no screen.`,
-            });
-        const undeclared = parts.connectors.filter((c) => !c.declared);
-        if (undeclared.length)
-            derived.push({
-                kind: "undeclared-account",
-                text: `${list(undeclared.map((c) => c.service))} ${undeclared.length > 1 ? "are" : "is"} used but never asked for, so an install doesn't connect ${undeclared.length > 1 ? "them" : "it"}.`,
-            });
-        const bare = parts.apps.filter((a) => !a.cover && a.shape !== "page");
-        if (bare.length)
-            derived.push({
-                kind: "no-cover",
-                text: `No cover image yet for ${list(bare.map((a) => a.title))}; the pictures here are drawn stand-ins.`,
-            });
+/** Every plugin that writes to the day, with what it puts there. */
+export function dayWriters(): BuiltPlugin[] {
+    return BUILT.filter((p) => p.day === "writes" && p.today.length > 0);
+}
+
+export interface Tie {
+    plugin: BuiltPlugin;
+    /** Shared tables this plugin reads from the other. */
+    uses: string[];
+    /** Shared tables of this plugin the other reads. */
+    usedFor: string[];
+    /** The other carries this one: adding it adds this. */
+    buildsOnThis: boolean;
+}
+
+/** The built plugins this one shares tables with, or that carry it, in
+ *  build order. What a plugin itself carries is said apart ("Adding it also
+ *  adds"), and so is Today, which reads what every plugin writes. */
+export function tiesOf(plugin: BuiltPlugin): Tie[] {
+    const ties: Tie[] = [];
+    for (const other of BUILT) {
+        if (other.slug === plugin.slug) continue;
+        const uses = plugin.reads.filter((t) => other.makes.includes(t));
+        const usedFor = other.reads.filter((t) => plugin.makes.includes(t));
+        const buildsOnThis = other.carriesDirect.includes(plugin.slug);
+        if (uses.length || usedFor.length || buildsOnThis) {
+            ties.push({ plugin: other, uses, usedFor, buildsOnThis });
+        }
     }
-    return [...derived, ...plugin.gaps];
+    return ties;
 }
 
-/** Plugins that link to this one without it linking back still belong on its
- *  page: a link is one fact about two plugins. */
-export function linksOf(plugin: Plugin) {
-    const own = plugin.links;
-    const back = PLUGINS.flatMap((p) =>
-        p.links
-            .filter(
-                (l) =>
-                    l.slug === plugin.slug &&
-                    !own.some((o) => o.slug === p.slug),
-            )
-            .map((l) => ({ ...l, slug: p.slug })),
-    );
-    return [...own, ...back].map((l) => ({
-        ...l,
-        plugin: getPlugin(l.slug)!,
+/** The accounts a plugin's carried plugins ask for, each with whose it is. */
+export function carriedAccounts(plugin: BuiltPlugin): Array<{ from: BuiltPlugin; account: Account }> {
+    return plugin.carries.flatMap((slug) => {
+        const from = getBuilt(slug);
+        return from ? from.accounts.map((account) => ({ from, account })) : [];
+    });
+}
+
+/** Where a plugin's page sends somebody who wants to add it. */
+export function installHref(plugin: BuiltPlugin): string | null {
+    return plugin.install;
+}
+
+/** The catalog in build order, built and planned together, by line. */
+export function byLine(): Array<{ line: Line; built: BuiltPlugin[]; planned: PlannedPlugin[] }> {
+    return LINES.map((line) => ({
+        line,
+        built: BUILT.filter((p) => p.line === line.id),
+        planned: PLANNED.filter((p) => p.line === line.id),
     }));
 }
-
-/** The GitHub templates a plugin installs from or starts from. */
-export function templatesUsedByPlugins(): Set<string> {
-    return new Set(
-        PLUGINS.flatMap((p) =>
-            (p.basis ?? []).flatMap((b) => (b.template ? [b.template] : [])),
-        ),
-    );
-}
-
-export function list(items: string[]): string {
-    if (items.length < 2) return items[0] ?? "";
-    return items.slice(0, -1).join(", ") + " and " + items[items.length - 1];
-}
-
-export type { Plugin, PluginSlug };

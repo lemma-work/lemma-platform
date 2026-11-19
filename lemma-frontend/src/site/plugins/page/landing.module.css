@@ -1,0 +1,87 @@
+/* A plugin's landing page is drawn with the product pages' own pieces
+   (`app/(marketing)/landing.module.css` and `product.module.css`: the
+   label, the serif headlines, the steps, the claim beside its proof, the
+   tinted panel, the window, the margin note, the trust columns, the close).
+   This holds only what those do not have: a capture that comes in light,
+   dark and a phone layout, a capture that runs off its panel on purpose,
+   the plugin's own window frame, and the dark rendition of the few colours
+   the product stylesheet writes as literals (`theme.module.css` has the
+   tokens). */
+
+/* ── A capture: its theme's version, and its phone layout on a phone ──── */
+/* Each rule names `.visual` too, to outrank the page's own `.page img`. */
+.visual { display: block; width: 100% }
+.visual .desk { display: block }
+.visual .phone { display: none }
+.visual .capture { display: block; width: 100%; height: auto; margin: 0 auto }
+.visual .dark { display: none }
+:global(:root[data-theme="dark"]) .visual .light { display: none }
+:global(:root[data-theme="dark"]) .visual .dark { display: block }
+@media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme="light"])) .visual .light { display: none }
+    :global(:root:not([data-theme="light"])) .visual .dark { display: block }
+}
+
+/* ── The plugin's window: its face and the view, over the capture ────── */
+/* In a panel the window is as wide as its capture, so a close-up is shown
+   at the size it was taken, not stretched. */
+.fit { width: fit-content; max-width: 100%; margin-inline: auto }
+.window .capture { border-radius: 0 }
+:global(:root[data-theme="dark"]) .chrome { background: var(--paper) }
+:global(:root[data-theme="dark"]) .chrome i { background: rgb(241 239 232 / .16) }
+@media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme="light"])) .chrome { background: var(--paper) }
+    :global(:root:not([data-theme="light"])) .chrome i { background: rgb(241 239 232 / .16) }
+}
+
+/* The margin note follows the page's theme. */
+.panel > p:first-child { color: var(--scrawl) }
+:global(:root[data-theme="dark"]) .sand { background: linear-gradient(180deg, #1f1d19, #1a1815) }
+@media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme="light"])) .sand { background: linear-gradient(180deg, #1f1d19, #1a1815) }
+}
+
+/* A crop that cuts through something on purpose runs off the panel's foot. */
+@media (min-width: 641px) {
+    .panel[data-bleed="bottom"] { padding-bottom: 0 }
+    .panel[data-bleed="bottom"] .window { border-bottom: 0; border-bottom-left-radius: 0; border-bottom-right-radius: 0 }
+}
+@media (max-width: 640px) {
+    .panel[data-phone-bleed="bottom"] { padding-bottom: 0 }
+    .panel[data-phone-bleed="bottom"] .window { border-bottom: 0; border-bottom-left-radius: 0; border-bottom-right-radius: 0 }
+    .visual .desk { display: none }
+    .visual .phone { display: block }
+}
+
+/* ── Hero ─────────────────────────────────────────────────────────────── */
+.button { border: 0; font: inherit; font-size: 16px; cursor: pointer }
+.button[aria-pressed="true"] { background: transparent; color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-2) }
+.button[aria-pressed="true"]:hover { background: transparent; box-shadow: inset 0 0 0 1px var(--ink) }
+.soon { display: inline-flex; align-items: center; gap: 10px; font-size: 16px; color: var(--ink-3) }
+.soon::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--line-2) }
+.demo { display: block; width: 100%; height: min(78vh, 700px); border: 0; background: var(--paper) }
+
+/* ── How it works: each step ends on its close-up, the three in line ─── */
+.step { display: flex; flex-direction: column }
+.stepPanel { display: flex; align-items: center; justify-content: center; height: 300px; margin-top: auto; padding: 24px; overflow: hidden }
+.stepText { margin-bottom: 28px }
+.stepPanel > div { width: fit-content; max-width: 100%; margin-inline: auto }
+.stepPanel[data-bleed="bottom"] { align-items: flex-start }
+
+/* ── Better with: the plugins that build on it ───────────────────────── */
+.better { grid-template-columns: repeat(4, minmax(0, 1fr)) }
+.better a { display: grid; gap: 10px }
+.better img { width: 56px; height: 56px; object-fit: contain }
+.better a:hover h3 { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: .18em }
+
+/* ── The close: the plugin's own face over its line ────────────────── */
+.closeFace { width: 96px; height: 96px; margin: -24px auto 18px; object-fit: contain }
+
+@media (max-width: 1080px) {
+    .better { grid-template-columns: repeat(2, minmax(0, 1fr)) }
+    .stepPanel { margin-top: 0 }
+}
+@media (max-width: 520px) {
+    .better { grid-template-columns: 1fr }
+    .stepPanel { height: auto; max-height: 340px; align-items: flex-start }
+}
