@@ -14,7 +14,7 @@ from uuid import UUID
 import pytest_asyncio
 
 from app.core.plan_limits import declare_plan_limits, reset_plan_limits
-from app.core.ports.plan_limits import PodAllowance, SandboxSize
+from app.core.ports.plan_limits import MachinePolicy, PodAllowance
 
 
 @dataclass
@@ -24,7 +24,7 @@ class SetPlan:
     pods: PodAllowance | None = None
     organizations: int | None = None
     members: int | None = None
-    size: SandboxSize | None = None
+    machines: MachinePolicy | None = None
 
     async def pod_allowance(
         self, *, user_id: UUID, organization_id: UUID
@@ -37,8 +37,10 @@ class SetPlan:
     async def member_limit(self, *, organization_id: UUID) -> int | None:
         return self.members
 
-    async def workspace_size(self, *, user_id: UUID) -> SandboxSize | None:
-        return self.size
+    async def machine_policy(
+        self, *, user_id: UUID | None, organization_id: UUID | None
+    ) -> MachinePolicy | None:
+        return self.machines
 
 
 @pytest_asyncio.fixture

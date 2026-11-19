@@ -78,7 +78,7 @@ async def read_target(
         # never anything to look at and the resolver wakes it on schedule.
         return _STILL_GOING
     if wait_type is AgentWaitType.PROCESS:
-        return await _read_process(target_ref, user_id=user_id)
+        return await _read_process(target_ref, user_id=user_id, pod_id=pod_id)
     if wait_type is AgentWaitType.SUBAGENT:
         return await _read_subagent_run(
             target_ref, user_id=user_id, parent_conversation_id=conversation_id
@@ -99,13 +99,15 @@ def _outcome(
     )
 
 
-async def _read_process(process_id: str, *, user_id: UUID) -> TargetOutcome:
+async def _read_process(
+    process_id: str, *, user_id: UUID, pod_id: UUID | None
+) -> TargetOutcome:
     from app.modules.workspace.contracts.processes import (
         ProcessProbeStatus,
         probe_process,
     )
 
-    probe = await probe_process(user_id=user_id, process_id=process_id)
+    probe = await probe_process(user_id=user_id, process_id=process_id, pod_id=pod_id)
     if probe.status is ProcessProbeStatus.FINISHED:
         return _outcome(
             AgentWaitType.PROCESS,

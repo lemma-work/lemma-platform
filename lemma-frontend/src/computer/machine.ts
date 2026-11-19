@@ -31,7 +31,7 @@ export interface Roots {
  *  and it is deliberately not exported as a browsing root: a constant here can
  *  only ever be as current as the last person to remember it, and the last
  *  time these moved the hardcoded copy stayed behind. This pane asked
- *  `/workspace` for a fortnight after that path stopped existing — which the
+ *  the old project root for a fortnight after that path stopped existing — which the
  *  route answers 422 for, so the machine read as unreachable rather than as a
  *  client looking in the wrong place.
  */
@@ -49,7 +49,7 @@ export function rootsOf(listing: Listing | undefined): Roots {
     };
 }
 
-/** One entry, exactly as `GET /workspace/files` sends it. */
+/** One entry, exactly as `GET /machines/me/files` sends it. */
 export interface Entry {
     path: string;
     name: string;
@@ -58,7 +58,7 @@ export interface Entry {
     modified_at: string;
 }
 
-/** One directory, exactly as `GET /workspace/files` sends it.
+/** One directory, exactly as `GET /machines/me/files` sends it.
  *
  *  `sleeping` and `exists` are both false-by-absence in the schema and both
  *  mean something specific, which is why neither is folded into "no entries":
@@ -79,7 +79,7 @@ export interface Listing {
     entries?: Entry[];
 }
 
-/** What `GET /workspace/browser/status` answers without waking anything. */
+/** What `GET /machines/me/browser` answers without waking anything. */
 export type BrowserState = "asleep" | "stopped" | "running" | "unavailable" | "unsupported";
 
 /** What the machine is doing, from the two ambient answers together.

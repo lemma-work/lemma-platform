@@ -57,6 +57,7 @@ from app.modules.pod_bundle.infrastructure import (
     account_checks,
     bundle_outcome,
     kept_parts,
+    machine_bundle,
 )
 from app.modules.pod_bundle.infrastructure.grants import has_grants
 from app.modules.pod_bundle.infrastructure.one_schedule import refuse_shared_workflows
@@ -76,7 +77,7 @@ from app.modules.pod_bundle.domain.state import (
 logger = get_logger(__name__)
 
 
-class ExistingResources(Protocol):
+class ExistingResources(machine_bundle.MachineNames, Protocol):
     """The pod's current resources, by name — everything the diff needs."""
 
     async def table_names(self) -> set[str]: ...
@@ -303,6 +304,9 @@ class PlanBuilder:
         table_steps, data_steps = await self._table_steps(bundle_root, warnings)
         steps += table_steps
 
+        # --- machines: before the agents that name one, and their grants ----
+        steps.extend(await machine_bundle.machine_steps(bundle_root, self._existing))
+
         # --- functions, agents, workflows, schedules -------------------------
         functions = _create_or_keep(
             bundle_root, "functions", await self._existing.function_names()
@@ -468,7 +472,7 @@ class PlanBuilder:
         return parsed if isinstance(parsed, dict) else {}
 
 
-class ServiceExistingResources:
+class ServiceExistingResources(machine_bundle.PodMachineNames):
     """Production :class:`ExistingResources` — lists the pod's resources through
     the module services over a caller-supplied short UoW + ``Context``. Lazy
     imports keep the module import cheap and cycle-free (mirrors the exporter)."""

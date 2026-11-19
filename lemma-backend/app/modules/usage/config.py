@@ -67,6 +67,32 @@ class UsageSettings(BaseSettings):
         default=None,
         description="Deployment-wide monthly system-spend limit per user, in USD.",
     )
+    usage_user_monthly_compute_units: float | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Deployment-wide monthly compute allowance per person for their own "
+            "machines, in compute units (1 CU = one hour of a 2x4 machine). "
+            "None means no allowance beyond the USD limits."
+        ),
+    )
+    usage_org_monthly_compute_units: float | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Deployment-wide monthly compute allowance per organization for "
+            "its pod machines, in compute units. None means no allowance "
+            "beyond the USD limits."
+        ),
+    )
+    usage_compute_unit_usd: float | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "What one compute unit costs, in USD, so machine time counts in "
+            "the spend limits beside model calls. None records it at no cost."
+        ),
+    )
     usage_contacts_monthly_default_usd: float | None = Field(
         default=50,
         ge=0,

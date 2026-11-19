@@ -159,6 +159,8 @@ AGENT_JSON = _fill_enums("""{
   // which is what lets a workflow read named fields off its result.
   // "input_schema": { "type": "object", "properties": { } },
   // "output_schema": { "type": "object", "properties": { } },
+  // "machine": "pod:builder",  // where its commands run: one of the pod's machines
+  //                            // (machines/<name>/<name>.json); omitted = the default machine of whoever it acts for
   // "metadata": { },     // free-form; yours to read, the platform ignores it
   // Zero access by default. This EMPTY list means "holds nothing" — on import it
   // REPLACES the agent's grants, so delete the whole "permissions" key if you are

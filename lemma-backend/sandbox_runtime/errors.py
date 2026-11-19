@@ -61,6 +61,10 @@ class SandboxPathConflict(SandboxRejected):
     """A filesystem precondition or destination constraint was not satisfied."""
 
 
+class SandboxPathProtected(SandboxRejected):
+    """A change to the browser's profile, however the path was spelled."""
+
+
 class SandboxProcessNotFound(SandboxRejected):
     """The sandbox has no process with this id.
 

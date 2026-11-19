@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from uuid import UUID
 
 from app.modules.usage.domain.accounting import (
+    ORG_ONLY_SOURCES,
     OUTSIDE_AUDIENCE_SOURCES,
     BudgetWindow,
     MeteringIdentity,
@@ -93,9 +94,7 @@ def spend_windows(
                 # What answering people outside cost is the organization's,
                 # so it never fills the allowance of the member who looked
                 # after the conversation either.
-                excluded_source_types=(
-                    OUTSIDE_AUDIENCE_SOURCES if user is not None else ()
-                ),
+                excluded_source_types=(ORG_ONLY_SOURCES if user is not None else ()),
             )
         )
     if outside_audience and organization_id is not None:

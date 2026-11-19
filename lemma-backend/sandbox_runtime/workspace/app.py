@@ -24,7 +24,11 @@ from fastapi import (
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from sandbox_runtime.paths import RUNTIME_FILESYSTEM_ROOTS, running_runtime_version
+from sandbox_runtime.paths import (
+    PROTECTED_PATHS,
+    RUNTIME_FILESYSTEM_ROOTS,
+    running_runtime_version,
+)
 from sandbox_runtime.protocol import ByteRange, ProcessState
 from sandbox_runtime.tasks import create_inherited_task
 
@@ -50,7 +54,9 @@ from .filesystem_manager import (
     FileConflictError,
     FilesystemManager,
     FileTooLargeError,
+    ProtectedPathError,
 )
+from . import port_relay
 from .browser_guard import shed_browser_if_starved
 from .process_manager import ManagedProcess, OutputChunk, ProcessManager
 from .python_session_manager import PythonSessionManager
@@ -117,6 +123,7 @@ def create_app(
         allowed_roots=allowed_roots,
         max_read_bytes=transfer_limit,
         max_write_bytes=transfer_limit,
+        protected_paths=PROTECTED_PATHS,
     )
     python_sessions = PythonSessionManager(allowed_roots=allowed_roots)
     quiescer = WorkspaceQuiescer()
@@ -194,6 +201,14 @@ def create_app(
     @app.exception_handler(ValueError)
     async def value_error_handler(_request: Request, error: ValueError) -> JSONResponse:
         return JSONResponse(status_code=422, content={"detail": str(error)})
+
+    @app.exception_handler(ProtectedPathError)
+    async def protected_path_handler(
+        _request: Request, error: ProtectedPathError
+    ) -> JSONResponse:
+        # 423, not 403: the API's client reads 401 and 403 as its own runtime
+        # credential being refused. Not 422, which reads as a file too large.
+        return JSONResponse(status_code=423, content={"detail": str(error)})
 
     @app.exception_handler(FileNotFoundError)
     async def not_found_handler(
@@ -497,6 +512,10 @@ def create_app(
             # two answers depending on how deep the absence went.
             removed = False
         return Response(status_code=200 if removed else 204)
+
+    # A port on this machine's loopback, for a preview the fabric cannot reach
+    # any other way. See `port_relay`.
+    app.include_router(port_relay.create_router(), dependencies=[Depends(authenticate)])
 
     return app
 

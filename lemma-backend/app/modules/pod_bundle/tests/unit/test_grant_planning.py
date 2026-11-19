@@ -47,6 +47,12 @@ class _NoResources:
     async def surface_names(self):
         return set()
 
+    async def machine_names(self):
+        return set()
+
+    async def machine_refusals(self, machines):
+        return []
+
 
 class _Conferral:
     """Refuses every grant carrying a permission in ``refuse``."""

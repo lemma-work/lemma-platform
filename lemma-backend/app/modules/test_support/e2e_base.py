@@ -35,7 +35,9 @@ from app.modules.test_support.lock_holders import (
     warn_lock_holders,
 )
 from app.core.test_utils import (
+    OWNER_LABEL_KEY,
     SHARED_E2E_NETWORK_NAME,
+    invocation_owner,
     create_postgres_database,
     get_postgres_uri_from_another_container,
     get_postgres_url,
@@ -92,9 +94,9 @@ def _remove_workspace_volumes() -> None:
     prune -- and it deleted a live dev stack's workspace volume out from under
     somebody, over and over, while an e2e suite ran beside it.
 
-    Filtering on the owner instead is what makes the claim true. Volumes from
-    an *interrupted* e2e run still match, because the tag identifies the
-    harness rather than one process.
+    Filtering on the owner instead is what makes the claim true, and the owner
+    is this run's: another run's volumes are its own business until it is
+    gone (`sweep_gone_owners`).
     """
     listed = subprocess.run(
         [
@@ -125,34 +127,32 @@ def _remove_workspace_volumes() -> None:
         )
 
 
-#: Stamped on every sandbox an e2e run creates (`settings.workspace_owner_tag`,
-#: read by the Docker provider) and the only thing these sweeps delete by.
+#: Stamped on every sandbox this process creates (`settings.workspace_owner_tag`,
+#: read by the Docker provider) and the only thing its sweeps delete by: the
+#: invocation's pid, then the xdist worker, so a test's teardown removes its
+#: own worker's sandboxes and nothing else.
 #:
-#: Fixed rather than per-run: an interrupted run leaves containers and volumes
-#: behind and the next run has to recognise them. What it must never match is
-#: another *stack* -- a developer's `make dev` on the same daemon, whose
-#: sandboxes this used to delete mid-use.
-E2E_OWNER_TAG = "lemma-e2e"
+#: It used to be the fixed ``lemma-e2e``, naming the harness rather than the
+#: run, so two runs on one daemon deleted each other's live sandboxes on every
+#: teardown. An interrupted run's leftovers are still cleaned up: by
+#: `sweep_gone_owners` once its process is gone, never while it is alive.
+E2E_OWNER_TAG = (
+    f"{invocation_owner()}-{os.environ.get('PYTEST_XDIST_WORKER', 'master')}"
+)
 
 
 def sweep_filter_sets(*, sandboxes_only: bool) -> list[list[str]]:
-    """The `docker ps` filters this harness is allowed to delete by.
+    """The `docker ps` filters this process is allowed to delete by.
 
     Its own function so the property that matters can be asserted without a
-    Docker daemon: **every set must name something only this harness creates.**
+    Docker daemon: **every set must name this run's owner.** Docker's filters
+    are conjunctive, so each set is one owner-scoped selection.
 
-    Docker's filters are conjunctive, so each way of labelling a sandbox has to
-    be swept separately. The workspace set used to be
-    `managed-by=lemma-workspace` alone, which is not a scope -- it matches
-    every Lemma sandbox on the daemon. An e2e run beside a developer's dev
-    stack deleted that stack's live sandbox on every sweep, repeatedly, within
-    seconds, and the person using it watched the page they were typing into go
-    black each time. `lemma-owner` is what narrows it to ours.
-
-    Two e2e runs on one daemon still collide, because they share the tag by
-    design: it identifies the harness rather than one process, which is what
-    lets the next run clean up after an interrupted one. That is the same
-    trade CI's one-runner-per-job layout already assumes.
+    `managed-by=lemma-workspace` alone matches every Lemma sandbox on the
+    daemon -- a developer's dev stack's included, which an e2e run once deleted
+    over and over while somebody typed into it. `lemma.e2e=true` alone matches
+    every e2e run's containers, which is how parallel runs killed each other's
+    Postgres. Both are only ever used paired with an owner.
     """
     workspace_ours = [
         "--filter",
@@ -161,34 +161,29 @@ def sweep_filter_sets(*, sandboxes_only: bool) -> list[list[str]]:
         f"label=lemma-owner={E2E_OWNER_TAG}",
     ]
     if sandboxes_only:
-        return [
-            [
-                "--filter",
-                "label=lemma.e2e=true",
-                "--filter",
-                "label=app.kubernetes.io/name=lemma-sandbox",
-            ],
-            workspace_ours,
-        ]
-    return [["--filter", "label=lemma.e2e=true"], workspace_ours]
+        return [workspace_ours]
+    return [
+        [
+            "--filter",
+            "label=lemma.e2e=true",
+            "--filter",
+            f"label={OWNER_LABEL_KEY}={invocation_owner()}",
+        ],
+        workspace_ours,
+    ]
 
 
 def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
-    """Remove leftover Docker containers created by e2e runs.
+    """Remove this run's leftover Docker containers -- never another run's.
 
-    The shared session testcontainers (postgres/redis/supertokens/kreuzberg) and
-    the sandboxes BOTH carry ``lemma.e2e=true``, so a broad sweep by that label
-    would tear down the live session containers mid-run. Sandboxes are
-    identifiable on their own: the workspace module labels its containers
-    ``managed-by=lemma-workspace``, and pre-cutover ones carry
-    ``app.kubernetes.io/name=lemma-sandbox``.
+    - ``sandboxes_only=True`` (per-test cleanup): this worker's sandboxes only,
+      sparing the shared session containers -- otherwise the workspace teardown
+      after the first test kills postgres/redis and every later test fails to
+      connect.
+    - default: this invocation's session containers as well.
 
-    - ``sandboxes_only=True`` (per-test cleanup): remove ONLY sandboxes, sparing
-      the shared session containers — otherwise the workspace teardown after the
-      first test kills postgres/redis and every later test fails to connect.
-    - default (session boundaries): remove ALL e2e-labeled containers for a clean
-      slate, which is safe because the session containers aren't up yet (start)
-      or are being torn down anyway (finish).
+    Another run's containers, live or not, are never matched here; an
+    interrupted run's are `sweep_gone_owners`'s, once its process is gone.
     """
     if not shutil.which("docker"):
         return

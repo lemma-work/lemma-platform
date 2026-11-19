@@ -39,19 +39,24 @@ The design intentionally uses different lifecycle policies for the two workloads
 
 | Workload | Logical owner | Durable state | Idle action | Physical isolation |
 | --- | --- | --- | --- | --- |
-| Workspace | User | home-directory files | Quiesce and release | One sandbox per user |
+| Workspace (a [machine](../machines.md)) | User (default machine) or pod (pod machine) | home-directory files | Quiesce and release | One sandbox per machine |
 | Function | Pod | None | Destroy after five minutes | One sandbox per pod |
+
+The workspace workload is what the product calls a **machine**: every user's
+default machine (`me`) and every shared pod machine is one workspace sandbox.
+[machines.md](../machines.md) covers refs, access, previews, reset scopes and
+compute metering; this design set covers the fabric underneath.
 
 The logical identity is a composite key. A UUID is never interpreted without its
 workload kind:
 
 ```text
-(WORKSPACE, user_id)
+(WORKSPACE, machine_id)   -- a default machine's id is its user's id
 (FUNCTION, pod_id)
 ```
 
 The function logical ID is therefore exactly the pod ID without sharing a namespace
-with user workspaces. Provider-generated IDs remain private sandbox data.
+with machines. Provider-generated IDs remain private sandbox data.
 
 **One workspace per person, not per pod or agent.** Every conversation a person
 has -- with any pod's assistant or any named agent -- runs in their one
@@ -332,7 +337,7 @@ increases this image and weakens the capability contract.
 
 ### 6.4 The filesystem contract
 
-What a workspace sandbox guarantees about its own disk. Stated here because it is
+What a machine guarantees about its own disk. Stated here because it is
 the thing agents, tools and operators all reason about, and because getting it
 wrong is silent: files land somewhere real, and simply are not there next time.
 
@@ -340,8 +345,13 @@ wrong is silent: files land somewhere real, and simply are not there next time.
 
 | Path | What it is | Guarantee |
 |---|---|---|
-| `/home/user` | the sandbox user's home, and **the durable root** | everything under it survives for the life of the workspace |
+| `/home/user` | the sandbox user's home, and **the durable root** | everything under it survives for the life of the machine |
 | `/home/user/lemma` | the **project root**, inside that home | where conversations and repositories are created |
+| `/home/user/lemma/runs/<agent>/<run>` | a run's own directory on a pod machine | pruned by the disk janitor once the run has finished |
+| `/home/user/lemma/services/<name>` | a long-lived service on a pod machine | kept; the service is restarted when the machine resumes |
+| `/home/user/.lemma/browser/profile` | the browser profile: every login | **protected** (below) |
+
+All of these come from `lemma-backend/sandbox_runtime/paths.py` and nowhere else.
 
 **The whole home persists, not just the project root.** That is the contract, and
 it is deliberately wider than the directory Lemma itself writes to. Tools put
@@ -359,10 +369,20 @@ leaving a credential helper in `~` all behave the way they would on a machine.
 #### `/tmp` is the opposite, and on purpose
 
 `/tmp` does **not** persist and must not be relied on. Session-scoped credentials
-are staged there precisely so they die with the sandbox — the GitHub token, the
-browser relay token, the browser profile. It is reachable from a shell, and
+are staged there precisely so they die with the sandbox — the GitHub token and
+the browser relay token. It is reachable from a shell, and
 deliberately **not** reachable through the HTTP files route, which is a narrower
 surface than a shell and is exposed to page script.
+
+#### The browser profile is protected
+
+`PROTECTED_PATHS` in `paths.py` names the browser profile. Nothing deletes,
+moves or overwrites it: not the files API, not a reset scope (except a confirmed
+`home` reset, which restores the logins unless asked to forget them), not the
+disk janitor, not quiesce. Before a machine stops, the browser is closed cleanly
+and the login-bearing parts of the profile are backed up encrypted, off the
+machine; a new disk gets them back. The HTTP files route also refuses to *read*
+the profile (`is_browser_private`).
 
 #### How each fabric keeps the promise
 
@@ -376,7 +396,7 @@ surface than a shell and is exposed to page script.
 
 #### One layout: a stable image, a floor, and the overlay
 
-Every fabric lays a workspace sandbox out the same way.
+Every fabric lays a machine out the same way.
 
 | Part | What is in it | Where it comes from | When it changes |
 |---|---|---|---|
