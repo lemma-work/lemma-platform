@@ -22065,7 +22065,7 @@ var LemmaClient = (() => {
     }
     /**
      * Ensure The Current User Has A Workspace
-     * Select an eligible organization and idempotently ensure the current user has a private pod and assistant.
+     * Put the current user in an organization, making one if they belong to none, and say which Lemma they land in. Pending invitations are accepted first, then an organization they already belong to is used, then their company's organization open to their verified work domain is joined; otherwise one is made, with a Lemma everyone in it shares. Safe to repeat: a second call makes nothing new.
      * @param requestBody
      * @returns FirstWorkspaceResponse Successful Response
      * @throws ApiError
@@ -22111,6 +22111,24 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Say What The Current User Does
+     * Keep what the current user said they do, replacing any earlier answer, and return the user with it. Asked once, at their first start: an answer with no jobs and no `other` records that they skipped, so they are not asked again. Leaves every other preference as it was.
+     * @param requestBody
+     * @returns UserResponse Successful Response
+     * @throws ApiError
+     */
+    static usersWorkSet(requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/users/me/work",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/users.ts
@@ -22123,6 +22141,12 @@ var LemmaClient = (() => {
     }
     ensureFirstWorkspace(payload = {}) {
       return this.client.request(() => UsersService.usersEnsureFirstWorkspace(payload));
+    }
+    /** Keep what the signed-in person does, replacing any earlier answer, and
+     *  answer with the whole user. `{ jobs: [] }` records that they skipped the
+     *  question, so it is not asked again. */
+    setWork(payload) {
+      return this.client.request(() => UsersService.usersWorkSet(payload));
     }
     /** Whether this local installation can send email. 404 on a server. */
     emailDelivery() {

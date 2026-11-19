@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 178 |
+| `covered` | 180 |
 | `gap` | 5 |
-| `manual` | 36 |
-| `planned` | 36 |
+| `manual` | 35 |
+| `planned` | 37 |
 | `withdrawn` | 2 |
-| **total** | **257** |
+| **total** | **259** |
 
-Scenario tests declaring a promise: 459.
+Scenario tests declaring a promise: 461.
 
 ## Contract coverage
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 260 | 423 |
+| OpenAPI operations | 262 | 424 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -175,11 +175,12 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-005` A person chooses comfortable chat text on their device | `manual` | — |
 | `PS-ONB-006` Authentication resumes the person's requested destination | `manual` | — |
 | `PS-ONB-007` A new person confirms their name and can prove their phone before they start | `manual` | — |
+| `PS-ONB-008` A person is asked what they do once, and the answer stays with them | `covered` | `test_what_a_person_does_stays_with_them` |
 | `PS-ONB-010` The person who creates an organization owns it | `covered` | `test_creator_of_an_organization_owns_it`, `test_a_person_can_own_several_organizations` |
 | `PS-ONB-011` An organization has a handle that survives being renamed | `covered` | `test_renaming_an_organization_keeps_its_handle`, `test_handle_availability_is_checkable` |
 | `PS-ONB-014` Two organizations may share a display name | `covered` | `test_two_organizations_may_share_a_display_name` |
 | `PS-ONB-013` Only an owner changes what the organization is | `covered` | `test_only_an_owner_changes_the_organization` |
-| `PS-ONB-015` A new organization opens in a Lemma everyone in it can find | `manual` | — |
+| `PS-ONB-015` A new organization opens in a Lemma everyone in it shares | `covered` | `test_a_new_organization_opens_in_a_lemma_everyone_shares` |
 | `PS-ONB-016` An organization's own Lemma starts by bringing the team's stuff in | `manual` | — |
 | `PS-ONB-020` An invited person joins with the role they were offered | `covered` | `test_an_invited_person_joins_with_the_offered_role`, `test_an_editor_invites_up_to_their_own_level`, `test_an_invitation_is_addressed` |
 | `PS-ONB-021` An invitation can carry a pod, and accepting it grants both | `covered` | `test_an_invitation_cannot_smuggle_a_pod_administrator`, `test_an_invitation_carries_its_pod`, `test_an_invitation_to_a_vanished_pod_is_not_silently_half_applied` |
@@ -188,6 +189,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-024` A person can see the invitations waiting for them | `covered` | `test_an_unproven_address_is_not_shown_its_invitations`, `test_an_owner_sees_sent_invitations` |
 | `PS-ONB-030` A person is offered the organizations they could join | `covered` | `test_suggestions_are_empty_without_a_matching_domain` |
 | `PS-ONB-031` A person joins an organization that is open to them | `covered` | `test_invite_only_refuses_self_join`, `test_an_open_organization_admits_anyone_as_a_member`, `test_joining_again_changes_nothing` |
+| `PS-ONB-032` Colleagues from one work domain land in one organization | `planned` | — |
 | `PS-ONB-040` Whoever manages people changes what a member may do | `covered` | `test_an_owner_changes_a_role`, `test_a_member_cannot_change_roles`, `test_an_editor_changes_roles_up_to_their_own_level`, `test_an_editor_cannot_make_an_owner`, `test_an_editor_cannot_reach_over_an_owner`, `test_a_member_manages_nobody` |
 | `PS-ONB-041` An organization always has at least one owner | `covered` | `test_the_last_owner_cannot_step_down` |
 | `PS-ONB-042` Removal respects the role hierarchy | `covered` | `test_an_editor_cannot_reach_over_an_owner`, `test_an_editor_removes_members_and_editors`, `test_a_member_manages_nobody`, `test_removing_a_member_takes_their_access` |
@@ -195,7 +197,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-080` A person deletes their own account, from the app or the website | `planned` | — |
 | `PS-ONB-081` Deleting an account unlinks the person from work they shared | `planned` | — |
 | `PS-ONB-082` An account is not deleted out from under what depends on it | `planned` | — |
-| `PS-ONB-050` First-chat setup yields one usable personal workspace | `covered` | `test_first_chat_workspace_is_ready_and_reused`, `test_importer_can_defer_personal_pod_creation` |
+| `PS-ONB-050` First-chat setup lands the person in their organization's Lemma | `covered` | `test_first_chat_workspace_is_ready_and_reused`, `test_no_private_pod_is_made_beside_the_organizations_lemma` |
 | `PS-ONB-070` A new person is shown what Lemma is and where everything is | `manual` | — |
 | `PS-ONB-071` A person can ask how the place they are in works | `manual` | — |
 | `PS-ONB-060` A visitor can learn about Lemma without signing in | `covered` | `test_public_guides_and_company_pages` |
