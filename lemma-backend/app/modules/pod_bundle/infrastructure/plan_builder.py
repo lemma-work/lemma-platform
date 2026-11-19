@@ -21,9 +21,9 @@ inject a fake, so the diff logic is tested without a database.
 from __future__ import annotations
 
 import csv
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 from uuid import UUID
 
 from lemma_pod_bundle import load_resource_payload
@@ -59,13 +59,17 @@ from app.modules.pod_bundle.infrastructure import (
     kept_parts,
 )
 from app.modules.pod_bundle.infrastructure.grants import has_grants
+from app.modules.pod_bundle.infrastructure.kept_parts import ExistingResources
 from app.modules.pod_bundle.infrastructure.plan_variables import (
     variables_from_manifest,
 )
 from app.modules.pod_bundle.infrastructure.grant_planning import (
     GrantConferral,
+    HeldGrants,
     NoGrantConferral,
+    NoHeldGrants,
     plan_grant_conferral,
+    plan_kept_access,
 )
 from app.modules.pod_bundle.domain.state import (
     ImportPlan,
@@ -75,22 +79,6 @@ from app.modules.pod_bundle.domain.state import (
 )
 
 logger = get_logger(__name__)
-
-
-class ExistingResources(Protocol):
-    """The pod's current resources, by name — everything the diff needs."""
-
-    async def table_names(self) -> set[str]: ...
-    async def table_manifest(self, name: str) -> dict[str, Any] | None: ...
-    async def function_names(self) -> set[str]: ...
-    async def agent_names(self) -> set[str]: ...
-    async def workflow_names(self) -> set[str]: ...
-    async def schedule_names(self) -> set[str]: ...
-    async def app_names(self) -> set[str]: ...
-    async def surface_names(self) -> set[str]: ...
-    async def existing_paths(self, paths: Sequence[str]) -> set[str]:
-        """Which of these file and folder paths the pod already holds."""
-        ...
 
 
 def _resource_subdirs(bundle_root: Path, resource_type: str) -> list[Path]:
@@ -275,8 +263,11 @@ class PlanBuilder:
         grants: GrantConferral | None = None,
         accounts: account_checks.AccountUsability | None = None,
         outcome: bundle_outcome.OwnedOutcome | None = None,
+        created: Collection[str] = (),
+        held: HeldGrants | None = None,
     ):
-        self._existing = existing
+        #: Less what this import made before, which a replan finishes.
+        self._existing = kept_parts.TheirParts(existing, created)
         #: What the target pod owns now; ``None`` when this import sets none.
         self._outcome = outcome
         #: Whether the importer could use an account a schedule names.
@@ -286,6 +277,8 @@ class PlanBuilder:
         #: The bundle's own ``connectors/`` (``connector_planning``).
         self._connectors = connectors or NoConnectorLookup()
         self._grants = grants or NoGrantConferral()
+        #: What a kept function or agent already holds (``plan_kept_access``).
+        self._held = held or NoHeldGrants()
 
     async def build_plan(self, *, bundle_root: Path) -> ImportPlan:
         pod_manifest = self._read_pod_manifest(bundle_root)
@@ -330,6 +323,7 @@ class PlanBuilder:
             # Matched by the name the applier creates it under, and named by
             # its directory, which the applier loads the manifest by.
             here = _resolved_surface_name(payload, d.name) in existing_surfaces
+            here = here and not self._existing.ours(StepKind.SURFACE, d.name)
             steps.append(
                 kept_parts.create_or_keep(
                     StepKind.SURFACE, d.name, {d.name} if here else set()
@@ -343,6 +337,7 @@ class PlanBuilder:
 
         # --- files (folders parent-first, then file bytes) -------------------
         file_steps = _file_steps(bundle_root)
+        _check_step_count(file_steps)  # before one lookup per path, not after
         present = (
             await self._existing.existing_paths(["/" + s.name for s in file_steps])
             if file_steps
@@ -366,6 +361,7 @@ class PlanBuilder:
         )
         steps += grant_steps
         warnings += await plan_grant_conferral(bundle_root, steps, self._grants)
+        warnings += await plan_kept_access(bundle_root, functions + agents, self._held)
 
         if self._directory is not None:
             warnings += await plan_connector_grants(
@@ -437,7 +433,9 @@ class PlanBuilder:
                 seeded_rows += _check_seed_rows(data_path, name, seeded_rows)
                 data.append(
                     kept_parts.table_data_step(
-                        name, table_created=step.action is StepAction.CREATE
+                        name,
+                        table_created=step.action is StepAction.CREATE,
+                        loaded=self._existing.ours(StepKind.TABLE_DATA, name),
                     )
                 )
         return tables, data

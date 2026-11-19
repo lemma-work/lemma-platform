@@ -41,6 +41,7 @@ class FakeExisting:
         self._apps = set(apps or [])
         self._surfaces = set(surfaces or [])
         self._paths = set(paths or [])
+        self.path_lookups = 0
 
     async def table_names(self):
         return self._tables
@@ -67,6 +68,7 @@ class FakeExisting:
         return self._surfaces
 
     async def existing_paths(self, paths):
+        self.path_lookups += len(paths)
         return self._paths & set(paths)
 
 
@@ -616,6 +618,25 @@ async def test_a_bundle_within_the_record_caps_still_plans(tmp):
     assert StepKind.TABLE_DATA in [s.kind for s in plan.steps]
 
 
+async def test_an_oversized_file_tree_is_refused_before_any_path_is_looked_up(tmp):
+    """Planning asks the pod about each bundled path; a bundle over the step
+    cap is refused first, so it costs the cap, not one lookup per file."""
+    from lemma_pod_bundle.limits import MAX_IMPORT_PLAN_STEPS
+
+    from app.modules.pod_bundle.domain.errors import BundleInvalidError
+
+    root = _build_bundle(tmp)
+    files_root = root / "files"
+    files_root.mkdir(parents=True, exist_ok=True)
+    for i in range(MAX_IMPORT_PLAN_STEPS + 1):
+        (files_root / f"f{i}.md").write_text("x", encoding="utf-8")
+    existing = FakeExisting()
+
+    with pytest.raises(BundleInvalidError):
+        await PlanBuilder(existing).build_plan(bundle_root=root)
+    assert existing.path_lookups == 0
+
+
 async def test_a_bundle_declaring_more_steps_than_the_cap_is_refused(tmp):
     """500 MiB uncompressed still allows tens of thousands of tiny files, and
     every one of them was a step the importer would carry out."""
@@ -746,3 +767,103 @@ async def test_an_import_that_sets_no_outcome_plans_none(tmp):
 
     assert plan.outcome is None
     assert plan.warnings == []
+
+
+# --- a replan, and parts the import made -----------------------------------
+
+
+def _bundle_with_everything(tmp: Path) -> Path:
+    root = _build_bundle(tmp)
+    grants = {"grants": [{"resource_type": "table", "resource_name": "leads"}]}
+    _write(root / "tables" / "leads" / "leads.json", _table_manifest("leads", ["id"]))
+    (root / "tables" / "leads" / "data.csv").write_text("id\n1\n", encoding="utf-8")
+    _write(root / "agents" / "bot" / "bot.json", {"name": "bot", "permissions": grants})
+    _write(root / "apps" / "board" / "board.json", {"name": "board"})
+    _write(
+        root / "surfaces" / "support" / "support.json",
+        {"name": "support", "platform": "SLACK"},
+    )
+    return root
+
+
+async def test_a_replan_finishes_what_the_import_made_before(tmp):
+    """The import failed after creating them and was replanned. They are its
+    own, not the pod's: planned CREATE again, so the agent still gets its
+    grants step and the half-built app is finished -- where a fresh look at the
+    pod would keep them and leave the agent with none of its access."""
+    root = _bundle_with_everything(tmp)
+    existing = FakeExisting(
+        tables={"leads"},
+        table_manifests={"leads": _table_manifest("leads", ["id"])},
+        agents={"bot"},
+        apps={"board"},
+        surfaces={"support"},
+    )
+    made = ["TABLE:leads", "AGENT:bot", "APP:board", "SURFACE:support"]
+
+    plan = await PlanBuilder(existing, created=made).build_plan(bundle_root=root)
+
+    steps = {(s.kind, s.name): s for s in plan.steps}
+    for key in (
+        (StepKind.TABLE, "leads"),
+        (StepKind.TABLE_DATA, "leads"),
+        (StepKind.AGENT, "bot"),
+        (StepKind.AGENT_GRANTS, "bot"),
+        (StepKind.APP, "board"),
+        (StepKind.SURFACE, "support"),
+    ):
+        assert steps[key].action is StepAction.CREATE, key
+
+
+async def test_a_replan_does_not_load_rows_twice(tmp):
+    root = _bundle_with_everything(tmp)
+    existing = FakeExisting(
+        tables={"leads"}, table_manifests={"leads": _table_manifest("leads", ["id"])}
+    )
+
+    plan = await PlanBuilder(
+        existing, created=["TABLE:leads", "TABLE_DATA:leads"]
+    ).build_plan(bundle_root=root)
+
+    data = next(s for s in plan.steps if s.kind is StepKind.TABLE_DATA)
+    assert data.status is StepStatus.SKIPPED
+    assert "earlier attempt" in (data.error or "")
+
+
+class _Held:
+    """What each kept workload lacks, by name."""
+
+    def __init__(self, lacking):
+        self._lacking = lacking
+        self.asked = []
+
+    async def lacking(self, grants, *, grantee_type, grantee_name):
+        self.asked.append((grantee_type, grantee_name))
+        return self._lacking.get(grantee_name, [])
+
+
+async def test_a_kept_agent_lacking_its_bundled_access_is_named(tmp):
+    """Imported afresh after an import that never finished, the agent is kept
+    with none of its access, and only the plan can say so: it writes nothing
+    to a part it keeps."""
+    root = _bundle_with_everything(tmp)
+    held = _Held({"bot": ["table.read on table 'leads'"]})
+
+    plan = await PlanBuilder(FakeExisting(agents={"bot"}), held=held).build_plan(
+        bundle_root=root
+    )
+
+    assert held.asked == [("AGENT", "bot")]
+    [warning] = [w for w in plan.warnings if "'bot'" in w]
+    assert "keeps its own access" in warning
+    assert "table.read on table 'leads'" in warning
+
+
+async def test_a_kept_agent_holding_its_access_says_nothing(tmp):
+    root = _bundle_with_everything(tmp)
+
+    plan = await PlanBuilder(FakeExisting(agents={"bot"}), held=_Held({})).build_plan(
+        bundle_root=root
+    )
+
+    assert not [w for w in plan.warnings if "'bot'" in w]

@@ -303,6 +303,83 @@ async def test_an_import_keeps_what_the_pod_already_has(
     assert kept.json()["instruction"] == "My own words."
 
 
+async def test_a_replan_after_a_failed_import_still_grants_its_agent(
+    authenticated_client, fixed_test_org, worker, tmp_path
+):
+    """The import creates its agent, then fails before the agent's grants step.
+    The person clears what was in the way and replans: the new plan treats the
+    agent as the import's own, not the pod's, so its grants are still written
+    rather than kept as none."""
+    pod_id = await _new_pod(authenticated_client, fixed_test_org["id"])
+    # A file where the bundle has a folder: its file inside cannot be written.
+    blocker = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/files",
+        data={"directory_path": "/", "search_enabled": "false"},
+        files={"data": ("docs", b"in the way", "text/plain")},
+    )
+    assert blocker.status_code == status.HTTP_201_CREATED, blocker.text
+    grant = {
+        "resource_type": "datastore_table",
+        "resource_name": "leads",
+        "permission_ids": ["datastore.record.read"],
+    }
+    root = tmp_path / "bundle-replan"
+    _write(root / "pod.json", {"name": "CRM", "format_version": 2, "variables": {}})
+    _write(
+        root / "tables" / "leads" / "leads.json",
+        {"name": "leads", "primary_key_column": "id", "columns": _COLS},
+    )
+    _write(
+        root / "agents" / "assistant" / "assistant.json",
+        {"name": "assistant", "instruction": "Hi.", "permissions": {"grants": [grant]}},
+    )
+    _write(root / "files" / "docs" / ".folder.json", {"visibility": "POD"})
+    _write(root / "files" / "docs" / "guide.md", "Read me.")
+
+    import_id = await _upload(authenticated_client, pod_id, pack_bundle(root))
+    await _wait(
+        authenticated_client, pod_id, import_id, until={"AWAITING_CONFIRMATION"}
+    )
+    base = f"/pods/{pod_id}/bundle/imports/{import_id}"
+    applied = await authenticated_client.post(f"{base}/apply", json={})
+    assert applied.status_code == status.HTTP_202_ACCEPTED, applied.text
+    failed = await _wait(
+        authenticated_client, pod_id, import_id, until={"COMPLETED", "FAILED"}
+    )
+    assert failed["status"] == "FAILED", failed
+    steps = {(s["kind"], s["name"]): s["status"] for s in failed["plan"]["steps"]}
+    assert steps[("AGENT", "assistant")] == "DONE"
+    assert steps[("AGENT_GRANTS", "assistant")] == "PENDING"
+
+    cleared = await authenticated_client.delete(
+        f"/pods/{pod_id}/datastore/files/by-path", params={"path": "/docs"}
+    )
+    assert cleared.status_code == status.HTTP_204_NO_CONTENT, cleared.text
+    replanned = await authenticated_client.post(f"{base}/replan")
+    assert replanned.status_code == status.HTTP_202_ACCEPTED, replanned.text
+    planned = await _wait(
+        authenticated_client, pod_id, import_id, until={"AWAITING_CONFIRMATION"}
+    )
+    actions = {(s["kind"], s["name"]): s["action"] for s in planned["plan"]["steps"]}
+    assert actions[("AGENT", "assistant")] == "CREATE"
+    assert actions[("AGENT_GRANTS", "assistant")] == "CREATE"
+
+    again = await authenticated_client.post(f"{base}/apply", json={})
+    assert again.status_code == status.HTTP_202_ACCEPTED, again.text
+    final = await _wait(
+        authenticated_client, pod_id, import_id, until={"COMPLETED", "FAILED"}
+    )
+    assert final["status"] == "COMPLETED", final
+    held = await authenticated_client.get(
+        f"/pods/{pod_id}/agents/assistant/permissions"
+    )
+    assert held.status_code == status.HTTP_200_OK, held.text
+    assert any(
+        g["resource_name"] == "leads" and "datastore.record.read" in g["permission_ids"]
+        for g in held.json()["grants"]
+    ), held.json()
+
+
 async def test_cancel_persists_terminal_tombstone(
     authenticated_client, test_pod, worker, tmp_path
 ):

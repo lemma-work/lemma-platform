@@ -107,6 +107,18 @@ class BundleConfirmationRequiredError(PodBundleDomainError):
         )
 
 
+class PartKeptError(PodBundleDomainError):
+    """A step found its part already in the pod and not the import's own.
+
+    It is kept as it is: the step is marked SKIPPED with this reason, and the
+    import goes on. The plan keeps what the pod had when it was made; this is
+    the same rule for a part that arrived between plan and apply, and for the
+    access or rows of one this import did not create."""
+
+    def __init__(self, message: str):
+        super().__init__(message, code="POD_BUNDLE_PART_KEPT", status_code=409)
+
+
 class BundleStagingMissingError(PodBundleDomainError):
     """The staged archive was swept; replan/apply need a fresh upload."""
 

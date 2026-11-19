@@ -45,6 +45,8 @@ from app.core.concurrency.offload import run_blocking
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import AppBuildFailedError
+from app.modules.pod_bundle.domain.state import StepKind
+from app.modules.pod_bundle.infrastructure.kept_parts import CreatedParts
 from sandbox_runtime.paths import WORKSPACE_ROOT
 
 logger = get_logger(__name__)
@@ -270,14 +272,23 @@ class AppStepRunner:
         user_id: UUID,
         bundle_root: Path,
         replacements: dict[str, str],
+        created: CreatedParts | None = None,
+        resumed: bool = False,
     ) -> None:
         resource_dir = bundle_root / "apps" / step.name
         manifest = self._load_manifest(resource_dir, step.name, replacements)
+        created = created or CreatedParts()
 
-        # Phase 1 (short UoW): ensure the app exists with a unique slug.
+        # Phase 1 (short UoW): ensure the app exists with a unique slug. One
+        # already there is finished only when this import made it: anyone
+        # else's -- a build that failed, one never deployed -- is kept.
         already_ready, app_slug = await self._ensure_app(
             step.name, manifest, pod_id=pod_id, user_id=user_id
         )
+        if already_ready is None:
+            created.add(StepKind.APP, step.name)
+        else:
+            created.claim(step, resumed=resumed)
         if already_ready:
             # Cheap replay: a prior attempt already created + deployed this app.
             return
@@ -302,11 +313,12 @@ class AppStepRunner:
         *,
         pod_id: UUID,
         user_id: UUID,
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool | None, str]:
         """Create the app if absent (allocating a unique slug); return
-        ``(already_ready, slug)`` where ``already_ready`` is True when it already
-        exists fully deployed (a READY current release) so the caller can skip the
-        rebuild on replay. ``slug`` is the app's deployed public slug."""
+        ``(already_ready, slug)``. ``already_ready`` is None for an app this
+        call created, and for one already there whether it is fully deployed
+        (a READY current release), so a replay can skip the rebuild. ``slug``
+        is the app's deployed public slug."""
         from app.modules.apps.contracts import AppConflictError, AppEntity, AppStatus
         from app.modules.apps.contracts.provisioning import create_app, find_app_by_name
 
@@ -342,7 +354,7 @@ class AppStepRunner:
                         ctx=ctx,
                     )
                     await uow.commit()
-                    return False, (created.public_slug if created else slug)
+                    return None, (created.public_slug if created else slug)
                 except AppConflictError as exc:
                     # The name is free (checked above), so this is a slug collision
                     # — try the next deterministic candidate.
