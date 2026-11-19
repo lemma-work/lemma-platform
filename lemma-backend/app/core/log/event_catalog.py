@@ -1019,6 +1019,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'identity.session.access_token_stale.observed': EventSpec('debug', frozenset({'expired_by_seconds'})),
     'identity.signup.admitted': EventSpec('info', frozenset({'admission'})),
     'identity.signup.refused': EventSpec('info', frozenset({'code', 'signup_mode'})),
+    'identity.user_preferences.work_unreadable.degraded': EventSpec('warning', frozenset()),
     'infrastructure.channel_service.close_realtime_pub_sub_connection.diagnostic': EventSpec('debug', frozenset()),
     'infrastructure.channel_service.realtime_pub_sub_subscribe_replacing.diagnostic': EventSpec('debug', frozenset({'error_type'})),
     'infrastructure.notify_wake.close_failed.degraded': EventSpec('warning', frozenset({'label'})),

@@ -178,9 +178,10 @@ async def ensure_chat_organization(
     """The organization a chat-first workspace goes in, making one if there is none.
 
     The same policy the web signup runs -- an existing membership, else a join
-    by verified work domain, else a new organization of their own -- asked for
-    the organization alone, because the caller is about to create a *named* pod
-    and the spare one `with_pod` would make is clutter beside it.
+    by verified work domain, else a new organization, made with the Lemma
+    everyone in it shares -- without the private pod `with_pod` would add in an
+    older organization: the caller is about to create a *named* pod, and a
+    spare one beside it is clutter.
 
     Only for the shared bot. A company installation fixes the organization, and
     somebody outside it is told to ask an administrator rather than handed a

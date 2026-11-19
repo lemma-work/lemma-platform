@@ -272,7 +272,7 @@ async def test_approve_join_request_adds_org_and_pod_membership_when_missing():
         organization_repository=org_repo,
     )
 
-    result = await service.approve_join_request(
+    result, _ = await service.approve_join_request(
         pod_id,
         join_request.id,
         requester_id,
@@ -385,7 +385,7 @@ async def test_approve_join_request_org_owner_may_grant_org_owner():
         approver_role=OrganizationRole.ORG_OWNER
     )
 
-    result = await service.approve_join_request(
+    result, _ = await service.approve_join_request(
         join_request.pod_id,
         join_request.id,
         requester_id,
@@ -707,7 +707,7 @@ async def test_approving_someone_elses_request_tells_them():
         approver_role=OrganizationRole.ORG_OWNER
     )
 
-    result = await service.approve_join_request(
+    result, _ = await service.approve_join_request(
         join_request.pod_id, join_request.id, approver_id
     )
 

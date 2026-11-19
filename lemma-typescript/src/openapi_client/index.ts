@@ -289,6 +289,7 @@ export type { InstallationOption } from './models/InstallationOption.js';
 export type { InstalledAppSummary } from './models/InstalledAppSummary.js';
 export type { InstallRequestInitiateSchema } from './models/InstallRequestInitiateSchema.js';
 export type { InstallRequestResponseSchema } from './models/InstallRequestResponseSchema.js';
+export { Job } from './models/Job.js';
 export type { JoinablePodListResponse } from './models/JoinablePodListResponse.js';
 export type { JoinablePodResponse } from './models/JoinablePodResponse.js';
 export type { JsonObject } from './models/JsonObject.js';
@@ -655,6 +656,8 @@ export type { WebWidgetUpdateRequest } from './models/WebWidgetUpdateRequest.js'
 export type { WhatsAppGroupRequest } from './models/WhatsAppGroupRequest.js';
 export { WidgetAnswer } from './models/WidgetAnswer.js';
 export type { WidgetEmbedUrlResponse } from './models/WidgetEmbedUrlResponse.js';
+export type { WorkAnswerRequest } from './models/WorkAnswerRequest.js';
+export type { WorkAnswerResponse } from './models/WorkAnswerResponse.js';
 export type { WorkflowCreateRequest } from './models/WorkflowCreateRequest.js';
 export type { WorkflowDetailResponse } from './models/WorkflowDetailResponse.js';
 export type { WorkflowEdge } from './models/WorkflowEdge.js';

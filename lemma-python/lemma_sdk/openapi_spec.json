@@ -10230,9 +10230,27 @@
       "FirstWorkspaceRequest": {
         "additionalProperties": false,
         "properties": {
+          "own_organization": {
+            "default": false,
+            "description": "Skip their company's organization, even when it is open to their work domain, and make a workspace of their own. It is made by invitation only and named after the person. Invitations and an organization they already belong to still come first.",
+            "title": "Own Organization",
+            "type": "boolean"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What kind of organization to make when one is made. Omitted: a company's, named after it and open to colleagues from the same domain, when the person's address is verified and on a work domain; otherwise a workspace of one. false: a workspace of one whatever the address, for a deployment nobody else can reach.",
+            "title": "Team"
+          },
           "with_pod": {
             "default": true,
-            "description": "Ensure a personal pod and assistant. Importers may request only an organization.",
+            "description": "Make a private pod and assistant when the person would otherwise land in no Lemma: an organization that has no Lemma of its own, or one whose Lemma they left. A new organization is always made with one.",
             "title": "With Pod",
             "type": "boolean"
           }
@@ -10274,7 +10292,37 @@
             "title": "Organization Id",
             "type": "string"
           },
+          "organization_name": {
+            "title": "Organization Name",
+            "type": "string"
+          },
+          "organization_open_to_domain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The email domain whose verified addresses may join the organization on their own, when it takes colleagues that way. Its owner can close it in Settings.",
+            "title": "Organization Open To Domain"
+          },
+          "organization_pod_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The organization's own Lemma, the one everyone in it shares. Differs from `pod_id` when an invitation brought the person to another pod, and is null in an organization that has none.",
+            "title": "Organization Pod Id"
+          },
           "pod_created": {
+            "description": "Whether the pod in `pod_id` was made by this call.",
             "title": "Pod Created",
             "type": "boolean"
           },
@@ -10288,11 +10336,24 @@
                 "type": "null"
               }
             ],
+            "description": "Where the person lands: the pod an invitation named, else the organization's own Lemma, else the private pod `with_pod` asked for. Null when there is none.",
             "title": "Pod Id"
+          },
+          "pod_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pod Name"
           }
         },
         "required": [
           "organization_id",
+          "organization_name",
           "entry",
           "organization_created",
           "pod_created"
@@ -13326,6 +13387,22 @@
         ],
         "title": "InstalledAppSummary",
         "type": "object"
+      },
+      "Job": {
+        "description": "What a person does, as the first-run question offers it.",
+        "enum": [
+          "SALES",
+          "MARKETING",
+          "PRODUCT",
+          "FOUNDER",
+          "OPERATIONS",
+          "HR",
+          "PROJECT_MANAGEMENT",
+          "ENGINEERING",
+          "SUPPORT"
+        ],
+        "title": "Job",
+        "type": "string"
       },
       "JoinablePodListResponse": {
         "description": "Pods the caller may join, a page at a time.",
@@ -27088,6 +27165,17 @@
             "format": "date-time",
             "title": "Updated At",
             "type": "string"
+          },
+          "work": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkAnswerResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What they said they do, or null until they have been asked. An answer with no jobs and no `other` means they skipped it. Only on the current user's own record."
           }
         },
         "required": [
@@ -28002,6 +28090,72 @@
           "url"
         ],
         "title": "WidgetEmbedUrlResponse",
+        "type": "object"
+      },
+      "WorkAnswerRequest": {
+        "description": "What the person does, in answer to the one time they are asked.",
+        "properties": {
+          "jobs": {
+            "description": "What they do, any number of them, each kept once in the order given. Empty with no `other` records that they skipped the question, which still stops it being asked again.",
+            "items": {
+              "$ref": "#/components/schemas/Job"
+            },
+            "maxItems": 32,
+            "title": "Jobs",
+            "type": "array"
+          },
+          "other": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Something else, in their words. Trimmed; empty is no answer. At most 120 characters once trimmed.",
+            "title": "Other"
+          }
+        },
+        "required": [
+          "jobs"
+        ],
+        "title": "WorkAnswerRequest",
+        "type": "object"
+      },
+      "WorkAnswerResponse": {
+        "description": "What the person said they do, and when.",
+        "properties": {
+          "answered_at": {
+            "format": "date-time",
+            "title": "Answered At",
+            "type": "string"
+          },
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/Job"
+            },
+            "title": "Jobs",
+            "type": "array"
+          },
+          "other": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Other"
+          }
+        },
+        "required": [
+          "jobs",
+          "answered_at"
+        ],
+        "title": "WorkAnswerResponse",
         "type": "object"
       },
       "WorkflowCreateRequest": {
@@ -59778,7 +59932,7 @@
     },
     "/users/me/first-workspace": {
       "post": {
-        "description": "Select an eligible organization and idempotently ensure the current user has a private pod and assistant.",
+        "description": "Put the current user in an organization, making one if they belong to none, and say which Lemma they land in. Pending invitations are accepted first, then an organization they already belong to is used, then their company's organization open to their verified work domain is joined; otherwise one is made, with a Lemma everyone in it shares. Safe to repeat: a second call makes nothing new.",
         "operationId": "users.ensure_first_workspace",
         "requestBody": {
           "content": {
@@ -59911,6 +60065,58 @@
           "resource": "user.profile",
           "result": "entity",
           "verb": "upsert"
+        }
+      }
+    },
+    "/users/me/work": {
+      "put": {
+        "description": "Keep what the current user said they do, replacing any earlier answer, and return the user with it. Asked once, at their first start: an answer with no jobs and no `other` records that they skipped, so they are not asked again. Leaves every other preference as it was.",
+        "operationId": "users.work.set",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkAnswerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Say What The Current User Does",
+        "tags": [
+          "Users"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "users.work"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "users.work",
+          "result": "entity",
+          "verb": "set"
         }
       }
     },
