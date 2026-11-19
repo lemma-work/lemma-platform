@@ -14,7 +14,13 @@ import type { Go } from "./model";
  *  are waiting, or when they could not be read: an empty box on Home is noise,
  *  and the email is still there.
  */
-export function Invited({ go }: { go: Go }) {
+export function Invited({ go, onJoined }: {
+    go: Go;
+    /** An invitation accepted: the way in takes it from here, showing the
+     *  organization's Lemmas to join. Without it, Home opens the Lemma the
+     *  invitation named. */
+    onJoined?: (invite: Invitation) => void;
+}) {
     const queryClient = useQueryClient();
     const invitations = useQuery({ queryKey: ["my-invitations"], queryFn: () => source.myInvitations(), staleTime: 60_000 });
 
@@ -30,7 +36,8 @@ export function Invited({ go }: { go: Go }) {
                 queryClient.invalidateQueries({ queryKey: ["orgs"] }),
                 queryClient.invalidateQueries({ queryKey: ["pods"] }),
             ]);
-            if (invite.podId) go(outcomeView(invite.podId));
+            if (onJoined) onJoined(invite);
+            else if (invite.podId) go(outcomeView(invite.podId));
         },
     });
 

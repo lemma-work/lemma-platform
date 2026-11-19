@@ -88,6 +88,8 @@ import type {
     Member,
     Message,
     NewOrg,
+    FirstWorkspace,
+    FirstWorkspaceWanted,
     Org,
     Persona,
     Pod,
@@ -287,6 +289,7 @@ function podSummary(pod: { id: string; name: string; organization_id: string; ic
     const home = (pod.config as { home_app?: unknown } | null | undefined)?.home_app;
     return { id: pod.id, orgId: pod.organization_id, name, iconUrl: pod.icon_url ?? null,
         ...(description ? { description } : {}),
+        ...(sharedByEveryone(pod.config) ? { everyone: true } : {}),
         ...(pod.created_at ? { hiredAt: pod.created_at } : {}),
         ...(pod.user_id ? { hiredBy: pod.user_id } : {}),
         ...(typeof home === "string" && home ? { homeApp: home } : {}),
@@ -294,6 +297,15 @@ function podSummary(pod: { id: string; name: string; organization_id: string; ic
         subtitle: "", members: [], waiting: "" };
 }
 
+/** Whether a Lemma is the one everyone in its organization is in: open to
+ *  them, and joined by everyone who comes later. Both halves, because the
+ *  server refuses the second without the first and a config read halfway
+ *  through a change could carry either alone. */
+function sharedByEveryone(config: unknown): boolean {
+    if (!config || typeof config !== "object") return false;
+    const said = config as { join_policy?: unknown; auto_join_new_members?: unknown };
+    return said.auto_join_new_members === true && (said.join_policy === "ORG_MEMBERS" || said.join_policy === "PUBLIC");
+}
 
 const INLINE_TEXT_LIMIT = 512 * 1024;
 /** Html gets its own, and a much larger one. The other two are read as prose
@@ -513,8 +525,8 @@ export const liveSource: PodSource = {
     async listPods(orgId: string): Promise<Pod[]> {
         const listed = (await lemma().pods.listByOrganization(orgId)) as Listish;
         return itemsOf(listed)
-            .map((raw) => raw as { id?: string; name?: string; organization_id?: string; icon_url?: string | null; description?: string | null; created_at?: string | null; user_id?: string | null })
-            .filter((pod): pod is { id: string; name: string; organization_id?: string; icon_url?: string | null; description?: string | null; created_at?: string | null; user_id?: string | null } =>
+            .map((raw) => raw as { id?: string; name?: string; organization_id?: string; icon_url?: string | null; description?: string | null; created_at?: string | null; user_id?: string | null; config?: unknown })
+            .filter((pod): pod is { id: string; name: string; organization_id?: string; icon_url?: string | null; description?: string | null; created_at?: string | null; user_id?: string | null; config?: unknown } =>
                 Boolean(pod.id && pod.name),
             )
             .map((pod) => podSummary({ ...pod, organization_id: pod.organization_id ?? orgId }));
@@ -1213,9 +1225,24 @@ export const liveSource: PodSource = {
         return (await lemma().podSurfaces.slackInstallAvailability()).available;
     },
 
-    async ensureFirstWorkspace(): Promise<{ orgId: string }> {
-        const workspace = await lemma().users.ensureFirstWorkspace({ with_pod: true });
-        return { orgId: String(workspace.organization_id) };
+    async ensureFirstWorkspace(wanted?: FirstWorkspaceWanted): Promise<FirstWorkspace> {
+        const made = await lemma().users.ensureFirstWorkspace({
+            /* No private Lemma beside the shared one: somebody who lands in an
+               organization without one lands on its list of Lemmas. */
+            with_pod: false,
+            ...(wanted?.ownOrganization ? { own_organization: true } : {}),
+            ...(wanted?.team === false ? { team: false } : {}),
+        });
+        return {
+            orgId: String(made.organization_id),
+            orgName: shortOrgName(made.organization_name ?? ""),
+            entry: made.entry,
+            orgCreated: made.organization_created === true,
+            podId: made.pod_id ? String(made.pod_id) : null,
+            podName: made.pod_name ? humanizeName(made.pod_name) : null,
+            orgPodId: made.organization_pod_id ? String(made.organization_pod_id) : null,
+            openToDomain: made.organization_open_to_domain ?? null,
+        };
     },
 
     async startSlackInstall(orgId: string): Promise<string> {

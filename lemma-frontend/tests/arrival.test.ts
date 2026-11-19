@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { arrivalHeading, canOpenToDomain, defaultOrgKind, domainOf, freshTeamNameFor, isDomainTaken, personalNameFor, teamNameFor } from "../src/org/arrival.ts";
+import { readFileSync } from "node:fs";
+import { OPEN_TO_ANYONE, arrivalHeading, canOpenToDomain, defaultOrgKind, domainOf, freshTeamNameFor, isDomainTaken, personalNameFor, teamNameFor } from "../src/org/arrival.ts";
 
 test("a domain is read off the address, lowercased", () => {
     assert.equal(domainOf("Alice@Acme.COM"), "acme.com");
@@ -33,10 +34,13 @@ test("a domain that could not be read is treated as one nobody owns", () => {
     assert.equal(canOpenToDomain(null), false);
 });
 
-test("the company name is prefilled from the first label of the domain", () => {
+test("the company name is prefilled from the label that names the company", () => {
     assert.equal(teamNameFor("alice@acme.com"), "Acme");
     assert.equal(teamNameFor("alice@acme.co.uk"), "Acme");
     assert.equal(teamNameFor("alice@my-company.io"), "My company");
+    // The company, not the department: a subdomain is not the organization.
+    assert.equal(teamNameFor("alice@eng.acme.com"), "Acme");
+    assert.equal(teamNameFor("alice@eng.acme.co.uk"), "Acme");
     assert.equal(teamNameFor("alice"), "");
 });
 
@@ -88,4 +92,15 @@ test("a second organization is not offered the name of the first", () => {
     assert.equal(freshTeamNameFor("alice@acme.com", [" acme "]), "");
     assert.equal(freshTeamNameFor("alice@acme.com", ["Alice's Personal"]), "Acme");
     assert.equal(freshTeamNameFor("alice@acme.com", []), "Acme");
+});
+
+test("the web refuses to open a workspace to exactly the mail providers the server refuses", () => {
+    /* The server's list is the authority; this copy only names a workspace
+       and preselects how it opens. Read from the Python source, so a domain
+       added to one side alone fails here rather than in somebody's sign-up. */
+    const python = readFileSync(new URL("../../lemma-backend/app/modules/identity/domain/email_domains.py", import.meta.url), "utf8");
+    const block = python.slice(python.indexOf("PUBLIC_EMAIL_PROVIDER_DOMAINS"), python.indexOf(")", python.indexOf("PUBLIC_EMAIL_PROVIDER_DOMAINS")));
+    const server = [...block.matchAll(/"([a-z0-9.-]+\.[a-z]{2,})"/g)].map((match) => match[1]).sort();
+    assert.ok(server.length > 20, "read the server's list");
+    assert.deepEqual([...OPEN_TO_ANYONE].sort(), server);
 });

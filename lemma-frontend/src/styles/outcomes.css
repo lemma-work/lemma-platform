@@ -503,6 +503,20 @@
     white-space: nowrap;
 }
 
+/* The organization's own Lemma, the one everyone is in. Quiet, because it
+   names who is in it, not something to act on. It keeps its width and the
+   name before it is the one cut short. */
+.ox-everyone {
+    flex: none;
+    margin-left: -4px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--wash-b);
+    color: var(--ink-3);
+    font-size: 11px;
+    line-height: 17px;
+}
+
 .ox-group__chev {
     display: grid;
     place-items: center;

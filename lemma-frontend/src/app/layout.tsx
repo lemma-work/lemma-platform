@@ -27,6 +27,7 @@ import "@/styles/contacts.css";
 import "@/styles/empty.css";
 import "@/styles/tour.css";
 import "@/styles/space-mobile.css";
+import "@/styles/arrival.css";
 
 export const metadata: Metadata = { metadataBase: new URL(publicSiteUrl()), title: {default: 'Lemma', template: '%s | Lemma'}, description: 'Your Lemmas and the work they are doing.', manifest: '/manifest.webmanifest', alternates: {types: {'application/rss+xml':'/feed.xml'}} };
 

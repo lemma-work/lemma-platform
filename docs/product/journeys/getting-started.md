@@ -153,6 +153,8 @@ are shown with a retry action rather than an indefinite loading message.
 - The system shall not ask an account that already has both, an account older
   than its first week, or a person who has already continued or skipped in that
   browser.
+- Where the way in already asked for the name (PS-ONB-009), the step shall not
+  ask it again; it opens only for a phone still to prove.
 
 ### PS-ONB-008 — A person is asked what they do once, and the answer stays with them
 **Status:** covered
@@ -173,6 +175,33 @@ are shown with a retry action rather than an indefinite loading message.
   120 characters, then the system shall refuse it and keep the answer it had.
 
 **Contracts:** `users.work.set`, `user.current.get`
+
+### PS-ONB-009 — Every way in looks the same and says what a Lemma is
+**Status:** manual
+
+> **Verified by:** on a stack running this build, signing up on the web with a
+> work address, then a colleague from the same domain, then a person invited
+> to a Lemma, then accepting an invitation to an organization from Home, then
+> signing up from a plugin's install page with a personal address: each opens
+> on the same sentence about what a Lemma is, in the same steps and type, and
+> the install page carries on to choosing where the plugin goes. `npm test` in
+> `lemma-frontend` checks the steps each door walks
+> (`tests/arrival-flow.test.ts`) and the words they use
+> (`tests/outcomes-copy.test.ts`).
+
+- Whichever way a person arrives — the web app, a plugin's install page, an
+  invitation — the system shall show the same steps in the same look, opening
+  with one sentence about what a Lemma is.
+- The system shall decide nothing a person could decide better: where their
+  company's organization is open to them, it shall offer it and let them start
+  their own instead; otherwise it shall make or join without asking.
+- A name the account lacks shall be asked on the same screen as what they do,
+  not again in a dialog over the Lemma they land in.
+- Somebody who came in another way (a chat app, an install page) and was not
+  asked what they do shall be asked when they next come to Home, never in place
+  of a chat, an app or a Lemma a link opened.
+
+**Contracts:** `users.ensure_first_workspace`, `users.work.set`
 
 ---
 
@@ -352,6 +381,31 @@ are shown with a retry action rather than an indefinite loading message.
 > **Verified by:** the listing for a verified address is proven by the backend's
 > own e2e suite; the scenario suite boots with verification off and proves the
 > unverified half. A lane with verification on would let a scenario prove both.
+
+---
+
+### PS-ONB-025 — An invited person sees the Lemmas they can join
+**Status:** manual
+
+> **Verified by:** on a stack running this build, signing up as somebody
+> invited to one Lemma, and accepting an invitation to an organization alone
+> from Home while working in another: the Lemma they were invited to leads,
+> then the organization's own Lemma with them already in it, then the Lemmas
+> open to everyone there with Join, then "Start a new one"; continuing from
+> Home lands in the organization they joined. The backend's e2e suite proves
+> they are in the organization's Lemma in the answer to accepting
+> (`test_first_workspace_api_e2e.py`).
+
+- When a person accepts an invitation, at sign-up or from Home, the system shall
+  show them that organization's Lemmas: the one they were invited to first,
+  then the ones they are in, then the ones open to everyone there, each with a
+  way to join it, and a way to start a new one.
+- A person new to the organization shall be in the Lemma everyone in it shares
+  from the moment they accept.
+- When they continue, the system shall open the organization they joined, on
+  the Lemma they were invited to when there was one.
+
+**Contracts:** `org.invitation.accept`, `pod.list_joinable`, `pod.join`
 
 ---
 
