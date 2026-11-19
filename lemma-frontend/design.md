@@ -65,6 +65,56 @@ ships). The words are in `src/marketing/product-pages.ts`.
   teammate sits on its closing band. Nothing follows the scroll, and reduced
   motion gets none of it (`lively.tsx`).
 
+The plugin listing (`/templates`) and each plugin's page (`/templates/<slug>`)
+are drawn from one generated file, `src/site/plugins/generated/catalog.json`,
+written with the pictures in `public/plugins/` by the plugins repository's
+`_build/site_catalog.py`. Run it again rather than editing either.
+
+- The built plugins come first and big, each with a real picture of its app
+  on made-up sample data, in the site's light or dark. Never a drawn screen.
+- A plugin's hero puts its first picture beside the words; "Try it" swaps it
+  for the app itself, the plugin's demo on made-up rows, loaded only when
+  asked for and told the site's theme (`lemma-app-theme`) on load, when it
+  says it is listening, and on every change. Its own bar moves between apps,
+  which `next.config.ts` serves folder by folder.
+- How they stack is worked out from what each plugin carries and the shared
+  tables it reads (`src/site/plugins/stack.ts`), not drawn by hand.
+- The plugins not built yet are one line each, in build order by line, and
+  their pages say only what is known: the line, the place in the order, what
+  they will build on.
+- Until a plugin is published its button says "Coming soon"; there is no Add
+  that goes nowhere. Each plugin wears one clay face, small, as its mark.
+- The listing and the older plugin page set their words in Albert Sans, the
+  app frame's face, at every size.
+- Every plugin page and the listing sit in the website's own frame (the
+  routes live in `app/(marketing)/templates/`; `MarketingFrame` in
+  `site/plugins/page/frame.tsx`): the pinned nav, the footer, the warm
+  ground. Their tokens get a dark rendition there (`theme.module.css`)
+  because a plugin's pictures come in light and dark; in light the page is
+  the home page's to the pixel.
+- A plugin whose `listing.json` has `moments` gets a landing page
+  (`page/landing.tsx`), drawn with the product pages' own pieces, not a
+  second system: the centred hero ("Plugins · Mail", the serif promise, how
+  it keeps it, the violet "Try it live" and a quiet "Coming soon") over the
+  plugin's window playing its main job, which "Try it live" swaps for the
+  demo; how it works as the home page's three numbered steps, each ending on
+  its close-up; then each moment as a product-page claim beside its proof:
+  an eyebrow, a serif headline and a short body on one side, and on the
+  other a violet or sand panel holding the capture in the plugin's window,
+  its face in the title bar, with a note in the margin on the one detail the
+  claim is about. Then what builds on it and what stays private in the trust
+  columns, questions as the product pages' points, and the violet close. No
+  tables, notes or other plumbing. The rest keep the older page until
+  theirs are written; its words stay in Albert Sans.
+- Its pictures are captures of the plugin's own demo, made by the plugins'
+  `_kit/bin/moments.mjs` from `.lemma/moments.json`: close-ups at 2x and
+  4 to 10 second loops (mp4 and webm, muted, with a poster), in light and dark,
+  and again in the app's phone layout wherever the wide crop would be too
+  small to read on a phone. Never a whole screen shrunk, never drawn: a
+  close-up keeps the size it was taken at. A crop that cuts through
+  something on purpose runs off the panel's foot. Loops play only while on
+  screen, and with reduced motion they stay on the poster.
+
 Appearance includes Chat text size: Small (14px), Default (15px), and Large
 (17px), with a live preview and a browser-local preference restored before paint.
 Only message prose, its headings, and the composer follow this setting; navigation

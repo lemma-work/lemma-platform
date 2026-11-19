@@ -227,6 +227,7 @@ class ImportUseCases:
         owner: str | None = None,
         repo: str | None = None,
         ref: str | None = None,
+        path: str | None = None,
         template: str | None = None,
     ) -> ImportState:
         """Single URL-based import entry point.
@@ -234,7 +235,7 @@ class ImportUseCases:
         ``URL``: verify the lemma signed download token (410 on bad/expired) and
         queue ``pod_bundle.import_url`` with the resolved source object — the
         worker reads it straight from object storage (no server-side fetch, no
-        SSRF). ``GITHUB``: parse the repo reference and queue
+        SSRF). ``GITHUB``: parse the repo reference, keep ``path``, and queue
         ``pod_bundle.import_github``. ``TEMPLATE``: pack the named template that
         ships with the backend (404 for an unknown name), stage it, and queue
         the plan straight away. The request carries no bytes in any case.
@@ -303,6 +304,7 @@ class ImportUseCases:
                 source=BundleSource(
                     kind=BundleSourceKind.GITHUB,
                     repo_url=url or f"https://github.com/{owner}/{repo}",
+                    path=path,
                     ref=ref,
                 ),
             )

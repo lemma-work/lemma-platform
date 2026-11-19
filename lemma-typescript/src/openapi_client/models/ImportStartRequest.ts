@@ -21,6 +21,10 @@ export type ImportStartRequest = {
      */
     owner?: (string | null);
     /**
+     * For GITHUB: the folder inside the repository that holds the bundle (its `pod.json`), e.g. 'install/mail', for a repository that holds several. Relative, with no leading '/' and no '.' or '..'. The job fails before planning when the folder is not there (GITHUB_PATH_NOT_FOUND) or holds no `pod.json` (GITHUB_PATH_NOT_A_BUNDLE). Omit for the repository itself. Refused with any other kind.
+     */
+    path?: (string | null);
+    /**
      * GITHUB branch/tag/sha (optional).
      */
     ref?: (string | null);
