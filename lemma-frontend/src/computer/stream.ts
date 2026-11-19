@@ -244,12 +244,16 @@ export const RTC_FAILURES_BEFORE_VNC = 3;
  *  - `vnc`: that count reached the limit; stop retrying WebRTC.
  *
  *  A connection that did reach a picture resets the count: dropping after
- *  working is a blip, not a streamer that cannot start.
+ *  working is a blip, not a streamer that cannot start. One the API never
+ *  answered is not counted at all.
  */
-export function afterRtcClose(options: { settled: boolean; noBrowser: boolean; wasLive: boolean; failures: number }):
+export function afterRtcClose(options: { settled: boolean; noBrowser: boolean; wasLive: boolean; reached?: boolean; failures: number }):
     { action: "settle" | "wait" | "retry" | "vnc"; failures: number } {
     if (options.settled) return { action: "settle", failures: options.failures };
     if (options.noBrowser) return { action: "wait", failures: 0 };
+    /* The API never answered (a deploy, a dropped network): VNC goes through
+       the same API, so this says nothing about WebRTC and is not counted. */
+    if (options.reached === false) return { action: "retry", failures: options.failures };
     const failures = options.wasLive ? 0 : options.failures + 1;
     return { action: failures >= RTC_FAILURES_BEFORE_VNC ? "vnc" : "retry", failures };
 }

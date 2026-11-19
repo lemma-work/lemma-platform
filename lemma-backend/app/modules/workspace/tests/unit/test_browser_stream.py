@@ -345,3 +345,50 @@ def test_turn_credentials_are_short_lived_by_default() -> None:
 
     field = WorkspaceSettings.model_fields["turn_credential_ttl_seconds"]
     assert field.default <= 3600
+
+
+@pytest.mark.asyncio
+async def test_a_relay_refusal_that_beats_the_hello_is_passed_on() -> None:
+    """The relay checks the streamer before it accepts, then accepts and
+    closes with 4427 at once: the hello meets a closed socket. The pane must
+    still be told 4427 (use VNC), not a dropped connection it retries."""
+    from websockets.exceptions import ConnectionClosedOK
+    from websockets.frames import Close
+
+    from app.modules.workspace.services import browser_view_rtc
+
+    class Refused:
+        close_code = 4427
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def send(self, message: str) -> None:
+            raise ConnectionClosedOK(Close(4427, "the streamer is failed"), None)
+
+    async def connect(url, *, headers):
+        return Refused()
+
+    class Browser:
+        sent: list[str] = []
+
+        async def send_text(self, text: str) -> None:
+            self.sent.append(text)
+
+    browser = Browser()
+
+    code = await browser_view_rtc.serve(
+        browser,
+        upstream_url="ws://relay.test/rtc",
+        headers={},
+        viewer=_VIEWER,
+        machine_ice=[],
+        browser_ice=[],
+        connect=connect,
+    )
+
+    assert code == 4427
+    assert browser.sent == [], "no config for a view that is not happening"

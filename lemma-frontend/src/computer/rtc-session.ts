@@ -42,9 +42,10 @@ export interface RtcHandlers {
     onRevoked?(): void;
     /** WebRTC did not work here; the pane should use VNC. */
     onFallback(reason: FallbackReason): void;
-    /** The connection ended, with a code the pane reads (`live.ts`), and
-     *  whether it had a picture first. Called once; the session is finished. */
-    onClosed(code: number, wasLive: boolean): void;
+    /** The connection ended, with a code the pane reads (`live.ts`),
+     *  whether it had a picture first, and whether the API answered at all.
+     *  Called once; the session is finished. */
+    onClosed(code: number, wasLive: boolean, reached: boolean): void;
 }
 
 export interface StreamStats {
@@ -65,6 +66,9 @@ export class RtcSession {
     private mayDrive = false;
     private driving = false;
     private connected = false;
+    /** The API accepted the socket: a close before that is the API or the
+     *  network being away, which VNC would meet just the same. */
+    private reached = false;
     private finished = false;
     private deadline: ReturnType<typeof setTimeout> | undefined;
     private grace: ReturnType<typeof setTimeout> | undefined;
@@ -75,6 +79,7 @@ export class RtcSession {
     constructor(url: string, handlers: RtcHandlers) {
         this.handlers = handlers;
         this.socket = new WebSocket(url);
+        this.socket.addEventListener("open", () => { this.reached = true; });
         this.socket.addEventListener("message", (event) => {
             if (typeof event.data === "string") void this.onSignal(event.data);
         });
@@ -187,7 +192,7 @@ export class RtcSession {
         clearTimeout(this.grace);
         this.peer?.close();
         try { this.socket.close(1000); } catch { /* already closed */ }
-        this.handlers.onClosed(code, this.connected);
+        this.handlers.onClosed(code, this.connected, this.reached);
     }
 
     private fallBack(reason: FallbackReason): void {

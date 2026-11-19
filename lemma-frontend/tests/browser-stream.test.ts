@@ -546,3 +546,36 @@ test("a page hidden for a minute lets its screen go, and gets it back when shown
 });
 
 void mock;
+
+
+test("a connect the API never answered is retried and not counted toward VNC", () => {
+    let failures = 0;
+    for (let i = 0; i < RTC_FAILURES_BEFORE_VNC * 3; i += 1) {
+        const next = afterRtcClose({ settled: false, noBrowser: false, wasLive: false, reached: false, failures });
+        assert.equal(next.action, "retry");
+        failures = next.failures;
+    }
+    assert.equal(failures, 0);
+    /* Once it answers and WebRTC still fails, those count as before. */
+    const answered = afterRtcClose({ settled: false, noBrowser: false, wasLive: false, reached: true, failures });
+    assert.deepEqual(answered, { action: "retry", failures: 1 });
+});
+
+test("a close says whether the API accepted the socket first", () => {
+    const original = globalThis.WebSocket;
+    globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
+    try {
+        const seen: boolean[] = [];
+        const record: RtcHandlers = { ...handlers([]), onClosed: (_code, _live, reached) => seen.push(reached) };
+        /* The API is away: the socket never opens. */
+        new RtcSession("wss://api.test/view", record);
+        FakeSocket.last!.emit("close", { code: 1006 });
+        /* The API answered, then closed it: the streamer could not start. */
+        new RtcSession("wss://api.test/view", record);
+        FakeSocket.last!.emit("open", {});
+        FakeSocket.last!.emit("close", { code: 1011 });
+        assert.deepEqual(seen, [false, true]);
+    } finally {
+        globalThis.WebSocket = original;
+    }
+});

@@ -30,6 +30,7 @@ from typing import Literal
 
 from fastapi import WebSocket
 from redis.exceptions import RedisError
+from websockets.exceptions import ConnectionClosed
 
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
@@ -261,18 +262,31 @@ async def serve(
     viewer: RtcViewer,
     machine_ice: list[IceServer],
     browser_ice: list[IceServer],
+    connect=connect_upstream,
 ) -> int | None:
     """Carry one WebRTC view's signalling until either end stops.
 
     Returns the relay's close code when it refused with one the pane reads
-    (44xx), so the caller can pass it on; `None` otherwise.
+    (44xx), so the caller can pass it on; `None` otherwise. `connect` dials
+    the relay.
     """
-    async with await connect_upstream(upstream_url, headers=headers) as upstream:
-        await upstream.send(hello_message(viewer, machine_ice))
+    async with await connect(upstream_url, headers=headers) as upstream:
+        try:
+            await upstream.send(hello_message(viewer, machine_ice))
+        except ConnectionClosed:
+            # The relay refuses by accepting and closing at once (a close
+            # before accept carries no code), so its 4427 for a streamer that
+            # would not start is already waiting here. Raised on, it became
+            # 1011, and the pane retried the start instead of using VNC.
+            return _refusal(upstream)
         await websocket.send_text(config_message(viewer, browser_ice))
         await _pump(websocket, upstream, viewer)
-        code = getattr(upstream, "close_code", None)
-        return code if code and 4400 <= code <= 4499 else None
+        return _refusal(upstream)
+
+
+def _refusal(upstream) -> int | None:
+    code = getattr(upstream, "close_code", None)
+    return code if code and 4400 <= code <= 4499 else None
 
 
 async def _pump(websocket: WebSocket, upstream, viewer: RtcViewer) -> None:

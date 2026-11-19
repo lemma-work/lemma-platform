@@ -126,7 +126,7 @@ export function LiveScreenRtc({
                     if (stopped) return;
                     handlers.current.onFallback(reason);
                 },
-                onClosed: (code, wasLive) => {
+                onClosed: (code, wasLive, reached) => {
                     if (stopped || session.current !== current) return;
                     session.current = null;
                     if (sampler) clearInterval(sampler);
@@ -135,7 +135,7 @@ export function LiveScreenRtc({
                        media stops; a still picture is not a live one. */
                     if (video.current) video.current.srcObject = null;
                     const state = stateFromClose(code);
-                    const next = afterRtcClose({ settled: isSettled(state), noBrowser: state === "no-browser", wasLive, failures });
+                    const next = afterRtcClose({ settled: isSettled(state), noBrowser: state === "no-browser", wasLive, reached, failures });
                     failures = next.failures;
                     if (next.action === "vnc") {
                         handlers.current.onFallback("error", true);
