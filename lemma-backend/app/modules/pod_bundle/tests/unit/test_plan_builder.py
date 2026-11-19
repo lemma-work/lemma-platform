@@ -30,6 +30,7 @@ class FakeExisting:
         schedules=None,
         apps=None,
         surfaces=None,
+        machines=None,
         paths=None,
     ):
         self._tables = set(tables or [])
@@ -40,6 +41,9 @@ class FakeExisting:
         self._schedules = set(schedules or [])
         self._apps = set(apps or [])
         self._surfaces = set(surfaces or [])
+        self._machines = set(machines or [])
+        self.refused_templates: set[str] = set()
+        self.machines_checked: list[tuple[str, str, str | None]] = []
         self._paths = set(paths or [])
         self.path_lookups = 0
 
@@ -66,6 +70,17 @@ class FakeExisting:
 
     async def surface_names(self):
         return self._surfaces
+
+    async def machine_names(self):
+        return self._machines
+
+    async def machine_refusals(self, machines):
+        self.machines_checked = [(m.name, m.template, m.size) for m in machines]
+        return [
+            f"Machine '{m.name}': not on this deployment."
+            for m in machines
+            if m.template in self.refused_templates
+        ]
 
     async def existing_paths(self, paths):
         self.path_lookups += len(paths)

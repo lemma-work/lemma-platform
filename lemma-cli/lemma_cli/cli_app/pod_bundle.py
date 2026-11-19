@@ -76,6 +76,7 @@ from lemma_pod_bundle.normalize import (
     _normalize_agent_payload,
     _normalize_app_payload,
     _normalize_function_payload,
+    _normalize_machine_payload,
     _normalize_pod_payload,
     _normalize_resource_permissions_payload as _normalize_resource_permissions_payload,
     _normalize_schedule_payload,
@@ -91,6 +92,7 @@ from lemma_pod_bundle.normalize import (
     _surface_name_from_payload,
     _surface_platform_from_payload,
     _validate_function_payload,
+    _validate_machine_payload,
     referenced_connector_slugs,
 )
 from lemma_pod_bundle.portability import (
@@ -114,6 +116,7 @@ from lemma_sdk import Lemma
 
 from .pod_bundle_home_app import bundle_home_app, carry_home_app, plan_home_app
 from .pod_bundle_outcome import bundle_outcome, carry_outcome, plan_outcome
+from .pod_bundle_machines import check_machines_against_policy
 from .pod_bundle_connectors import (
     declare_pod_connectors,
     export_pod_connectors,
@@ -1053,6 +1056,22 @@ def export_pod_bundle(
                 f"data-table '{missing}' is not a table in this pod; skipped"
             )
 
+    machines: list[dict[str, Any]] = []
+    if should_export("machines"):
+        machines = [
+            machine
+            for machine in _pod_machines(client, pod_id)
+            if should_export_name(machine)
+        ]
+        for machine in sorted(machines, key=lambda item: str(item.get("name", ""))):
+            machine_name = str(machine.get("name") or "")
+            resource_dir = bundle_root / "machines" / machine_name
+            resource_dir.mkdir(parents=True, exist_ok=True)
+            _write_json(
+                resource_dir / f"{machine_name}.json",
+                _normalize_machine_payload(machine),
+            )
+
     functions: list[dict[str, Any]] = []
     if should_export("functions"):
         functions = [
@@ -1101,7 +1120,7 @@ def export_pod_bundle(
             agent_permissions = to_plain(pod_sdk.agents.permissions(agent_name))
             agent_payload = extract_large_text(
                 _attach_permissions_payload(
-                    _normalize_agent_payload(full_agent),
+                    _normalize_agent_payload(full_agent, pod_id=pod_id),
                     agent_permissions,
                 ),
                 field_name="instruction",
@@ -1238,6 +1257,7 @@ def export_pod_bundle(
         "counts": {
             "connectors": len(connectors),
             "tables": len(tables),
+            "machines": len(machines),
             "functions": len(functions),
             "agents": len(agents),
             "workflows": len(workflows),
@@ -1249,6 +1269,16 @@ def export_pod_bundle(
             "variables": len(variables),
         },
     }
+
+
+def _pod_machines(client: Lemma, pod_id: str) -> list[dict[str, Any]]:
+    """The pod's own machines -- not the people's machines it can also see."""
+    listed = to_plain(client.machines.list(pod_id=pod_id)) or {}
+    return [
+        machine
+        for machine in listed.get("machines") or []
+        if isinstance(machine, dict) and machine.get("kind") == "pod"
+    ]
 
 
 def _resource_dirs(root: Path, resource_type: str) -> list[Path]:
@@ -1378,6 +1408,7 @@ def _build_import_plan(
 
     for resource_type in (
         "tables",
+        "machines",
         "functions",
         "agents",
         "workflows",
@@ -1435,6 +1466,10 @@ def _build_import_plan(
                 issues.extend(
                     _validate_function_payload(resource_dir, resource_name, payload)
                 )
+            if resource_type == "machines":
+                issues.extend(
+                    _validate_machine_payload(resource_dir, resource_name, payload)
+                )
             if resource_type == "schedules":
                 if not payload.get("name"):
                     payload["name"] = resource_name
@@ -1478,6 +1513,32 @@ def _build_import_plan(
                 path=str(source_dir / "tables"), message=column_refusal
             )
         )
+
+    machine_dirs = _resource_dirs(source_dir, "machines")
+    pod_machines = (
+        {str(item.get("name")): item for item in _pod_machines(client, pod_id)}
+        if machine_dirs
+        else {}
+    )
+    existing_machines = set(pod_machines)
+    refused, could_not_ask = check_machines_against_policy(
+        client, pod_id, machine_dirs, pod_machines
+    )
+    issues.extend(refused)
+    for resource_dir in machine_dirs:
+        machine_name = resource_dir.name
+        if machine_name in existing_machines:
+            if upsert:
+                summary["machines"].append(f"updated:{machine_name}")
+            else:
+                issues.append(
+                    BundleValidationIssue(
+                        path=str(resource_dir),
+                        message=f"Machine already exists: {machine_name}",
+                    )
+                )
+        else:
+            summary["machines"].append(f"created:{machine_name}")
 
     existing_functions = _build_existing_map(
         list_items(pod_sdk.functions.list(limit=1000))
@@ -1683,7 +1744,8 @@ def _build_import_plan(
     return (
         summary,
         issues,
-        _collect_grant_advisories(source_dir, created_names=created_names),
+        could_not_ask
+        + _collect_grant_advisories(source_dir, created_names=created_names),
     )
 
 
@@ -1845,6 +1907,7 @@ def _validate_grant_references(
         "workflow": ("workflows", lambda: pod_sdk.workflows.list(limit=1000)),
         "schedule": ("schedules", lambda: pod_sdk.schedules.list(limit=1000)),
         "app": ("apps", lambda: pod_sdk.apps.list(limit=1000)),
+        "machine": ("machines", lambda: _pod_machines(client, pod_sdk.pod_id)),
     }
     resolved_targets: dict[str, set[str]] = {}
 
@@ -2813,6 +2876,46 @@ def import_pod_bundle(
         var_overrides=variables,
         member_override=pod_member_id,
     )
+
+    # Machines before the agents that run on one and the grants that name one.
+    machine_dirs = _resource_dirs(source_dir, "machines")
+    pod_machines = (
+        {str(item.get("name")): item for item in _pod_machines(client, pod_id)}
+        if machine_dirs
+        else {}
+    )
+    existing_machines = set(pod_machines)
+    refused, could_not_ask = check_machines_against_policy(
+        client, pod_id, machine_dirs, pod_machines
+    )
+    issues.extend(refused)
+    for resource_dir in machine_dirs:
+        machine_name = resource_dir.name
+        payload = apply_variables(
+            load_resource_payload(resource_dir, machine_name, resource_type="machines")
+        )
+        fields = {
+            key: payload.get(key) for key in ("size", "run_slots", "display_name")
+        }
+        if machine_name in existing_machines:
+            if not upsert:
+                raise ValueError(
+                    f"Machine already exists and --no-upsert was requested: {machine_name}"
+                )
+            _progress_start("machine", machine_name, "updating")
+            client.machines.update(machine_name, pod_id=pod_id, **fields)
+            summary["machines"].append(f"updated:{machine_name}")
+            _progress_done("machine", machine_name, "updated")
+        else:
+            _progress_start("machine", machine_name, "creating")
+            client.machines.create(
+                machine_name,
+                pod_id=pod_id,
+                template=payload.get("template"),
+                **fields,
+            )
+            summary["machines"].append(f"created:{machine_name}")
+            _progress_done("machine", machine_name, "created")
 
     # Grants reference resources by name, and may point at workflows, apps,
     # schedules, or folders that import later than agents/functions. Collect

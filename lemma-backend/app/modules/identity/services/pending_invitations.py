@@ -18,6 +18,7 @@ from app.core.log.log import get_logger
 from app.modules.identity.domain.organization_entities import (
     OrganizationInvitationStatus,
 )
+from app.modules.identity.services.organization_roles import sync_organization_role
 from app.modules.identity.services.organization_service import OrganizationService
 
 logger = get_logger(__name__)
@@ -60,6 +61,14 @@ async def accept_pending_invitations(
         try:
             async with uow.session.begin_nested():
                 await organization_service.accept_invitation(invitation.id, user_id)
+                # Inside the savepoint: a membership whose role grants nothing
+                # is worse than the invitation left pending.
+                await sync_organization_role(
+                    uow.session,
+                    organization_id=invitation.organization_id,
+                    user_id=user_id,
+                    assigned_by_user_id=user_id,
+                )
         except DomainError as exc:
             logger.warning(
                 "identity.first_workspace.invitation_skipped",

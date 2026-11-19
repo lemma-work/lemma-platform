@@ -13,13 +13,14 @@ from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.domain.errors import UserConflictError, UserNotFoundError
 from app.modules.identity.domain.ports import UserRepositoryPort
 from app.modules.identity.domain.user_entities import UserEntity
-from app.modules.identity.domain.user_preferences import UserPreferences
+from app.modules.identity.domain.user_preferences import UserPreferences, WorkAnswer
 from app.modules.identity.infrastructure.mobile_number_claims import (
     acquire_mobile_number_claim_lock,
     get_other_mobile_number_owner_id,
 )
 from app.modules.identity.infrastructure.chat_account_policy import chat_account_clause
 from app.modules.identity.infrastructure.models import EmailChallenge, User
+from app.modules.identity.infrastructure.user_work import record_work
 from app.core.helpers.identifiers import normalize_mobile_digits
 
 
@@ -296,4 +297,19 @@ class UserRepository(UserRepositoryPort):
             raise UserNotFoundError()
         instance.preferences = preferences.model_dump(mode="json")
         await self.session.flush()
+        return instance.to_entity()
+
+    async def set_work(self, user_id: UUID, answer: WorkAnswer) -> UserEntity:
+        """Keep the answer, then read the user back as it now stands."""
+        if not await record_work(self.session, user_id=user_id, answer=answer):
+            raise UserNotFoundError()
+        # The write went around the ORM, so a row this session already holds
+        # would otherwise be handed back as it was before it.
+        instance = (
+            await self.session.execute(
+                select(User)
+                .where(User.id == user_id)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one()
         return instance.to_entity()

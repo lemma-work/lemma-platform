@@ -5,13 +5,14 @@
  */
 
 /** Why the socket closed, in numbers. These match the `CLOSE_*` constants in
- *  `browser_view_controller.py`, and they are read off the WebSocket's own
+ *  `machine_socket_auth.py` and `machine_browser_view_controller.py`, and they are read off the WebSocket's own
  *  close event rather than RFB's `disconnect`, which reports only whether the
  *  close was clean — not enough to tell "no browser is running yet" (worth
  *  retrying, the agent may start one) from "your session ended" (retrying with
  *  the same expired cookie can never succeed). */
 const CLOSE_UNAUTHENTICATED = 4401;
 const CLOSE_ORIGIN_REFUSED = 4403;
+const CLOSE_NOT_FOUND = 4404;
 const CLOSE_NO_BROWSER = 4409;
 const CLOSE_UNSUPPORTED = 4422;
 const CLOSE_STALE_IMAGE = 4426;
@@ -29,6 +30,8 @@ export type LiveState =
 export function stateFromClose(code: number): LiveState {
     if (code === CLOSE_UNAUTHENTICATED) return "signed-out";
     if (code === CLOSE_ORIGIN_REFUSED) return "refused";
+    /* No machine by that ref: retrying asks for the same missing thing. */
+    if (code === CLOSE_NOT_FOUND) return "unsupported";
     if (code === CLOSE_NO_BROWSER) return "no-browser";
     if (code === CLOSE_UNSUPPORTED) return "unsupported";
     if (code === CLOSE_STALE_IMAGE) return "stale-image";
@@ -73,5 +76,5 @@ export function socketUrl(
     if (options.origin) query.set("origin", options.origin);
     else if (options.conversationId) query.set("conversation", options.conversationId);
     if (options.accessToken) query.set("access_token", options.accessToken);
-    return `${base}/workspace/browser/view?${query.toString()}`;
+    return `${base}/machines/me/browser/view?${query.toString()}`;
 }

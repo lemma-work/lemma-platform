@@ -16,7 +16,7 @@ upserts by default): it writes through the API and never reaches this plan.
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from lemma_pod_bundle import diff_table_columns
 
@@ -114,8 +114,14 @@ def create_or_keep(kind: StepKind, name: str, existing: set[str]) -> PlanStep:
     return PlanStep(index=0, kind=kind, name=name, action=StepAction.CREATE)
 
 
+if TYPE_CHECKING:
+    # Typed only: `machine_bundle` imports this module to build its steps.
+    from app.modules.pod_bundle.infrastructure.machine_bundle import BundledMachine
+
+
 class ExistingResources(Protocol):
-    """The pod's current resources, by name — everything the plan's diff needs."""
+    """The pod's current resources, by name — everything the plan's diff needs,
+    machines included (the shape `machine_bundle.MachineNames` asks for)."""
 
     async def table_names(self) -> set[str]: ...
     async def table_manifest(self, name: str) -> dict[str, object] | None: ...
@@ -128,6 +134,10 @@ class ExistingResources(Protocol):
     async def existing_paths(self, paths: Sequence[str]) -> set[str]:
         """Which of these file and folder paths the pod already holds."""
         ...
+
+    async def machine_names(self) -> set[str]: ...
+
+    async def machine_refusals(self, machines: list[BundledMachine]) -> list[str]: ...
 
 
 class TheirParts:
@@ -178,6 +188,15 @@ class TheirParts:
 
     async def existing_paths(self, paths: Sequence[str]) -> set[str]:
         return await self._existing.existing_paths(paths)
+
+    async def machine_names(self) -> set[str]:
+        """As they are: an import records no machine as its own, and keeps any
+        the pod has (`agent_apply.apply_machine`), so a replan keeps the ones
+        its earlier attempt made rather than planning them again."""
+        return await self._existing.machine_names()
+
+    async def machine_refusals(self, machines: list[BundledMachine]) -> list[str]:
+        return await self._existing.machine_refusals(machines)
 
 
 def existing_table_step(

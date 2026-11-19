@@ -101,6 +101,7 @@ class StepKind(str, Enum):
     APP = "APP"
     SURFACE = "SURFACE"
     FILE = "FILE"
+    MACHINE = "MACHINE"
 
 
 class PlanStep(BaseModel):

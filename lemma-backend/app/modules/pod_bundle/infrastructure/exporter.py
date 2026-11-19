@@ -49,6 +49,7 @@ from lemma_pod_bundle.portability import _extract_portable_variables
 
 from app.modules.pod_bundle.infrastructure.bundle_identity import stamp_bundle_id
 from app.modules.pod_bundle.infrastructure.exporter_agents import export_agents
+from app.modules.pod_bundle.infrastructure.machine_bundle import export_machines
 from app.modules.pod_bundle.infrastructure.exporter_connectors import (
     export_connectors,
 )
@@ -67,16 +68,7 @@ logger = get_logger(__name__)
 # Resource dirs the exporter knows how to fill, in a stable order. ``files`` is
 # out of scope for the export slice (the CLI's file/asset export is separate and
 # best-effort); we still create the empty dir for layout parity.
-_EXPORT_RESOURCE_TYPES = (
-    "connectors",
-    "tables",
-    "functions",
-    "agents",
-    "workflows",
-    "schedules",
-    "surfaces",
-    "apps",
-)
+_EXPORT_RESOURCE_TYPES = tuple(d for d in RESOURCE_DIRS if d != "files")
 
 _RECORD_EXPORT_PAGE = 1_000
 
@@ -313,6 +305,10 @@ class BundleExporter:
                     )
                 done += 1
                 await on_progress(done, total)
+
+            # --- machines -----------------------------------------------------
+            done += await export_machines(uow, root, pod_id, selected=selected)
+            await on_progress(done, total)
 
             # --- functions ----------------------------------------------------
             if "functions" in selected:
