@@ -25,10 +25,16 @@ Load = Callable[[str, str], Mapping[str, object]]
 async def apply_machine(
     step: PlanStep, *, uow, pod_id: UUID, user_id: UUID, load: Load
 ) -> None:
-    """Create the pod machine, or bring an existing one to the bundle's
-    definition. An upsert by name, like every step: a replay converges."""
-    from app.modules.workspace.contracts.pod_machines import upsert_pod_machine
+    """Create the pod machine. One the pod already has is kept as it is
+    (``kept_parts``): the import's own from before a crash, or one made since
+    the plan -- so a replay converges and nothing is replaced."""
+    from app.modules.workspace.contracts.pod_machines import (
+        list_pod_machine_names,
+        upsert_pod_machine,
+    )
 
+    if step.name in await list_pod_machine_names(uow, pod_id=pod_id):
+        return
     payload = load("machines", step.name)
     run_slots = payload.get("run_slots")
     display_name = payload.get("display_name")
@@ -47,12 +53,10 @@ async def apply_machine(
 async def apply_agent(
     step: PlanStep, *, uow, ctx, pod_id: UUID, user_id: UUID, load: Load
 ) -> None:
-    """Create the agent, or overwrite an existing one's definition."""
-    from app.modules.agent.contracts.provisioning import (
-        create_agent,
-        get_agent,
-        update_agent,
-    )
+    """Create the agent. One the pod already has is kept as it is
+    (``kept_parts``): the import's own from before a crash, or one made since
+    the plan. Its instructions, settings and machine are never replaced."""
+    from app.modules.agent.contracts.provisioning import create_agent, get_agent
 
     payload = load("agents", step.name)
     common = {
@@ -66,32 +70,21 @@ async def apply_agent(
         "input_schema": payload.get("input_schema"),
         "output_schema": payload.get("output_schema"),
         "metadata": payload.get("metadata"),
-        # Which machine its commands run on. Absent means its own default,
-        # and a bundle saying so clears a machine the target agent had.
+        # Which machine its commands run on; absent means its own default.
         "machine": payload.get("machine"),
     }
-    existing = await get_agent(uow, pod_id=pod_id, name=step.name, ctx=ctx)
-    if existing is None:
-        await create_agent(
-            uow,
-            pod_id=pod_id,
-            user_id=user_id,
-            name=step.name,
-            instruction=str(payload.get("instruction") or ""),
-            visibility=payload.get("visibility"),
-            ctx=ctx,
-            **common,
-        )
-    else:
-        await update_agent(
-            uow,
-            pod_id=pod_id,
-            name=step.name,
-            instruction=payload.get("instruction"),
-            user_id=user_id,
-            ctx=ctx,
-            **common,
-        )
+    if await get_agent(uow, pod_id=pod_id, name=step.name, ctx=ctx) is not None:
+        return
+    await create_agent(
+        uow,
+        pod_id=pod_id,
+        user_id=user_id,
+        name=step.name,
+        instruction=str(payload.get("instruction") or ""),
+        visibility=payload.get("visibility"),
+        ctx=ctx,
+        **common,
+    )
 
 
 def _agent_runtime(payload: Mapping[str, object]):

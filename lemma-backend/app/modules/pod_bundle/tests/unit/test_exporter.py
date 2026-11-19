@@ -1195,6 +1195,10 @@ async def test_a_machine_and_the_agent_on_it_round_trip_through_a_bundle(
         created.update(kwargs)
         return SimpleNamespace(id=uuid4(), name=kwargs["name"])
 
+    async def _no_machines(uow, *, pod_id):
+        return set()
+
+    monkeypatch.setattr(f"{_MACHINES}.list_pod_machine_names", _no_machines)
     monkeypatch.setattr(f"{_MACHINES}.upsert_pod_machine", _upsert)
     monkeypatch.setattr(f"{_AGENTS}.get_agent", _no_agent)
     monkeypatch.setattr(f"{_AGENTS}.create_agent", _create_agent)

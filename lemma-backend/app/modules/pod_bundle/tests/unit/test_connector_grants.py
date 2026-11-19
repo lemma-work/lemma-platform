@@ -79,6 +79,16 @@ async def test_a_connector_the_pod_lacks_but_the_org_installed_is_declared(
     assert "'github'" in warning and "agent 'triage'" in warning
 
 
+async def test_only_the_grants_the_import_writes_are_planned(tmp_path):
+    """An agent the pod already has keeps its own access, so what its bundled
+    copy was granted is neither declared nor a reason to refuse the import."""
+    warnings = await plan_connector_grants(
+        _bundle(tmp_path, "github", "jira"), Directory(), writing=set()
+    )
+
+    assert warnings == []
+
+
 async def test_a_declared_connector_needs_nothing(tmp_path):
     warnings = await plan_connector_grants(
         _bundle(tmp_path, "github"), Directory(declared={"github"})
