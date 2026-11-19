@@ -6,7 +6,6 @@ be a pod's machine or one of your own:
   me                     your default machine
   pod:<pod>:<name>       a pod's machine, the pod by id or name
                          (pod:<name> for the selected pod)
-  mine:<name>            another machine of yours
   <machine-id>
 
 `exec` and `shell` follow the process over a socket, so what it prints shows up
@@ -50,7 +49,7 @@ app.add_typer(preview_app, name="preview")
 app.add_typer(logins_app, name="logins")
 app.add_typer(grants_app, name="grants")
 
-_REF_HELP = "Which machine: me, pod:<pod>:<name>, pod:<name>, mine:<name> or an id."
+_REF_HELP = "Which machine: me, pod:<pod>:<name>, pod:<name> or an id."
 
 #: Exit code for a command whose exit status the machine never reported (it
 #: was cancelled, or timed out): the shell's convention for "killed".
@@ -322,7 +321,7 @@ def _exit_code_of(stream: Any) -> int:
         "Examples:\n\n"
         "  lemma machine exec me ls -la\n"
         "  lemma machine exec pod:builder 'npm ci && npm test'\n"
-        "  lemma machine exec --cwd /Users/me/src mine:mac make\n\n"
+        "  lemma machine exec --cwd /home/user/src me make\n\n"
         "Options go before the ref: everything after it is the command."
     ),
 )

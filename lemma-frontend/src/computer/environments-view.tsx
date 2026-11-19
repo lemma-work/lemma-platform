@@ -28,8 +28,8 @@ function problemText(problem: unknown, fallback: string): string {
 
 /* ── the rail ─────────────────────────────────────────────────────── */
 
-/** Every machine this teammate's space can reach, in three groups: yours,
- *  the space's own, and the ones somebody connected. */
+/** Every machine this teammate's space can reach: yours, the space's own,
+ *  and -- when there are any -- the ones somebody connected. */
 export function EnvironmentsRail({ podId, machines, loading, failed, onRetry, selected, onSelect, visible }: {
     podId: string;
     machines: Machine[];
@@ -91,12 +91,15 @@ export function EnvironmentsRail({ podId, machines, loading, failed, onRetry, se
                 )}
             </RailGroup>
 
-            <RailGroup title="Connected">
-                {rail.connected.map((machine) => (
-                    <RailRow key={machine.ref} machine={machine} selected={selected === machine.ref} onSelect={onSelect} />
-                ))}
-                <ConnectPanel />
-            </RailGroup>
+            {/* Shown only once there is one: joining a machine of one's own
+                is not offered yet, so nothing here points at a way to. */}
+            {rail.connected.length > 0 && (
+                <RailGroup title="Connected">
+                    {rail.connected.map((machine) => (
+                        <RailRow key={machine.ref} machine={machine} selected={selected === machine.ref} onSelect={onSelect} />
+                    ))}
+                </RailGroup>
+            )}
 
             {machines.length > 0 && <p className="envrail__usage">{usageSummary(machines)}</p>}
 
@@ -170,8 +173,6 @@ function RailRow({ machine, selected, onSelect, onDelete }: {
     );
 }
 
-const CONNECT_COMMAND = "lemma machine connect";
-
 function CopyButton({ text, label }: { text: string; label: string }) {
     const [copied, setCopied] = useState<"yes" | "no" | null>(null);
     useEffect(() => {
@@ -188,19 +189,6 @@ function CopyButton({ text, label }: { text: string; label: string }) {
         >
             {copied === "yes" ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
         </button>
-    );
-}
-
-/** How a laptop or server joins: one command, run there. */
-function ConnectPanel() {
-    return (
-        <div className="envconnect">
-            <p>Connect a machine of your own by running this on it:</p>
-            <div className="envconnect__cmd">
-                <code>{CONNECT_COMMAND}</code>
-                <CopyButton text={CONNECT_COMMAND} label="Copy the command" />
-            </div>
-        </div>
     );
 }
 

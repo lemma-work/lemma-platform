@@ -17,7 +17,7 @@ machine come from `lemma-backend/sandbox_runtime/paths.py` and nowhere else.
 |---|---|---|---|---|
 | Default machine | One per person, created on first use, 1 vCPU / 2 GB by default (a plan may choose another size) | `me` | The person | The person |
 | Pod machine | Shared by a pod's agents; created by its editors and admins within the plan's policy; templates `workspace` and `workspace-docker` (has Docker; E2B only) | `pod:<name>` in the pod, `pod:<pod>:<name>` from outside (the pod by id or name; the older `pod:<pod>/<name>` is still read) | The pod — it outlives whoever created it | The organization |
-| Connected machine | A person's own laptop or VM joined with the CLI | `mine:<name>` | The person | — |
+| Connected machine | A person's own laptop or VM. **Not offered yet**: the model and the `mine:<name>` ref are in place, but nothing joins one | `mine:<name>` | The person | — |
 
 The API's `ref` field uses the colon form, `pod:<pod>:<name>`, because a
 slash cannot sit in a URL path segment; both forms parse. Any machine can also
@@ -82,7 +82,7 @@ the pod's default agent acting for one, reaches the verifier too. Creating,
 changing, deleting and granting pod machines are a person's own acts, never an
 app's or an agent's.
 
-A connected machine is its owner's. Shared into a pod, it is that pod's
+A connected machine (not offered yet) is its owner's. Shared into a pod, it is that pod's
 resource as above, but never more than usable by anybody else, and never by an
 app.
 
