@@ -130,9 +130,13 @@ diagnostics for delivery errors; signup never falls back to a public channel.
 A successful mailbox check creates or reuses an account. It does not bypass the
 installation organization's membership policy. Invite-only organizations require
 an administrator to add the person before a pod and personal route are created.
-Other memberships do not change that destination. No credentials are copied to
-the personal pod: execution carries the source installation separately from the
-authorized target pod.
+Other memberships do not change that destination. The person lands in the pod
+an invitation named, else the Lemma the organization shares, else -- in an
+organization that has none, or for a member who left it -- a private pod of
+their own, by the same rule as a
+web sign-up (`users.ensure_first_workspace` in the identity contract). No
+credentials are copied to that pod: execution carries the source installation
+separately from the authorized target pod.
 
 ## Verification
 

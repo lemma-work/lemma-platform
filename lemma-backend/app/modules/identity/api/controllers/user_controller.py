@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Request, status
 
 from app.core.api.dependencies import UoWDep
@@ -15,8 +17,11 @@ from app.modules.identity.api.schemas.user_schemas import (
     AccountDeletionResponse,
     UserProfileRequest,
     UserResponse,
+    WorkAnswerRequest,
+    WorkAnswerResponse,
 )
 from app.modules.identity.domain.user_entities import UserEntity
+from app.modules.identity.domain.user_preferences import WorkAnswer
 from app.modules.identity.infrastructure.supertokens_auth.account_removal import (
     drop_cached_standing,
 )
@@ -28,11 +33,24 @@ _HIDDEN_FROM_APPS = {
     "mobile_number": None,
     "mobile_verified_at": None,
     "date_of_birth": None,
+    "work": None,
 }
 
 
+def _own_record(user_data: UserEntity) -> UserResponse:
+    """The person's own record, with what only they are shown of it."""
+    work = user_data.preferences.work if user_data.preferences is not None else None
+    return UserResponse.model_validate(user_data).model_copy(
+        update={
+            "work": WorkAnswerResponse.model_validate(work.model_dump())
+            if work is not None
+            else None
+        }
+    )
+
+
 def _user_response(request: Request, user_data: UserEntity) -> UserResponse:
-    response = UserResponse.model_validate(user_data)
+    response = _own_record(user_data)
     if app_request_of(request) is not None:
         return response.model_copy(update=_HIDDEN_FROM_APPS)
     return response
@@ -102,7 +120,37 @@ async def upsert_profile(
         **data.model_dump(exclude_unset=True, exclude={"telegram_username"})
     )
     updated_user = await user_service.update_user(current_user_data)
-    return UserResponse.model_validate(updated_user)
+    return _own_record(updated_user)
+
+
+@router.put(
+    "/me/work",
+    operation_id="users.work.set",
+    summary="Say What The Current User Does",
+    description=(
+        "Keep what the current user said they do, replacing any earlier "
+        "answer, and return the user with it. Asked once, at their first "
+        "start: an answer with no jobs and no `other` records that they "
+        "skipped, so they are not asked again. Leaves every other preference "
+        "as it was."
+    ),
+    response_model=UserResponse,
+)
+async def set_work(
+    request: Request,
+    data: WorkAnswerRequest,
+    user_service: UserServiceDep,
+) -> UserResponse:
+    user: UserEntity = request.state.user
+    updated = await user_service.set_work(
+        user.id,
+        WorkAnswer(
+            jobs=data.jobs,
+            other=data.other,
+            answered_at=datetime.now(timezone.utc),
+        ),
+    )
+    return _user_response(request, updated)
 
 
 @router.delete(

@@ -2,6 +2,7 @@ import type { GeneratedClientAdapter } from "../generated.js";
 import type { UserProfileRequest } from "../openapi_client/models/UserProfileRequest.js";
 import type { AccountDeletionRequest } from "../openapi_client/models/AccountDeletionRequest.js";
 import type { FirstWorkspaceRequest } from "../openapi_client/models/FirstWorkspaceRequest.js";
+import type { WorkAnswerRequest } from "../openapi_client/models/WorkAnswerRequest.js";
 import { UsersService } from "../openapi_client/services/UsersService.js";
 
 export class UsersNamespace {
@@ -13,6 +14,13 @@ export class UsersNamespace {
 
   ensureFirstWorkspace(payload: FirstWorkspaceRequest = {}) {
     return this.client.request(() => UsersService.usersEnsureFirstWorkspace(payload));
+  }
+
+  /** Keep what the signed-in person does, replacing any earlier answer, and
+   *  answer with the whole user. `{ jobs: [] }` records that they skipped the
+   *  question, so it is not asked again. */
+  setWork(payload: WorkAnswerRequest) {
+    return this.client.request(() => UsersService.usersWorkSet(payload));
   }
 
   /** Whether this local installation can send email. 404 on a server. */
