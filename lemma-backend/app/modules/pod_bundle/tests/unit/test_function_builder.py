@@ -41,6 +41,7 @@ async def test_function_step_uses_canonical_self_scoped_use_case(tmp_path) -> No
     runner = FunctionStepRunner(
         uow_factory=object(),
         use_cases=use_cases,
+        exists=AsyncMock(return_value=False),
     )
 
     await runner.run(
@@ -62,3 +63,34 @@ async def test_function_step_uses_canonical_self_scoped_use_case(tmp_path) -> No
     assert call["entity"].type == FunctionType.JOB
     assert call["update_entity"].code.startswith("def triage")
     assert call["user_id"] == user_id
+
+
+async def test_a_function_the_pod_has_is_kept_as_it_is(tmp_path) -> None:
+    """Its code, schema and access are the pod's. A step that finds it here --
+    this import's own from before a crash, or one made since the plan -- does
+    not compile the bundle's copy over it."""
+    root = tmp_path / "bundle"
+    resource = root / "functions" / "triage"
+    resource.mkdir(parents=True)
+    (resource / "triage.json").write_text(
+        json.dumps({"name": "triage", "code": "def triage():\n    return 1\n"}),
+        encoding="utf-8",
+    )
+    use_cases = SimpleNamespace(upsert_function_for_import=AsyncMock())
+    exists = AsyncMock(return_value=True)
+    pod_id, user_id = uuid4(), uuid4()
+
+    await FunctionStepRunner(
+        uow_factory=object(), use_cases=use_cases, exists=exists
+    ).run(
+        PlanStep(
+            index=0, kind=StepKind.FUNCTION, name="triage", action=StepAction.CREATE
+        ),
+        pod_id=pod_id,
+        user_id=user_id,
+        bundle_root=root,
+        replacements={},
+    )
+
+    exists.assert_awaited_once_with("triage", pod_id, user_id)
+    use_cases.upsert_function_for_import.assert_not_awaited()

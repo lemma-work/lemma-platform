@@ -276,6 +276,45 @@ async def test_table_update_adds_new_columns_only(tmp_path, monkeypatch):
     assert fake.created == []
 
 
+async def test_a_table_never_loses_a_column_whatever_the_step_says(
+    tmp_path, monkeypatch
+):
+    """The column the bundle lacks is the pod's own -- one a person added, say.
+
+    ``destructive`` is how a plan used to ask for the drop, and one planned
+    before an import kept what exists can still carry it."""
+
+    class _C:
+        def __init__(self, name):
+            self.name = name
+
+    existing = SimpleNamespace(
+        primary_key_column="id", columns=[_C("id"), _C("title"), _C("score")]
+    )
+    root = tmp_path / "bundle"
+    _write(
+        root / "tables" / "leads" / "leads.json",
+        {
+            "name": "leads",
+            "primary_key_column": "id",
+            "columns": [
+                {"name": "id", "type": "UUID"},
+                {"name": "title", "type": "TEXT"},
+            ],
+        },
+    )
+    fake = FakeTableOperations().patch(monkeypatch)
+    fake._existing["leads"] = existing
+
+    await _applier(root).apply_step(
+        _step(StepKind.TABLE, "leads", action=StepAction.UPDATE, destructive=True)
+    )
+
+    assert fake.removed == []
+    assert fake.added == []
+    assert fake.created == []
+
+
 # --- grants ------------------------------------------------------------------
 
 
@@ -521,6 +560,31 @@ async def test_an_imported_agent_carries_the_toolsets_its_grant_is_derived_from(
     ]
     # ...and a ctx, without which the service skips the derivation entirely.
     assert seen.get("ctx") is not None
+
+
+async def test_an_agent_the_pod_has_is_kept_as_it_is(tmp_path, monkeypatch):
+    """Its instructions, toolsets and runtime are the pod's. A step that finds
+    it here -- this import's own from before a crash, or one made since the
+    plan -- leaves it alone rather than writing the bundle's copy over it."""
+    root = tmp_path / "bundle"
+    _write(
+        root / "agents" / "support" / "support.json",
+        {"name": "support", "instruction": "The bundle's words."},
+    )
+    _patch_agent_lookup(monkeypatch)
+    written: list[dict] = []
+
+    async def _written(uow, **kwargs):
+        written.append(kwargs)
+
+    monkeypatch.setattr(f"{_AGENTS}.create_agent", _written)
+    monkeypatch.setattr(f"{_AGENTS}.update_agent", _written)
+
+    await _applier(root).apply_step(
+        _step(StepKind.AGENT, "support", action=StepAction.UPDATE)
+    )
+
+    assert written == []
 
 
 async def test_the_grants_step_puts_the_derived_memory_grant_back(
@@ -1091,6 +1155,36 @@ async def test_a_bundled_surface_naming_an_account_runs_as_its_connector(
     assert surface_fake.created is not None
     assert surface_fake.created["pod_connector_slug"] == "support-slack"
     assert any("deprecated" in w and "support-slack" in w for w in warnings)
+
+
+async def test_a_surface_the_pod_has_is_kept_as_it_is(tmp_path, monkeypatch):
+    """Nothing is written over its settings, and the account its bundled copy
+    names is not turned into a pod connector it would never use."""
+    root = tmp_path / "bundle"
+    _account_surface(root)
+    asked = []
+
+    async def serving(_uow, _ctx, *, pod_id, account_id):
+        asked.append(account_id)
+        return SimpleNamespace(slug="support-slack", pod_account_id=uuid4())
+
+    monkeypatch.setattr(
+        "app.modules.connectors.contracts.pod_connectors.pod_connector_for_account",
+        serving,
+    )
+    surface_fake = FakeSurfaceService(existing=SimpleNamespace(id=uuid4(), config={}))
+    _patch_surface_operations(monkeypatch, surface_fake)
+    warnings: list[str] = []
+    applier = _applier(
+        root, replacements={"slack_account": str(uuid4())}, warnings=warnings
+    )
+
+    await applier.apply_step(_step(StepKind.SURFACE, "slack", action=StepAction.UPDATE))
+
+    assert surface_fake.created is None
+    assert surface_fake.updated is None
+    assert asked == []
+    assert warnings == []
 
 
 async def test_a_bundled_surface_with_no_account_given_says_so(tmp_path, monkeypatch):

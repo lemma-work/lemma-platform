@@ -64,9 +64,8 @@ async def test_each_machine_is_checked_as_the_apply_will_ask_for_it(tmp_path):
 
     plan = await PlanBuilder(existing).build_plan(bundle_root=root)
 
-    assert existing.machines_checked == [
-        ("ci", "workspace-docker", "4x8"),
-        ("qa", "workspace", None),
-    ]
+    # Only the machine the import creates has to fit the plan: `qa` is kept
+    # as the pod has it (an import never replaces), so it is not built.
+    assert existing.machines_checked == [("ci", "workspace-docker", "4x8")]
     steps = {s.name: s.action for s in plan.steps if s.kind is StepKind.MACHINE}
-    assert steps == {"ci": StepAction.CREATE, "qa": StepAction.UPDATE}
+    assert steps == {"ci": StepAction.CREATE, "qa": StepAction.SKIP}
