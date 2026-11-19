@@ -296,7 +296,10 @@ async def test_a_connector_with_no_installation_blocks_the_import(
         "plan"
     ]
     by_slug = {c["slug"]: c for c in plan["connectors"]}
-    assert {c["status"] for c in by_slug.values()} == {"NEEDS_INSTALLATION"}
+    # `crm` is required; `crm-shared` is optional and only a grant names it,
+    # so it would be left out rather than stop the import.
+    assert by_slug["crm"]["status"] == "NEEDS_INSTALLATION"
+    assert by_slug["crm-shared"]["status"] == "SKIPPED"
     assert "installation" in by_slug["crm"]["message"]
 
     refused = await client.post(
@@ -305,7 +308,7 @@ async def test_a_connector_with_no_installation_blocks_the_import(
     assert refused.status_code == 422, refused.text
     body = refused.json()
     assert body["code"] == "POD_BUNDLE_CONFIRMATION_REQUIRED"
-    assert {b["slug"] for b in body["details"]["blocking"]} == {"crm", "crm-shared"}
+    assert {b["slug"] for b in body["details"]["blocking"]} == {"crm"}
     # Refused before anything was written.
     assert await _pod_connectors(client, pod_b) == {}
     agents = (await client.get(f"/pods/{pod_b}/agents")).json()
@@ -328,6 +331,35 @@ async def test_a_connector_with_no_installation_blocks_the_import(
     assert final["status"] == "COMPLETED", final
     declared = await _pod_connectors(client, pod_b)
     assert declared["crm"]["auth_config_id"] == declared["crm-shared"]["auth_config_id"]
+
+
+async def test_an_optional_connector_nobody_installed_is_left_out_with_its_grant(
+    scenario, db_session, worker
+):
+    """`crm-shared` is optional and only the agent's grant names it: with no
+    installation, the import goes ahead without it and drops that grant,
+    rather than stopping on a connector the bundle said it could do without."""
+    connector_id = await _catalog_connector(db_session)
+    zip_bytes, _ = await _exported_pod(scenario, db_session, connector_id)
+    await _importing_pod(scenario, db_session, connector_id, installed=False)
+    client, pod_b = scenario.owner_client, scenario.pod_id
+    import_id = await start_and_plan_import(client, pod_b, zip_bytes)
+
+    applied = await client.post(
+        f"/pods/{pod_b}/bundle/imports/{import_id}/apply",
+        json={"connectors": {"crm": {"create_installation": True}}},
+    )
+    assert applied.status_code == status.HTTP_202_ACCEPTED, applied.text
+    final = await wait_import(client, pod_b, import_id, until={"COMPLETED", "FAILED"})
+
+    assert final["status"] == "COMPLETED", final
+    assert set(await _pod_connectors(client, pod_b)) == {"crm"}
+    step = next(s for s in final["plan"]["steps"] if s["name"] == "crm-shared")
+    assert step["status"] == "SKIPPED"
+    assert any("'crm-shared' was dropped" in w for w in final["warnings"])
+    grants = await client.get(f"/pods/{pod_b}/agents/deal_desk/permissions")
+    assert grants.status_code == status.HTTP_200_OK, grants.text
+    assert not [g for g in grants.json()["grants"] if g["resource_type"] == "connector"]
 
 
 async def test_a_slug_the_pod_declares_in_the_other_mode_blocks_the_import(

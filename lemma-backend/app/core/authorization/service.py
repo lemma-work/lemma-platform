@@ -38,8 +38,8 @@ from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.grants import (
     delete_grantee_grants,
 )
+from app.core.authorization.permission_rows import ensure_permission_rows
 from app.core.authorization.models import (
-    AuthPermissionModel,
     RoleAssignmentModel,
     RoleModel,
     RolePermissionModel,
@@ -125,26 +125,12 @@ class AuthorizationDataService:
         just a synthetic repro). A single bulk upsert closes the same TOCTOU
         window the role_permissions upsert below already closes for its own
         table, and rowcount reports exactly the same "was anything new"
-        signal the loop above tracked in `changed`.
+        signal the loop above tracked in `changed`. The grant writers ask the
+        same upsert for just the ids they write (``ensure_permission_rows``).
         """
-        rows = [
-            {
-                "id": definition.id,
-                "scope": definition.scope.value,
-                "resource_type": definition.resource_type,
-                "description": definition.description,
-                "system_only": definition.system_only,
-            }
-            for definition in PERMISSION_DEFINITIONS
-        ]
-        if not rows:
-            return False
-        result = await self.session.execute(
-            insert(AuthPermissionModel)
-            .values(rows)
-            .on_conflict_do_nothing(index_elements=["id"])
+        return await ensure_permission_rows(
+            self.session, [definition.id for definition in PERMISSION_DEFINITIONS]
         )
-        return result.rowcount > 0
 
     async def ensure_org_system_roles(self, organization_id: UUID) -> None:
         await self._ensure_system_roles(
@@ -242,6 +228,9 @@ class AuthorizationDataService:
             await self.session.flush()
         else:
             role.description = description
+        # Role rows carry a foreign key to the permission rows, which are
+        # seeded lazily: a permission added in a release may not be there yet.
+        await ensure_permission_rows(self.session, permission_ids)
         await self._replace_role_permissions(
             role_id=role.id,
             permission_ids=permission_ids,

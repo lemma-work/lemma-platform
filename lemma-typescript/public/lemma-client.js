@@ -17147,6 +17147,40 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Send Self Notice
+     * Tell the person this request acts for something, in their own channel:
+     * a function or agent writing to the person it runs as, or a member writing
+     * a note to themselves. There is no recipient to name. A workload needs
+     * `channel.notify_self` granted on the pod (`resource_type` `pod`,
+     * `resource_name` `/`); a member holds it with `channel.write`. Idempotency
+     * and the per-minute cap are the same as for a notice to another member.
+     * @param podId
+     * @param requestBody
+     * @param idempotencyKey
+     * @returns NoticeResponse Successful Response
+     * @throws ApiError
+     */
+    static agentNoticeSendSelf(podId, requestBody, idempotencyKey) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/members/me/notices",
+        path: {
+          "pod_id": podId
+        },
+        headers: {
+          "Idempotency-Key": idempotencyKey
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          403: `The request acts for nobody in this pod.`,
+          404: `The person it acts for is not in this pod.`,
+          422: `Validation Error`,
+          429: `Too many notices this minute; see Retry-After.`
+        }
+      });
+    }
+    /**
      * Send Notice
      * Tell another member of the pod something, in their own channel. The
      * same `Idempotency-Key` from the same member is the same notice; sent with
@@ -19584,6 +19618,15 @@ var LemmaClient = (() => {
         }
       );
     }
+    /** Tell the person this runs as something, in their own channel: a
+     *  function's note to whoever it runs for, or a note to yourself. It names
+     *  no recipient. A function or agent needs `channel.notify_self` granted on
+     *  the pod (`resource_type` `pod`, `resource_name` `/`). */
+    notifyMe(podId, text, options = {}) {
+      return this.client.request(
+        () => AgentSurfacesService.agentNoticeSendSelf(podId, { text }, options.idempotencyKey)
+      );
+    }
     /** Tell another member of the pod something: a line in their own channel.
      *  `to` is a pod member id, user id or email address. */
     notify(podId, body, options = {}) {
@@ -20901,7 +20944,7 @@ var LemmaClient = (() => {
   var DecisionsService = class {
     /**
      * Make a decision
-     * Answer closed questions -- a choice, several choices, yes or no, a point on a scale -- about one piece of evidence. Nothing is stored: record the answer wherever it matters to you. An answer of null means the evidence did not support one. 422 means the request cannot be asked as sent; 429 and 503 mean ask again later.
+     * Answer closed questions -- a choice, several choices, yes or no, a point on a scale -- about one piece of evidence. Nothing is stored: record the answer wherever it matters to you. Treat an answer of null, or a confidence below your own threshold, as unsure. 422 means the request cannot be asked as sent; 429 and 503 mean ask again later.
      * @param podId
      * @param requestBody
      * @returns DecisionResponse Successful Response
@@ -20933,9 +20976,19 @@ var LemmaClient = (() => {
       __publicField(this, "podId", podId);
     }
     /**
-     * Answers come back per question key; `value` is `null` when the evidence did
-     * not support an answer. A provider that could not answer rejects instead
-     * (503, or 429 with Retry-After), so "unsure" and "failed" never look alike.
+     * Answers come back per question key. Treat one as unsure when `value` is
+     * `null`, or `confidence` is set and below your own threshold: the
+     * language-model provider answers `null` when the evidence did not support
+     * an answer, and the `typesafe` provider always answers the value it judged
+     * most likely, with that value's probability as `confidence` where it reports
+     * one (for several choices, the confidence of the least certain per-option
+     * decision, not the probability of the whole selection). A value whose
+     * `confidence` is `null` carries no measure -- every answer of the
+     * language-model provider, and a `typesafe` scale read from its score alone
+     * -- so it is its own case, neither sure nor unsure, and where it goes is
+     * yours to decide. A provider that could not
+     * answer rejects instead (503 or 429), so "unsure" and "failed" never look
+     * alike.
      */
     make(payload) {
       return this.client.request(
@@ -21472,6 +21525,33 @@ var LemmaClient = (() => {
           "column_name": columnName
         },
         errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Update Column
+     * Add options to an ENUM column, drop a column's foreign key, or both. `options` must include every option the column has now: removing one is refused (422), because rows may already hold it, and sending `options` for a column that is not ENUM is refused too. `drop_foreign_key` works on any column. Sending what the column already is changes nothing.
+     * @param podId
+     * @param tableName
+     * @param columnName
+     * @param requestBody
+     * @returns TableDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static tableColumnUpdate(podId, tableName, columnName, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/pods/{pod_id}/datastore/tables/{table_name}/columns/{column_name}",
+        path: {
+          "pod_id": podId,
+          "table_name": tableName,
+          "column_name": columnName
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          409: `The table stayed in use for a few seconds, so nothing was changed; try again.`,
           422: `Validation Error`
         }
       });
@@ -22094,14 +22174,15 @@ var LemmaClient = (() => {
     }
     /**
      * Create Workflow Run
-     * Create a new run for this workflow. Takes no request body: if the workflow's entry node is a FORM node the run is created WAITING on it (see `active_wait` in the response) and input is submitted via `workflow.run.form.submit`; otherwise the run executes immediately. Trigger payloads for scheduled/event/datastore starts are supplied by the platform, not through this endpoint. Send an `Idempotency-Key` header to make a retry safe: the same key, from the same person, for the same workflow, returns the run it already created.
+     * Create a new run for this workflow. The body is optional and names at most the record the run is about (`about`): the record is read as you (404 when you cannot read it) and becomes `start.payload`, as a table trigger's change would. A run takes no other input: if the workflow's entry node is a FORM node the run is created WAITING on it (see `active_wait` in the response) and input is submitted via `workflow.run.form.submit`; otherwise the run executes immediately. Send an `Idempotency-Key` header to make a retry safe: the same key, from the same person, for the same workflow, returns the run it already created.
      * @param podId
      * @param workflowName
      * @param idempotencyKey
+     * @param requestBody
      * @returns WorkflowRunResponse Successful Response
      * @throws ApiError
      */
-    static workflowRunCreate(podId, workflowName, idempotencyKey) {
+    static workflowRunCreate(podId, workflowName, idempotencyKey, requestBody) {
       return request(OpenAPI, {
         method: "POST",
         url: "/pods/{pod_id}/workflows/{workflow_name}/runs",
@@ -22112,7 +22193,11 @@ var LemmaClient = (() => {
         headers: {
           "Idempotency-Key": idempotencyKey
         },
+        body: requestBody,
+        mediaType: "application/json",
         errors: {
+          400: `\`about.record_id\` is not a valid key for the table.`,
+          404: `No such workflow, or no record you can read matches \`about\`.`,
           422: `Validation Error`
         }
       });
@@ -22151,11 +22236,20 @@ var LemmaClient = (() => {
       });
       __publicField(this, "runs", {
         /**
-         * Create a run. Runs take no inputs: when the workflow starts with a
-         * form, the returned run is WAITING with `active_wait` describing the
-         * form to render and submit via `runs.submitForm`.
+         * Create a run. A run takes no free-form input: when the workflow starts
+         * with a form, the returned run is WAITING with `active_wait` describing
+         * the form to render and submit via `runs.submitForm`. `about` names the
+         * one record the run is about: it is read as you (404 when you cannot)
+         * and becomes `start.payload`, as a table trigger's change would.
          */
-        create: (workflowName) => this.client.request(() => WorkflowsService.workflowRunCreate(this.podId(), workflowName)),
+        create: (workflowName, options = {}) => this.client.request(
+          () => WorkflowsService.workflowRunCreate(
+            this.podId(),
+            workflowName,
+            options.idempotencyKey,
+            options.about ? { about: { table: options.about.table, record_id: options.about.recordId } } : void 0
+          )
+        ),
         list: (workflowName, options = {}) => this.client.request(
           () => {
             var _a;

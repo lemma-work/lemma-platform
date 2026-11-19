@@ -117,6 +117,15 @@ class BundleStagingMissingError(PodBundleDomainError):
         super().__init__(message, code="POD_BUNDLE_STAGING_MISSING", status_code=410)
 
 
+class StepNotApplicableError(PodBundleDomainError):
+    """A step the apply does not carry out: a kind this slice does not apply
+    yet, or a connector the import leaves out. Marked SKIPPED with the reason
+    rather than failing the whole import."""
+
+    def __init__(self, message: str):
+        super().__init__(message, code="POD_BUNDLE_STEP_UNSUPPORTED", status_code=422)
+
+
 class AppBuildFailedError(PodBundleDomainError):
     """A bundled app could not be built/deployed in the target pod (a non-zero
     build, a missing ``dist/index.html``, or an invalid dist archive). Terminal:

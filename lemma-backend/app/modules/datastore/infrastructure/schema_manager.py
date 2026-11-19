@@ -26,6 +26,8 @@ from app.modules.datastore.infrastructure.pod_schema_catalog import (
     drop_pod_schema,
     lock_schema_bootstrap,
 )
+from app.modules.datastore.domain.column_changes import ColumnChange
+from app.modules.datastore.infrastructure.column_constraints import replace_column_check
 from app.modules.datastore.infrastructure.query_role import QueryRoleGrants
 from app.modules.datastore.infrastructure.record_indexes import (
     ensure_record_index,
@@ -438,6 +440,32 @@ class SchemaManager:
                 exc=exc,
                 table_name=table_name,
                 column_name=column_name,
+            ) from exc
+
+    async def change_column_constraints(
+        self, pod_id: UUID, table_name: str, change: ColumnChange
+    ) -> None:
+        """Make the database enforce ``change``; see ``column_constraints``."""
+        column = change.column
+        self._sanitize_identifier(table_name)
+        self._sanitize_identifier(column.name)
+        relation = f'"{self._get_schema_name(pod_id)}"."{table_name}"'
+        check = self._enum_check_clause(column) if change.options_widened else None
+        try:
+            await replace_column_check(
+                self._engine,
+                relation,
+                column,
+                check,
+                drop_foreign_key=change.foreign_key_dropped,
+            )
+        except DBAPIError as exc:
+            raise self._map_db_error(
+                operation=f"change the options of column '{column.name}'",
+                exc=exc,
+                table_name=table_name,
+                column_name=column.name,
+                columns=[column],
             ) from exc
 
     def _user_isolation_policy_sql(self, schema_name: str, table_name: str) -> str:

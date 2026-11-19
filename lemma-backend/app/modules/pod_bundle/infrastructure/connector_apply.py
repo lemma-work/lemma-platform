@@ -29,6 +29,7 @@ from app.modules.pod_bundle.domain.connector_plan import (
 from app.modules.pod_bundle.domain.errors import (
     BundleInvalidError,
     PodBundleDomainError,
+    StepNotApplicableError,
 )
 from app.modules.pod_bundle.domain.state import PlanStep
 
@@ -75,6 +76,11 @@ async def apply_connector(
             )
         return
     choice = choices.get(step.name)
+    if choice is not None and choice.skip:
+        raise StepNotApplicableError(
+            f"Connector '{step.name}' ({connector.connector}) is optional and was "
+            "left out; grants on it were dropped."
+        )
     if choice is None:
         raise PodBundleDomainError(
             f"No installation was chosen for connector '{step.name}'. Apply the "
