@@ -1307,6 +1307,44 @@ async def test_a_surface_the_pod_has_is_kept_as_it_is(tmp_path, monkeypatch):
     assert warnings == []
 
 
+async def test_the_mailbox_an_imported_agent_was_born_with_takes_the_bundle(
+    tmp_path, monkeypatch
+):
+    """An agent is born with its email surface. When the import created the
+    agent, the bundle's surface of that name is that mailbox -- the import's
+    own -- and takes the bundle's settings rather than being kept."""
+    root = tmp_path / "bundle"
+    _write(
+        root / "surfaces" / "resend-reporter" / "resend-reporter.json",
+        {
+            "name": "resend-reporter",
+            "platform": "RESEND",
+            "default_agent_name": "Reporter",
+            "is_enabled": False,
+        },
+    )
+    mailbox = SimpleNamespace(id=uuid4(), pod_id=_UUID, agent_id=_AGENT_ID, config={})
+    surface_fake = FakeSurfaceService(existing=mailbox)
+    _patch_surface_operations(monkeypatch, surface_fake)
+    _patch_agent_lookup(monkeypatch)
+
+    async def _settled_config(uow, **kwargs):
+        return {"settled": True}
+
+    monkeypatch.setattr(f"{_SURFACES}.apply_surface_config", _settled_config)
+    created = CreatedParts(["AGENT:Reporter"])
+
+    await _applier(root, created=created).apply_step(
+        _step(StepKind.SURFACE, "resend-reporter")
+    )
+
+    assert surface_fake.created is None
+    assert surface_fake.updated is not None
+    assert surface_fake.updated["surface_id"] == mailbox.id
+    assert surface_fake.updated["is_active"] is False
+    assert created.made(StepKind.SURFACE, "resend-reporter")
+
+
 async def test_a_bundled_surface_with_no_account_given_says_so(tmp_path, monkeypatch):
     """Without an account the surface still imports, on the platform's own
     bot -- and the import says that, rather than nothing."""

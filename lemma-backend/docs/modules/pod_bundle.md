@@ -100,7 +100,9 @@ through it (`kept_parts.CreatedParts`):
   Otherwise someone made it between plan and apply: the step writes nothing
   and is marked `SKIPPED` (`POD_BUNDLE_PART_KEPT`), and a table gains nothing
   either. A function is created only (`create_function_for_import`), decided
-  in the unit of work that resolves the create.
+  in the unit of work that resolves the create. An agent is born with its email
+  surface, so when the import created the agent, the bundle's surface of that
+  name is that mailbox: the import's own, and it takes the bundle's settings.
 - A `*_GRANTS` step writes only to a function or agent the import created, and
   a `TABLE_DATA` step only to a table it created, once.
 - A replan keeps the record of what the discarded plan made, and plans those

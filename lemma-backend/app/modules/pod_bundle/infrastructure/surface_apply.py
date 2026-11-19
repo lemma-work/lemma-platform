@@ -9,7 +9,7 @@ makes it the clean cut.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from lemma_pod_bundle.apply_fields import SURFACE_APPLY_FIELDS
@@ -19,6 +19,13 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.pod_bundle.domain.errors import PodBundleDomainError
 from app.modules.pod_bundle.domain.state import PlanStep, StepKind
 from app.modules.pod_bundle.infrastructure.kept_parts import CreatedParts
+
+if TYPE_CHECKING:
+    from app.modules.agent_surfaces.contracts import (
+        AgentSurfaceEntity,
+        SurfaceCreateRequest,
+        SurfacePlatform,
+    )
 
 
 async def apply_surface(
@@ -39,7 +46,12 @@ async def apply_surface(
     platform), so import is create-once by that name: a surface the pod
     already has keeps its settings. Creation mirrors the surface create
     controller (reusing its config helper) so an imported surface behaves
-    exactly like a hand-configured one."""
+    exactly like a hand-configured one.
+
+    The one surface already there that is the import's own without being
+    recorded is the mailbox an agent is born with: when the import created
+    that agent, the bundle's surface of the same name is that mailbox, and
+    takes the bundle's settings as the agent did."""
     from app.modules.agent.contracts.provisioning import get_agent
     from app.modules.agent_surfaces.contracts import (
         AgentSurfaceEntity,
@@ -77,7 +89,20 @@ async def apply_surface(
     resolved_name = str(
         payload.get("name") or ""
     ).strip() or AgentSurfaceEntity.default_name_for(platform)
-    if await get_surface_by_name(uow, pod_id=pod_id, name=resolved_name) is not None:
+    agent_name = str(payload.get("default_agent_name") or "") or None
+    agent = (
+        await get_agent(uow, pod_id=pod_id, name=agent_name, ctx=ctx)
+        if agent_name
+        else None
+    )
+    existing = await get_surface_by_name(uow, pod_id=pod_id, name=resolved_name)
+    born_with_ours = (
+        existing is not None
+        and agent is not None
+        and existing.agent_id == agent.id
+        and created.made(StepKind.AGENT, str(agent_name))
+    )
+    if existing is not None and not born_with_ours:
         # Asked before its account is translated into a connector it would
         # never use: the import's own is done, anyone else's is kept.
         created.claim(step, resumed=resumed)
@@ -101,11 +126,17 @@ async def apply_surface(
         }
     )
 
-    agent = (
-        await get_agent(uow, pod_id=pod_id, name=request.default_agent_name, ctx=ctx)
-        if request.default_agent_name
-        else None
-    )
+    if existing is not None:
+        await _settle_born_mailbox(
+            existing,
+            request,
+            agent_id=agent.id if agent else None,
+            platform=platform,
+            uow=uow,
+            ctx=ctx,
+        )
+        created.add(StepKind.SURFACE, step.name)
+        return
     config = await build_surface_config(
         uow,
         pod_id=pod_id,
@@ -128,6 +159,49 @@ async def apply_surface(
     if not request.is_enabled:
         await update_surface(uow, surface_id=surface.id, is_active=False, ctx=ctx)
     created.add(StepKind.SURFACE, step.name)
+
+
+async def _settle_born_mailbox(
+    existing: AgentSurfaceEntity,
+    request: SurfaceCreateRequest,
+    *,
+    agent_id: UUID | None,
+    platform: SurfacePlatform,
+    uow: SqlAlchemyUnitOfWork,
+    ctx: Context,
+) -> None:
+    """Give the mailbox the import's own agent was born with the bundle's
+    settings, as a hand edit of it would."""
+    from app.modules.agent_surfaces.contracts.provisioning import (
+        apply_surface_config,
+        update_surface,
+    )
+
+    config = await apply_surface_config(
+        uow,
+        pod_id=existing.pod_id,
+        platform=platform,
+        existing=existing.config,
+        config_input=request.config,
+        ctx=ctx,
+    )
+    await update_surface(
+        uow,
+        surface_id=existing.id,
+        agent_id=agent_id,
+        update_agent_id="default_agent_name" in request.model_fields_set,
+        config=config,
+        credential_mode=(
+            request.credential_mode
+            if "credential_mode" in request.model_fields_set
+            else None
+        ),
+        pod_connector_slug=request.pod_connector,
+        is_active=(
+            request.is_enabled if "is_enabled" in request.model_fields_set else None
+        ),
+        ctx=ctx,
+    )
 
 
 async def _without_deprecated_account(
