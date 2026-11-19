@@ -46,7 +46,9 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 
 #: Defaults for a checkout. Both are overridable because the backend image does
@@ -199,8 +201,44 @@ def _run(command: list[str], *, cwd: Path | None = None) -> None:
         )
 
 
+@contextmanager
+def _one_build_at_a_time(repo_root: Path) -> Iterator[None]:
+    """Hold the source trees for one build.
+
+    ``uv build`` runs setuptools in the project's own directory, which writes
+    and deletes ``*.egg-info`` there: two builds of one checkout at once (test
+    workers, a developer's second terminal) delete each other's files and fail.
+    Windows has no ``fcntl``; its host-pack build is a single process.
+    """
+    try:
+        import fcntl
+    except ImportError:
+        yield
+        return
+    key = hashlib.sha256(str(repo_root.resolve()).encode()).hexdigest()[:16]
+    lock_path = Path(tempfile.gettempdir()) / f"lemma-runtime-bundle-{key}.lock"
+    with open(lock_path, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
 def _build_wheels(destination: Path, repo_root: Path) -> list[Path]:
     """One wheel per first-party project, built from the monorepo sources."""
+    with _one_build_at_a_time(repo_root):
+        _build_each_wheel(destination, repo_root)
+    wheels = sorted(destination.glob("*.whl"))
+    if len(wheels) != len(WHEEL_PROJECTS):
+        raise SystemExit(
+            f"expected {len(WHEEL_PROJECTS)} wheels, built {len(wheels)}: "
+            f"{[w.name for w in wheels]}"
+        )
+    return wheels
+
+
+def _build_each_wheel(destination: Path, repo_root: Path) -> None:
     for project in WHEEL_PROJECTS:
         source = repo_root / project
         if not source.is_dir():
@@ -215,13 +253,6 @@ def _build_wheels(destination: Path, repo_root: Path) -> list[Path]:
                 str(source),
             ]
         )
-    wheels = sorted(destination.glob("*.whl"))
-    if len(wheels) != len(WHEEL_PROJECTS):
-        raise SystemExit(
-            f"expected {len(WHEEL_PROJECTS)} wheels, built {len(wheels)}: "
-            f"{[w.name for w in wheels]}"
-        )
-    return wheels
 
 
 def _unpack(wheels: list[Path], site_packages: Path) -> None:
