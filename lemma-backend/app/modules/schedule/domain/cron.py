@@ -24,6 +24,8 @@ from zoneinfo import ZoneInfo, available_timezones
 
 from crontab import CronTab
 
+from app.core.helpers.time_zones import current_zone_name
+
 _CRON_FIELDS = 5
 
 # How many wall-clock occurrences may be walked past before giving up on
@@ -62,18 +64,30 @@ def resolve_zone(name: str | None) -> tzinfo:
     ``ZoneInfo("america/new_york")`` succeeds, while the same string raises on
     Linux. Validating by construction would accept on a developer's laptop a
     schedule the container then cannot arm.
+
+    A renamed zone a browser still reports (``Asia/Calcutta``) is read as its
+    current name when this host has that one (``RENAMED_ZONES``), so a
+    schedule written on a host that keeps the old name as a link still fires
+    on one whose tz data has dropped it. Read, not rewritten: the schedule
+    keeps the name it was given, because its config is what an export writes
+    out, and a stored ``Asia/Kolkata`` would be a diff nobody made against the
+    bundle that said ``Asia/Calcutta`` -- the reason absence is never
+    rewritten as ``"UTC"`` above. Resolving on every read is also what keeps a name stored long ago
+    working on whichever host reads it next.
     """
     if name is None:
         return timezone.utc
     text = name.strip()
     if not text:
         return timezone.utc
-    if text not in _known_zones():
+    known = _known_zones()
+    current = current_zone_name(text, known)
+    if current not in known:
         raise ValueError(
             f"Unknown time zone: {name!r}. Use an IANA zone name such as "
             "'Europe/Berlin' or 'America/New_York'."
         )
-    return ZoneInfo(text)
+    return ZoneInfo(current)
 
 
 def _as_utc(moment: datetime) -> datetime:

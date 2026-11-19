@@ -369,8 +369,14 @@ granted to the function (`resource_type: "connector"` — see Permissions below)
 run = pod.workflows.create_run("ticket-intake")
 if run.active_wait and run.active_wait.wait_type == "HUMAN":
     run = pod.workflows.submit_form(str(run.id), node_id=run.active_wait.node_id, inputs={"ticket_id": rid})
+# A run about one record: read as you, it becomes start.payload, as a table
+# trigger's change would. An app does the same with
+# client.workflows.runs.create(name, { about: { table, recordId } }).
+run = pod.workflows.create_run("prepare-meeting", about=("meetings_work", rid))
 conv = pod.conversations.create_for_agent("triage-agent", title="Triage")
 pod.conversations.send(str(conv.id), "Classify ticket " + rid)
+# Tell the person this function runs as (needs pod:/:channel.notify_self):
+pod.channels.notify_me("Three meetings tomorrow; briefs are ready.")
 ```
 
 ### Decisions (classify, route, triage)
@@ -398,16 +404,21 @@ result = pod.decisions.make(
     schema=QUESTIONS,
     examples=[{"evidence": "Refund my last invoice", "answers": {"category": "billing"}}],
 )
-category = result.answers["category"].value   # "billing", or None when unsure
+answer = result.answers["category"]
+unsure = answer.value is None or (answer.confidence is not None and answer.confidence < 0.7)
+category = None if unsure else answer.value     # "billing", or None for a person to look at
 ```
 
 - Each property's `description` is the question. Allowed shapes only: a string
   `enum` (or `oneOf` of `{const, description}`), an array of one with
   `uniqueItems: true`, `boolean`, or `integer` with `minimum`/`maximum` (2-11
   levels). Free text and open-ended numbers are refused (422).
-- `value` is `None` when the evidence did not support an answer — route that to
-  a person rather than guessing. `confidence` is set only by providers that
-  measure it.
+- Unsure is `value is None` **or** `confidence` set and below your threshold —
+  route that to a person rather than guessing. Check both: the default model
+  provider answers `None` when the evidence did not support an answer and never
+  sets `confidence`; the `typesafe` provider always answers its most probable
+  value and sets `confidence` to that value's probability. Pick the threshold
+  per question, by what a wrong answer costs.
 - Evidence over 64 KiB is refused, not cut: send the part that matters.
 - Examples are how answers improve: keep corrected cases in a table and pass the
   recent ones in `examples`.

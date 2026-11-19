@@ -208,13 +208,15 @@ export function declares(c: ConnectorPlan): boolean {
  *
  *  A connector with nowhere to map to cannot be declared, and whatever names
  *  its slug would be bound to nothing; a shared one with no account only
- *  waits for one, which is a warning, not a stop. */
+ *  waits for one, which is a warning, not a stop. An optional one with
+ *  nowhere to map to (SKIPPED) is left out unless one is created for it. */
 export function blockedBy(c: ConnectorPlan, pick: ConnectorPick): string | null {
     if (c.status === "CONFLICT") return c.message ?? "Its name is taken in this Lemma.";
     if (!declares(c)) return null;
     if (pick.installation === CREATE_INSTALLATION)
         return c.can_create_installation ? null : c.message;
     if (pick.installation) return null;
+    if (c.status === "SKIPPED") return null;
     return c.message ?? "Your organization has no " + c.connector + " installation.";
 }
 

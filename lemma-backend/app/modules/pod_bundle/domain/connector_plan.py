@@ -8,11 +8,16 @@ The plan offers those choices (:class:`ConnectorPlan`); the apply request makes
 them (:class:`ConnectorChoice`); :func:`resolve_connector_choices` checks one
 against the other before anything is written.
 
-Two outcomes are not alike. A SHARED connector nobody shares an account for
+Three outcomes are not alike. A SHARED connector nobody shares an account for
 imports anyway, as NEEDS_ACCOUNT: the pod works, that connector waits for an
 account, and the plan says so as a warning. A connector with no installation to
 map to cannot be declared at all, and everything naming its slug would be bound
 to nothing -- that blocks the apply until the importer picks or creates one.
+Unless the bundle marks it optional (``required: false``) and nothing runs
+through it -- only grants name it: then it is SKIPPED, left out, and the grants
+on it are dropped with a warning, so the rest imports and works without it. An
+importer may still create an installation for it, and may leave out any other
+optional connector on purpose (``ConnectorChoice.skip``).
 """
 
 from __future__ import annotations
@@ -42,6 +47,10 @@ class ConnectorPlanStatus(str, Enum):
     #: account they were not built for (a shared mailbox for a per-member one,
     #: or the reverse).
     CONFLICT = "CONFLICT"
+    #: Optional, no installation of the catalog connector in the org, and only
+    #: grants name it: imported without it, and those grants are dropped. The
+    #: importer may still create an installation (``can_create_installation``).
+    SKIPPED = "SKIPPED"
 
 
 class DeclaredConnector(BaseModel):
@@ -123,11 +132,22 @@ class ConnectorPlan(BaseModel):
         return self.mode == "SHARED"
 
     @property
+    def runs_something(self) -> bool:
+        """Whether a bundled schedule or surface runs through it: one that
+        cannot be made without it, so it is never left out."""
+        return any(
+            where.startswith(("schedules/", "surfaces/")) for where in self.used_by
+        )
+
+    @property
     def declares(self) -> bool:
-        """Whether applying the plan declares this connector at all."""
+        """Whether applying the plan declares this connector, unless the
+        importer chooses otherwise: a SKIPPED one is declared only when they
+        create an installation for it."""
         return self.status not in (
             ConnectorPlanStatus.EXISTS,
             ConnectorPlanStatus.CONFLICT,
+            ConnectorPlanStatus.SKIPPED,
         )
 
 
@@ -159,6 +179,15 @@ class ConnectorChoice(BaseModel):
             "as. Left out, the connector imports needing an account."
         ),
     )
+    skip: bool = Field(
+        default=False,
+        description=(
+            "Leave this connector out: it is not declared, and grants on it are "
+            "dropped. Only for one the bundle marks optional (`required: "
+            "false`); one the plan says SKIPPED is left out unless you choose "
+            "an installation or to create one."
+        ),
+    )
 
 
 class BlockingConnector(BaseModel):
@@ -166,11 +195,42 @@ class BlockingConnector(BaseModel):
     reason: str
 
 
+def _left_out(
+    plan: ConnectorPlan, choice: ConnectorChoice
+) -> ConnectorChoice | BlockingConnector | None:
+    """The choice to leave this connector out, why that cannot be, or ``None``
+    when it is to be declared. Asked to (``skip``), or SKIPPED by the plan
+    with nothing chosen instead."""
+    chose_something = (
+        choice.create_installation
+        or choice.auth_config_id is not None
+        or choice.share_account_id is not None
+    )
+    if choice.skip and (plan.required or plan.runs_something):
+        return BlockingConnector(
+            slug=plan.slug,
+            reason="the bundle needs this connector; it cannot be left out",
+        )
+    if choice.skip and chose_something:
+        return BlockingConnector(
+            slug=plan.slug,
+            reason="choose an installation or to leave it out, not both",
+        )
+    if choice.skip or (
+        plan.status is ConnectorPlanStatus.SKIPPED and not chose_something
+    ):
+        return ConnectorChoice(skip=True)
+    return None
+
+
 def _resolve_one(
     plan: ConnectorPlan, choice: ConnectorChoice
 ) -> ConnectorChoice | BlockingConnector:
     if plan.status is ConnectorPlanStatus.CONFLICT:
         return BlockingConnector(slug=plan.slug, reason=plan.message or "conflict")
+    left_out = _left_out(plan, choice)
+    if left_out is not None:
+        return left_out
     if choice.create_installation and choice.auth_config_id is not None:
         return BlockingConnector(
             slug=plan.slug,
@@ -226,16 +286,21 @@ def _resolve_one(
     )
 
 
+def skipped_connectors(choices: Mapping[str, ConnectorChoice]) -> frozenset[str]:
+    """The slugs the resolved choices leave out."""
+    return frozenset(slug for slug, choice in choices.items() if choice.skip)
+
+
 def resolve_connector_choices(
     plans: list[ConnectorPlan], requested: Mapping[str, ConnectorChoice]
 ) -> tuple[dict[str, ConnectorChoice], list[BlockingConnector]]:
     """The importer's choices made whole, or what still blocks the apply.
 
     Every connector the plan declares comes back with an installation (chosen,
-    defaulted, or to be created) and the account it is to share, if any. A
-    choice for a slug the bundle does not declare is refused rather than
-    ignored: it is a typo, and ignoring it would import something the person
-    did not mean.
+    defaulted, or to be created) and the account it is to share, if any; one
+    left out comes back with ``skip``. A choice for a slug the bundle does not
+    declare is refused rather than ignored: it is a typo, and ignoring it would
+    import something the person did not mean.
     """
     by_slug = {plan.slug: plan for plan in plans}
     blocking = [
@@ -264,4 +329,5 @@ __all__ = [
     "InstallationOption",
     "declared_conflict",
     "resolve_connector_choices",
+    "skipped_connectors",
 ]

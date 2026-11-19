@@ -109,6 +109,39 @@ class WorkflowCreateRequest(BaseModel):
     _run_title = field_validator("run_title")(_checked_run_title)
 
 
+class WorkflowRunAbout(BaseModel):
+    """One record a run is about: a row of a table in the workflow's pod."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    table: str = Field(min_length=1, max_length=255, description="The table's name.")
+    record_id: str = Field(
+        min_length=1, max_length=255, description="The record's primary key."
+    )
+
+
+class WorkflowRunCreateRequest(BaseModel):
+    """What a person may give a run they start: at most the record it is about.
+
+    Not free-form input, which a run never takes (inputs arrive through FORM
+    nodes): the record is read by the platform, as the person starting the
+    run, and handed to the run as ``start.payload`` -- the shape a table
+    change gives it -- so one workflow serves both a table trigger and a
+    button about one row.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    about: WorkflowRunAbout | None = Field(
+        default=None,
+        description=(
+            "The record this run is about. It is read as you: a record you "
+            "cannot read is a 404. Its fields become `start.payload`, and "
+            "`start.metadata` carries `table_name` and `record_id`."
+        ),
+    )
+
+
 class WorkflowUpdateRequest(BaseModel):
     description: str | None = Field(
         default=None,

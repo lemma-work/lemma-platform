@@ -11,6 +11,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | Operation | Method | Path | Summary |
 | --- | --- | --- | --- |
 | `agent.notice.send` | POST | `/pods/{pod_id}/members/{member}/notices` | Send Notice |
+| `agent.notice.send_self` | POST | `/pods/{pod_id}/members/me/notices` | Send Self Notice |
 | `agent.surface.available` | GET | `/pods/{pod_id}/available-surfaces` | List Available Surfaces |
 | `agent.surface.channels` | GET | `/pods/{pod_id}/surfaces/{surface_name}/channels` | List Surface Channels |
 | `agent.surface.create` | POST | `/pods/{pod_id}/surfaces` | Create Surface |
