@@ -220,14 +220,24 @@ class BundleSourceKind(str, Enum):
 #: separators, so a name cannot address anything outside that directory.
 TEMPLATE_NAME_PATTERN = r"^[a-z0-9][a-z0-9-]{0,62}$"
 
+#: A folder inside a repository, e.g. ``install/mail``: relative, ordinary
+#: characters only, and no segment made of dots alone, so neither ``.`` nor
+#: ``..`` can address anything outside the repository. Written without
+#: look-around, which pydantic's regex engine does not support.
+_PATH_SEGMENT = r"[A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*"
+BUNDLE_PATH_PATTERN = rf"^{_PATH_SEGMENT}(?:/{_PATH_SEGMENT})*$"
+BUNDLE_PATH_MAX_LENGTH = 255
+
 
 class BundleSource(BaseModel):
     kind: BundleSourceKind
     # For kind=URL: the signed lemma download URL the bundle was imported from
-    # (kept for the recipe/provenance). For kind=GITHUB: repo_url is set instead.
+    # (kept for the recipe/provenance). For kind=GITHUB: repo_url is set instead,
+    # and `path` when the bundle is a folder inside the repository.
     # For kind=TEMPLATE: `template:<name>`, which is what the recipe records.
     url: str | None = None
     repo_url: str | None = None
+    path: str | None = None
     template: str | None = None
     ref: str | None = None
     bundle_filename: str | None = None

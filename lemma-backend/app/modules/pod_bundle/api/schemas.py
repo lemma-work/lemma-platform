@@ -13,6 +13,8 @@ from app.modules.pod_bundle.domain.connector_plan import (
     ConnectorPlan,
 )
 from app.modules.pod_bundle.domain.state import (
+    BUNDLE_PATH_MAX_LENGTH,
+    BUNDLE_PATH_PATTERN,
     TEMPLATE_NAME_PATTERN,
     BundleSourceKind,
     ExportState,
@@ -275,6 +277,20 @@ class ImportStartRequest(BaseModel):
     ref: str | None = Field(
         default=None, description="GITHUB branch/tag/sha (optional)."
     )
+    path: str | None = Field(
+        default=None,
+        max_length=BUNDLE_PATH_MAX_LENGTH,
+        pattern=BUNDLE_PATH_PATTERN,
+        description=(
+            "For GITHUB: the folder inside the repository that holds the bundle "
+            "(its `pod.json`), e.g. 'install/mail', for a repository that holds "
+            "several. Relative, with no leading '/' and no '.' or '..'. The job "
+            "fails before planning when the folder is not there "
+            "(GITHUB_PATH_NOT_FOUND) or holds no `pod.json` "
+            "(GITHUB_PATH_NOT_A_BUNDLE). Omit for the repository itself. Refused "
+            "with any other kind."
+        ),
+    )
     account_id: UUID | None = Field(
         default=None,
         deprecated=True,
@@ -295,7 +311,10 @@ class ImportStartRequest(BaseModel):
     @model_validator(mode="after")
     def _source_fields_match_kind(self) -> "ImportStartRequest":
         """A template is named, never located, so the fields that locate a
-        bundle are refused beside it rather than ignored."""
+        bundle are refused beside it rather than ignored. A folder is a place
+        in a repository, so only a GITHUB import takes one."""
+        if self.path is not None and self.kind is not BundleSourceKind.GITHUB:
+            raise ValueError("path is only accepted with kind=GITHUB.")
         if self.kind is not BundleSourceKind.TEMPLATE:
             if self.template is not None:
                 raise ValueError("template is only accepted with kind=TEMPLATE.")
