@@ -6,22 +6,7 @@ import { isLocalDeployment } from "@/site/config";
 import { captureEvent } from "@/site/analytics/client";
 import { WorkspaceLoading } from "@/shell/workspace-loading";
 import { NotYours } from "@/shell/not-yours";
-import { createLemma, freshFace } from "./data";
 import { arrivalStep } from "./arrival-step";
-
-/** The organization's own Lemma, made with it: open to everyone in it, and
- *  joined by everyone who comes later, as a chat app's first channel is. So
- *  nobody lands in an empty container -- they land in a Lemma, on its
- *  welcome. Answers its id, or null when it could not be made: the
- *  organization exists either way, and the Lemmas page offers to make one. */
-export async function firstLemma(orgId: string, name: string): Promise<string | null> {
-    try {
-        const made = await createLemma({ orgId, name, purpose: "", face: freshFace([]), reach: "org", people: [], everyone: true });
-        return made.podId;
-    } catch {
-        return null;
-    }
-}
 
 /** The frame's way in for somebody who belongs nowhere yet.
  *
@@ -96,7 +81,10 @@ export function FrameArrival({ linkedPodId, asksWork, asksName, onEntered }: {
             }}
             asksWork={asksWork}
             asksName={asksName}
-            onEntered={(landing) => onEntered(linkedPodId && !landing.startNew ? { ...landing, podId: linkedPodId } : landing)}
+            /* With invitations accepted, the link they opened is still where
+               they land. Turned down for a place of their own, it is not: that
+               would put the door they just declined back in front of them. */
+            onEntered={(landing) => onEntered(linkedPodId && !ownInstead && !landing.startNew ? { ...landing, podId: linkedPodId } : landing)}
         />
     );
 }

@@ -2,13 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { source, type FirstWorkspace, type FirstWorkspaceWanted, type Org } from "@/data";
+import { source, type FirstWorkspace, type Org } from "@/data";
 import { captureEvent } from "@/site/analytics/client";
 import { ArrivalRow, ArrivalShell, LEMMA_IS, LemmaMark, OrgMark } from "./shell";
 import { LemmasStep } from "./lemmas-step";
 import { PluginsStep } from "./plugins-step";
 import { WorkStep } from "./work-step";
 import { nextStep, stepsFor, type ArrivalStepId } from "./steps";
+import { firstWorkspaceWanted } from "./first-workspace";
 import type { WorkAnswer } from "./work";
 
 /** Where the way in left somebody. `startNew` asks for the New Lemma dialog
@@ -134,11 +135,7 @@ function WorkspaceStep({ start, made, onMade, onContinue }: {
            first: it lets in only the organization open to their domain, and
            puts them in its shared Lemma in the same request, as a newcomer. */
         mutationFn: async (wanted: { own?: boolean }) => {
-            const asked: FirstWorkspaceWanted = {
-                ...(wanted.own ? { ownOrganization: true } : {}),
-                ...(start.local ? { team: false } : {}),
-            };
-            return source.ensureFirstWorkspace(asked);
+            return source.ensureFirstWorkspace(firstWorkspaceWanted({ own: wanted.own, local: start.local }));
         },
         onSuccess: onMade,
     });

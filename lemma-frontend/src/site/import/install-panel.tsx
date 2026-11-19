@@ -19,6 +19,8 @@ import { source as data } from "@/data";
 import { connectLinkLabel, failureOf } from "@/data/pod-connectors";
 import { Mark } from "@/shell/mark";
 import { ArrivalRow, ArrivalShell, LEMMA_IS, LemmaMark, OrgMark } from "@/arrival/shell";
+import { firstWorkspaceWanted } from "@/arrival/first-workspace";
+import { isLocalDeployment } from "@/site/config";
 import { forgetInstall, markInstallArrival, rememberInstall } from "./pending-install";
 import type { Pod } from "@/data/types";
 import { captureEvent } from "@/site/analytics/client";
@@ -130,7 +132,7 @@ function FirstWorkspace({ title, onMade }: { title: string; onMade: () => void }
         setBusy(true);
         setError("");
         try {
-            await data.ensureFirstWorkspace();
+            await data.ensureFirstWorkspace(firstWorkspaceWanted({ local: isLocalDeployment() }));
             onMade();
         } catch (e) {
             setError(

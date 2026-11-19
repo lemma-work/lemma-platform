@@ -9,7 +9,6 @@ import { takeDeletionNote } from "@/session/account-deletion";
 import { source as data } from "@/data";
 import { afterNewOrganization, newOrganizationLink } from "@/auth/redirects";
 import type { ActionProps } from "./action-host";
-import { firstLemma } from "@/outcomes/arrival";
 import { captureEvent } from "@/site/analytics/client";
 export function Actions(props: ActionProps) {
     const session = useSession();
@@ -244,7 +243,9 @@ function CreateOrganization() {
         try {
             const org = await data.createOrg({ name: name.trim() });
             /* Every new organization opens in a Lemma everyone in it shares,
-               named after it, whichever page made it. */
+               named after it, whichever page made it. Loaded here, on the one
+               action that needs it, not by every page this host draws. */
+            const { firstLemma } = await import("@/outcomes/first-lemma");
             await firstLemma(org.id, org.name);
             window.location.assign(
                 afterNewOrganization(org.id, window.location.search),

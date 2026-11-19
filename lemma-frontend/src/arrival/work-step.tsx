@@ -98,16 +98,25 @@ export function WorkStep({ askName, onDone }: { askName: boolean; onDone: (answe
             )}
             {save.isError && (
                 <p className="ar__problem" role="alert">
-                    That didn’t save. {save.error instanceof Error ? save.error.message : ""} Try again.
+                    That didn’t save. {save.error instanceof Error ? save.error.message : ""} Try again, or go on without saving and you’ll be asked another time.
                 </p>
             )}
             <div className="ar__acts">
                 <button type="submit" className="ar__btn ar__btn--primary" disabled={!said || save.isPending}>
                     {save.isPending && said ? "Saving…" : "Continue"}
                 </button>
-                <button type="button" className="ar__quiet" disabled={save.isPending} onClick={() => save.mutate({ jobs: [], other: null })}>
-                    Skip
-                </button>
+                {/* The question is optional. A save that keeps failing must not
+                    stand between somebody and the Lemma behind it, so after a
+                    failure the quiet way out goes on without saving. */}
+                {save.isError ? (
+                    <button type="button" className="ar__quiet" onClick={() => onDone(answer)}>
+                        Go on without saving
+                    </button>
+                ) : (
+                    <button type="button" className="ar__quiet" disabled={save.isPending} onClick={() => save.mutate({ jobs: [], other: null })}>
+                        Skip
+                    </button>
+                )}
             </div>
         </form>
     );

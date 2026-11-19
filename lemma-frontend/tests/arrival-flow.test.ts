@@ -75,3 +75,13 @@ test("somebody who missed the question is asked it on Home, never over a link th
         assert.equal(asksWorkOn(view), false, view);
     }
 });
+
+test("every door asks the server for a first workspace the same way", async () => {
+    const { firstWorkspaceWanted } = await import("../src/arrival/first-workspace.ts");
+    assert.deepEqual(firstWorkspaceWanted({ local: false }), {});
+    assert.deepEqual(firstWorkspaceWanted({ own: true, local: false }), { ownOrganization: true });
+    // On a local install nobody else can reach the server yet, so it is never
+    // opened to a whole email domain -- from the web or a plugin's page.
+    assert.deepEqual(firstWorkspaceWanted({ local: true }), { team: false });
+    assert.deepEqual(firstWorkspaceWanted({ own: true, local: true }), { ownOrganization: true, team: false });
+});

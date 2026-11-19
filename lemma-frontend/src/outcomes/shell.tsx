@@ -37,7 +37,8 @@ import {
 import { useNeedsYou, usePodActivity, usePodDetails, useRecents } from "./data";
 import { looksNamed, named, slug, unnamed, type Names } from "./named-address";
 import { appName as nameOfApp, appsOf } from "./lemma-apps";
-import { FrameArrival, firstLemma } from "./arrival";
+import { FrameArrival } from "./arrival";
+import { firstLemma } from "./first-lemma";
 import { ArrivalFlow, type ArrivalStart, type Landing } from "@/arrival/flow";
 import { asksWorkOn, stillAsksWork } from "@/arrival/work";
 import { NewLemmaDialog } from "./new-lemma";

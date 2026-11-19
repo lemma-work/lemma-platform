@@ -49,7 +49,9 @@ export function LemmasStep({ orgId, orgName, invitedPodId, onContinue, onStartNe
         }
     };
 
-    const reading = mine.isPending || joinable.isPending;
+    /* In flight, not merely pending: a read that is switched off (the sample
+       workspace has no joinable list) is pending for ever. */
+    const reading = mine.isLoading || joinable.isLoading;
     return (
         <>
             <h1 className="ar__t">You’re in {orgName}</h1>
