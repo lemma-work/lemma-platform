@@ -14,9 +14,9 @@ only a promise marked `covered` with no test is.
 | `covered` | 180 |
 | `gap` | 4 |
 | `manual` | 35 |
-| `planned` | 36 |
+| `planned` | 37 |
 | `withdrawn` | 2 |
-| **total** | **257** |
+| **total** | **258** |
 
 Scenario tests declaring a promise: 461.
 
@@ -233,6 +233,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-PACK-012` Applying an import either finishes or can be safely retried | `covered` | `test_a_bundle_round_trips` |
 | `PS-PACK-013` A hostile bundle cannot damage the platform | `covered` | `test_a_hostile_bundle_cannot_reach_outside_the_pod`, `test_a_bundle_that_expands_enormously_is_refused` |
 | `PS-PACK-014` An imported pod works without further wiring | `covered` | `test_an_imported_function_actually_runs` |
+| `PS-PACK-015` An import keeps what a pod already has | `planned` | — |
 | `PS-PACK-020` A person publishes a pod so others can install it | `covered` | `test_an_expired_publication_says_so`, `test_publishing_needs_an_account` |
 | `PS-PACK-021` A shared bundle can be viewed before it is installed | `covered` | `test_a_stranger_can_read_a_shared_bundle`, `test_reading_a_bundle_grants_nothing_else`, `test_a_forged_link_is_refused` |
 | `PS-PACK-030` A person builds an app for a pod | `covered` | `test_an_app_can_be_changed`, `test_a_bad_bundle_is_refused`, `test_an_earlier_deployment_can_be_restored`, `test_an_app_is_created`, `test_a_duplicate_app_name_is_refused`, `test_deleting_an_app_removes_it`, `test_promoting_a_missing_result_is_refused` |

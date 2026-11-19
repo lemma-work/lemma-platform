@@ -4,17 +4,17 @@
 it owns, its plan and its held setup chat, all in one transaction. It plans the
 template's import and applies it straight away, without the confirmation an
 uploaded bundle waits for: the person chose a template that ships with this
-server, for a pod that has nothing in it yet to overwrite. Then, in the item's
-completion, it starts the setup chat's first turn, so the agent never works in
-a pod whose tables are half there.
+server, and an import only adds to a pod -- whatever is already there is kept.
+Then, in the item's completion, it starts the setup chat's first turn, so the
+agent never works in a pod whose tables are half there.
 
 The turn starts however the import ends. Applied, the agent finds the
 template's tables, skill and schedules; failed or stopped short, it finds what
 landed and says so. A plan that would need the person after all -- variables
-to fill, or a destructive step -- is left waiting for them as any import is,
-and the agent starts beside it. If the item dies, its ``on_dead`` hook ends the
-import and starts the turn in the same commit: no setup chat is left waiting on
-a job that will not come back.
+to fill -- is left waiting for them as any import is, and the agent starts
+beside it. If the item dies, its ``on_dead`` hook ends the import and starts
+the turn in the same commit: no setup chat is left waiting on a job that will
+not come back.
 """
 
 from __future__ import annotations
