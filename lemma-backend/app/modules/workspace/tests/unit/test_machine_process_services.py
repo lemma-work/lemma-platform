@@ -7,6 +7,7 @@ runtime through the one method that builds it.
 
 from __future__ import annotations
 
+import asyncio
 from uuid import UUID, uuid4
 
 import pytest
@@ -26,6 +27,8 @@ MACHINE = uuid4()
 class _Registry:
     def __init__(self) -> None:
         self.records: dict[str, ProcessRecord] = {}
+        # The start claim, as Redis's SET NX holds it: one holder per name.
+        self.claims: dict[str, str] = {}
 
     async def put(self, machine_id: UUID, record: ProcessRecord) -> None:
         self.records[record.process_id] = record
@@ -37,12 +40,26 @@ class _Registry:
         for process_id in process_ids:
             self.records.pop(process_id, None)
 
+    async def claim_start(self, machine_id: UUID, name: str, token: str) -> bool:
+        if name in self.claims:
+            return False
+        self.claims[name] = token
+        return True
+
+    async def release_start(self, machine_id: UUID, name: str, token: str) -> None:
+        if self.claims.get(name) == token:
+            del self.claims[name]
+
 
 class _Runtime:
     def __init__(self) -> None:
         self.states: dict[UUID, ProcessState] = {}
+        #: Set to make a start wait, the way a real start waits on its machine.
+        self.gate: asyncio.Event | None = None
 
     async def start_process(self, kind, machine_id, *, operation_id, **_) -> None:
+        if self.gate is not None:
+            await self.gate.wait()
         self.states[operation_id] = ProcessState.RUNNING
 
     async def list_processes(self, kind, machine_id) -> tuple[LocalProcessRef, ...]:
@@ -68,6 +85,9 @@ class _Services:
 
     async def stopped(self, machine_id: UUID, process_id: str) -> None:
         self.stopped_ids.append(process_id)
+
+    async def others_kept(self, machine_id: UUID, name: str) -> int:
+        return len([kept for kept in self.recorded if kept != name])
 
 
 class _Processes(MachineProcesses):
@@ -111,3 +131,54 @@ async def test_a_plain_process_is_never_held_to_a_name():
     plain = StartProcess(command="sleep 60", cwd="/home/user/lemma")
     await processes.start_process(MACHINE, plain, base_env={})
     await processes.start_process(MACHINE, plain, base_env={})
+
+
+async def test_two_concurrent_starts_of_one_name_run_one_service():
+    """Each start used to find none running and both ran: the check and the
+    record were two steps with the start between them."""
+    processes = _Processes()
+    processes.runtime.gate = asyncio.Event()
+
+    first = asyncio.create_task(
+        processes.start_process(MACHINE, _service(), base_env={})
+    )
+    await asyncio.sleep(0)
+    with pytest.raises(MachineConflict) as refused:
+        await processes.start_process(MACHINE, _service(), base_env={})
+    processes.runtime.gate.set()
+    await first
+
+    assert refused.value.code == "MACHINE_SERVICE_RUNNING"
+    assert len(processes.runtime.states) == 1
+
+
+async def test_the_name_is_free_again_once_a_start_fails():
+    processes = _Processes()
+
+    async def refuse(kind, machine_id, **_):
+        raise OSError("the machine did not answer")
+
+    processes.runtime.start_process = refuse  # type: ignore[method-assign]
+    with pytest.raises(OSError):
+        await processes.start_process(MACHINE, _service(), base_env={})
+
+    del processes.runtime.start_process
+    started = await processes.start_process(MACHINE, _service(), base_env={})
+    assert started.service == "web"
+
+
+async def test_a_service_past_the_limit_is_refused_not_dropped():
+    from app.modules.workspace.services.machine_services import MAX_SERVICES
+
+    processes = _Processes()
+    for index in range(MAX_SERVICES):
+        processes.store.recorded[f"svc-{index}"] = {}
+
+    with pytest.raises(MachineConflict) as refused:
+        await processes.start_process(MACHINE, _service("one-too-many"), base_env={})
+
+    assert refused.value.code == "MACHINE_SERVICE_LIMIT"
+    assert processes.runtime.states == {}
+    # A name already kept is a restart of it, not a new one.
+    again = await processes.start_process(MACHINE, _service("svc-0"), base_env={})
+    assert again.service == "svc-0"

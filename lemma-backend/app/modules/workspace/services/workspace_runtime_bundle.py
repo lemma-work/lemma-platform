@@ -45,6 +45,10 @@ from app.modules.workspace.services.browser_proxy import (
     browser_proxy_for,
     decision_bytes,
 )
+from app.modules.workspace.services.browser_stream import (
+    DISPLAY_DECISION_PATH,
+    display_decision,
+)
 from app.modules.workspace.process_output import TERMINAL_PROCESS_STATES
 from app.modules.workspace.providers.base import (
     ProviderFailed,
@@ -501,7 +505,8 @@ class WorkspaceRuntimeBundleMixin:
         *,
         wait_seconds: float | None = None,
     ) -> None:
-        """Tell this sandbox whether its browser goes through a proxy.
+        """Tell this sandbox whether its browser goes through a proxy, and
+        whether a display it creates may be dense.
 
         Here, beside the runtime bundle, because this is the one call that
         happens on every session -- and the viewer path is not enough on its
@@ -526,13 +531,29 @@ class WorkspaceRuntimeBundleMixin:
         budget = _INSTALL_BUDGET_SECONDS
         if wait_seconds is not None:
             budget = min(budget, wait_seconds)
+        client = self._get_manager_client()
+        deadline_at = _deadline(budget)
         try:
+            # The display's density decision rides along, for the same reason
+            # the proxy does: the display is created by the agent's first
+            # browser command as often as by a viewer, and density is decided
+            # once, when it is (`lemma-ensure-display`). Delivered only on the
+            # view path, a person opening the screen changed it under the
+            # agent's running Chrome.
             await asyncio.wait_for(
-                self._get_manager_client().write_file(
-                    user_id,
-                    BROWSER_PROXY_DECISION_PATH,
-                    decision_bytes(proxy),
-                    deadline_at=_deadline(budget),
+                asyncio.gather(
+                    client.write_file(
+                        user_id,
+                        BROWSER_PROXY_DECISION_PATH,
+                        decision_bytes(proxy),
+                        deadline_at=deadline_at,
+                    ),
+                    client.write_file(
+                        user_id,
+                        DISPLAY_DECISION_PATH,
+                        display_decision(),
+                        deadline_at=deadline_at,
+                    ),
                 ),
                 timeout=budget,
             )

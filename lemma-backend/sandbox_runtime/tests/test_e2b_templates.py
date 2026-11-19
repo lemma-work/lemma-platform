@@ -288,3 +288,24 @@ def test_the_docker_template_is_ready_on_docker_info_with_no_start_command(
     assert template.ready_commands == [build_templates.DOCKER_READY_COMMAND]
     assert "docker info" in build_templates.DOCKER_READY_COMMAND
     assert template.start_commands == []
+
+
+def test_the_streamer_has_one_go_on_both_fabrics() -> None:
+    """The template downloads Go; the Docker images build in a pinned `golang`
+    image. Two releases meant two compilers for one binary."""
+    module = build_templates
+    root = Path(__file__).resolve().parents[2] / "sandbox-images"
+    major_minor = ".".join(module.GO_VERSION.split(".")[:2])
+    for dockerfile in ("Dockerfile.workspace", "streamer/Dockerfile"):
+        pinned = re.search(r"golang:(\d+\.\d+)-", (root / dockerfile).read_text())
+        assert pinned is not None, dockerfile
+        assert pinned.group(1) == major_minor, (dockerfile, module.GO_VERSION)
+
+
+def test_the_streamers_build_packages_leave_with_the_compiler() -> None:
+    module = build_templates
+    command = module._build_streamer_command()
+    for package in module.STREAMER_BUILD_PACKAGES:
+        assert package in command.split("apt-mark auto", 1)[1]
+    assert "apt-get autoremove" in command
+    assert "/usr/local/go" in command

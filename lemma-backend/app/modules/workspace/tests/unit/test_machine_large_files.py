@@ -14,8 +14,13 @@ from app.modules.workspace.api.controllers import (
     machine_files_controller as controller,
 )
 from app.modules.workspace.domain.machine_errors import MachineConflict
+from app.modules.workspace.providers.runtime_errors import (
+    WorkspaceRuntimeFileNotFound,
+)
 from app.modules.workspace.services import machine_file_sync
+from sandbox_runtime.errors import SandboxNotFound, SandboxPathNotFound
 from sandbox_runtime.paths import WORKSPACE_ROOT
+from sandbox_runtime.protocol import FileKind
 
 CEILING = controller._MAX_CONTENT_BYTES
 
@@ -138,3 +143,41 @@ async def test_a_file_that_grows_past_the_cap_stops_streaming_at_it() -> None:
         )
 
     assert machine.read_bytes <= 65 * 1024
+
+
+class _Stat:
+    def __init__(self, answer: BaseException | str) -> None:
+        self.answer = answer
+
+    async def stat_file(self, machine_id, path, *, deadline_at):
+        if isinstance(self.answer, BaseException):
+            raise self.answer
+        return SimpleNamespace(kind=self.answer, size_bytes=0)
+
+
+@pytest.mark.parametrize(
+    ("answer", "lands_at"),
+    [
+        (SandboxPathNotFound("no such path"), "/w/new.txt"),
+        (WorkspaceRuntimeFileNotFound("no such path"), "/w/new.txt"),
+        (FileKind.DIRECTORY, "/w/new.txt/report.csv"),
+        (FileKind.FILE, "/w/new.txt"),
+    ],
+)
+async def test_a_file_from_the_pod_lands_at_the_path_or_inside_a_directory(
+    answer, lands_at
+) -> None:
+    target = await machine_file_sync._landing(
+        _Stat(answer), uuid4(), "/w/new.txt", "report.csv"
+    )
+
+    assert target == lands_at
+
+
+async def test_a_machine_that_is_not_there_is_not_read_as_an_absent_path() -> None:
+    # Its class name says "NotFound" too; the old name sniff took it for an
+    # absent path and wrote on regardless.
+    with pytest.raises(SandboxNotFound):
+        await machine_file_sync._landing(
+            _Stat(SandboxNotFound("gone")), uuid4(), "/w/new.txt", "report.csv"
+        )

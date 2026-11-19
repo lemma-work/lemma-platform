@@ -16,6 +16,7 @@ as it prints it, and `exec` exits with the command's own exit code.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import sys
 from pathlib import Path
@@ -447,30 +448,54 @@ def kill_process(
 # -- cp -------------------------------------------------------------------------
 
 
+#: A machine's name, as the API's ref grammar has it: no colon, no slash.
+_MACHINE_NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?")
+
+
 def split_machine_path(spec: str) -> tuple[str, str] | None:
     """``(ref, path)`` for ``<ref>:<path>``, or None for a local path.
 
-    A ref may itself hold colons (``pod:<pod>:<name>``), so the split is at the
-    first ``:/`` after the ref's kind -- an absolute path -- and otherwise at
-    the last colon, which leaves the path relative to the machine's ``~/lemma``.
+    Split by the ref grammar, not at a colon: a ref may hold colons
+    (``pod:<pod>:<name>``) and so may a path. ``me``, ``mine:<name>`` and a
+    machine id end at a fixed colon, since a name never holds one. After
+    ``pod:`` the older ``<pod>/<name>`` ends at the colon after it; otherwise
+    ``pod:<a>:<b>:<path>`` is the pod-named form when ``<b>`` is a machine
+    name, and ``pod:<a>:<path>`` -- the pod in context -- when it is not, which
+    an absolute path never is. So a relative path with a colon in it after
+    ``pod:<name>`` must be written absolute, or with the pod named.
     """
-    if spec.startswith("me:"):
-        return "me", spec[len("me:") :]
-    if spec.startswith(("pod:", "mine:")):
-        kind_end = spec.index(":") + 1
-        anchor = spec.find(":/", kind_end)
-        if anchor != -1:
-            return spec[:anchor], spec[anchor + 1 :]
-        ref, _, path = spec.rpartition(":")
-        if len(ref) < kind_end:
-            raise typer.BadParameter(
-                f"{spec!r} names a machine but no path: write {spec}:<path>"
-            )
+    if spec.startswith(("me:", "default:")):
+        ref, _, path = spec.partition(":")
         return ref, path
+    if spec.startswith("mine:"):
+        name, sep, path = spec[len("mine:") :].partition(":")
+        if not sep:
+            raise _no_path(spec)
+        return f"mine:{name}", path
+    if spec.startswith("pod:"):
+        return _split_pod_path(spec)
     head, sep, path = spec.partition(":")
     if sep and _is_uuid(head):
         return head, path
     return None
+
+
+def _split_pod_path(spec: str) -> tuple[str, str]:
+    first, sep, rest = spec[len("pod:") :].partition(":")
+    if not sep:
+        raise _no_path(spec)
+    if "/" in first:
+        return f"pod:{first}", rest
+    second, sep, path = rest.partition(":")
+    if sep and _MACHINE_NAME.fullmatch(second):
+        return f"pod:{first}:{second}", path
+    return f"pod:{first}", rest
+
+
+def _no_path(spec: str) -> typer.BadParameter:
+    return typer.BadParameter(
+        f"{spec!r} names a machine but no path: write {spec}:<path>"
+    )
 
 
 def _is_uuid(value: str) -> bool:

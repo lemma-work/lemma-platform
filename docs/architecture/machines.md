@@ -33,7 +33,11 @@ queue.
 
 Access is cumulative: **status** (see that it exists and how it is), **use**
 (processes, files, previews, the browser) and **manage** (resize, reset,
-delete). Two rules decide it.
+delete). The browser means watching it as well as driving it: the screen shows
+whatever is signed in there, so the view socket (and the TURN credentials it
+hands out) needs **use** in either mode. **Status** sees only whether the
+browser is running and at what size, not who is watching it or who holds the
+screen's size. Two rules decide it.
 
 **`me` is the person and every run they own.** A person's default machine is
 theirs to manage, and every agent run they own uses it — a chat, a schedule, a
@@ -46,6 +50,12 @@ third line (`agent/contracts/run_audience.py`). Nobody else reaches `me`: not a
 function, not an app's page, not another person. An app's page acts as its
 viewer inside its own pod, and a person's own machine is not a pod resource.
 
+A run reading what people outside the pod wrote — a group's strangers, or a
+row a contact wrote that started a schedule — is held on `me` exactly as on a
+pod machine: using it waits for its person's approval
+(`core/authorization/outside_text_gate.py`, asked of the run's own context by
+`infrastructure/machine_facts.py`). Seeing that it is there does not.
+
 **A pod machine is a pod resource**, authorized by the core `Authorizer`
 like every other (`ResourceType.MACHINE`, `machine.use`, `machine.manage`):
 
@@ -55,16 +65,22 @@ like every other (`ResourceType.MACHINE`, `machine.use`, `machine.manage`):
   they act for (`workload_authority`), so a grant never lifts a run above its
   person;
 - the pod's default agent as the person it acts for;
-- an app's page as its viewer, in its own pod only, and never past use.
+- an app's page as its viewer, in its own pod only, and never past use —
+  and never a terminal: it cannot start a process, read its output, type into
+  it or stop it (`APP_ROUTES` leaves those out, and the stream socket refuses
+  it), because its script is the app author's.
 
 Grants are for agents and functions; people need none. Setting an agent's
 `machine: pod:<name>` — in the editor or in a bundle — confers that agent the
 `machine.use` grant, bounded like any conferral by what the person saving it
 may do themselves, so naming a machine and granting it cannot drift apart. A
 tool call may still name any machine the run may use (`list_machines` shows
-them). Keeping a machine from somebody — a verifier the builder must not
-reach — is not granting it to them. Creating, changing, deleting and granting
-pod machines are a person's own acts, never an app's or an agent's.
+them). Keeping a machine from an agent — a verifier the builder agent must not
+reach — is not granting it to that agent. That isolates agents only: every
+editor holds `machine.use` on every pod machine by role, so any editor, and
+the pod's default agent acting for one, reaches the verifier too. Creating,
+changing, deleting and granting pod machines are a person's own acts, never an
+app's or an agent's.
 
 A connected machine is its owner's. Shared into a pod, it is that pod's
 resource as above, but never more than usable by anybody else, and never by an
@@ -72,11 +88,24 @@ app.
 
 **A pod machine is one trust domain.** Every process on it runs as one Linux
 user, so anything running there can read what the others hold: their
-environment, their checkouts, their credentials. That is why the tokens Lemma
-places on a pod machine are scoped to the workload (its grant intersected with
-its person) and short-lived: the most a co-tenant can take is that run's own
-narrowed authority. Work that must not share with another run belongs on a
-machine of its own.
+environment, their checkouts, their credentials, the browser's profile and
+every login in it. Plainly: **anyone with `machine.use` on a pod machine can
+see and use everything on it** — every process and its environment, every
+terminal (anyone with use can stream another person's terminal and type into
+it), every checkout, and the browser's signed-in sessions. An app's page
+cannot open a terminal there, but it can still write files that the
+machine's processes go on to run.
+
+What Lemma keeps from co-tenants is the reach of the tokens it places there.
+Every one is short-lived (the access-token lifetime) and pinned to the pod:
+an agent's or function's carries its own delegation (its grant intersected
+with its person); a person's own process — the CLI, the SDK, an Environments
+terminal — gets the token the pod's default agent would carry for them, which
+reaches what they may do in that pod and nothing in any other pod or the
+organization, and has destructive actions approved first like any delegated
+token (`services/machine_process_credentials.py`). On `me`, where nobody else
+runs anything, a person's process keeps their own token. Work that must not
+share with another run, or person, belongs on a machine of its own.
 
 ```mermaid
 flowchart TD
@@ -111,7 +140,11 @@ flowchart TD
   processes API), not stopped at run end, and restarted when the machine
   resumes. Its definition is kept in the database with the caller's variables
   encrypted and the claims its token was minted for, so the restart gets a
-  fresh token with the same reach.
+  fresh token with the same reach -- once whoever started it is decided again
+  to still have use of the machine; one whose starter has not is forgotten.
+  A machine's services go with it when it is deleted, made again under its
+  name, or its home is reset, and it keeps at most 64: the next name is
+  refused (`MACHINE_SERVICE_LIMIT`).
 - Repositories are kept as mirrors and checked out as worktrees at any ref, so
   concurrent runs on one repository do not clone it again or share a tree.
 - A **disk janitor**, a background job, watches the fixed-size disk: from
@@ -121,7 +154,9 @@ flowchart TD
   a protected path, a running service or a live run.
 - A machine with a run slot taken is busy, and the idle sweep leaves it alone.
   A running service keeps it busy only while it writes output within
-  `MACHINE_SERVICE_IDLE_SECONDS`. A run waiting on its own work keeps its slot.
+  `MACHINE_SERVICE_IDLE_SECONDS`. A run waiting on a process it started
+  (`wait_for` on a process) keeps its slot; one waiting on a person, a timer
+  or a sub-agent frees it.
   A run that finds no slot free polls for a minute and is told the machine is
   busy; there is no queue.
 
@@ -196,6 +231,23 @@ be lost: `started` (logins copied, home packed and uploaded, its object key
 written), `packed` (old machine destroyed, row resized), `resized` (new machine
 started, home unpacked, logins restored, state cleared, carried copy deleted).
 A failed step is resumed from its state on the job's next run.
+
+- **Nobody uses a machine while it moves.** From the mark until the state is
+  cleared, every use and every change is refused with `MACHINE_MOVING` (409),
+  at the resolver every route, tool and SDK call goes through; the machine can
+  still be seen. A write after the pack would go with the old disk, and the new
+  disk is empty until the home is unpacked. So the sweep marks a move only when
+  no other is waiting, and no one is kept off their machine behind another
+  person's move.
+- **The carried home is sealed.** It holds SSH keys and `.env` files, so it is
+  sealed as it streams the way the logins are: a fresh AES-256-GCM data key
+  per object, wrapped by the deployment's secret cipher, the machine id bound
+  in, in frames that cannot be dropped, reordered or cut short unnoticed.
+- **A move given up is not tried again.** A home past 8 GiB or one that will
+  not pack, or logins that will not copy five times, abandons the move before
+  anything is destroyed. The row keeps the target with no state, so the sweep
+  does not mark the same move again and the machine is released like any
+  other; a different target size is a new move.
 
 ## Compute
 

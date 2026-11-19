@@ -7,7 +7,9 @@ import { MAX_READ_BYTES, MachinesNamespace } from "../namespaces/machines.js";
 /**
  * A server that behaves like the files controller: it honours a `Range`, it
  * never returns more than `MAX_READ_BYTES` in one response however much is
- * asked for, and it answers 416 for an offset past the end.
+ * asked for, it answers an unranged read it had to cut with a 206 naming the
+ * total, and it answers 416 for an offset past the end. `ignoresRange` puts
+ * something in front of it that drops the `Range` and the 206 with it.
  */
 function serving(totalBytes: number, { ignoresRange = false } = {}) {
   const asked: Array<{ start: number; end: number }> = [];
@@ -17,18 +19,21 @@ function serving(totalBytes: number, { ignoresRange = false } = {}) {
     options: { headers?: Record<string, string> } = {},
   ): Promise<{ blob: Blob; status: number; contentRange: string | null }> => {
     const header = options.headers?.Range;
-    const whole = () => ({
-      // No range, or one ignored: the whole file from byte 0, still capped.
-      blob: new Blob([new Uint8Array(Math.min(totalBytes, MAX_READ_BYTES))]),
-      status: 200,
-      contentRange: null,
-    });
-    if (!header) return whole();
+    const capped = () => new Blob([new Uint8Array(Math.min(totalBytes, MAX_READ_BYTES))]);
+    if (!header) {
+      const cut = totalBytes > MAX_READ_BYTES;
+      return {
+        blob: capped(),
+        status: cut ? 206 : 200,
+        contentRange: cut ? `bytes 0-${MAX_READ_BYTES - 1}/${totalBytes}` : null,
+      };
+    }
     const [first, last] = header.slice("bytes=".length).split("-");
     const start = Number(first);
     const end = Number(last);
     asked.push({ start, end });
-    if (ignoresRange) return whole();
+    // The Range dropped on the way: the file from byte 0, capped, as a 200.
+    if (ignoresRange) return { blob: capped(), status: 200, contentRange: null };
     if (start >= totalBytes) {
       throw new ApiError(416, "Requested Range Not Satisfiable");
     }
@@ -45,29 +50,7 @@ function serving(totalBytes: number, { ignoresRange = false } = {}) {
       return (await respond(...args)).blob;
     },
   } as unknown as HttpClient;
-  return { files: new MachinesNamespace(http).files, asked, respond };
-}
-
-/** The current server: an unranged read cut at the ceiling is a 206. */
-function servingWith206(totalBytes: number) {
-  const { respond } = serving(totalBytes);
-  const http = {
-    async requestBytesResponse(
-      method: string,
-      path: string,
-      options: { headers?: Record<string, string> } = {},
-    ) {
-      if (!options.headers?.Range && totalBytes > MAX_READ_BYTES) {
-        return {
-          blob: new Blob([new Uint8Array(MAX_READ_BYTES)]),
-          status: 206,
-          contentRange: `bytes 0-${MAX_READ_BYTES - 1}/${totalBytes}`,
-        };
-      }
-      return respond(method, path, options);
-    },
-  } as unknown as HttpClient;
-  return new MachinesNamespace(http).files;
+  return { files: new MachinesNamespace(http).files, asked };
 }
 
 describe("files.read", () => {
@@ -76,13 +59,13 @@ describe("files.read", () => {
     // whole file. The server now answers 206 with the total, and `read`
     // follows it to the end.
     const total = MAX_READ_BYTES * 2 + 99;
-    const files = servingWith206(total);
+    const { files } = serving(total);
 
     expect((await files.read("me", "/home/user/big.bin")).size).toBe(total);
   });
 
   it("returns only the slice asked for", async () => {
-    const files = servingWith206(MAX_READ_BYTES * 2);
+    const { files } = serving(MAX_READ_BYTES * 2);
 
     const blob = await files.read("me", "/home/user/big.bin", { range: { start: 0, end: 9 } });
 

@@ -251,6 +251,9 @@ class MachineLifecycle:
         from app.modules.workspace.services.compute_meter import close_sessions
 
         await close_sessions(self._uow_factory, machine.id)
+        # What ran on the old disk is not started on the new one: its files
+        # are gone, and so is whatever made it worth bringing back.
+        await self._forget_services(machine.id)
         await _bump_storage(self._uow_factory, machine.id)
         await service.ensure(machine.id)
         restored = (
@@ -306,6 +309,15 @@ class MachineLifecycle:
 
         await close_sessions(self._uow_factory, machine.id)
         await self._backups.forget(machine.id)
+        await self._forget_services(machine.id)
+
+    async def _forget_services(self, machine_id: UUID) -> None:
+        """Its services end with the machine's life (``forget_services``)."""
+        from app.modules.workspace.services.machine_services import MachineServices
+
+        await MachineProcesses(
+            self._processes.registry, services=MachineServices(self._uow_factory)
+        ).forget_services(machine_id)
 
 
 async def slot_holder_runs(machine_id: UUID) -> frozenset[str]:

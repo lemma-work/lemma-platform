@@ -122,3 +122,12 @@ async def test_a_stuck_move_past_the_destroy_keeps_its_carry_key() -> None:
 
     assert row.size_migration_state == MoveState.RESIZED.value
     assert row.size_migration_carry_key == "carry/old.tgz"
+
+
+async def test_a_move_given_up_keeps_its_target_so_it_is_not_marked_again() -> None:
+    row = _row(MoveState.STARTED, attempts=MAX_ATTEMPTS)
+    move = _Move(row)
+
+    await size_migration._note_failure(move, uuid4(), MachineConflict("x", code="T"))
+
+    assert (row.size_migration_state, row.size_migration_target) == (None, "2x4")

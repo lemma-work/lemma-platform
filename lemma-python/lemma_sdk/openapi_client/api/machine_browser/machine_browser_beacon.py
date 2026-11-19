@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote
 
 import httpx
@@ -7,40 +7,38 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
-from ...models.machine_file_entry import MachineFileEntry
-from ...types import UNSET, Response
+from ...models.stream_beacon import StreamBeacon
+from ...types import Response
 
 
 def _get_kwargs(
     ref: str,
     *,
-    path: str,
+    body: StreamBeacon,
 ) -> dict[str, Any]:
-
-    params: dict[str, Any] = {}
-
-    params["path"] = path
-
-    params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
+    headers: dict[str, Any] = {}
 
     _kwargs: dict[str, Any] = {
-        "method": "put",
-        "url": "/machines/{ref}/files/content".format(
+        "method": "post",
+        "url": "/machines/{ref}/browser:beacon".format(
             ref=quote(str(ref), safe=""),
         ),
-        "params": params,
     }
 
+    _kwargs["json"] = body.to_dict()
+
+    headers["Content-Type"] = "application/json"
+
+    _kwargs["headers"] = headers
     return _kwargs
 
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> ErrorResponse | MachineFileEntry | None:
-    if response.status_code == 200:
-        response_200 = MachineFileEntry.from_dict(response.json())
-
-        return response_200
+) -> Any | ErrorResponse | None:
+    if response.status_code == 204:
+        response_204 = cast(Any, None)
+        return response_204
 
     if response.status_code == 422:
         response_422 = ErrorResponse.from_dict(response.json())
@@ -55,7 +53,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[ErrorResponse | MachineFileEntry]:
+) -> Response[Any | ErrorResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -68,26 +66,28 @@ def sync_detailed(
     ref: str,
     *,
     client: AuthenticatedClient | Client,
-    path: str,
-) -> Response[ErrorResponse | MachineFileEntry]:
-    """Write a file on a machine (deprecated: use PUT files:content)
+    body: StreamBeacon,
+) -> Response[Any | ErrorResponse]:
+    """Report how a live screen session went
 
     Args:
         ref (str): Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in
             context), `mine:<name>`, or its id.
-        path (str):
+        body (StreamBeacon): What one viewing session got, from the viewer's side.
+
+            Bounded everywhere: it comes from a browser and ends up in a log line.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | MachineFileEntry]
+        Response[Any | ErrorResponse]
     """
 
     kwargs = _get_kwargs(
         ref=ref,
-        path=path,
+        body=body,
     )
 
     response = client.get_httpx_client().request(
@@ -101,27 +101,29 @@ def sync(
     ref: str,
     *,
     client: AuthenticatedClient | Client,
-    path: str,
-) -> ErrorResponse | MachineFileEntry | None:
-    """Write a file on a machine (deprecated: use PUT files:content)
+    body: StreamBeacon,
+) -> Any | ErrorResponse | None:
+    """Report how a live screen session went
 
     Args:
         ref (str): Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in
             context), `mine:<name>`, or its id.
-        path (str):
+        body (StreamBeacon): What one viewing session got, from the viewer's side.
+
+            Bounded everywhere: it comes from a browser and ends up in a log line.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | MachineFileEntry
+        Any | ErrorResponse
     """
 
     return sync_detailed(
         ref=ref,
         client=client,
-        path=path,
+        body=body,
     ).parsed
 
 
@@ -129,26 +131,28 @@ async def asyncio_detailed(
     ref: str,
     *,
     client: AuthenticatedClient | Client,
-    path: str,
-) -> Response[ErrorResponse | MachineFileEntry]:
-    """Write a file on a machine (deprecated: use PUT files:content)
+    body: StreamBeacon,
+) -> Response[Any | ErrorResponse]:
+    """Report how a live screen session went
 
     Args:
         ref (str): Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in
             context), `mine:<name>`, or its id.
-        path (str):
+        body (StreamBeacon): What one viewing session got, from the viewer's side.
+
+            Bounded everywhere: it comes from a browser and ends up in a log line.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | MachineFileEntry]
+        Response[Any | ErrorResponse]
     """
 
     kwargs = _get_kwargs(
         ref=ref,
-        path=path,
+        body=body,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -160,27 +164,29 @@ async def asyncio(
     ref: str,
     *,
     client: AuthenticatedClient | Client,
-    path: str,
-) -> ErrorResponse | MachineFileEntry | None:
-    """Write a file on a machine (deprecated: use PUT files:content)
+    body: StreamBeacon,
+) -> Any | ErrorResponse | None:
+    """Report how a live screen session went
 
     Args:
         ref (str): Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in
             context), `mine:<name>`, or its id.
-        path (str):
+        body (StreamBeacon): What one viewing session got, from the viewer's side.
+
+            Bounded everywhere: it comes from a browser and ends up in a log line.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | MachineFileEntry
+        Any | ErrorResponse
     """
 
     return (
         await asyncio_detailed(
             ref=ref,
             client=client,
-            path=path,
+            body=body,
         )
     ).parsed

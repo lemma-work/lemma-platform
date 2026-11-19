@@ -21,9 +21,11 @@ from app.core.authorization.context import (
     ResourceType,
     ResourceVisibility,
 )
+from app.core.authorization.outside_text_gate import outside_text_hold
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.permissions import Permissions
+from app.core.authorization.session_approvals import approve_for_this_context
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.workspace.domain.machine import Machine
 from app.modules.workspace.domain.machine_access import (
@@ -73,13 +75,41 @@ class DatabaseMachineFacts:
         resource = machine_resource(machine, pod_id)
         manage = await ctx.can(Permissions.MACHINE_MANAGE, resource)
         use = manage or await ctx.can(Permissions.MACHINE_USE, resource)
+        # Held, not refused: a run reading strangers' words that its person
+        # can let through. It may know the machine is there -- it is asking.
+        held = not use and await _held(ctx, resource)
         # Seeing a machine is reading the pod it is in -- for people. A
         # workload sees what it may use and nothing else.
-        see = use or (
-            caller.kind in (CallerKind.USER, CallerKind.APP)
-            and await ctx.can(Permissions.POD_READ, ResourceRef.pod(pod_id))
+        see = (
+            use
+            or held
+            or (
+                caller.kind in (CallerKind.USER, CallerKind.APP)
+                and await ctx.can(Permissions.POD_READ, ResourceRef.pod(pod_id))
+            )
         )
-        return PodAccess(manage=manage, use=use, see=see)
+        return PodAccess(manage=manage, use=use, see=see, held=held)
+
+    async def held_for_outside_text(self, caller: MachineCaller) -> bool:
+        """Whether this agent run is reading what people outside the pod wrote
+        and its person has not approved its using a machine.
+
+        For a person's own machine, which the authorizer does not decide: the
+        same gate it applies to a pod machine, asked of the run's own context
+        in its pod. One read of the mark first, so a run with nothing from
+        outside in front of it pays nothing more.
+        """
+        from app.core.authorization.outside_text import has_read_outside_text
+
+        if caller.kind is not CallerKind.AGENT or caller.conversation_id is None:
+            return False
+        if not await has_read_outside_text(str(caller.conversation_id)):
+            return False
+        if caller.pod_id is None:
+            return True
+        ctx = await self.context(caller, caller.pod_id)
+        # No context in its pod is no person to approve: held.
+        return ctx is None or await _held(ctx, None)
 
     async def pods_named(self, caller: MachineCaller, name: str) -> list[UUID]:
         """The pods ``pod:<name>:...`` could mean to this caller: a person's
@@ -117,14 +147,26 @@ class DatabaseMachineFacts:
                 principal_id=caller.workload_id,
                 pod_id=pod_id,
             )
-        return await service.build_delegated_workload_context(
+        ctx = await service.build_delegated_workload_context(
             user_id=caller.user_id,
             principal_type=principal_type,
             principal_id=caller.workload_id,
             pod_id=pod_id,
             is_default_pod_agent=caller.kind is CallerKind.AGENT
             and is_pod_default_agent(caller.workload_id, pod_id=pod_id),
+            # The conversation, which is what approvals and the outside-text
+            # mark are kept under. Without it the gate asked an empty session
+            # and nothing a run read from outside ever held it here.
+            delegation_session_id=str(caller.conversation_id)
+            if caller.conversation_id is not None
+            else None,
         )
+        approve_for_this_context(ctx, caller.approved)
+        return ctx
+
+
+async def _held(ctx: Context, resource: ResourceRef | None) -> bool:
+    return await outside_text_hold(ctx, Permissions.MACHINE_USE, resource) is not None
 
 
 __all__ = ["DatabaseMachineFacts", "machine_resource"]

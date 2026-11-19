@@ -14,7 +14,11 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.core.authorization.delegation import DelegationClaims, WorkloadPrincipalType
+from app.core.authorization.delegation import (
+    DEFAULT_POD_AGENT_NAME,
+    DelegationClaims,
+    WorkloadPrincipalType,
+)
 from app.modules.workspace.domain.machine_access import CallerKind, MachineCaller
 from app.modules.workspace.domain.machine_errors import MachineAccessDenied
 from app.modules.workspace.services.machine_process_credentials import (
@@ -89,23 +93,74 @@ async def _claims_for(caller: MachineCaller, minter: _Minter, **overrides):
     return claims
 
 
-async def test_an_apps_page_gets_no_lemma_token() -> None:
+async def test_an_apps_page_starts_nothing() -> None:
+    """Its script is the app author's: a process it started would be theirs,
+    running as the viewer beside everybody else's on the pod machine."""
     minter = _Minter()
-    env = await _env(
-        MachineCaller(CallerKind.APP, user_id=PERSON, pod_id=POD, app_id=uuid4()),
-        minter,
-    )
 
-    assert "LEMMA_TOKEN" not in env
-    assert minter.calls[0][1] == {"with_token": False}, "nothing was minted"
+    with pytest.raises(MachineAccessDenied):
+        await _env(
+            MachineCaller(CallerKind.APP, user_id=PERSON, pod_id=POD, app_id=uuid4()),
+            minter,
+            machine_pod_id=POD,
+        )
+    assert minter.calls == [], "nothing was minted"
 
 
-async def test_a_person_gets_their_own_token() -> None:
+async def test_a_person_gets_their_own_token_on_their_own_machine() -> None:
     minter = _Minter()
     env = await _env(MachineCaller(CallerKind.USER, user_id=PERSON), minter)
 
     assert env["LEMMA_TOKEN"] == "minted-for-None"
-    assert minter.calls[0][0] == (PERSON, None)
+    assert minter.calls[0] == ((PERSON, None), {})
+
+
+async def test_a_person_on_a_pod_machine_gets_a_token_pinned_to_the_pod() -> None:
+    """Every co-tenant reads every process's environment there: the token is
+    the pod's own agent acting for the person, never their whole session."""
+    minter = _Minter()
+
+    env = await _env(
+        MachineCaller(CallerKind.USER, user_id=PERSON), minter, machine_pod_id=POD
+    )
+
+    assert env["LEMMA_TOKEN"] == "minted-for-AGENT"
+    (user_id, pod_id), kwargs = minter.calls[0]
+    assert (user_id, pod_id) == (PERSON, POD)
+    assert kwargs["workload_type"] == "AGENT"
+    assert kwargs["workload_id"] == POD, "the pod's own agent is known by its pod"
+    assert kwargs["workload_name"] == DEFAULT_POD_AGENT_NAME
+    assert kwargs["session_id"]
+
+
+async def test_a_persons_pod_machine_service_restarts_pinned_to_the_same_pod() -> None:
+    claims = await _claims_for(
+        MachineCaller(CallerKind.USER, user_id=PERSON), _Minter(), machine_pod_id=POD
+    )
+
+    assert claims is not None
+    assert (claims.pod_id, claims.workload_type, claims.workload_id) == (
+        POD,
+        "AGENT",
+        POD,
+    )
+    assert TokenClaims.from_json(claims.to_json()) == claims
+
+
+async def test_a_person_on_a_pod_machine_is_refused_when_no_pinned_token_exists() -> (
+    None
+):
+    """Delegated tokens off: the only token left is the person's whole session."""
+    minter = _Minter()
+
+    with pytest.raises(MachineAccessDenied):
+        await _env(
+            MachineCaller(CallerKind.USER, user_id=PERSON),
+            minter,
+            machine_pod_id=POD,
+            delegated_tokens_enabled=False,
+        )
+    assert minter.calls == []
 
 
 async def test_an_agent_gets_the_same_delegation_claims_and_no_wider() -> None:
@@ -203,8 +258,8 @@ async def test_a_caller_whose_claims_cannot_be_built_is_refused(
 
 async def test_a_service_restart_is_minted_exactly_what_its_start_was() -> None:
     """A service started by an agent comes back with the agent's claims, and one
-    started by a page or a person-less run comes back with no token at all --
-    never the person's whole session."""
+    started by a person-less run comes back with no token at all -- never the
+    person's whole session."""
     claims = _claims(WorkloadPrincipalType.AGENT)
     agent = MachineCaller(
         CallerKind.AGENT,
@@ -223,8 +278,6 @@ async def test_a_service_restart_is_minted_exactly_what_its_start_was() -> None:
     assert stored.session_id == claims.session_id
     assert TokenClaims.from_json(stored.to_json()) == stored
 
-    page = MachineCaller(CallerKind.APP, user_id=PERSON, pod_id=POD, app_id=uuid4())
-    assert await _claims_for(page, _Minter()) is None
     run = SimpleNamespace(pod_id=POD, function_id=AGENT)
     headless = MachineCaller(
         CallerKind.FUNCTION, user_id=None, pod_id=POD, workload_id=AGENT

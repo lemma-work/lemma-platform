@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from pydantic import SecretStr
-from sqlalchemy import select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app.core.config import reveal_secret
@@ -32,8 +32,10 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.workspace.infrastructure.machine_models import MachineServiceModel
 
 
-#: The most services one machine brings back. Each is a name a person or an
-#: agent chose; past this many something is starting them in a loop.
+#: The most services one machine keeps. Each is a name a person or an agent
+#: chose; past this many something is starting them in a loop, and the next
+#: name is refused (``MACHINE_SERVICE_LIMIT``) rather than kept and never
+#: brought back.
 MAX_SERVICES = 64
 
 
@@ -226,6 +228,42 @@ class MachineServices:
                 )
             ).all()
         return [_definition(row) for row in rows]
+
+    async def others_kept(self, machine_id: UUID, name: str) -> int:
+        """How many services besides ``name`` this machine would bring back."""
+        async with self._uow_factory() as uow:
+            count = await uow.session.scalar(
+                select(func.count())
+                .select_from(MachineServiceModel)
+                .where(
+                    MachineServiceModel.sandbox_id == machine_id,
+                    MachineServiceModel.name != name,
+                    MachineServiceModel.stopped_at.is_(None),
+                )
+            )
+        return int(count or 0)
+
+    async def forget(self, machine_id: UUID, name: str) -> None:
+        """One service's definition gone: it is never started again."""
+        async with self._uow_factory() as uow:
+            await uow.session.execute(
+                delete(MachineServiceModel).where(
+                    MachineServiceModel.sandbox_id == machine_id,
+                    MachineServiceModel.name == name,
+                )
+            )
+            await uow.commit()
+
+    async def forget_all(self, machine_id: UUID) -> None:
+        """Every definition gone: the machine was deleted, or its disk replaced.
+        A service belongs to the life of the machine it was started on."""
+        async with self._uow_factory() as uow:
+            await uow.session.execute(
+                delete(MachineServiceModel).where(
+                    MachineServiceModel.sandbox_id == machine_id
+                )
+            )
+            await uow.commit()
 
     async def stopped(self, machine_id: UUID, process_id: str) -> None:
         """A person stopped it: it is not started again after a pause."""

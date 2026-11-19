@@ -92,6 +92,47 @@ def _install_uv_command() -> str:
     )
 
 
+#: The Go toolchain the streamer is built with in the template, pinned and
+#: checksummed like Node and the GitHub CLI. The same release as the pinned
+#: `golang` image `Dockerfile.workspace` and the streamer's own Dockerfile
+#: build with, so one binary has one compiler on both fabrics
+#: (`test_e2b_templates` holds the two together). Removed again after the
+#: build: the sandbox runs the binary, not the compiler.
+GO_VERSION = "1.25.14"
+GO_LINUX_AMD64_SHA256 = (
+    "a21ae5633a269bcd7e90cf767e48225633795e99d831742cbf3397064fee7712"
+)
+
+#: What the template installs only to build the streamer. x264 and libvpx are
+#: linked statically, so none of it is needed to run it.
+STREAMER_BUILD_PACKAGES = ("gcc", "libc6-dev", "libvpx-dev", "libx264-dev")
+
+
+def _install_go_command() -> str:
+    archive = f"go{GO_VERSION}.linux-amd64.tar.gz"
+    return (
+        f"curl -fsSL https://go.dev/dl/{archive} -o /tmp/go.tgz && "
+        f"echo '{GO_LINUX_AMD64_SHA256}  /tmp/go.tgz' | sha256sum -c - && "
+        "tar -C /usr/local -xzf /tmp/go.tgz && rm /tmp/go.tgz"
+    )
+
+
+def _build_streamer_command() -> str:
+    """The WebRTC streamer, built here as `Dockerfile.workspace` builds it."""
+    return (
+        "cd /tmp/lemma-streamer-src && CGO_ENABLED=1 /usr/local/go/bin/go build "
+        "-trimpath -ldflags='-s -w' -o /usr/local/bin/lemma-streamer "
+        "./cmd/lemma-streamer && "
+        "rm -rf /tmp/lemma-streamer-src /usr/local/go /root/go /root/.cache/go-build && "
+        # Marked automatic rather than purged: autoremove then takes only what
+        # nothing else in the template depends on, so a package that needs
+        # one of these keeps it.
+        f"apt-mark auto {' '.join(STREAMER_BUILD_PACKAGES)} >/dev/null && "
+        "DEBIAN_FRONTEND=noninteractive apt-get autoremove -y && "
+        "rm -rf /var/lib/apt/lists/*"
+    )
+
+
 def workspace_template():
     return (
         Template(file_context_path=REPOSITORY_ROOT)
@@ -155,7 +196,14 @@ def workspace_template():
                 # `xrandr`, for resizing the display to match the pane it is
                 # being watched in.
                 "x11-xserver-utils",
-                "x11vnc",
+                # TigerVNC's scraping server, and the clipboard tool the
+                # WebRTC streamer uses. See Dockerfile.workspace.
+                "tigervnc-scraping-server",
+                "xclip",
+                # Building the WebRTC streamer in the template, against this
+                # template's own libraries, and removed once it is built; see
+                # `_build_streamer_command`.
+                *STREAMER_BUILD_PACKAGES,
                 "xz-utils",
                 "xvfb",
             ],
@@ -445,6 +493,14 @@ def workspace_template():
             "/usr/local/bin/start-vnc-bridge",
             mode=0o755,
         )
+        .run_cmd(_install_go_command(), user="root")
+        .copy("lemma-backend/sandbox-images/streamer", "/tmp/lemma-streamer-src")
+        .run_cmd(_build_streamer_command(), user="root")
+        .copy(
+            "lemma-backend/sandbox-images/scripts/start-streamer.sh",
+            "/usr/local/bin/start-streamer",
+            mode=0o755,
+        )
         .copy(
             "lemma-backend/sandbox-images/scripts/save-webpage.sh",
             "/usr/local/bin/save-webpage",
@@ -463,7 +519,9 @@ def workspace_template():
             {
                 "DISPLAY": ":99",
                 "XDG_RUNTIME_DIR": "/tmp/lemma-browser/runtime",
-                "WORKSPACE_XVFB_SCREEN": "1440x960x24",
+                "WORKSPACE_XVFB_SCREEN": "1280x800x24",
+                # See Dockerfile.workspace: downloads land in the Files view.
+                "AGENT_BROWSER_DOWNLOAD_PATH": "/home/user/lemma/downloads",
                 "AGENT_BROWSER_CONFIG": "/tmp/lemma-browser/config.json",
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/local/bin/workspace-chrome",
                 "AGENT_BROWSER_PROFILE": "/home/user/.lemma/browser/profile",

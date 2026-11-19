@@ -158,6 +158,11 @@ def _tar_command() -> str:
     )
 
 
+#: The login probe's answer for "this profile holds no login": distinct from
+#: a shell that failed, so a failure is never read as an empty profile.
+_NO_LOGINS = 3
+
+
 class LoginBackups:
     def __init__(
         self,
@@ -361,7 +366,10 @@ class LoginBackups:
 
         Never over a profile that has anything: a login made since the last
         copy is newer than the copy, and replacing it would be the loss this
-        is here to prevent.
+        is here to prevent. So only a probe that ran and found nothing (exit
+        ``_NO_LOGINS``) restores; one that failed -- a timeout, a machine not
+        answering -- says nothing about the profile, and the next sweep that
+        sees the machine resume asks again.
         """
         if await self.latest(sandbox_id) is None:
             return False
@@ -371,12 +379,19 @@ class LoginBackups:
             sandbox_id,
             acting_user=acting_user,
             command=(
-                f"cd {root} 2>/dev/null || exit 1; "
-                f'for p in {parts}; do [ -e "$p" ] && exit 0; done; exit 1'
+                f"cd {root} 2>/dev/null || exit {_NO_LOGINS}; "
+                f'for p in {parts}; do [ -e "$p" ] && exit 0; done; '
+                f"exit {_NO_LOGINS}"
             ),
             timeout_seconds=30,
         )
-        if held.ok:
+        if held.exit_code != _NO_LOGINS:
+            if not held.ok:
+                logger.warning(
+                    "workspace.login_backup.probe_failed.degraded",
+                    sandbox_id=str(sandbox_id),
+                    exit_code=held.exit_code,
+                )
             return False
         return await self.restore(sandbox_id, acting_user=acting_user)
 

@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from fastapi import WebSocket
+
 from supertokens_python.recipe.session.asyncio import (
     get_session_without_request_response,
 )
@@ -141,6 +142,20 @@ async def session_user_id(
         return None
 
 
+#: What a pane may call itself. It reaches the relay inside a viewer name and
+#: ends up in its logs, so it is held to a shape that cannot forge a line.
+VIEWER_PATTERN = r"^[A-Za-z0-9-]{1,40}$"
+
+
+def viewer_name(user_id: UUID, pane: str | None) -> str | None:
+    """`<user>:<pane>`, the name the relay knows this viewer by.
+
+    Prefixed with the user here, never by the client, so one person's pane
+    can never be named as another's -- the resize lease is held by name.
+    """
+    return f"{user_id}:{pane}" if pane else None
+
+
 def user_id_resolver() -> UserIdResolver:
     """The resolver the socket route uses, as something that can be supplied."""
     return resolve_user_id
@@ -148,10 +163,12 @@ def user_id_resolver() -> UserIdResolver:
 
 __all__ = [
     "SocketPrincipal",
+    "VIEWER_PATTERN",
     "UserIdResolver",
     "remember_principal",
     "resolve_user_id",
     "socket_principal",
     "session_user_id",
     "user_id_resolver",
+    "viewer_name",
 ]

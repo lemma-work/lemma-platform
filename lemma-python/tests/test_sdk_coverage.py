@@ -32,9 +32,6 @@ KNOWN_UNEXPOSED_PREFIXES = (
     # Deprecated shims of /machines, kept for old clients; the Machines facade
     # (lemma_sdk/resources/machines.py) wraps the machine.* operations instead.
     "workspace.",
-    # The machine file write's first path, deprecated for one release;
-    # MachineFiles.write calls `machine.files.write` (PUT files:content).
-    "machine.files.write_legacy",
     "app.public",
     "health_check",  # liveness probe
     # OAuth/consent browser callbacks — never called by a client

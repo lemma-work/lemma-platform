@@ -98,6 +98,153 @@ async def test_a_cli_that_never_exits_is_killed_rather_than_waited_on(
     assert process.killed, "a wedged CLI must not outlive the answer it gave"
 
 
+class _EndingStdout:
+    """A pipe that says its lines and then closes: a CLI that gave up."""
+
+    def __init__(self, lines: list[bytes]) -> None:
+        self._lines = list(lines)
+
+    async def readline(self) -> bytes:
+        return self._lines.pop(0) if self._lines else b""
+
+
+class _Exited:
+    """A process that has already finished, with this exit status."""
+
+    def __init__(self, returncode: int, lines: list[bytes] | None = None) -> None:
+        self.returncode = returncode
+        self.stdout = _EndingStdout(lines or [])
+
+    async def wait(self) -> int:
+        return self.returncode
+
+    def kill(self) -> None:
+        pass
+
+
+#: Verbatim from the sandbox, the second time the collision was reproduced.
+_COLLIDED = (
+    "✗ Daemon process exited during startup with no error output. "
+    "Re-run with --debug for more details.\n"
+).encode()
+
+#: A named session, so the port file lives under a profile base the test can
+#: point at `tmp_path` -- the default session would also sweep `/tmp` for
+#: agent-browser's scratch profiles, which is this machine's business.
+_SESSION = "login-app.example.com"
+
+
+def _session_profile(monkeypatch, tmp_path: Path) -> Path:
+    monkeypatch.setattr(chrome, "_SCRATCH_PROFILE_BASE", str(tmp_path / "profile"))
+    profile = Path(chrome.profile_for_session(_SESSION) or "")
+    profile.mkdir(parents=True)
+    return profile
+
+
+async def test_concurrent_starts_run_the_cli_once(monkeypatch, tmp_path: Path) -> None:
+    """The view socket, the targets poll and the keepalive arrive together.
+
+    Each used to run its own `get cdp-url`; two CLIs that find no daemon each
+    spawn one, the second one's Chrome finds the profile locked, and the
+    browser ends up running and unreachable. The ones that wait must find the
+    browser the first one started -- a real listening socket and a real port
+    file, the way `live_port` would meet them in a sandbox.
+    """
+    profile = _session_profile(monkeypatch, tmp_path)
+    server = await asyncio.start_server(lambda _r, w: w.close(), "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    spawned: list[tuple[str, ...]] = []
+
+    async def fake_exec(*argv, **_kwargs):
+        spawned.append(argv)
+        # Slow enough that the others are queued behind the lock by now.
+        await asyncio.sleep(0.1)
+        (profile / "DevToolsActivePort").write_text(f"{port}\n/devtools/browser/x\n")
+        return _Exited(0, [f"ws://127.0.0.1:{port}/devtools/browser/x\n".encode()])
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    try:
+        ports = await asyncio.wait_for(
+            asyncio.gather(*(chrome.ensure_port(session=_SESSION) for _ in range(3))),
+            timeout=5,
+        )
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert ports == [port, port, port]
+    assert len(spawned) == 1, spawned
+
+
+def _recording_exec(monkeypatch, starts: list[list[bytes]], *, alive: bool = False):
+    """Answer `get cdp-url` from `starts` in turn; pkill succeeds; pgrep says
+    whether anything is still `alive`. Returns every argv it was asked to run."""
+    ran: list[tuple[str, ...]] = []
+    answers = list(starts)
+
+    async def fake_exec(*argv, **_kwargs):
+        ran.append(argv)
+        if argv[0] == "pkill":
+            return _Exited(0)
+        if argv[0] == "pgrep":
+            return _Exited(0 if alive else 1)
+        return _Exited(0, answers.pop(0))
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    return ran
+
+
+async def test_a_collided_start_stops_the_daemons_and_the_profiles_chrome_then_retries(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Stopping only the daemons left the orphaned Chrome holding the profile
+    lock, so every fresh daemon collided with it again."""
+    profile = _session_profile(monkeypatch, tmp_path)
+    ran = _recording_exec(
+        monkeypatch,
+        [[_COLLIDED], [b"ws://127.0.0.1:45125/devtools/browser/x\n"]],
+    )
+
+    assert await asyncio.wait_for(chrome.ensure_port(session=_SESSION), 5) == 45125
+
+    commands = [argv[0] if argv[0] in ("pkill", "pgrep") else "cli" for argv in ran]
+    assert commands == ["cli", "pkill", "pgrep", "pkill", "pgrep", "cli"]
+    stopped = [argv[-1] for argv in ran if argv[0] == "pkill"]
+    assert stopped[0] == "agent-browser"
+    assert stopped[1].startswith("--user-data-dir=")
+    assert str(profile).replace(".", "[.]") in stopped[1]
+    # Anchored, so the default profile cannot match a named session's
+    # `profile-<digest>` by prefix.
+    assert stopped[1].endswith("([[:space:]]|$)")
+    # And waited on: the pgrep after each pkill asks about the same thing.
+    assert [argv[-1] for argv in ran if argv[0] == "pgrep"] == stopped
+
+
+async def test_a_second_collision_is_reported_not_recovered_again(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _session_profile(monkeypatch, tmp_path)
+    ran = _recording_exec(monkeypatch, [[_COLLIDED], [_COLLIDED]])
+
+    with pytest.raises(chrome.BrowserNotRunning):
+        await asyncio.wait_for(chrome.ensure_port(session=_SESSION), 5)
+
+    assert sum(1 for argv in ran if argv[0] == "pkill") == 2, ran
+
+
+async def test_what_will_not_stop_is_killed(monkeypatch, tmp_path: Path) -> None:
+    """A Chrome that ignores SIGTERM still holds the lock; the retry would
+    collide with it exactly as before."""
+    _session_profile(monkeypatch, tmp_path)
+    monkeypatch.setattr(chrome, "_STOP_GRACE_SECONDS", 0.05)
+    ran = _recording_exec(monkeypatch, [], alive=True)
+
+    await asyncio.wait_for(chrome.restart_daemon(session=_SESSION), 5)
+
+    signals = [argv[1] for argv in ran if argv[0] == "pkill"]
+    assert signals == ["-TERM", "-KILL", "-TERM", "-KILL"]
+
+
 async def test_a_recorded_port_nothing_answers_on_is_not_believed(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -244,6 +391,8 @@ def test_the_relay_serves_only_what_it_means_to() -> None:
         "/profile:forget",
         "/profile:signed-in",
         "/vnc",
+        "/rtc",
+        "/browser:command",
     } <= served
     # Asserted as an equality, not a subset: `/state:clear` was once here and
     # nothing ever called it, all the way down through the client and the
@@ -261,8 +410,16 @@ def test_the_relay_serves_only_what_it_means_to() -> None:
     # file while it claimed to assert the served surface, so a display route
     # could have come or gone without anything noticing.
     assert {p for p in served if p.startswith("/display")} == {
+        "/display",
         "/display:resize",
         "/display:reset",
+    }
+    # One toolbar route, whose body is a closed set (`commands.py`). Asserted
+    # as the only `/browser` route besides ensure, so a second door into
+    # navigation cannot appear beside it unnoticed.
+    assert {p for p in served if p.startswith("/browser")} == {
+        "/browser:ensure",
+        "/browser:command",
     }
     assert not {p for p in served if p.startswith("/state")}
     assert not {p for p in served if p.startswith("/cdp")}
@@ -294,6 +451,9 @@ def _client(monkeypatch, tmp_path, token: str = "token-abc"):
     token_file = tmp_path / "token"
     token_file.write_text(token)
     monkeypatch.setattr(relay_app, "TOKEN_PATH", token_file)
+    # A fixed /tmp path that other tests on the same worker can touch: one that
+    # ran the agent-browser wrapper made `/health` report an active agent here.
+    monkeypatch.setattr(relay_app, "AGENT_ACTIVE_MARKER", tmp_path / "agent-active")
     return TestClient(relay_app.create_app())
 
 
@@ -307,10 +467,19 @@ def test_health_needs_no_token_and_says_when_chrome_is_down(
     not running", which was the same answer for a browser that was down, a
     display that never came up, and a websockify that had died.
     """
+    from sandbox_runtime.browser_relay import display
+
     client = _client(monkeypatch, tmp_path)
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"chrome": "stopped", "vnc": "down", "viewers": 0}
+    assert response.json() == {
+        "chrome": "stopped",
+        "vnc": "down",
+        "viewers": 0,
+        "watching": [],
+        "agent_active_seconds": None,
+        "cpus": display.machine_cpus(),
+    }
 
 
 def test_a_guarded_route_without_a_token_is_refused_as_unauthorised(
@@ -1002,7 +1171,7 @@ def test_a_viewer_cannot_push_the_display_past_its_starting_size(
     sandbox at 1920x1200 for the rest of its life.
 
     That was measured to lose an `agent-browser record` part-way through on a
-    loaded runner -- 1.67x the pixels for x11vnc to encode and for ffmpeg to
+    loaded runner -- 1.67x the pixels for the VNC server to encode and for ffmpeg to
     grab. The framebuffer ceiling is still reachable, but only by an agent
     asking for it on purpose with `set-display-size`.
     """
@@ -1013,9 +1182,9 @@ def test_a_viewer_cannot_push_the_display_past_its_starting_size(
         asked.append((width, height))
         return f"{width}x{height}"
 
-    from sandbox_runtime.browser_relay import app as relay_app
+    from sandbox_runtime.browser_relay import display
 
-    monkeypatch.setattr(relay_app, "set_display_size", fake_resize)
+    monkeypatch.setattr(display, "set_display_size", fake_resize)
     client = _client(monkeypatch, tmp_path)
 
     response = client.post(
@@ -1049,9 +1218,9 @@ def test_the_display_can_be_put_back(monkeypatch, tmp_path) -> None:
         asked.append((width, height))
         return f"{width}x{height}"
 
-    from sandbox_runtime.browser_relay import app as relay_app
+    from sandbox_runtime.browser_relay import display
 
-    monkeypatch.setattr(relay_app, "set_display_size", fake_resize)
+    monkeypatch.setattr(display, "set_display_size", fake_resize)
     client = _client(monkeypatch, tmp_path)
 
     response = client.post(
@@ -1071,22 +1240,22 @@ def test_resetting_the_display_is_behind_the_token(monkeypatch, tmp_path) -> Non
 def _refusing_resize(monkeypatch):
     """`set_display_size` as it behaves while a take is running.
 
-    Raises `relay_app.RecordingInProgress`, not the one importable from
+    Raises `display.RecordingInProgress`, not the one importable from
     `chrome`, and the difference is not pedantry: a test earlier in this
     file reloads `chrome` to re-read an environment variable, which makes a
-    *new* class object while `app` keeps the one it imported. Raise the
+    *new* class object while `display` keeps the one it imported. Raise the
     wrong one and the route's `except` does not match, the exception escapes
     as a 500, and the test fails only when run alongside its neighbours.
     """
-    from sandbox_runtime.browser_relay import app as relay_app
+    from sandbox_runtime.browser_relay import display
 
     async def refuse(width: int, height: int) -> str:
-        raise relay_app.RecordingInProgress(
+        raise display.RecordingInProgress(
             "the display is being recorded, so its size is held until the "
             "recording stops"
         )
 
-    monkeypatch.setattr(relay_app, "set_display_size", refuse)
+    monkeypatch.setattr(display, "set_display_size", refuse)
 
 
 def test_a_viewer_cannot_resize_the_display_out_from_under_a_recording(
@@ -1281,3 +1450,27 @@ async def test_a_keepalive_that_hangs_is_killed_not_left_behind(
         assert await chrome.keepalive(session="workspace") is False
     assert started[0].returncode is not None, "the stuck CLI was reaped"
     assert "timed out" in caplog.text
+
+
+def test_a_profile_lock_from_another_host_is_cleared(tmp_path) -> None:
+    """The home volume outlives its container, and Chrome will not call a lock
+    naming another host stale -- so the relay does, before it starts one."""
+    from sandbox_runtime.browser_relay.chrome import clear_foreign_lock
+
+    (tmp_path / "SingletonLock").symlink_to("old-container-3924")
+    (tmp_path / "SingletonSocket").symlink_to("/tmp/gone/SingletonSocket")
+    (tmp_path / "SingletonCookie").symlink_to("123")
+    (tmp_path / "DevToolsActivePort").write_text("41234\n")
+
+    assert clear_foreign_lock(tmp_path, host="this-container") is True
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["DevToolsActivePort"]
+
+
+def test_a_profile_lock_from_this_host_is_left_for_chrome(tmp_path) -> None:
+    from sandbox_runtime.browser_relay.chrome import clear_foreign_lock
+
+    (tmp_path / "SingletonLock").symlink_to("this-container-77")
+
+    assert clear_foreign_lock(tmp_path, host="this-container") is False
+    assert (tmp_path / "SingletonLock").is_symlink()
+    assert clear_foreign_lock(tmp_path / "missing", host="x") is False

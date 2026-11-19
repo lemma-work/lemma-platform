@@ -324,6 +324,59 @@ async def test_a_stopped_container_is_restarted_rather_than_replaced(
     assert len(provider.created) == 1
 
 
+async def test_a_sandbox_the_provider_paused_restarts_its_clock_when_resumed(
+    service: SandboxService, provider: FakeProvider, sandbox_uow_factory
+) -> None:
+    """E2B pauses on its own timeout while the row still says READY. The
+    resume must restart ``ready_at``: the meter opens the new session there,
+    and the old value billed every paused hour."""
+    from datetime import timedelta
+
+    from app.modules.workspace.infrastructure.sandbox_repository import utcnow
+
+    sandbox = await _workspace(service)
+    first = await service.ensure(sandbox.id)
+    paused_at = utcnow() - timedelta(hours=3)
+    async with sandbox_uow_factory() as uow:
+        await uow.session.execute(
+            update(SandboxInstanceModel)
+            .where(SandboxInstanceModel.sandbox_id == sandbox.id)
+            .values(ready_at=paused_at)
+        )
+        await uow.commit()
+    provider.containers[first.provider_id] = ProviderInstance(
+        provider_id=first.provider_id, name=first.provider_id, running=False
+    )
+    service.forget(sandbox.id)
+
+    await service.ensure(sandbox.id)
+
+    async with sandbox_uow_factory() as uow:
+        instance = await SandboxRepository(uow).current_instance(sandbox.id)
+    assert instance is not None
+    assert instance.state is SandboxInstanceState.READY
+    assert instance.ready_at is not None and instance.ready_at > paused_at + timedelta(
+        hours=2
+    )
+
+
+async def test_reusing_a_running_sandbox_keeps_its_clock(
+    service: SandboxService, sandbox_uow_factory
+) -> None:
+    sandbox = await _workspace(service)
+    await service.ensure(sandbox.id)
+    async with sandbox_uow_factory() as uow:
+        before = await SandboxRepository(uow).current_instance(sandbox.id)
+    service.forget(sandbox.id)
+
+    await service.ensure(sandbox.id)
+
+    async with sandbox_uow_factory() as uow:
+        after = await SandboxRepository(uow).current_instance(sandbox.id)
+    assert before is not None and after is not None
+    assert after.ready_at == before.ready_at
+
+
 class NonResumingProvider(FakeProvider):
     """A provider whose stopped instances cannot be started where they are.
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 from urllib.parse import urlsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -233,16 +233,38 @@ async def test_a_deleted_pod_machine_takes_its_previews_and_grants_with_it(
     assert opened.status_code == status.HTTP_201_CREATED, opened.text
     label = urlsplit(opened.json()["url"]).hostname.split(".", 1)[0][2:]
 
+    from app.core.api.dependencies import get_uow_factory
+    from app.modules.workspace.services.machine_previews import MachinePreviews
+    from app.modules.workspace.services.machine_services import MachineServices
+
+    services = MachineServices(get_uow_factory())
+
+    async def keep_a_service() -> None:
+        # The definition alone: what a restart after a resume would start.
+        await services.record(
+            UUID(first),
+            name="web",
+            command="sleep 600",
+            cwd="/home/user/lemma",
+            env={},
+            claims=None,
+            started_by=None,
+            restart_on_resume=True,
+            process_id=str(uuid4()),
+        )
+
+    await keep_a_service()
     deleted = await client.delete(f"/pods/{pod_id}/machines/qa")
     assert deleted.status_code == status.HTTP_204_NO_CONTENT, deleted.text
 
-    from app.core.api.dependencies import get_uow_factory
-    from app.modules.workspace.services.machine_previews import MachinePreviews
-
     gone = await MachinePreviews(get_uow_factory()).by_label(label, cached=False)
     assert gone is not None and gone.revoked_at is not None
+    assert await services.running(UUID(first)) == []
 
+    # One left behind all the same is not the new machine's either.
+    await keep_a_service()
     again = await make()
+    assert await services.running(UUID(again)) == []
     assert again == first, "the row is revived, which is why this matters"
     grants = await client.get(f"/pods/{pod_id}/machines/qa/grants")
     assert grants.status_code == status.HTTP_200_OK, grants.text

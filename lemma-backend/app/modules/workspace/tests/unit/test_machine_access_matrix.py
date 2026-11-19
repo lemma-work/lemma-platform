@@ -219,9 +219,16 @@ def test_connected_machine(caller, machine, pod, expected):
 
 
 class _Facts:
-    def __init__(self, *, member: bool = True, pod: PodAccess = OUTSIDER) -> None:
+    def __init__(
+        self,
+        *,
+        member: bool = True,
+        pod: PodAccess = OUTSIDER,
+        reads_outside: bool = False,
+    ) -> None:
         self.member = member
         self.pod = pod
+        self.reads_outside = reads_outside
         self.asked: list[str] = []
 
     async def answers_member(self, caller: MachineCaller) -> bool:
@@ -235,6 +242,10 @@ class _Facts:
     async def pods_named(self, caller: MachineCaller, name: str) -> list:
         self.asked.append("pod names")
         return []
+
+    async def held_for_outside_text(self, caller: MachineCaller) -> bool:
+        self.asked.append("outside text")
+        return self.reads_outside
 
 
 class _NoDatabase:
@@ -281,3 +292,55 @@ def test_not_found_is_what_a_refusal_reads_as():
 
     with pytest.raises(MachineNotFound):
         _require(NONE, USE, MachineRef.parse("pod:qa"))
+
+
+# --- a run reading what people outside the pod wrote --------------------------
+
+
+async def test_a_run_reading_outside_text_is_held_on_the_persons_own_machine():
+    """`me` is decided without the authorizer, and still held as a pod machine
+    is: seen, not used, until the person approves."""
+    from app.modules.workspace.domain.machine_errors import MachineHeldForApproval
+
+    facts = _Facts(member=True, reads_outside=True)
+    resolver = _resolver(facts)
+    resolver._find = _found(DEFAULT)  # type: ignore[method-assign]
+
+    assert await resolver.decide(agent(), DEFAULT) is STATUS
+    with pytest.raises(MachineHeldForApproval) as held:
+        await resolver.resolve("me", agent(), need=USE)
+    assert held.value.code == "OUTSIDE_TEXT_REQUIRES_APPROVAL"
+    assert held.value.details == {"permission_ids": ["machine.use"]}
+
+
+async def test_a_run_with_nothing_from_outside_uses_the_persons_own_machine():
+    facts = _Facts(member=True, reads_outside=False)
+
+    assert await _resolver(facts).decide(agent(), DEFAULT) is USE
+
+
+async def test_the_person_themself_is_never_held_on_their_own_machine():
+    facts = _Facts(reads_outside=True)
+
+    assert await _resolver(facts).decide(user(), DEFAULT) is MANAGE
+    assert "outside text" not in facts.asked
+
+
+async def test_a_held_pod_machine_asks_for_approval_rather_than_vanishing():
+    from app.modules.workspace.domain.machine_errors import MachineHeldForApproval
+
+    facts = _Facts(pod=PodAccess(see=True, held=True))
+    resolver = _resolver(facts)
+    resolver._find = _found(POD_MACHINE)  # type: ignore[method-assign]
+
+    with pytest.raises(MachineHeldForApproval):
+        await resolver.resolve("pod:qa", agent(), need=USE)
+    status = await resolver.resolve("pod:qa", agent(), need=STATUS)
+    assert status.access is STATUS
+
+
+def _found(machine: Machine):
+    async def find(ref, caller):
+        return machine
+
+    return find

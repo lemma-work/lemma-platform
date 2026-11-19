@@ -27,15 +27,27 @@ from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 from uuid import UUID, uuid4
 
+from redis.exceptions import RedisError
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.core.config import settings
 from app.core.infrastructure.redis.client import get_redis
+from app.core.log.log import get_logger
 from app.modules.workspace.config import workspace_settings
+from app.modules.workspace.domain.machine_errors import (
+    MachineAccessDenied,
+    MachineConflict,
+)
 from app.modules.workspace.process_output import has_stopped
+from app.modules.workspace.providers.runtime_client import WorkspaceRuntimeError
 from app.modules.workspace.services.machine_services import (
+    MAX_SERVICES,
     MachineServices,
+    ServiceDefinition,
     TokenClaims,
     mint_env,
 )
+from sandbox_runtime.errors import SandboxError
 from sandbox_runtime.protocol import (
     EnvironmentVariable,
     ProcessOutputSnapshot,
@@ -43,7 +55,36 @@ from sandbox_runtime.protocol import (
     TerminalSize,
 )
 
+logger = get_logger(__name__)
+
 _KEY = "machine:processes:v1:{machine_id}"
+#: Held while one start of a named service checks that none is running and
+#: records itself: without it two concurrent starts both found none and both
+#: ran. Expires on its own, so a start that died holding it blocks the name
+#: for no longer than this.
+_START_CLAIM_KEY = "machine:service-start:v1:{machine_id}:{name}"
+_START_CLAIM_SECONDS = 120
+_RELEASE_IF_OURS = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then "
+    "return redis.call('del', KEYS[1]) else return 0 end"
+)
+
+#: What one service's restart can fail with without stopping the rest: the
+#: machine or its runtime refusing, a mint or a decision that could not be
+#: read, Redis or the database blinking.
+_RESTART_FAILURES: tuple[type[BaseException], ...] = (
+    SandboxError,
+    WorkspaceRuntimeError,
+    MachineConflict,
+    MachineAccessDenied,
+    RedisError,
+    SQLAlchemyError,
+    OSError,
+    ValueError,
+    LookupError,
+    RuntimeError,
+    TimeoutError,
+)
 #: A service process's hard deadline. What actually bounds a service is its
 #: idle ceiling (`MACHINE_SERVICE_IDLE_SECONDS`): past it, it no longer keeps
 #: its machine busy, the machine is released and the service comes back with it.
@@ -106,6 +147,16 @@ class MachineProcessRegistry:
         if process_ids:
             await self._redis.hdel(self._key(machine_id), *process_ids)
 
+    async def claim_start(self, machine_id: UUID, name: str, token: str) -> bool:
+        """Whether this start of service ``name`` holds the name now; False
+        while another start of it is in flight."""
+        key = _START_CLAIM_KEY.format(machine_id=machine_id, name=name)
+        return bool(await self._redis.set(key, token, nx=True, ex=_START_CLAIM_SECONDS))
+
+    async def release_start(self, machine_id: UUID, name: str, token: str) -> None:
+        key = _START_CLAIM_KEY.format(machine_id=machine_id, name=name)
+        await self._redis.eval(_RELEASE_IF_OURS, 1, key, token)
+
 
 def _record(raw: object) -> ProcessRecord | None:
     try:
@@ -165,10 +216,26 @@ class MachineProcesses:
     async def start_process(
         self, machine_id: UUID, request: StartProcess, *, base_env: dict[str, str]
     ) -> ProcessRecord:
+        if not request.service:
+            return await self._start(machine_id, request, base_env=base_env)
+        token = str(uuid4())
+        if not await self._registry.claim_start(machine_id, request.service, token):
+            raise MachineConflict(
+                f"A service named {request.service!r} is being started already.",
+                code="MACHINE_SERVICE_RUNNING",
+            )
+        try:
+            await self._refuse_a_second(machine_id, request.service)
+            await self._refuse_past_the_limit(machine_id, request.service)
+            return await self._start(machine_id, request, base_env=base_env)
+        finally:
+            await self._registry.release_start(machine_id, request.service, token)
+
+    async def _start(
+        self, machine_id: UUID, request: StartProcess, *, base_env: dict[str, str]
+    ) -> ProcessRecord:
         from sandbox_runtime.protocol import WorkloadKind
 
-        if request.service:
-            await self._refuse_a_second(machine_id, request.service)
         operation_id = uuid4()
         now = datetime.now(timezone.utc)
         lifetime = (
@@ -230,8 +297,6 @@ class MachineProcesses:
         say which one a preview was pointing at. One paused under a resume
         (state unknown) is not running and does not count.
         """
-        from app.modules.workspace.domain.machine_errors import MachineConflict
-
         for view in await self.list(machine_id):
             if (
                 view.record.service == service
@@ -243,6 +308,30 @@ class MachineProcesses:
                     f"(process {view.record.process_id}). Stop it first.",
                     code="MACHINE_SERVICE_RUNNING",
                 )
+
+    async def _refuse_past_the_limit(self, machine_id: UUID, service: str) -> None:
+        """A new name past ``MAX_SERVICES`` is refused, not kept: a definition
+        past the limit was recorded and then never brought back."""
+        if await self.services.others_kept(machine_id, service) >= MAX_SERVICES:
+            raise MachineConflict(
+                f"This machine already keeps {MAX_SERVICES} services. Stop one "
+                "you no longer need, or reuse its name.",
+                code="MACHINE_SERVICE_LIMIT",
+            )
+
+    async def forget_services(self, machine_id: UUID) -> None:
+        """Every service of the machine forgotten, definitions and entries:
+        the machine is gone or its disk was replaced, and a service is never
+        started again on a life it was not started on."""
+        await self.services.forget_all(machine_id)
+        await self._registry.drop(
+            machine_id,
+            [
+                record.process_id
+                for record in await self._registry.all(machine_id)
+                if record.service
+            ],
+        )
 
     async def list(self, machine_id: UUID) -> list[ProcessView]:
         """What is running, joined with what Lemma knows about each process.
@@ -424,32 +513,68 @@ class MachineProcesses:
         self,
         machine_id: UUID,
         *,
+        may_restart: Callable[[ServiceDefinition], Awaitable[bool]],
         mint: Callable[[TokenClaims], Awaitable[dict[str, str]]] = mint_env,
     ) -> list[ProcessRecord]:
         """Start again every service the last pause ended, under its own name,
         with a token minted afresh for the claims the first start used. A
-        service whose claims were never recorded starts with none."""
+        service whose claims were never recorded starts with none.
+
+        ``may_restart`` decides again whether its starter may use the machine
+        (``machine_service_starter``): a fresh token is a fresh grant. One
+        whose starter no longer may is forgotten, not started. Each service
+        is its own attempt: one that fails is reported and the rest still
+        start."""
         running, ended = await self._alive(machine_id)
         restarted: list[ProcessRecord] = []
         for definition in await self.services.running(machine_id):
             if not self._wants_restart(definition, running, ended):
                 continue
-            if definition.process_id:
-                await self._registry.drop(machine_id, [definition.process_id])
-            base_env = await mint(definition.claims) if definition.claims else {}
-            restarted.append(
-                await self.start_process(
-                    machine_id,
-                    StartProcess(
-                        command=definition.command,
-                        cwd=definition.cwd,
-                        env=definition.revealed_env(),
-                        service=definition.name,
-                        restart_on_resume=True,
-                        started_by=definition.started_by,
-                        claims=definition.claims,
-                    ),
-                    base_env=base_env,
+            try:
+                record = await self._restart_one(
+                    machine_id, definition, may_restart, mint
                 )
-            )
+            except _RESTART_FAILURES as exc:
+                logger.warning(
+                    "workspace.machine_processes.service_restart_failed.degraded",
+                    sandbox_id=str(machine_id),
+                    service_name=definition.name,
+                    error_type=type(exc).__name__,
+                    exc_info=True,
+                )
+                continue
+            if record is not None:
+                restarted.append(record)
         return restarted
+
+    async def _restart_one(
+        self,
+        machine_id: UUID,
+        definition: ServiceDefinition,
+        may_restart: Callable[[ServiceDefinition], Awaitable[bool]],
+        mint: Callable[[TokenClaims], Awaitable[dict[str, str]]],
+    ) -> ProcessRecord | None:
+        if definition.process_id:
+            await self._registry.drop(machine_id, [definition.process_id])
+        if not await may_restart(definition):
+            await self.services.forget(machine_id, definition.name)
+            logger.info(
+                "workspace.machine_processes.service_forgotten_starter_lost_access.observed",
+                sandbox_id=str(machine_id),
+                service_name=definition.name,
+            )
+            return None
+        base_env = await mint(definition.claims) if definition.claims else {}
+        return await self.start_process(
+            machine_id,
+            StartProcess(
+                command=definition.command,
+                cwd=definition.cwd,
+                env=definition.revealed_env(),
+                service=definition.name,
+                restart_on_resume=True,
+                started_by=definition.started_by,
+                claims=definition.claims,
+            ),
+            base_env=base_env,
+        )

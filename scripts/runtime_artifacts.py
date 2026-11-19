@@ -77,6 +77,9 @@ WORKSPACE_IMAGE_INPUTS = (
     ".dockerignore",
     WORKSPACE_DOCKERFILE,
     "lemma-backend/sandbox-images/scripts/start-workspace-runtime.sh",
+    # A compiled binary the runtime overlay cannot carry, so a change to it is
+    # a change to the image.
+    "lemma-backend/sandbox-images/streamer",
     "lemma-backend/sandbox-images/templates/workspace-github",
     "lemma-backend/sandbox-images/templates/workspace-node",
     "lemma-backend/sandbox-images/templates/workspace-python",

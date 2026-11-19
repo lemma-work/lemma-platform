@@ -39,6 +39,8 @@ from app.modules.workspace.domain.machine_access import (
 )
 from app.modules.workspace.domain.machine_errors import (
     MachineAccessDenied,
+    MachineHeldForApproval,
+    MachineMoving,
     MachineNotFound,
 )
 from app.modules.workspace.infrastructure.machine_facts import DatabaseMachineFacts
@@ -61,6 +63,8 @@ class FactsSource(Protocol):
     ) -> PodAccess: ...
 
     async def pods_named(self, caller: MachineCaller, name: str) -> list[UUID]: ...
+
+    async def held_for_outside_text(self, caller: MachineCaller) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,29 +103,48 @@ class MachineResolver:
         machine = await self._find(parsed, caller)
         if machine is None:
             raise MachineNotFound(str(parsed))
-        access = await self.decide(caller, machine)
+        access, held = await self._decision(caller, machine)
+        if held and access < need:
+            raise MachineHeldForApproval(str(parsed))
         _require(access, need, parsed)
+        if machine.moving and need >= MachineAccess.USE:
+            # Every route, tool and SDK call reaches a machine through here: a
+            # write between the size move's pack and its destroy, or onto the
+            # new disk before the home is back, would be silently lost.
+            raise MachineMoving(str(parsed))
         return ResolvedMachine(machine=machine, access=access)
 
     async def decide(self, caller: MachineCaller, machine: Machine) -> MachineAccess:
+        access, _held = await self._decision(caller, machine)
+        return access
+
+    async def _decision(
+        self, caller: MachineCaller, machine: Machine
+    ) -> tuple[MachineAccess, bool]:
+        """The caller's access, and whether use is only held for the approval
+        of a run reading what people outside the pod wrote -- on a person's
+        own machine as on a pod's: seen, not used, until its person says so."""
         if machine.kind is MachineKind.DEFAULT:
-            return default_machine_access(
+            access = default_machine_access(
                 caller,
                 machine,
                 answers_member=caller.kind is CallerKind.AGENT
                 and caller.user_id == machine.owner_id
                 and await self._facts.answers_member(caller),
             )
+            if access is MachineAccess.USE and caller.kind is CallerKind.AGENT:
+                if await self._facts.held_for_outside_text(caller):
+                    return MachineAccess.STATUS, True
+            return access, False
         if machine.kind is MachineKind.POD:
-            return pod_machine_access(
-                caller, machine, await self._facts.pod_access(caller, machine)
-            )
+            pod = await self._facts.pod_access(caller, machine)
+            return pod_machine_access(caller, machine, pod), pod.held
         pod = (
             await self._facts.pod_access(caller, machine)
             if is_shared(machine) and caller.user_id != machine.owner_id
             else PodAccess()
         )
-        return connected_machine_access(caller, machine, pod)
+        return connected_machine_access(caller, machine, pod), pod.held
 
     async def visible(
         self, caller: MachineCaller, *, pod_ids: list[UUID]

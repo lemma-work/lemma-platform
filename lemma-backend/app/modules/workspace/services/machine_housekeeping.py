@@ -87,7 +87,35 @@ async def _machine(uow_factory: UnitOfWorkFactory, machine_id: UUID) -> Machine 
         return await MachineRepository(uow).get(machine_id)
 
 
+async def _still_running(uow_factory: UnitOfWorkFactory, machine_id: UUID) -> bool:
+    """Read again, now: the metering pass saw it resumed, but the release of
+    idle machines runs between the two, and restarting a service on a machine
+    released this tick would wake it straight back up."""
+    from app.modules.workspace.domain.sandbox import (
+        SandboxDesiredState,
+        SandboxInstanceState,
+    )
+    from app.modules.workspace.infrastructure.sandbox_repository import (
+        SandboxRepository,
+    )
+
+    async with uow_factory() as uow:
+        repository = SandboxRepository(uow)
+        sandbox = await repository.get(machine_id)
+        instance = await repository.current_instance(machine_id)
+    return (
+        sandbox is not None
+        and sandbox.desired_state is SandboxDesiredState.PRESENT
+        and instance is not None
+        and instance.state is SandboxInstanceState.READY
+    )
+
+
 async def _resume_one(uow_factory: UnitOfWorkFactory, machine: Machine) -> int:
+    from app.modules.workspace.services.machine_service_starter import (
+        starter_may_restart,
+    )
+
     if machine.template is MachineTemplate.WORKSPACE_DOCKER:
         await run_on_machine(
             machine.id,
@@ -97,7 +125,10 @@ async def _resume_one(uow_factory: UnitOfWorkFactory, machine: Machine) -> int:
         )
     restarted = await MachineProcesses(
         services=MachineServices(uow_factory)
-    ).restart_services(machine.id)
+    ).restart_services(
+        machine.id,
+        may_restart=lambda definition: starter_may_restart(uow_factory, definition),
+    )
     if await LoginBackups(uow_factory).restore_if_lost(
         machine.id, acting_user=_acting_user(machine)
     ):
@@ -114,7 +145,7 @@ async def after_resume(uow_factory: UnitOfWorkFactory, machine_ids: list[UUID]) 
     for machine_id in machine_ids:
         try:
             machine = await _machine(uow_factory, machine_id)
-            if machine is None:
+            if machine is None or not await _still_running(uow_factory, machine_id):
                 continue
             async with asyncio.timeout(MACHINE_BUDGET_SECONDS):
                 restarted = await _resume_one(uow_factory, machine)
@@ -163,15 +194,24 @@ def machine_release(uow_factory: UnitOfWorkFactory):
 async def _hand_to_size_move(uow_factory: UnitOfWorkFactory, machine: Machine) -> bool:
     """Whether this idle machine is the size-move job's now: one already in
     flight, or a default machine at the legacy size, marked here. The job
-    does the work, from the state on the row -- never this sweep."""
+    does the work, from the state on the row -- never this sweep.
+
+    Marked only when no other move is waiting: a marked machine is refused
+    to its owner until its move ends. Not marked again once abandoned for
+    the same size, so it is released like any other machine."""
     if not workspace_settings.machine_size_migration_enabled:
         return False
-    from app.modules.workspace.services.size_migration import SizeMigration
+    from app.modules.workspace.services.size_migration import (
+        MARKED_AT_ONCE,
+        SizeMigration,
+    )
 
     migration = SizeMigration(uow_factory)
     if await migration.in_flight(machine.id):
         return True
     if machine.kind is not MachineKind.DEFAULT or machine.size != LEGACY_DEFAULT_SIZE:
+        return False
+    if await migration.waiting() >= MARKED_AT_ONCE:
         return False
     from app.modules.workspace.services.machine_policy import policy_for_user
 

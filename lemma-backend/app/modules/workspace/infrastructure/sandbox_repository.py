@@ -420,7 +420,9 @@ class SandboxRepository:
             .values(last_used_at=utcnow())
         )
 
-    async def mark_in_use(self, sandbox_id: UUID, instance_id: UUID | None) -> None:
+    async def mark_in_use(
+        self, sandbox_id: UUID, instance_id: UUID | None, *, resumed: bool = False
+    ) -> None:
         """Record that this sandbox is serving again, not merely that it was used.
 
         Adopting a sandbox is a state change, and the resume path treated it as
@@ -436,6 +438,12 @@ class SandboxRepository:
         extra, and because doing it as one conditional UPDATE rather than
         read-then-write leaves no window for a concurrent release to be undone
         by a stale value.
+
+        ``resumed``: the instance was stopped and has just been started again.
+        Its running clock restarts whatever the row said. E2B pauses a sandbox
+        on its own timeout while the row stays READY, so "only when it was not
+        READY" kept the old ``ready_at``, and the meter opened the resumed
+        session at the pause -- billing every paused hour.
         """
         await self.session.execute(
             update(SandboxModel)
@@ -461,8 +469,11 @@ class SandboxRepository:
                 state=SandboxInstanceState.READY.value,
                 last_error=None,
                 # A resume starts a new running session: restart its clock,
-                # or the next release would time the paused hours as well.
-                ready_at=case(
+                # or the meter and the next release would time the paused
+                # hours as well.
+                ready_at=utcnow()
+                if resumed
+                else case(
                     (
                         SandboxInstanceModel.state != SandboxInstanceState.READY.value,
                         utcnow(),

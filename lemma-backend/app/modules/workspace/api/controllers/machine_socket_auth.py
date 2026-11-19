@@ -87,6 +87,10 @@ async def authorize_socket(
     try:
         async with get_uow_factory()() as uow:
             caller = await _caller(websocket, user_id)
+            if caller.kind is CallerKind.APP:
+                # A terminal, typed into as whoever started it: never an app's
+                # page, whose script is its author's (``APP_ROUTES``).
+                raise MachineAccessDenied(ref, "open a terminal from an app's page on")
             resolved = await MachineResolver(uow).resolve(ref, caller, need=need)
             await uow.commit()
     except MachineNotFound, MachineAccessDenied:

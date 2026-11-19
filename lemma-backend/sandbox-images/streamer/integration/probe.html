@@ -1,0 +1,20 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>stream probe</title>
+<style>body{margin:0;font:16px/1.4 sans-serif}p{margin:0 16px 12px}#t{position:fixed;top:8px;right:8px;background:#000;color:#0f0;padding:4px 8px;font:20px monospace}</style>
+</head><body><div id="t"></div><input id="i" style="position:fixed;bottom:8px;left:8px;width:400px">
+<script>
+// A page that keeps scrolling: the realistic heavy case for a screen stream.
+for (let i = 0; i < 4000; i++) {
+  const p = document.createElement("p");
+  p.textContent = i + " The quick brown fox jumps over the lazy dog. Lorem ipsum dolor sit amet, consectetur adipiscing elit.";
+  p.style.color = `hsl(${(i * 37) % 360} 60% 35%)`;
+  document.body.appendChild(p);
+}
+const still = location.hash === "#still";
+function tick() {
+  document.getElementById("t").textContent = Date.now();
+  if (!still) { window.scrollBy(0, 8); if (window.scrollY + innerHeight >= document.body.scrollHeight) window.scrollTo(0, 0); }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+</script></body></html>

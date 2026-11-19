@@ -145,6 +145,8 @@ services:
       - websockets-sansio
       - --ws-max-size
       - "1048576"
+      - --ws-per-message-deflate
+      - "false"
       - --no-access-log
     # The workspace module drives the host's container runtime to provision
     # sandboxes, so it needs the socket and the privilege to use it. This is the

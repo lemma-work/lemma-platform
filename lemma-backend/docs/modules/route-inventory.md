@@ -507,6 +507,8 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/machines/{name}/grants` | `machine.pod.grants.get` | Which agents and functions are granted a pod machine |
 | PATCH | `/pods/{pod_id}/machines/{name}` | `machine.pod.update` | Rename or resize a pod machine |
 | POST | `/machines/{ref}/browser:access` | `machine.browser.access` | A signed link to a machine's browser |
+| POST | `/machines/{ref}/browser:beacon` | `machine.browser.beacon` | Report how a live screen session went |
+| POST | `/machines/{ref}/browser:command` | `machine.browser.command` | Steer a machine's browser from the screen's toolbar |
 | POST | `/machines/{ref}/browser:display` | `machine.browser.display` | Set the size of a machine's browser display |
 | POST | `/machines/{ref}/browser:navigate` | `machine.browser.navigate` | Open a page in a machine's browser |
 | POST | `/machines/{ref}/files:move` | `machine.files.move` | Move or rename a path on a machine |
@@ -519,6 +521,5 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/machines/{ref}:reset` | `machine.reset` | Clean a machine by scope |
 | POST | `/machines/{ref}:restart` | `machine.restart` | Stop a machine and start it again |
 | POST | `/pods/{pod_id}/machines` | `machine.pod.create` | Create a machine the pod's agents share |
-| PUT | `/machines/{ref}/files/content` | `machine.files.write_legacy` | Write a file on a machine (deprecated: use PUT files:content) |
 | PUT | `/machines/{ref}/files:content` | `machine.files.write` | Write a file on a machine |
 | PUT | `/pods/{pod_id}/machines/{name}/grants` | `machine.pod.grants.set` | Replace which agents and functions are granted a pod machine |
