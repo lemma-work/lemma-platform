@@ -51,11 +51,13 @@ class PodCreationSource(str, Enum):
 class PodRecipe(BaseModel):
     """A record of a bundle installed into this pod (the durable trace of an
     import; the ephemeral import job state is not kept). ``kind`` distinguishes an
-    uploaded bundle from a GitHub-sourced one; ``repo_url`` is set for GitHub."""
+    uploaded bundle from a GitHub-sourced one; ``repo_url`` is set for GitHub, and
+    ``path`` when the bundle was a folder inside that repository."""
 
     kind: str  # "upload" | "github"
     name: str | None = None
     repo_url: str | None = None
+    path: str | None = None
     format_version: int | None = None
     imported_at: datetime
     imported_by: UUID

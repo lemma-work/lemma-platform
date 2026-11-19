@@ -18,7 +18,8 @@ T = TypeVar("T", bound="PodRecipe")
 class PodRecipe:
     """A record of a bundle installed into this pod (the durable trace of an
     import; the ephemeral import job state is not kept). ``kind`` distinguishes an
-    uploaded bundle from a GitHub-sourced one; ``repo_url`` is set for GitHub.
+    uploaded bundle from a GitHub-sourced one; ``repo_url`` is set for GitHub, and
+    ``path`` when the bundle was a folder inside that repository.
 
         Attributes:
             imported_at (datetime.datetime):
@@ -26,6 +27,7 @@ class PodRecipe:
             kind (str):
             format_version (int | None | Unset):
             name (None | str | Unset):
+            path (None | str | Unset):
             repo_url (None | str | Unset):
     """
 
@@ -34,6 +36,7 @@ class PodRecipe:
     kind: str
     format_version: int | None | Unset = UNSET
     name: None | str | Unset = UNSET
+    path: None | str | Unset = UNSET
     repo_url: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -56,6 +59,12 @@ class PodRecipe:
         else:
             name = self.name
 
+        path: None | str | Unset
+        if isinstance(self.path, Unset):
+            path = UNSET
+        else:
+            path = self.path
+
         repo_url: None | str | Unset
         if isinstance(self.repo_url, Unset):
             repo_url = UNSET
@@ -75,6 +84,8 @@ class PodRecipe:
             field_dict["format_version"] = format_version
         if name is not UNSET:
             field_dict["name"] = name
+        if path is not UNSET:
+            field_dict["path"] = path
         if repo_url is not UNSET:
             field_dict["repo_url"] = repo_url
 
@@ -107,6 +118,15 @@ class PodRecipe:
 
         name = _parse_name(d.pop("name", UNSET))
 
+        def _parse_path(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        path = _parse_path(d.pop("path", UNSET))
+
         def _parse_repo_url(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -122,6 +142,7 @@ class PodRecipe:
             kind=kind,
             format_version=format_version,
             name=name,
+            path=path,
             repo_url=repo_url,
         )
 

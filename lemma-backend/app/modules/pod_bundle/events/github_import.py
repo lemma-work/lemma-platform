@@ -8,16 +8,20 @@ one for a shared connector -- and anonymously when the connector refuses (no
 `github` connector in the pod, or no account of theirs on it), which is all a
 public repository needs. The connector's refusal is what the person sees when
 anonymous access did not reach the repository either (`github_fetcher`).
+
+When the import names a folder inside the repository, the archive is narrowed
+to it (`github_folder`) before anything is staged or planned.
 """
 
 from __future__ import annotations
 
 from app.core.authorization.scope import uow_scope
 from app.core.authorization.service import AuthorizationDataService
+from app.core.concurrency.offload import run_blocking
 from app.modules.pod_bundle.config import pod_bundle_settings
 from app.modules.pod_bundle.domain.state import ImportState
 from app.modules.pod_bundle.events.work import BundleWorkerContext
-from app.modules.pod_bundle.infrastructure import github_fetcher
+from app.modules.pod_bundle.infrastructure import github_fetcher, github_folder
 
 _ANONYMOUS_WARNING = "GitHub import used anonymous API access and may be rate-limited."
 _POD_CONNECTOR_SLUG = "github"
@@ -28,6 +32,27 @@ def github_import_fetcher(
 ) -> github_fetcher.GithubBundleFetcher:
     return github_fetcher.GithubBundleFetcher(
         operation_runner=_operation_runner(worker_ctx=worker_ctx, state=state)
+    )
+
+
+async def fetch_bundle_archive(
+    fetcher: github_fetcher.GithubBundleFetcher,
+    state: ImportState,
+    *,
+    owner: str,
+    repo: str,
+) -> bytes:
+    """The repository's archive, or only its folder ``state.source.path``."""
+    archive = await fetcher.fetch_zipball(owner=owner, repo=repo, ref=state.source.ref)
+    if not state.source.path:
+        return archive
+    return await run_blocking(
+        github_folder.bundle_in_folder,
+        archive,
+        state.source.path,
+        repository=f"{owner}/{repo}",
+        max_uncompressed_bytes=pod_bundle_settings.pod_bundle_max_uncompressed_bytes,
+        limiter="cpu_bound",
     )
 
 
