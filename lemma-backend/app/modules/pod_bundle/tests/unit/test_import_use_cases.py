@@ -232,6 +232,24 @@ async def test_start_import_github_enqueues():
     assert "account_id" not in state.model_dump()
 
 
+async def test_start_import_github_keeps_the_folder_it_installs_from():
+    """The folder rides on the job's source, which is what the worker narrows
+    the archive by and what the pod's recipe records."""
+    uc, _, _, queue = _use_cases()
+    state = await uc.start_import(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        kind=BundleSourceKind.GITHUB,
+        owner="acme",
+        repo="plugins",
+        path="install/mail",
+    )
+    assert state.source.repo_url == "https://github.com/acme/plugins"
+    assert state.source.path == "install/mail"
+    call = next(c for c in queue.calls if c[0] == "pod_bundle.import_github")
+    assert call[1]["owner"] == "acme" and call[1]["repo"] == "plugins"
+
+
 async def test_start_import_github_bad_repo_rejected():
     uc, *_ = _use_cases()
     with pytest.raises(BundleInvalidError):

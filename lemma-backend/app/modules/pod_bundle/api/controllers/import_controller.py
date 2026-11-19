@@ -77,7 +77,8 @@ _TERMINAL_EVENT_TYPES = {"completed", "error", "expired"}
         "Import a pod bundle from a URL. kind=URL takes a lemma signed download "
         "URL (from an export, or from POST …/bundle/uploads); kind=GITHUB takes a "
         "repo (repo_url or owner+repo), fetched through the pod's `github` "
-        "connector as the importer, or anonymously for a public repo; "
+        "connector as the importer, or anonymously for a public repo, and an "
+        "optional `path` to a folder inside it that holds the bundle; "
         "kind=TEMPLATE takes the name of a template that ships with Lemma (404 "
         "when there is none by that name). "
         "Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, "
@@ -111,6 +112,7 @@ async def start_import(
         owner=data.owner,
         repo=data.repo,
         ref=data.ref,
+        path=data.path,
         template=data.template,
     )
     return ImportStatusResponse.from_state(state)
