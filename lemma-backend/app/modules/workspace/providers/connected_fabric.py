@@ -87,7 +87,14 @@ class ConnectedFabricProvider:
                 self._rows.pop(machine_id, None)
                 raise MachineNotConnected(found.name if found else str(machine_id))
             connection = found
-            self._rows[machine_id] = (time.monotonic() + _ROW_TTL_SECONDS, connection)
+            # A row from before the machine's first ``hello`` has no runtime
+            # port yet; believing it for the TTL would refuse a machine that
+            # connected a moment later, so it is read again next time.
+            if isinstance(connection.capabilities.get("runtime_port"), int):
+                self._rows[machine_id] = (
+                    time.monotonic() + _ROW_TTL_SECONDS,
+                    connection,
+                )
         return ConnectedMachineProvider(connection, self._runtime_credentials)
 
     async def _named(self, name: str) -> ConnectedMachineProvider:

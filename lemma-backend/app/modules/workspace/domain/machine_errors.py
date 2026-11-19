@@ -39,6 +39,21 @@ class MachineNotConnected(DomainError):
         )
 
 
+class MachineConnectionsOff(DomainError):
+    """A connected machine on a server that has connected machines turned off.
+
+    Refused rather than served by the configured fabric, which would build a
+    sandbox of its own in the person's machine's place.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Connected machines are turned off on this server.",
+            code="MACHINE_NOT_CONNECTED",
+            status_code=409,
+        )
+
+
 class MachinePolicyRefused(DomainError):
     """The plan does not allow this machine, size, template or count."""
 

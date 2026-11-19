@@ -28,6 +28,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import random
 import signal
 import sys
@@ -66,6 +67,18 @@ MAX_BACKOFF_SECONDS = 300.0
 #: How long a machine waits for the runtime Lemma said it would push before
 #: starting the one it has. Installing it can resolve packages, hence minutes.
 PUSH_WAIT_SECONDS = 180.0
+#: How long Lemma has to answer ``hello`` (and ``revoke``) once the socket is
+#: open. Keepalive pings are off, so without it a silent server holds the
+#: agent in the handshake for ever and the reconnect loop never runs.
+HANDSHAKE_SECONDS = 30.0
+#: An established link with no frame from Lemma for this many heartbeats is
+#: dead. Every ``control`` is answered with ``control_ok``, so a live link is
+#: never this quiet; the server applies the same count the other way.
+MISSED_HEARTBEATS = 3
+#: How often the agent checks that the runtime it started is still running,
+#: and the most it waits between attempts to start one that will not.
+RUNTIME_CHECK_SECONDS = 5.0
+RUNTIME_MAX_BACKOFF_SECONDS = 60.0
 
 AGENT_RELEASE = "machine-agent/1"
 
@@ -210,11 +223,18 @@ class MachineAgent:
                     }
                 )
             )
-            await _expect(socket, "welcome")
+            await _expect(socket, "welcome", timeout=HANDSHAKE_SECONDS)
             await socket.send(
                 json.dumps({"type": "revoke", "id": self._frame_id(), "body": {}})
             )
-            await _expect(socket, "revoked")
+            try:
+                await _expect(socket, "revoked", timeout=HANDSHAKE_SECONDS)
+            except TimeoutError:
+                # No answer is not a yes: the revoke may never have landed.
+                raise Stop(
+                    "Lemma did not confirm the disconnect; "
+                    "the machine may still be connected."
+                ) from None
 
     # ----------------------------------------------------------- the runtime
 
@@ -228,7 +248,12 @@ class MachineAgent:
         return response.content
 
 
-async def _expect(socket, frame_type: str) -> dict[str, object]:
+async def _expect(socket, frame_type: str, *, timeout: float) -> dict[str, object]:
+    async with asyncio.timeout(timeout):
+        return await _expect_forever(socket, frame_type)
+
+
+async def _expect_forever(socket, frame_type: str) -> dict[str, object]:
     while True:
         message = await socket.recv()
         if isinstance(message, bytes):
@@ -271,18 +296,29 @@ class _Link:
                 "machine": await agent.report(),
             },
         )
-        welcome = await _expect(self._socket, "welcome")
+        welcome = await _expect(self._socket, "welcome", timeout=HANDSHAKE_SECONDS)
         runtime = welcome.get("runtime") or {}
         heartbeat = int(welcome.get("heartbeat_ms") or 20_000) / 1000
         token = str(runtime.get("token") or "")
         _log.info("connected to Lemma as %s", welcome.get("name"))
         starting = asyncio.ensure_future(
-            self._start_runtime(token, expected=runtime.get("version"))
+            self._supervise_runtime(token, expected=runtime.get("version"))
         )
         beating = asyncio.ensure_future(self._heartbeat(heartbeat))
         reconnect_after: int | None = None
+        silent = False
         try:
-            async for message in self._socket:
+            while True:
+                try:
+                    message = await asyncio.wait_for(
+                        self._socket.recv(), heartbeat * MISSED_HEARTBEATS
+                    )
+                except TimeoutError:
+                    _log.warning(
+                        "no frame from Lemma in %.0fs", heartbeat * MISSED_HEARTBEATS
+                    )
+                    silent = True
+                    break
                 if isinstance(message, bytes):
                     await self._mux.feed(message)
                     continue
@@ -302,21 +338,38 @@ class _Link:
                 task.cancel()
             await asyncio.gather(starting, beating, return_exceptions=True)
             await self._mux.close()
+        if silent:
+            return None, "silent", None
         return self._socket.close_code, self._socket.close_reason or "", reconnect_after
 
-    async def _start_runtime(self, token: str, *, expected: object) -> None:
-        if expected and expected != self._agent.runtime.installed_version():
+    async def _supervise_runtime(self, token: str, *, expected: object) -> None:
+        """Keep the runtime up for as long as this link lasts."""
+        runtime = self._agent.runtime
+        if expected and expected != runtime.installed_version():
             # Lemma pushes this version next. Start on it, not on what is here:
             # a runtime started now would report ready and then restart under
             # the first requests. If the push never lands, start what is here.
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._pushed.wait(), PUSH_WAIT_SECONDS)
-        try:
-            await self._agent.runtime.ensure(token)
-        except RuntimeError as error:
-            _log.error("the runtime did not start: %s", error)
-            return
-        await self._beat()
+        backoff = RUNTIME_CHECK_SECONDS
+        first = True
+        while True:
+            # After the first start, only a runtime that exited is started
+            # again: one that is slow to answer its health check is busy, and
+            # restarting it would kill what it is doing.
+            if first or not runtime.running():
+                try:
+                    await runtime.ensure(token)
+                except RuntimeError as error:
+                    _log.error("the runtime did not start: %s", error)
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, RUNTIME_MAX_BACKOFF_SECONDS)
+                    continue
+                first = False
+                backoff = RUNTIME_CHECK_SECONDS
+                # Say so now, not a heartbeat from now: Lemma waits on it.
+                await self._beat()
+            await asyncio.sleep(RUNTIME_CHECK_SECONDS)
 
     async def _heartbeat(self, interval: float) -> None:
         while True:
@@ -357,28 +410,37 @@ class _Link:
             raise mux.StreamReset(mux.ResetCode.REFUSED, "a runtime too large")
         await self._mux.accept(stream)
         state = self._agent.config.state_directory
-        with tempfile.NamedTemporaryFile(
-            dir=state, prefix="runtime-", suffix=".zip", delete=False
-        ) as handle:
-            archive = Path(handle.name)
-            received = 0
-            while chunk := await stream.read():
-                received += len(chunk)
-                if received > size:
-                    raise mux.StreamReset(mux.ResetCode.REFUSED, "more than announced")
-                handle.write(chunk)
+        descriptor, raw = tempfile.mkstemp(dir=state, prefix="runtime-", suffix=".zip")
+        archive = Path(raw)
+        # From the moment the file exists: a transfer cut short (a reset, the
+        # link lost) leaves no partial archive behind to pile up.
         try:
-            installer = await self._agent.fetch("/agent-host/compute/runtime/installer")
-            outcome = await self._agent.runtime.install(
-                archive=archive,
-                version=str(target.get("version")),
-                archive_sha256=str(target.get("sha256")),
-                requires=[str(name) for name in target.get("requires") or []],
-                installer=installer,
-            )
-        except (InstallFailed, httpx.HTTPError, RuntimeError) as error:
-            _log.error("installing the pushed runtime failed: %s", error)
-            outcome = {"installed": False, "error": str(error)[:500]}
+            with os.fdopen(descriptor, "wb") as handle:
+                received = 0
+                while chunk := await stream.read():
+                    received += len(chunk)
+                    if received > size:
+                        raise mux.StreamReset(
+                            mux.ResetCode.REFUSED, "more than announced"
+                        )
+                    handle.write(chunk)
+            if received != size:
+                raise mux.StreamReset(mux.ResetCode.REFUSED, "less than announced")
+            # Only a complete transfer gets here; a cut-short one raised above.
+            try:
+                installer = await self._agent.fetch(
+                    "/agent-host/compute/runtime/installer"
+                )
+                outcome = await self._agent.runtime.install(
+                    archive=archive,
+                    version=str(target.get("version")),
+                    archive_sha256=str(target.get("sha256")),
+                    requires=[str(name) for name in target.get("requires") or []],
+                    installer=installer,
+                )
+            except (InstallFailed, httpx.HTTPError, RuntimeError) as error:
+                _log.error("installing the pushed runtime failed: %s", error)
+                outcome = {"installed": False, "error": str(error)[:500]}
         finally:
             archive.unlink(missing_ok=True)
             self._pushed.set()
@@ -399,7 +461,15 @@ def main(argv: list[str] | None = None) -> int:
 
     async def run() -> int:
         if args.revoke:
-            await agent.revoke()
+            try:
+                await agent.revoke()
+            except Stop as stop:
+                # Unlike the link's Stop, a revoke that was not confirmed failed.
+                _log.error("%s", stop)
+                return 1
+            except TimeoutError:
+                _log.error("Lemma did not answer; the machine is still connected.")
+                return 1
             return 0
         loop = asyncio.get_running_loop()
         stopping = asyncio.Event()

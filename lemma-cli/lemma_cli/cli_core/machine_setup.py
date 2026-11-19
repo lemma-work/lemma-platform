@@ -51,6 +51,9 @@ DEFAULT_ROOT = Path("~/lemma-machine")
 STATE = ".lemma"
 CONFIG_NAME = "machine.json"
 SECRET_NAME = "machine-secret"
+#: The CLI's own record of the pairing, kept apart from ``machine.json`` because
+#: the agent reads that one strictly: which server and mode the secret is for.
+PAIRING_NAME = "pairing.json"
 PYTHON_VERSION = "3.14"
 AGENT_MODULE = "sandbox_runtime.machine_link.agent"
 
@@ -646,36 +649,88 @@ def os_user() -> str:
 def require_host_tools() -> None:
     """What host mode needs, checked before anything is paired: a pairing
     that then fails here leaves a machine nobody can serve."""
+    if sys.platform.startswith("win"):
+        # The runtime drives processes through pty, termios and process
+        # groups, none of which Windows has; a container does.
+        raise SetupError(
+            "Host mode does not run on Windows. Connect this computer with --image."
+        )
     if shutil.which("uv") is None:
         raise SetupError(
             "Host mode needs uv: https://docs.astral.sh/uv/getting-started/installation/"
         )
 
 
-def previous_pairing(root: Path, mode: str) -> Paired | None:
-    """The machine this ``--root`` was already joined as, in this mode.
+def _same_server(a: str, b: str) -> bool:
+    return a.rstrip("/") == b.rstrip("/")
 
-    Running ``connect`` again -- after Ctrl-C, a reboot, an upgrade -- serves
-    that machine again instead of pairing a new one each time. ``disconnect``
-    is how to start over.
-    """
+
+def record_pairing(root: Path, *, server: str, mode: str, paired: Paired) -> None:
+    """Keep the secret and what it is for, before anything else can fail: the
+    server has spent the code, so a retry after a failed install must reuse
+    this machine rather than ask for another approval."""
     state = state_directory(root)
-    config_file, secret_file = state / CONFIG_NAME, state / SECRET_NAME
-    if not (config_file.exists() and secret_file.exists()):
-        return None
+    write_private(state / SECRET_NAME, paired.machine_secret + "\n")
+    record = {
+        # The server as the person named it, not the address a container
+        # reaches it by: that is what a later --base-url is compared to.
+        "server": server.rstrip("/"),
+        "mode": mode,
+        "connection_id": paired.connection_id,
+        "name": paired.name,
+    }
+    write_private(state / PAIRING_NAME, json.dumps(record, indent=2) + "\n")
+
+
+def pairing_record(root: Path) -> dict[str, str] | None:
     try:
-        config = json.loads(config_file.read_text(encoding="utf-8"))
-        secret = secret_file.read_text(encoding="utf-8").strip()
+        record = json.loads(
+            (state_directory(root) / PAIRING_NAME).read_text(encoding="utf-8")
+        )
     except OSError, ValueError:
         return None
-    if config.get("mode") != mode or not secret or not config.get("connection_id"):
+    return record if isinstance(record, dict) else None
+
+
+def previous_pairing(root: Path, mode: str, server: str) -> Paired | None:
+    """The machine this ``--root`` was already joined as.
+
+    Running ``connect`` again -- after Ctrl-C, a reboot, an upgrade, a failed
+    install -- serves that machine again instead of pairing a new one each
+    time. A root joined to another server or in the other mode is refused, not
+    re-paired: its secret belongs to that server, and pairing over it would
+    leave the first machine running with nothing here able to remove it.
+    ``disconnect`` is how to start over. A root without the record (joined
+    before it was kept) is not reused.
+    """
+    record = pairing_record(root)
+    if record is None or not record.get("connection_id"):
         return None
+    try:
+        secret = (
+            (state_directory(root) / SECRET_NAME).read_text(encoding="utf-8").strip()
+        )
+    except OSError:
+        return None
+    if not secret:
+        return None
+    joined = str(record.get("server") or "")
+    if not _same_server(joined, server):
+        raise SetupError(
+            f"{root} is joined to {joined}, not {server.rstrip('/')}. "
+            f"Run `lemma machine disconnect --root {root}` against {joined} first."
+        )
+    if record.get("mode") != mode:
+        raise SetupError(
+            f"{root} already serves {record.get('name')} in {record.get('mode')} mode. "
+            f"Run `lemma machine disconnect --root {root}` first to connect it in "
+            f"{mode} mode."
+        )
     return Paired(
-        connection_id=str(config["connection_id"]),
-        # Not kept in machine.json, whose keys the agent reads strictly; nothing
-        # after pairing reads it.
+        connection_id=str(record["connection_id"]),
+        # Nothing after pairing reads it.
         user_id="",
-        name=str(config["name"]),
+        name=str(record["name"]),
         machine_secret=secret,
     )
 
@@ -735,10 +790,11 @@ def connect(
     than pairing another one."""
     root = options.root
     mode = "image" if options.image else "host"
+    # Before any I/O that carries the secret: it must only reach its own server.
+    paired = previous_pairing(root, mode, options.api_url)
     if not options.image:
         steps.require_host_tools()
     installation = installation_id(root)
-    paired = previous_pairing(root, mode)
     if paired is not None:
         progress(
             f"Serving {paired.name} again (joined from {root}); "
@@ -755,9 +811,9 @@ def connect(
             open_browser=options.open_browser,
         )
         progress(f"Approved as {paired.name}.")
+        record_pairing(root, server=options.api_url, mode=mode, paired=paired)
     state = state_directory(root)
     secret_file = state / SECRET_NAME
-    write_private(secret_file, paired.machine_secret + "\n")
     config_file = state / CONFIG_NAME
     if options.image:
         description = steps.runtime_description(options.api_url, paired.machine_secret)
@@ -814,28 +870,52 @@ def connect(
 
 
 def disconnect(api_url: str, root: Path, *, warn, steps: Steps = Steps()) -> str:
-    """Revoke this machine, stop serving it, forget its secret; its name."""
+    """Revoke this machine, stop serving it, forget its secret; its name.
+
+    A root whose install failed after pairing has the pairing record but no
+    ``machine.json``; it is disconnected all the same."""
+    from websockets.exceptions import WebSocketException
+
     state = state_directory(root)
     config_file = state / CONFIG_NAME
-    if not config_file.exists():
+    record = pairing_record(root)
+    if not config_file.exists() and record is None:
         raise SetupError(f"No machine is connected from {root}.")
-    config = json.loads(config_file.read_text(encoding="utf-8"))
-    name = str(config["name"])
+    joined = (record or {}).get("server")
+    if joined and not _same_server(str(joined), api_url):
+        # The secret is that server's; never send it anywhere else.
+        raise SetupError(
+            f"{root} is joined to {joined}, not {api_url.rstrip('/')}; "
+            f"disconnect it against {joined}."
+        )
+    config = (
+        json.loads(config_file.read_text(encoding="utf-8"))
+        if config_file.exists()
+        else {}
+    )
+    mode = str(config.get("mode") or (record or {}).get("mode") or "host")
+    name = str(config.get("name") or (record or {}).get("name"))
+    home = config.get("home") or (IMAGE_HOME if mode == "image" else str(root))
     secret = (state / SECRET_NAME).read_text(encoding="utf-8").strip()
     try:
         asyncio.run(
             steps.revoke(
-                api_url,
+                str(joined or api_url),
                 secret,
-                installation=str(config["installation_id"]),
-                home=str(config["home"]),
+                installation=str(
+                    config.get("installation_id") or installation_id(root)
+                ),
+                home=str(home),
             )
         )
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, WebSocketException) as error:
+        # The link dropping mid-revoke is a failure to tell Lemma, not a reason
+        # to leave the machine running here with its credential.
         warn(f"Could not tell Lemma ({error}); remove {name} there too.")
     steps.remove_service(name)
-    if config.get("mode") == "image":
+    if mode == "image":
         steps.remove_container(name)
     (state / SECRET_NAME).unlink(missing_ok=True)
+    (state / PAIRING_NAME).unlink(missing_ok=True)
     config_file.unlink(missing_ok=True)
     return name

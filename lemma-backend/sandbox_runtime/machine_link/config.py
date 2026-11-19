@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -71,11 +72,21 @@ class MachineConfig:
 
 def write_secret(path: Path, secret: str) -> None:
     """The secret, readable by its owner only, written so it never exists with
-    wider permissions even for an instant."""
+    wider permissions even for an instant.
+
+    A fresh owner-only file renamed over the old one, not the old one
+    truncated: ``O_CREAT``'s mode applies only to a file it creates, so
+    rewriting one left ``0644`` would keep it ``0644``.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        handle.write(secret + "\n")
+    descriptor, raw = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(secret + "\n")
+        os.replace(raw, path)
+    except BaseException:
+        Path(raw).unlink(missing_ok=True)
+        raise
 
 
 def platform_name() -> str:

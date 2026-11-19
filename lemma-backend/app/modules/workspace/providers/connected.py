@@ -62,9 +62,6 @@ from app.modules.workspace.providers.runtime_client import WorkspaceRuntimeClien
 from app.modules.workspace.providers.runtime_errors import WorkspaceRuntimeError
 from app.modules.workspace.services.machine_link.network import machine_url
 
-#: The ports a machine serves the runtime and relay on when it reports none.
-DEFAULT_RUNTIME_PORT = 8080
-
 
 def runtime_token(signer: RuntimeCredentialSigner, connection_id: UUID) -> str:
     """The credential Lemma presents to a machine's runtime.
@@ -223,15 +220,19 @@ class ConnectedMachineProvider(DockerOpsMixin):
 
     # ----------------------------------------------------------- runtime reach
 
-    def _port(self, key: str, default: int | None) -> int | None:
+    def _port(self, key: str) -> int | None:
         value = self._connection.capabilities.get(key)
-        return value if isinstance(value, int) else default
+        return value if isinstance(value, int) else None
 
     async def _runtime_client(
         self, provider_id: str, *, deadline_at: datetime
     ) -> WorkspaceRuntimeClient:
-        port = self._port("runtime_port", DEFAULT_RUNTIME_PORT)
-        assert port is not None
+        port = self._port("runtime_port")
+        if port is None:
+            # Every ``hello`` reports the port, so none means the machine has
+            # never connected. Guessing one would probe whatever else listens
+            # there and read its answer as the runtime failing.
+            raise self._not_connected()
         return WorkspaceRuntimeClient(
             machine_url(self._connection.id, port),
             runtime_token(self._runtime_credentials, self._connection.id),
@@ -260,12 +261,16 @@ class ConnectedMachineProvider(DockerOpsMixin):
 
         directory = path.rpartition("/")[0] or "/"
         await self.create_directory(instance, path=directory, deadline_at=deadline_at)
+        # 0600, as every other fabric delivers it: through the file API alone
+        # it would take the runtime's umask and be readable by every process
+        # of the person's on the machine.
         await self.write_file(
             instance,
             path=path,
             data=chunks(),
             expected_sha256=None,
             deadline_at=deadline_at,
+            mode=0o600,
         )
 
     # --------------------------------------------- operations, with path moves
@@ -312,14 +317,16 @@ class ConnectedMachineProvider(DockerOpsMixin):
         data: AsyncIterable[bytes],
         expected_sha256: str | None,
         deadline_at,
+        mode: int | None = None,
     ) -> FileStat:
-        stat = await super().write_file(
-            instance,
-            path=self.to_machine(path),
-            data=data,
-            expected_sha256=expected_sha256,
-            deadline_at=deadline_at,
-        )
+        async with self._ops_client(instance, deadline_at=deadline_at) as client:
+            stat = await client.write_file(
+                self.to_machine(path),
+                data,
+                expected_sha256=expected_sha256,
+                deadline_at=deadline_at,
+                mode=mode,
+            )
         return self._stat_out(stat)
 
     async def move_file(

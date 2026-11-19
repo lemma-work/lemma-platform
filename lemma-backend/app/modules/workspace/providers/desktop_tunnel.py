@@ -176,10 +176,14 @@ class _TunnelTransport(httpx.AsyncHTTPTransport):
 
 
 def sandbox_transport() -> httpx.AsyncBaseTransport | None:
-    """The transport for a client that may address a Desktop sandbox.
+    """The transport for a client that may address a Desktop sandbox or a
+    connected machine.
 
-    `None` everywhere but Desktop on macOS, so a caller passes it straight to
+    `None` where neither can be addressed -- not Desktop on macOS, and
+    connected machines off -- so a caller passes it straight to
     `httpx.AsyncClient(transport=...)` and gets httpx's own default otherwise.
+    With connected machines on it is a transport even without a Desktop
+    tunnel, so non-None does not mean this is Desktop.
     """
     path = tunnel_socket()
     if path is None and not _machines_enabled():
@@ -195,8 +199,10 @@ def transport_for(socket_path: str | None) -> httpx.AsyncBaseTransport:
 async def tunneled_socket(
     url: str, *, socket_path: str | None = None
 ) -> socket.socket | None:
-    """A socket already through the tunnel to `url`'s port, or `None` if `url`
-    is not a Desktop guest address or there is no tunnel.
+    """A socket already through to `url`'s port: down a connected machine's
+    link when `url` names one, else through the Desktop tunnel. `None` if `url`
+    is neither a machine nor a Desktop guest address, or there is no tunnel --
+    so a socket does not mean this is Desktop.
 
     For clients that take a connected socket, like `websockets.connect(sock=...)`.
     `socket_path` defaults to the configured tunnel.

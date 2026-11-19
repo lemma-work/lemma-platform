@@ -87,13 +87,17 @@ class MachineLinkStore:
             await uow.commit()
         return opened
 
-    async def heartbeat(self, connection_id: UUID, report: MachineReport) -> bool:
+    async def heartbeat(
+        self, connection_id: UUID, *, generation: int, report: MachineReport
+    ) -> int | None:
+        """The generation that owns the machine after this beat; None once
+        revoked. Only the owning generation's report is recorded."""
         async with self._uow_factory() as uow:
-            alive = await MachineConnectionRepository(uow).heartbeat(
-                connection_id, report=report_columns(report)
+            owner = await MachineConnectionRepository(uow).heartbeat(
+                connection_id, generation=generation, report=report_columns(report)
             )
             await uow.commit()
-        return alive
+        return owner
 
     async def link_generation(self, connection_id: UUID) -> int | None:
         async with self._uow_factory() as uow:

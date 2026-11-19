@@ -106,3 +106,42 @@ def test_an_existing_workspace_becomes_a_default_machine_and_it_rolls_back() -> 
         _migrate(database_url, "upgrade", REVISION)
         assert _machine_columns(plain_url, workspace) == default_machine
         assert _tables(plain_url) == set(TABLES)
+
+
+def _pairing_schema(plain_url: str) -> tuple[bool, set[str], set[str]]:
+    """Whether the pairings table exists; the connection columns that exist;
+    and those of ``secret_hash``/``home`` that take NULL."""
+    with psycopg.connect(plain_url) as connection:
+        table = connection.execute(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_name = 'machine_connection_pairings'"
+        ).fetchone()
+        rows = connection.execute(
+            "SELECT column_name, is_nullable FROM information_schema.columns "
+            "WHERE table_name = 'machine_connections'"
+        ).fetchall()
+    columns = {name for name, _ in rows}
+    nullable = {name for name, is_nullable in rows if is_nullable == "YES"} & {
+        "secret_hash",
+        "home",
+    }
+    return table is not None, columns & {"installation_id", "platform"}, nullable
+
+
+def test_pairing_relaxes_the_connection_and_adds_its_codes_and_rolls_back() -> None:
+    after = "0075_machine_connection_pairing"
+    with get_postgres_container() as postgres:
+        database_url = get_postgres_url(postgres)
+        plain_url = database_url.replace("postgresql+asyncpg", "postgresql")
+        _migrate(database_url, "upgrade", REVISION)
+        assert _pairing_schema(plain_url) == (False, set(), set())
+
+        _migrate(database_url, "upgrade", after)
+        paired = (True, {"installation_id", "platform"}, {"secret_hash", "home"})
+        assert _pairing_schema(plain_url) == paired
+
+        _migrate(database_url, "downgrade", REVISION)
+        assert _pairing_schema(plain_url) == (False, set(), set())
+
+        _migrate(database_url, "upgrade", after)
+        assert _pairing_schema(plain_url) == paired

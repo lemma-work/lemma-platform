@@ -543,7 +543,19 @@ async def splice(stream: MuxStream, reader, writer) -> None:
         if writer.can_write_eof():
             writer.write_eof()
 
-    tasks = [asyncio.ensure_future(outbound()), asyncio.ensure_future(inbound())]
+    async def reset() -> None:
+        # Once the peer's FIN ends ``inbound``, nothing else would notice a
+        # later RESET: ``outbound`` is parked on a local socket that may stay
+        # idle for ever. A stream that merely finished is no reason to stop.
+        await stream.wait_closed()
+        if stream._reset is not None:
+            raise stream._reset
+
+    tasks = [
+        asyncio.ensure_future(outbound()),
+        asyncio.ensure_future(inbound()),
+        asyncio.ensure_future(reset()),
+    ]
     try:
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
         for task in done:

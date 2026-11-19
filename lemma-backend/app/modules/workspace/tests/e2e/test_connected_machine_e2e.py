@@ -129,6 +129,18 @@ async def test_a_paired_machine_runs_processes_and_files_through_its_link(
         ]
         assert b"".join(chunks) == b"the"
 
+        # A delivered secret is its owner's alone, as on every other fabric,
+        # not left at the runtime's umask.
+        await provider.deliver_secret(
+            instance,
+            path="/home/user/lemma/secrets/token",
+            value=b"s3cret",
+            deadline_at=_deadline(),
+        )
+        secret = machine.root / "lemma" / "secrets" / "token"
+        assert secret.read_bytes() == b"s3cret"
+        assert secret.stat().st_mode & 0o777 == 0o600
+
         code, output = await _run(
             provider, instance, "pwd && cat hello.txt", cwd="/home/user/lemma"
         )
@@ -178,8 +190,12 @@ async def test_a_link_killed_mid_stream_fails_the_stream_and_the_machine_comes_b
         # network does: the link ends and every stream on it with it.
         await local.mux.close()
         local._stop(1011, "killed")
+        # The /health answer may already be buffered; read past it. A clean
+        # end of stream instead of a reset leaves the loop and fails the test.
         with pytest.raises(Exception) as broken:
-            await asyncio.wait_for(stream.read(), 5)
+            async with asyncio.timeout(5):
+                while await stream.read():
+                    pass
         assert "link" in str(broken.value)
 
         # The agent reconnects with backoff; the next operation works.

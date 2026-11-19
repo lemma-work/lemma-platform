@@ -423,16 +423,23 @@ class ComputeLinkSession:
             )
             return
         try:
-            alive = await self._store.heartbeat(self.connection_id, body.machine)
+            owner = await self._store.heartbeat(
+                self.connection_id, generation=self.generation, report=body.machine
+            )
         except TRANSIENT_ERRORS:
             logger.warning(
                 "workspace.machine_link.heartbeat_skipped.degraded",
                 connection_id=str(self.connection_id),
                 exc_info=True,
             )
-            alive = True
-        if not alive:
+            owner = self.generation
+        if owner is None:
             raise LinkClose(LinkCloseCode.REVOKED_OR_MISSING, REVOKED_OR_MISSING_REASON)
+        if owner != self.generation:
+            # A newer link reconnected the machine: its report is the machine's
+            # now, and this one was not written over it.
+            self._superseded(owner)
+            return
         self.report = body.machine
         await self._writer.send_frame(
             ServerFrameType.CONTROL_OK, ComputeControlOkBody(), re=frame.id

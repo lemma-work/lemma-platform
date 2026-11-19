@@ -156,6 +156,15 @@ and splices. No route is "not connected". The replica's own address is
 `MACHINE_LINK_REPLICA_URL`, else `POD_IP` (set it from the downward API) on
 `MACHINE_LINK_REPLICA_PORT`.
 
+**Deploying more than one replica.** The default address is `http://`, so the
+replica proxy is plaintext `ws://` on the cluster network: the HMAC proves the
+caller, but a machine's files, process I/O and browser bytes cross that network
+unencrypted. That is acceptable only where the cluster network is trusted.
+Elsewhere set `MACHINE_LINK_REPLICA_URL` to an `https://` address each replica
+answers on -- a service mesh with mTLS, or an internal TLS listener -- and it is
+dialled as `wss://`. Lemma ships no such listener itself. A single replica never
+proxies.
+
 ## The runtime on the machine
 
 - **Host mode** (default). The CLI builds `<root>/.lemma/env` with uv and

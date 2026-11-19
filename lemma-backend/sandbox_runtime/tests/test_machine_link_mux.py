@@ -335,3 +335,37 @@ async def test_splice_carries_a_stream_to_a_local_port_and_back() -> None:
     finally:
         server.close()
         await server.wait_closed()
+
+
+async def test_a_reset_after_the_peers_fin_ends_the_splice_of_an_idle_port() -> None:
+    async def serve_idle(reader, writer) -> None:
+        # Reads to EOF (the peer's FIN), then neither writes nor closes.
+        await reader.read()
+        await asyncio.Event().wait()
+
+    server = await asyncio.start_server(serve_idle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    spliced: asyncio.Queue[asyncio.Task[None]] = asyncio.Queue()
+
+    async def accept(stream: MuxStream, target: dict[str, object]) -> None:
+        reader, writer = await asyncio.open_connection("127.0.0.1", target["port"])
+        await stream._mux.accept(stream)
+        task = asyncio.ensure_future(mux.splice(stream, reader, writer))
+        await spliced.put(task)
+        await task
+
+    try:
+        async with linked(accept) as (opener, _, _, _):
+            stream = await opener.open({"kind": "port", "port": port})
+            await stream.write_eof()
+            splicing = await spliced.get()
+            await asyncio.sleep(0.05)
+            assert not splicing.done(), "half close keeps the other direction open"
+            await stream.reset()
+            with pytest.raises(StreamReset):
+                await asyncio.wait_for(splicing, 2)
+    finally:
+        server.close()
+        # The idle handler never notices its client went; it is not waited on.
+        server.close_clients()
+        await server.wait_closed()

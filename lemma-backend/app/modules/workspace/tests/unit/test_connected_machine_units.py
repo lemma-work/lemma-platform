@@ -210,3 +210,66 @@ def network_name(sandbox_id, kind) -> str:
     from app.modules.workspace.providers import naming
 
     return naming.container_name(sandbox_id, kind, 1)
+
+
+@pytest.mark.asyncio
+async def test_a_machine_that_never_reported_its_runtime_port_is_not_connected() -> (
+    None
+):
+    """Every ``hello`` reports the port. With none there is no port to guess:
+    a guess probes whatever else listens there and fails the machine for it."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.modules.workspace.domain.sandbox import SandboxKind
+    from app.modules.workspace.providers.base import ProviderInstance
+
+    provider = _provider("/Users/me/lemma-machine")
+    instance = ProviderInstance(provider_id="m", name="m")
+
+    with pytest.raises(MachineNotConnected, match="laptop is not connected"):
+        await provider.wait_ready(
+            instance,
+            kind=SandboxKind.WORKSPACE,
+            deadline_at=datetime.now(timezone.utc) + timedelta(seconds=5),
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_connected_machine_is_refused_while_connected_machines_are_off(
+    monkeypatch,
+) -> None:
+    """Off, no route stands in front of the fabric, which would otherwise make
+    a sandbox of its own under the machine's id: refused before any provider is
+    asked."""
+    from app.modules.workspace.domain.machine_connection import connected_machine_id
+    from app.modules.workspace.domain.machine_errors import MachineConnectionsOff
+    from app.modules.workspace.services.sandbox_service import SandboxService
+
+    monkeypatch.setattr(workspace_settings, "machine_connections_enabled", False)
+    service = SandboxService(provider=None, uow_factory=None)
+    machine = connected_machine_id()
+
+    with pytest.raises(MachineConnectionsOff) as refused:
+        await service.ensure(machine)
+    assert refused.value.status_code == 409
+    with pytest.raises(MachineConnectionsOff):
+        await service.describe(machine)
+
+
+def test_a_revoked_machines_slug_fits_and_is_no_name_a_person_can_give() -> None:
+    from app.modules.workspace.domain.machine_connection import (
+        NAME_PATTERN,
+        connected_machine_id,
+    )
+    from app.modules.workspace.infrastructure.machine_connection_repository import (
+        retired_slug,
+    )
+
+    connection_id = connected_machine_id()
+    slug = retired_slug(connection_id)
+
+    # sandboxes.slug is VARCHAR(64); the longest name a person can give is 64.
+    assert len(slug) <= 64
+    assert NAME_PATTERN.fullmatch("a" * 64)
+    assert not NAME_PATTERN.fullmatch(slug)
+    assert slug != retired_slug(connected_machine_id())

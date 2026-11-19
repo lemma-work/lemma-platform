@@ -3,24 +3,34 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { lemma } from "@/session/client";
 
+/** The shortest code the lookup will try; a shorter one is a typo, not a code. */
+const MIN_CODE_LENGTH = 6;
+
 /** Approve a machine that ran `lemma machine connect`: see what is asking,
  *  name it, and let it in. The machine claims its own secret afterwards. */
 export function MachineApproval() {
     const params = new URLSearchParams(window.location.search);
     const [code, setCode] = useState(params.get("code") ?? "");
     const pod = params.get("pod");
-    const [entered, setEntered] = useState(Boolean(params.get("code")));
+    // The same bar the lookup sets: a too-short code in the link would
+    // otherwise wait on a lookup that never runs.
+    const [entered, setEntered] = useState(code.length >= MIN_CODE_LENGTH);
+    // What was approved, captured on success: the machine then claims the
+    // pairing and the server deletes it, so a later lookup 404s.
+    const [approved, setApproved] = useState<{
+        name: string;
+        displayName: string;
+    } | null>(null);
     const pairing = useQuery({
         queryKey: ["machine-pairing", code],
         queryFn: () => lemma().machineConnections.pairing(code),
-        enabled: entered && code.length >= 6,
+        enabled: entered && code.length >= MIN_CODE_LENGTH && approved === null,
     });
     const [name, setName] = useState("");
     const [share, setShare] = useState(Boolean(pod));
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
-    const [approved, setApproved] = useState<string | null>(null);
-    async function approve() {
+    async function approve(displayName: string) {
         setBusy(true);
         setError("");
         try {
@@ -29,7 +39,7 @@ export function MachineApproval() {
                 name: name.trim() || null,
                 pod_id: share && pod ? pod : null,
             });
-            setApproved(connection.name);
+            setApproved({ name: connection.name, displayName });
         } catch (e) {
             setError(
                 e instanceof Error ? e.message : "Could not approve the machine.",
@@ -52,11 +62,21 @@ export function MachineApproval() {
                 </label>
                 <button
                     className="btn btn--primary"
-                    disabled={code.length < 6}
+                    disabled={code.length < MIN_CODE_LENGTH}
                     onClick={() => setEntered(true)}
                 >
                     Continue
                 </button>
+            </section>
+        );
+    if (approved)
+        return (
+            <section className="site-card">
+                <h2>{approved.displayName} is connected</h2>
+                <p>
+                    Agents can use it as <code>mine:{approved.name}</code>. The
+                    machine finishes setting itself up; you can close this page.
+                </p>
             </section>
         );
     if (pairing.isPending) return <p role="status">Looking up the code…</p>;
@@ -73,16 +93,6 @@ export function MachineApproval() {
             </section>
         );
     const machine = pairing.data;
-    if (approved)
-        return (
-            <section className="site-card">
-                <h2>{machine.display_name} is connected</h2>
-                <p>
-                    Agents can use it as <code>mine:{approved}</code>. The
-                    machine finishes setting itself up; you can close this page.
-                </p>
-            </section>
-        );
     return (
         <section className="site-card">
             <h2>Connect {machine.display_name}?</h2>
@@ -120,7 +130,7 @@ export function MachineApproval() {
             <button
                 className="btn btn--primary"
                 disabled={busy || machine.approved}
-                onClick={() => void approve()}
+                onClick={() => void approve(machine.display_name)}
             >
                 {busy ? "Connecting…" : "Connect this machine"}
             </button>

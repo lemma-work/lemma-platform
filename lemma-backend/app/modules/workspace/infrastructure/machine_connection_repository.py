@@ -52,6 +52,16 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def retired_slug(connection_id: UUID) -> str:
+    """The slug a revoked connection's machine row is renamed to.
+
+    From the id alone, so it fits ``sandboxes.slug`` whatever the name's length
+    (33 of its 64 characters), and with a ``~`` no name may contain
+    (``NAME_PATTERN``), so it never takes a name a person could give.
+    """
+    return f"~{connection_id.hex}"
+
+
 def _connection(row: MachineConnectionModel) -> MachineConnection:
     return MachineConnection(
         id=row.id,
@@ -89,12 +99,7 @@ class MachineConnectionRepository:
         now: datetime | None = None,
     ) -> PendingPairing:
         timestamp = now or utcnow()
-        # Expired codes go as new ones arrive; nothing else reads them.
-        await self.session.execute(
-            delete(MachineConnectionPairingModel).where(
-                MachineConnectionPairingModel.expires_at < timestamp
-            )
-        )
+        await self._expire_pairings(timestamp)
         row = MachineConnectionPairingModel(
             code_hash=code_hash,
             claim_key_hash=claim_key_hash,
@@ -106,6 +111,41 @@ class MachineConnectionRepository:
         self.session.add(row)
         await self.session.flush()
         return self._pending(row)
+
+    async def _expire_pairings(self, now: datetime) -> None:
+        """Expired codes go as new ones arrive; nothing else reads them.
+
+        A code approved but never claimed made a connection and its machine,
+        which would otherwise hold the name and a slot of the plan's limit with
+        no machine ever able to use them: they are revoked with it. A claim
+        deletes its code, so a connection that completed its claim is never
+        reached from here.
+        """
+        unclaimed = (
+            await self.session.execute(
+                delete(MachineConnectionPairingModel)
+                .where(MachineConnectionPairingModel.expires_at <= now)
+                .returning(MachineConnectionPairingModel.connection_id)
+            )
+        ).scalars()
+        connection_ids = [value for value in unclaimed if value is not None]
+        if not connection_ids:
+            return
+        revoked = (
+            await self.session.execute(
+                update(MachineConnectionModel)
+                .where(
+                    MachineConnectionModel.id.in_(connection_ids),
+                    MachineConnectionModel.secret_hash.is_(None),
+                    MachineConnectionModel.revoked_at.is_(None),
+                )
+                .values(revoked_at=now)
+                .returning(MachineConnectionModel.id)
+                .execution_options(synchronize_session=False)
+            )
+        ).scalars()
+        for connection_id in list(revoked):
+            await self._retire_machine(connection_id, at=now)
 
     @staticmethod
     def _pending(row: MachineConnectionPairingModel) -> PendingPairing:
@@ -119,7 +159,7 @@ class MachineConnectionRepository:
         )
 
     async def _live_pairing(
-        self, code_hash: str, *, now: datetime, lock: bool = False
+        self, code_hash: str, *, now: datetime | None, lock: bool = False
     ) -> MachineConnectionPairingModel:
         statement = select(MachineConnectionPairingModel).where(
             MachineConnectionPairingModel.code_hash == code_hash
@@ -127,14 +167,14 @@ class MachineConnectionRepository:
         if lock:
             statement = statement.with_for_update()
         row = (await self.session.execute(statement)).scalar_one_or_none()
-        if row is None or row.expires_at < now:
-            raise PairingNotFound("That code is unknown or has expired.")
-        return row
+        # The time is read once the row lock is held: a code that expired while
+        # this waited on another approval or claim is expired.
+        return _unexpired(row, now)
 
     async def pending_pairing(
         self, code_hash: str, *, now: datetime | None = None
     ) -> PendingPairing:
-        return self._pending(await self._live_pairing(code_hash, now=now or utcnow()))
+        return self._pending(await self._live_pairing(code_hash, now=now))
 
     async def approve_pairing(
         self,
@@ -152,8 +192,7 @@ class MachineConnectionRepository:
         advisory lock on the person, so two approvals racing past the plan's
         limit serialise -- a row lock cannot, when there are no rows yet.
         """
-        timestamp = now or utcnow()
-        pairing = await self._live_pairing(code_hash, now=timestamp, lock=True)
+        pairing = await self._live_pairing(code_hash, now=now, lock=True)
         if pairing.connection_id is not None:
             raise PairingAlreadyApproved("That code was already approved.")
         if limit is not None:
@@ -164,6 +203,7 @@ class MachineConnectionRepository:
                     )
                 )
             )
+            _unexpired(pairing, now)
             live = (
                 await self.session.execute(
                     select(func.count())
@@ -206,8 +246,13 @@ class MachineConnectionRepository:
 
     async def _machine_row(self, row: MachineConnectionModel) -> None:
         """The machine ``mine:<name>`` resolves to: a ``sandboxes`` row of the
-        person's, named by the connection and sharing its id."""
-        await SandboxRepository(self.uow).ensure_row(
+        person's, named by the connection and sharing its id.
+
+        ``ensure_row`` hands back a row already holding the slug -- another
+        machine of the person's under that name (Desktop's ``host-<hex>``, a
+        cloud machine) -- rather than making one; that name is taken.
+        """
+        machine = await SandboxRepository(self.uow).ensure_row(
             sandbox_id=row.id,
             kind=SandboxKind.WORKSPACE,
             owner_kind=SandboxOwnerKind.USER,
@@ -222,6 +267,10 @@ class MachineConnectionRepository:
                 "created_by": row.user_id,
             },
         )
+        if machine.id != row.id:
+            raise ConnectionNameTaken(
+                f"You already have a machine named {row.name}. Choose another name."
+            )
 
     async def claim_pairing(
         self,
@@ -238,8 +287,7 @@ class MachineConnectionRepository:
         an unknown or expired code, and for a claim key that is not the one the
         code was asked for with -- the same refusal, so a guess learns nothing.
         """
-        timestamp = now or utcnow()
-        pairing = await self._live_pairing(code_hash, now=timestamp, lock=True)
+        pairing = await self._live_pairing(code_hash, now=now, lock=True)
         if pairing.claim_key_hash != claim_key_hash:
             raise PairingNotFound("That code is unknown or has expired.")
         if pairing.connection_id is None:
@@ -302,23 +350,33 @@ class MachineConnectionRepository:
         self,
         connection_id: UUID,
         *,
+        generation: int,
         report: dict[str, object],
         now: datetime | None = None,
-    ) -> bool:
-        """Record a beat; False when the connection was revoked meanwhile."""
+    ) -> int | None:
+        """Record a beat from the link of ``generation``.
+
+        Returns the generation that owns the machine: ``generation`` when the
+        beat was recorded, a newer one when that link was superseded -- whose
+        report, runtime port included, is the machine's now, so the old link's
+        is not written -- and None once the connection is revoked.
+        """
         updated = (
             await self.session.execute(
                 update(MachineConnectionModel)
                 .where(
                     MachineConnectionModel.id == connection_id,
                     MachineConnectionModel.revoked_at.is_(None),
+                    MachineConnectionModel.link_generation == generation,
                 )
                 .values(last_seen_at=now or utcnow(), **report)
                 .returning(MachineConnectionModel.id)
                 .execution_options(synchronize_session=False)
             )
         ).scalar_one_or_none()
-        return updated is not None
+        if updated is not None:
+            return generation
+        return await self.link_generation(connection_id)
 
     async def link_generation(self, connection_id: UUID) -> int | None:
         """The generation of the link that owns the machine; None once revoked."""
@@ -397,16 +455,29 @@ class MachineConnectionRepository:
         if row is None:
             raise ConnectionNotFound("No such connected machine.")
         row.revoked_at = now or utcnow()
-        # The machine row goes with it, and gives its name back: renamed so a
-        # machine joined later under the same name gets a row of its own.
-        await self.session.execute(
-            update(SandboxModel)
-            .where(SandboxModel.id == row.id)
-            .values(
-                desired_state=SandboxDesiredState.DELETED.value,
-                slug=f"{row.name}~{row.id.hex[-8:]}",
-                updated_at=row.revoked_at,
-            )
-        )
+        await self._retire_machine(row.id, at=row.revoked_at)
         await self.session.flush()
         return _connection(row)
+
+    async def _retire_machine(self, connection_id: UUID, *, at: datetime) -> None:
+        """The machine row goes with its connection, and gives its name back:
+        renamed so a machine joined later under the same name gets a row of
+        its own."""
+        await self.session.execute(
+            update(SandboxModel)
+            .where(SandboxModel.id == connection_id)
+            .values(
+                desired_state=SandboxDesiredState.DELETED.value,
+                slug=retired_slug(connection_id),
+                updated_at=at,
+            )
+        )
+
+
+def _unexpired(
+    row: MachineConnectionPairingModel | None, now: datetime | None
+) -> MachineConnectionPairingModel:
+    """The code, unless it is unknown or past -- or at -- its ``expires_at``."""
+    if row is None or row.expires_at <= (now or utcnow()):
+        raise PairingNotFound("That code is unknown or has expired.")
+    return row

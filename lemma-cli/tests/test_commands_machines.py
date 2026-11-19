@@ -382,3 +382,139 @@ def test_a_missing_tool_is_said_before_anything_is_paired(tmp_path):
             steps=_steps(seen, require_host_tools=no_uv),
         )
     assert "pair" not in seen
+
+
+def _never_pair(api_url, **kwargs):
+    raise AssertionError("a machine already joined must not pair again")
+
+
+def _connect(root, seen, *, api_url="https://api.example.test", image=False, **steps):
+    return setup.connect(
+        setup.ConnectOptions(api_url=api_url, root=root, image=image),
+        announce=_quiet,
+        progress=_quiet,
+        steps=_steps(seen, **steps),
+    )
+
+
+def test_a_root_serving_one_mode_is_not_repaired_in_the_other(tmp_path):
+    """Review: host mode over an image root paired a second machine and left
+    the container running with its credential, beyond `disconnect`."""
+    _connect(tmp_path, {}, image=True)
+    seen: dict[str, object] = {}
+
+    with pytest.raises(setup.SetupError, match="disconnect"):
+        _connect(tmp_path, seen, pair=_never_pair)
+
+    assert "provisioned" not in seen
+    record = json.loads((tmp_path / ".lemma" / "pairing.json").read_text())
+    assert record["mode"] == "image"
+
+
+def test_a_secret_is_never_sent_to_a_server_it_was_not_issued_by(tmp_path):
+    """Review: joining to server A then connecting against B sent A's bearer
+    secret to B."""
+    _connect(tmp_path, {}, api_url="https://a.example.test")
+    seen: dict[str, object] = {}
+
+    def no_io(*args, **kwargs):
+        raise AssertionError("nothing may reach the other server")
+
+    with pytest.raises(setup.SetupError, match="a.example.test"):
+        _connect(
+            tmp_path,
+            seen,
+            api_url="https://b.example.test",
+            pair=_never_pair,
+            provision_host=no_io,
+            runtime_description=no_io,
+        )
+    with pytest.raises(setup.SetupError, match="a.example.test"):
+        setup.disconnect(
+            "https://b.example.test", tmp_path, warn=_quiet, steps=_steps(seen)
+        )
+    assert "revoked" not in seen
+    assert (tmp_path / ".lemma" / "machine-secret").exists()
+
+
+def test_image_mode_on_a_local_server_serves_the_same_machine_again(tmp_path):
+    """The container's address for a local server is rewritten; the record
+    keeps the one the person named, so reconnecting still matches."""
+    _connect(tmp_path, {}, api_url="http://localhost:8000", image=True)
+    seen: dict[str, object] = {}
+
+    connected = _connect(
+        tmp_path, seen, api_url="http://localhost:8000", image=True, pair=_never_pair
+    )
+
+    assert connected.name == "laptop"
+    assert seen["image"]["config"]["api_url"] == "http://host.docker.internal:8000"
+
+
+def test_a_failed_install_after_approval_resumes_without_another_approval(tmp_path):
+    """Review: the server spends the code on approval, so a retry that paired
+    again asked twice and overwrote the first machine's secret."""
+
+    def fails(api_url, secret, root, *, progress):
+        raise setup.SetupError("Installing the runtime's dependencies failed")
+
+    with pytest.raises(setup.SetupError, match="dependencies"):
+        _connect(tmp_path, {}, provision_host=fails)
+    assert not (tmp_path / ".lemma" / "machine.json").exists()
+    seen: dict[str, object] = {}
+
+    connected = _connect(tmp_path, seen, pair=_never_pair)
+
+    assert connected.name == "laptop"
+    assert seen["provisioned"][1] == "s3cret"
+
+
+def test_a_root_whose_install_failed_can_still_be_disconnected(tmp_path):
+    def fails(api_url, secret, root, *, progress):
+        raise setup.SetupError("Downloading the runtime failed")
+
+    with pytest.raises(setup.SetupError):
+        _connect(tmp_path, {}, provision_host=fails)
+    seen: dict[str, object] = {}
+
+    name = setup.disconnect(
+        "https://api.example.test", tmp_path, warn=_quiet, steps=_steps(seen)
+    )
+
+    assert name == "laptop"
+    assert seen["revoked"]["secret"] == "s3cret"
+    assert not list((tmp_path / ".lemma").glob("pairing.json"))
+    assert not (tmp_path / ".lemma" / "machine-secret").exists()
+
+
+def test_disconnect_cleans_up_when_the_link_drops_mid_revoke(tmp_path):
+    """Review: a closed socket raised past the warning, so the container kept
+    running and the credential stayed on disk."""
+    from websockets.exceptions import ConnectionClosed
+
+    _connect(tmp_path, {}, image=True)
+    seen: dict[str, object] = {}
+    warnings: list[str] = []
+
+    async def dropped(api_url, secret, *, installation, home):
+        raise ConnectionClosed(None, None)
+
+    name = setup.disconnect(
+        "https://api.example.test",
+        tmp_path,
+        warn=warnings.append,
+        steps=_steps(seen, revoke=dropped),
+    )
+
+    assert name == "laptop"
+    assert warnings and "remove laptop there too" in warnings[0]
+    assert seen["container_removed"] == "laptop"
+    assert not (tmp_path / ".lemma" / "machine-secret").exists()
+
+
+def test_host_mode_is_refused_on_windows_before_anything_is_paired(monkeypatch):
+    from lemma_cli.cli_core import machine_setup
+
+    monkeypatch.setattr(machine_setup.sys, "platform", "win32")
+    with pytest.raises(machine_setup.SetupError, match="--image"):
+        machine_setup.require_host_tools()
