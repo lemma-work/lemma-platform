@@ -28,8 +28,9 @@ class FirstWorkspaceRequest(BaseModel):
         default=True,
         description=(
             "Make a private pod and assistant when the person would otherwise "
-            "land in no Lemma: only in an older organization that has no Lemma "
-            "of its own. A new organization is always made with one."
+            "land in no Lemma: an organization that has no Lemma of its own, "
+            "or one whose Lemma they left. A new organization is always made "
+            "with one."
         ),
     )
     own_organization: bool = Field(

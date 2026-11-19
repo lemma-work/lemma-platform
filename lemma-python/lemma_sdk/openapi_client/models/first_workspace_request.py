@@ -21,9 +21,9 @@ class FirstWorkspaceRequest:
             after it and open to colleagues from the same domain, when the person's address is verified and on a work
             domain; otherwise a workspace of one. false: a workspace of one whatever the address, for a deployment nobody
             else can reach.
-        with_pod (bool | Unset): Make a private pod and assistant when the person would otherwise land in no Lemma: only
-            in an older organization that has no Lemma of its own. A new organization is always made with one. Default:
-            True.
+        with_pod (bool | Unset): Make a private pod and assistant when the person would otherwise land in no Lemma: an
+            organization that has no Lemma of its own, or one whose Lemma they left. A new organization is always made with
+            one. Default: True.
     """
 
     own_organization: bool | Unset = False

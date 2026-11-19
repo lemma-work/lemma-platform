@@ -153,13 +153,16 @@ included.
 - **Where they land (`pod_id`):** the pod an accepted invitation named; else
   the organization's Lemma -- its oldest live pod open to members that takes
   in newcomers -- which the caller is added to as a pod user in this call if
-  they are not in it; else, with `with_pod`, a private pod of their own (an
-  organization older than its Lemma); else null.
+  they are not in it and are new to the organization; else, with `with_pod`,
+  a private pod of their own (an organization with no Lemma of its own, or a
+  member who left it); else null.
 - **Effect:** every membership made here gets the organization role assignment
   its permission checks read, the same as `org.create`, `org.join_auto_join`
   and `org.invitation.accept` write.
-- **Idempotent:** a repeat call returns the same organization and pod and
-  makes nothing; concurrent calls serialize per person.
+- **Idempotent:** a repeat call returns the same organization and makes
+  nothing; concurrent calls serialize per person. Once an invitation is
+  accepted it is no longer pending, so a repeat call lands on the
+  organization's Lemma rather than the pod the invitation named.
 - **Errors:** 403 an inactive or deleted account; 422 an unknown field.
 
 ## `users.work.set`

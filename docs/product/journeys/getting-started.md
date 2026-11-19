@@ -167,6 +167,10 @@ are shown with a retry action rather than an indefinite loading message.
 - Skipping the question shall be an answer too: the system shall not ask a
   person who has answered or skipped again.
 - Answering shall change nothing else the person has set.
+- The system shall show the answer to the person alone: not in an
+  organization's or a Lemma's list of people, and not to an app.
+- If an answer names a job the system does not offer, or its own words run past
+  120 characters, then the system shall refuse it and keep the answer it had.
 
 **Contracts:** `users.work.set`, `user.current.get`
 
@@ -402,7 +406,8 @@ are shown with a retry action rather than an indefinite loading message.
   make the new organization, open by invitation only, rather than refuse the
   sign-up.
 - An address on a public mail provider, or one not yet verified, shall claim no
-  domain and join nobody's organization.
+  domain and shall join no organization by its email domain. An invitation it
+  accepts still brings it in.
 
 **Contracts:** `users.ensure_first_workspace`, `org.suggested`
 

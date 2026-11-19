@@ -443,7 +443,14 @@ class PodJoinRequestService:
         *,
         org_role: OrganizationRole = OrganizationRole.ORG_MEMBER,
         pod_role: PodRole = PodRole.USER,
-    ) -> PodJoinRequestEntity:
+    ) -> Tuple[PodJoinRequestEntity, Optional[OrganizationMemberEntity]]:
+        """Approve a pending request, adding the asker to the pod.
+
+        Returns the request and, when approving it made the asker a member of
+        the organization, that new membership -- as ``request_join`` does --
+        so the caller writes the organization role assignment permission checks
+        read. The membership row alone grants nothing.
+        """
         pod = await self.pod_repository.get(pod_id)
         if not pod:
             raise PodNotFoundError()
@@ -474,6 +481,7 @@ class PodJoinRequestService:
             join_request.user_id,
             pod.organization_id,
         )
+        created_org_member: OrganizationMemberEntity | None = None
         if not target_org_member:
             # The org role is granted to a brand-new member here, so bound it to
             # what the approver may confer: only an org owner mints owners/editors.
@@ -486,6 +494,7 @@ class PodJoinRequestService:
                     role=org_role,
                 )
             )
+            created_org_member = target_org_member
 
         existing_pod_member = (
             await self.pod_member_repository.get_by_pod_and_org_member(
@@ -525,7 +534,10 @@ class PodJoinRequestService:
             org_role=target_org_member.role,
             pod_role=pod_role,
         )
-        return await self.pod_join_request_repository.update(join_request)
+        return (
+            await self.pod_join_request_repository.update(join_request),
+            created_org_member,
+        )
 
     async def reject_join_request(
         self,
