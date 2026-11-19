@@ -12,11 +12,11 @@ only a promise marked `covered` with no test is.
 | Status | Scenarios |
 | --- | ---: |
 | `covered` | 178 |
-| `gap` | 4 |
+| `gap` | 5 |
 | `manual` | 36 |
 | `planned` | 36 |
 | `withdrawn` | 2 |
-| **total** | **256** |
+| **total** | **257** |
 
 Scenario tests declaring a promise: 459.
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 260 | 389 |
+| OpenAPI operations | 260 | 419 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -295,6 +295,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-BROWSER-020` A login is the person's own, and it stays | `covered` | `test_one_persons_logins_are_not_anothers` |
 | `PS-BROWSER-021` A login that has stopped working says so | `manual` | — |
 | `PS-BROWSER-022` A person sees and undoes what their browser holds | `covered` | `test_nothing_saved_is_an_empty_list`, `test_signing_out_without_a_running_browser_is_refused` |
+| `PS-BROWSER-023` Nothing short of the person's own say-so loses a login | `gap` | — |
 | `PS-BROWSER-030` A person can watch, and drive, their own browser | `gap` | `test_asking_whether_a_browser_can_be_watched_starts_nothing` |
 
 ## [Surfaces and notifications](journeys/surfaces-and-notifications.md)

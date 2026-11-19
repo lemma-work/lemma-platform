@@ -33,6 +33,7 @@ from app.modules.pod_bundle.infrastructure.connector_grants import (
 )
 from app.modules.pod_bundle.domain.connector_plan import ConnectorChoice
 from app.modules.pod_bundle.infrastructure.connector_apply import apply_connector
+from app.modules.pod_bundle.infrastructure.agent_apply import apply_agent, apply_machine
 from app.modules.pod_bundle.infrastructure.schedule_apply import apply_schedule
 from app.modules.pod_bundle.infrastructure.surface_apply import apply_surface
 from app.modules.pod_bundle.domain.state import PlanStep, StepKind
@@ -83,6 +84,7 @@ class BundleApplier:
             StepKind.WORKFLOW: self._apply_workflow,
             StepKind.SURFACE: self._surface_step,
             StepKind.FILE: self._apply_file,
+            StepKind.MACHINE: self._apply_machine,
         }.get(step.kind)
         if handler is None:
             # APP and FUNCTION are applied by self-scoped runners because they
@@ -232,37 +234,27 @@ class BundleApplier:
             visibility=meta.get("visibility") or "POD",
         )
 
-    # --- agents ----------------------------------------------------------
+    # --- machines and agents ---------------------------------------------
 
-    async def _apply_agent(self, step: PlanStep) -> None:
-        from app.modules.agent.contracts.provisioning import create_agent, get_agent
-
-        existing = await get_agent(
-            self._uow, pod_id=self._pod_id, name=step.name, ctx=self._ctx
-        )
-        if existing is not None:
-            # Kept as it is. The plan keeps an agent the pod had, so this one
-            # is this import's own from before a crash, or arrived since.
-            return
-        payload = self._load("agents", step.name)
-        await create_agent(
-            self._uow,
+    async def _apply_machine(self, step: PlanStep) -> None:
+        """The dispatch table's uniform shape over `agent_apply.apply_machine`."""
+        await apply_machine(
+            step,
+            uow=self._uow,
             pod_id=self._pod_id,
             user_id=self._user_id,
-            name=step.name,
-            instruction=str(payload.get("instruction") or ""),
-            visibility=payload.get("visibility"),
+            load=self._load,
+        )
+
+    async def _apply_agent(self, step: PlanStep) -> None:
+        """The dispatch table's uniform shape over `agent_apply.apply_agent`."""
+        await apply_agent(
+            step,
+            uow=self._uow,
             ctx=self._ctx,
-            description=payload.get("description"),
-            icon_url=payload.get("icon_url"),
-            agent_runtime=_agent_runtime(payload),
-            # Toolsets are what let an imported agent actually *use* tools
-            # (POD, WEB_SEARCH, …). Without them, a granted agent still can't
-            # act — so they travel with the agent, not the deferred grants step.
-            toolsets=_agent_toolsets(payload),
-            input_schema=payload.get("input_schema"),
-            output_schema=payload.get("output_schema"),
-            metadata=payload.get("metadata"),
+            pod_id=self._pod_id,
+            user_id=self._user_id,
+            load=self._load,
         )
 
     async def _connector_step(self, step: PlanStep) -> None:
@@ -342,6 +334,7 @@ class BundleApplier:
         explicitly empty grant list clears them — see `_apply_function_grants`."""
         from app.modules.agent.contracts.provisioning import (
             get_agent,
+            sync_agent_machine_grant,
             sync_agent_memory_grant,
         )
 
@@ -368,6 +361,14 @@ class BundleApplier:
             pod_id=self._pod_id,
             agent_id=agent.id,
             toolsets=getattr(agent, "toolsets", None),
+            ctx=self._ctx,
+            created_by_user_id=self._user_id,
+        )
+        await sync_agent_machine_grant(
+            self._uow,
+            pod_id=self._pod_id,
+            agent_id=agent.id,
+            machine=getattr(agent, "machine", None),
             ctx=self._ctx,
             created_by_user_id=self._user_id,
         )
@@ -453,33 +454,6 @@ def _is_system_column(column: dict[str, Any]) -> bool:
     from lemma_pod_bundle.diff import _is_system_table_column
 
     return _is_system_table_column(column)
-
-
-def _agent_runtime(payload: dict[str, Any]):
-    from app.core.domain.runtime import AgentRuntimeConfig
-
-    raw = payload.get("agent_runtime")
-    if isinstance(raw, dict) and raw.get("profile_id"):
-        return AgentRuntimeConfig.model_validate(raw)
-    return None
-
-
-def _agent_toolsets(payload: dict[str, Any]) -> list[Any]:
-    """Map the manifest's ``toolsets`` list to :class:`AgentToolset` values,
-    dropping any the runtime doesn't recognize (forward-compat) and the reserved
-    ``VIEW_IMAGE`` toolset, which is never persisted."""
-    from app.modules.agent.contracts import AgentToolset
-
-    toolsets: list[AgentToolset] = []
-    for raw in payload.get("toolsets") or []:
-        try:
-            toolset = AgentToolset(str(raw))
-        except ValueError:
-            continue
-        if toolset is AgentToolset.VIEW_IMAGE:
-            continue
-        toolsets.append(toolset)
-    return toolsets
 
 
 def _read_json_file(path: Path, *, label: str, warnings: list[str]) -> dict[str, Any]:

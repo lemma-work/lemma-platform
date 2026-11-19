@@ -47,6 +47,9 @@ from app.sandbox_health import record_sandbox_probe
 from app.core.infrastructure.channels.channel_service import channel_service
 
 from app.modules.apps.api.host_routing import AppHostRoutingMiddleware
+from app.modules.workspace.api.controllers.machine_preview_proxy import (
+    MachinePreviewHostMiddleware,
+)
 from app.modules.agent_surfaces.api.public_cors import PublicWebCORSMiddleware
 from app.core.registry import assembly
 from app.core.registry.installed import OSS_MODULES
@@ -463,6 +466,11 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     # the public app asset endpoint. Outermost so the slug is resolved before
     # routing/auth (the rewritten /public/* path is unauthenticated).
     app.add_middleware(AppHostRoutingMiddleware)
+
+    # Machine previews: `p-<id>.<MACHINE_PREVIEW_DOMAIN>` onto the preview
+    # proxy, HTTP and WebSocket both (a dev server's hot reload is a socket).
+    # Outside the app-host router so a preview host is never read as an app.
+    app.add_middleware(MachinePreviewHostMiddleware)
 
     # Outside the app-host router so it sees the path the browser used
     # (`/_lemma/...` on an app origin): a stray session cookie's path is a

@@ -242,10 +242,10 @@ class ConversationResponse(BaseModel):
     def workspace_cwd(self) -> str:
         # The sibling of `pod_cwd`, and added for the same reason one filesystem
         # over. The file pane rebuilt this path itself as
-        # `/workspace/conversations/{id}` -- which is the *fallback* branch of
+        # `~/lemma/conversations/{id}` -- which is the *fallback* branch of
         # `ToolContext.get_workspace_cwd()`, reached only by contexts with
         # no conversation row. Every real run resolves through
-        # `workspace_location` to `/workspace/c/{date}/{slug}`, so the pane
+        # `workspace_location` to `~/lemma/c/{date}/{slug}`, so the pane
         # asked for a directory that has never existed and got back an empty
         # listing, because a missing directory and an empty one answer
         # identically.
@@ -517,6 +517,15 @@ class CreateAgentRequest(BaseModel):
     output_schema: JsonObject | None = None
     visibility: ResourceVisibility = ResourceVisibility.POD
     metadata: JsonObject | None = None
+    machine: str | None = Field(
+        default=None,
+        max_length=200,
+        description=(
+            "Where this agent's commands run: a machine ref such as "
+            "`pod:<name>` for one of the pod's machines. Unset runs on the "
+            "default machine of whoever the run acts for."
+        ),
+    )
     permissions: AgentPermissionsReplaceRequest | None = Field(
         default=None,
         description=(
@@ -539,6 +548,15 @@ class UpdateAgentRequest(BaseModel):
     output_schema: JsonObject | None = None
     visibility: ResourceVisibility | None = None
     metadata: JsonObject | None = None
+    machine: str | None = Field(
+        default=None,
+        max_length=200,
+        description=(
+            "Where this agent's commands run: a machine ref such as "
+            "`pod:<name>` for one of the pod's machines. Unset runs on the "
+            "default machine of whoever the run acts for."
+        ),
+    )
     permissions: AgentPermissionsReplaceRequest | None = Field(
         default=None,
         description=(

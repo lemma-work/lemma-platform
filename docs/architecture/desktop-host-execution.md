@@ -272,7 +272,7 @@ the user's Mac.
 
 The workspace **root** is a real host folder, and paths in ops are host
 absolute paths. The provider never rewrites a command string. The agent is told
-its working directory from the sandbox, not from a hard-coded `/workspace`:
+its working directory by the host, never a hard-coded machine path:
 
 - If the conversation is bound to a folder (the folder chip, or an Agent Host
   run's cwd), the root is that folder. The user's native tools and Lemma's

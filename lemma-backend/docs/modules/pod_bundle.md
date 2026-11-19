@@ -85,7 +85,7 @@ Every non-app apply step opens its own authorization/UoW scope and commits
 before the Redis `DONE` checkpoint. App steps self-scope around a sandbox
 build. A crash between commit and checkpoint replays a step that creates only
 what is still missing, so it converges. The format handles pod connectors,
-tables/data, files, functions, agents/grants/toolsets, workflows, schedules,
+tables/data, pod machines, files, functions, agents/grants/toolsets, workflows, schedules,
 apps/source, surfaces, and pod metadata.
 
 **An import adds to a pod and never replaces what is there.** A person may have
@@ -99,6 +99,7 @@ must not undo it (`infrastructure/kept_parts.py`):
 | A function, agent, workflow, schedule, surface or app, by name | `SKIP` | Not run. Its code, instructions, settings, visibility, grants and the release an app serves stay as they are; no grants step is planned for a kept function or agent |
 | A file or folder, by path | `SKIP` | Not run. What the bundle adds inside a kept folder is still created |
 | A table the bundle seeds | The rows' `TABLE_DATA` step is `SKIP` | Rows load only into a table the import creates: rows without ids would be added twice, and rows with ids would be written over a row someone edited |
+| A pod machine, by name | `SKIP` | Not run. Its template, size and run slots stay as they are; only a machine the import creates is checked against the target's plan |
 | A pod connector of the same connector and mode | `SKIP` (`EXISTS`) | Checked again, never redeclared |
 
 A kept step is planned `SKIP` and marked `SKIPPED`, with the reason in its
@@ -112,6 +113,16 @@ request for compatibility.
 Nothing on this path replaces. A builder redeploying their own pod from a local
 bundle uses lemma-cli's direct import (`lemma pods import`, upsert by default),
 which writes through the API and never reaches this importer.
+
+A pod machine travels as `machines/<name>/<name>.json` — `name`, optional
+`display_name`, `template` (`workspace` | `workspace-docker`), optional `size`
+(`<vcpu>x<GB>`), optional `run_slots`. Its disk and instance do not travel. The
+MACHINE step is planned after tables and before every function, agent and
+`*_GRANTS` step, and creates the machine through
+`workspace.contracts.pod_machines` under the target's machine policy; a machine
+the pod already has is kept, like every other part. An agent's `machine` ref is
+exported portable (`pod:<source pod>:<name>` becomes `pod:<name>`); an agent's
+or function's `machine.use` grant names the machine by `resource_type: machine`.
 
 **Apps** (`infrastructure/app_builder.py`) with a `package.json` are rebuilt in
 the importing user's sandbox, because the build bakes in the pod id: `pnpm

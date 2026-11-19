@@ -72,6 +72,28 @@ handle.close(); // stop the stream and prevent further reconnects
 - **React.** In a component, prefer the hooks (`lemma-sdk/react`): `useLiveRecords({ client, tableName })` for a live record list that merges deltas **in place** (no flicker, no polling), or `useWatchChanges({ client, table, onChange })` to drive your own state/cache/`queryClient.invalidateQueries`. Both wrap this stream and close it on unmount.
 - **Standalone.** Outside a `LemmaClient` instance, import `watchDatastoreChanges(apiUrl, auth, podId, options)` and pass any `ChangeStreamTokenProvider`.
 
+### Machines
+
+`client.machines` reaches the computers commands, files and a browser run on. A machine is named by a ref: `"me"` (the person's own default machine), `"pod:<pod>:<name>"` (one a pod keeps, the pod by id or name), `"mine:<name>"` (one they connected), or its id.
+
+```ts
+const run = await client.machines.exec("me", { command: "npm test", cwd: "~/app" });
+for await (const event of run) {
+  if (event.type === "output") process.stdout.write(event.data);
+  else console.log("exited", event.exit_code);
+}
+
+const result = await client.machines.run("me", { command: "python --version" });
+console.log(result.exitCode, result.output);
+
+const listing = await client.machines.files.list("pod:abc:ci", { path: "/home/user" });
+const preview = await client.machines.previews.create("me", { port: 3000, visibility: "link" });
+```
+
+- **Output** comes over the process's WebSocket where there is one and from polling `/output` where there is not (or the socket drops), resuming from the last sequence either way. `run.input(...)`, `run.resize(...)` and `run.kill()` steer it.
+- **Namespaces.** `processes`, `files` (`list`/`stat`/`read`/`readWhole`/`write`/`delete`/`move`/`sync`), `previews`, `browser`, plus `run`, `startup`, `release`, `restart`, `reset` and `policy`. A pod's machines are managed flat, as in the Python SDK: `create({ name, ... })`, `update(name, changes)`, `delete(name)`, `grants(name)` and `setGrants(name, grants)`, in the client's pod unless `{ podId }` names another.
+- **Apps.** An app's page reaches the machines of its own pod, as its viewer, and never anybody's own `"me"`: that is not the pod's to offer. Creating, changing, deleting and granting machines stay the person's own.
+
 ## Browser bundle (no-build HTML)
 
 For a no-build HTML app or a conversation widget, load the prebuilt bundle from the host instead of npm-importing. The host injects pod context as `window.__LEMMA_CONFIG__` (podId / apiUrl / authUrl), so the client takes no arguments:
@@ -661,6 +683,10 @@ From `0.2.39` onward:
 - Workflow install/trigger APIs moved to `client.schedules`; create schedules with `workflow_name` or `agent_name` plus `schedule_type`.
 - Human form nodes can assign waits to a pod member id. Use `useWorkflowRunWaitAssignments` or `client.workflows.runs.waitingAssignedToMe()` to show work waiting for the signed-in member.
 - Pod member role updates, lookup, and removal use `pod_member_id`. Use `client.podMembers.lookupByUserId(...)` or `lookupByEmail(...)` when starting from user identity.
+
+After `0.9.0`:
+
+- `client.workspace` is removed: use `client.machines` with the ref `"me"` (`machines.startup("me")`, `machines.browser.access("me")`, `machines.files.list("me")`, and so on).
 
 ## Local Development
 

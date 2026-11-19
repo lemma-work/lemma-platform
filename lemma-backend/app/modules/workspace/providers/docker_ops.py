@@ -56,6 +56,7 @@ from app.modules.workspace.providers.runtime_errors import (
     WorkspaceRuntimeFileConflict,
     WorkspaceRuntimeFileNotFound,
     WorkspaceRuntimeFileRejected,
+    WorkspaceRuntimePathProtected,
     WorkspaceRuntimeProcessGone,
     WorkspaceRuntimeUnauthorized,
 )
@@ -273,6 +274,7 @@ class DockerOpsMixin:
     ) -> AsyncIterator[WorkspaceRuntimeClient]:
         from sandbox_runtime.errors import (
             SandboxPathConflict,
+            SandboxPathProtected,
             SandboxPathNotFound,
             SandboxProcessNotFound,
             SandboxRejected,
@@ -290,6 +292,8 @@ class DockerOpsMixin:
             raise SandboxPathNotFound(str(exc)) from exc
         except WorkspaceRuntimeFileConflict as exc:
             raise SandboxPathConflict(str(exc)) from exc
+        except WorkspaceRuntimePathProtected as exc:
+            raise SandboxPathProtected(str(exc)) from exc
         except WorkspaceRuntimeFileRejected as exc:
             raise SandboxRejected(str(exc)) from exc
         except WorkspaceRuntimeProcessGone as exc:
@@ -433,17 +437,28 @@ class DockerOpsMixin:
     async def reach_port(
         self, instance: ProviderInstance, *, port: int, deadline_at: datetime
     ) -> SandboxEndpoint:
-        """Where a published port of this sandbox can be reached.
+        """Where a port of this sandbox can be reached.
 
-        No headers and not public: the port is either on a private Docker
-        network or bound to loopback on the host, so reaching it at all already
-        means being inside the trust boundary.
+        Not public: the port is either on a private Docker network or bound to
+        loopback on the host, so reaching it at all already means being inside
+        the trust boundary.
+
+        A port the container did not publish, on a host with no private
+        network -- a laptop -- is reached through the workspace runtime's
+        `/ports/{port}` relay, which is published, with the runtime's own
+        credential. Without it a preview could only ever reach the ports the
+        runtime itself listens on, which is no preview at all.
         """
         inspected = await self._engine.inspect_container(
             instance.provider_id, deadline_at=deadline_at
         )
         if inspected is None:
             raise ProviderGone(f"sandbox container {instance.provider_id} is gone")
+        relayed = self._through_runtime(
+            inspected, provider_id=instance.provider_id, port=port
+        )
+        if relayed is not None:
+            return relayed
         try:
             url = self._base_url(inspected, runtime_port=port)
         except WorkspaceRuntimeError as exc:
@@ -456,6 +471,31 @@ class DockerOpsMixin:
             # close, where Desktop answers a clean 404.
             raise ProviderRejected(str(exc)) from exc
         return SandboxEndpoint(url=url)
+
+    def _through_runtime(
+        self, inspected: DockerContainerInspect, *, provider_id: str, port: int
+    ) -> SandboxEndpoint | None:
+        """The runtime relay's address for `port`, when nothing nearer reaches it."""
+        if self._config.private_network or self._runtime_credentials is None:
+            return None
+        if inspected.network_settings.ports.get(f"{port}/tcp"):
+            return None
+        kind = SandboxKind(
+            inspected.config.labels.get(LABEL_SANDBOX_KIND, SandboxKind.WORKSPACE.value)
+        )
+        if kind is not SandboxKind.WORKSPACE:
+            return None
+        runtime_port = profile_for(kind).runtime_port
+        try:
+            base = self._base_url(inspected, runtime_port=runtime_port)
+        except WorkspaceRuntimeError:
+            return None
+        return SandboxEndpoint(
+            url=f"{base}/ports/{port}",
+            headers={
+                "X-Lemma-Runtime-Token": self._runtime_credentials.token(provider_id)
+            },
+        )
 
     async def deliver_secret(
         self,

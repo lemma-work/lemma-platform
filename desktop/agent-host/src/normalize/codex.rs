@@ -204,8 +204,8 @@ mod tests {
     #[test]
     fn a_quoted_title_yields_its_subject() {
         assert_eq!(
-            quoted("Read file '/workspace/fixture/notes.txt'").as_deref(),
-            Some("/workspace/fixture/notes.txt")
+            quoted("Read file '/home/user/lemma/fixture/notes.txt'").as_deref(),
+            Some("/home/user/lemma/fixture/notes.txt")
         );
         assert_eq!(quoted("Search for 'two'").as_deref(), Some("two"));
         assert_eq!(quoted("List files"), None);

@@ -142,7 +142,7 @@ lemma apps open support-app          # open the DEPLOYED app in the agent browse
   `--nav sidebar|topbar|single-page`,
   `--style soft|neobrutal|editorial|terminal`, `--chat-mode page|popup|right-sidebar`,
   `--members/--no-members`, `--sdk-path <local-lemma-typescript>` (offline SDK),
-  `--proxy` (same-origin `/api` dev proxy — use this in the sandbox/agent browser),
+  `--proxy` (same-origin `/api` dev proxy — use this on a Lemma machine / in the agent browser),
   `--no-install`.
 - **Latest SDK, automatically.** `init` resolves the **latest published `lemma-sdk` from
   npm** and pins it (`^x.y.z`) in `package.json` (or a local `file:` when a sibling
@@ -153,7 +153,7 @@ lemma apps open support-app          # open the DEPLOYED app in the agent browse
   current token via `lemma auth print-token` and seeds `localStorage["lemma_token"]`
   before the app boots, so opening the dev URL in **any** browser (or the agent
   browser) is authenticated — no login UI, never written to a file, never shipped
-  in `vite build`. Inside the workspace sandbox use `--proxy` and
+  in `vite build`. On a Lemma machine use `--proxy` and
   `agent-browser open http://localhost:<port>`; for a deployed app use
   `lemma apps open <slug>` (registers the agent bearer scoped to the API origin).
 
@@ -209,6 +209,22 @@ where a write **auto-refreshes the matching list** (need a `QueryClientProvider`
 which the scaffold mounts). The scaffold depends on `lemma-sdk`, so its type
 declarations are in the app project's **`node_modules/lemma-sdk/dist/`** — read
 them for exact signatures (`cat node_modules/lemma-sdk/dist/react/useRecords.d.ts`).
+
+**Running code from an app: `client.machines`.** An app that runs a command,
+reads a file or opens a preview does it on a machine of **its own pod**, named
+by a ref: `"pod:<name>"` (or `"pod:<pod-id>:<name>"`).
+
+```ts
+const run = await client.machines.exec("pod:report", { command: "python report.py", cwd: "~/lemma/report" });
+for await (const event of run) { /* output events, then the exit */ }
+```
+
+The app acts as its viewer, as it does for every pod resource: a viewer whose
+pod role lets them use the machine (editors and admins) gets processes, files
+and previews; anyone else is told the machine does not exist. An app never
+reaches its viewer's own machine (`"me"`) -- that is not the pod's to offer --
+and the browser, its logins, a `home` reset, and creating, changing or granting
+machines stay the person's own.
 
 ## Addresses — a record's page, and other apps
 
@@ -329,13 +345,13 @@ adopt any one design system.
 ## Test it (and view it)
 
 - `npm run build` passes.
-- In `npm run dev` (auto-authed; in the sandbox open with
+- In `npm run dev` (auto-authed; on a Lemma machine open with
   `agent-browser open http://localhost:<port>` and scaffold with `--proxy`): walk
   one full DESIGN.md scenario — auth load, queue, select, a write, start/advance a
   workflow, submit an assigned form, file preview. Confirm `200`/`201`, not `401`.
 - **View it with your own eyes.** Use the browser snapshot loop (`browser` skill) +
   the **view-image** capability on a screenshot to actually *see* the rendered app;
-  and view-image works directly on pod/workspace files too (a `…/pages/page_0001.jpg`
+  and view-image works directly on pod or machine files too (a `…/pages/page_0001.jpg`
   child, an uploaded image) — see `file-viewer.md`.
 - **Ship a cover.** Before the final deploy, make the app's 1200×630 cover — the
   picture its links unfurl with and its card shows — and put it in the build at

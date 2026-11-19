@@ -266,7 +266,7 @@ async def test_send_message_starts_run_before_stream_body_is_consumed(
         data=SendMessageRequest(content="say ok"),
         user=SimpleNamespace(id=uuid4()),
         channel_service=channel_service,
-        request=SimpleNamespace(),
+        request=SimpleNamespace(state=SimpleNamespace()),
         uow_factory=uow_factory,
     )
 
@@ -303,7 +303,7 @@ async def test_stream_conversation_replays_terminal_failed_run(monkeypatch) -> N
         conversation_id=agent_run.conversation_id,
         user=SimpleNamespace(id=uuid4()),
         channel_service=channel_service,
-        request=SimpleNamespace(),
+        request=SimpleNamespace(state=SimpleNamespace()),
         uow_factory=uow_factory,
         agent_run_id=agent_run.id,
     )
@@ -342,7 +342,7 @@ async def test_stream_conversation_forwards_active_run_events(monkeypatch) -> No
         conversation_id=agent_run.conversation_id,
         user=SimpleNamespace(id=uuid4()),
         channel_service=channel_service,
-        request=SimpleNamespace(),
+        request=SimpleNamespace(state=SimpleNamespace()),
         uow_factory=uow_factory,
         agent_run_id=agent_run.id,
     )
@@ -383,7 +383,7 @@ async def test_send_message_encodes_a_dead_subscription_as_stream_error(
         data=SendMessageRequest(content="say ok"),
         user=SimpleNamespace(id=uuid4()),
         channel_service=channel_service,
-        request=SimpleNamespace(),
+        request=SimpleNamespace(state=SimpleNamespace()),
         uow_factory=uow_factory,
     )
     chunks = [chunk async for chunk in response.body_iterator]
@@ -421,7 +421,7 @@ async def test_send_message_raises_usage_limit_before_stream_starts(
             data=SendMessageRequest(content="say ok"),
             user=SimpleNamespace(id=uuid4()),
             channel_service=channel_service,
-            request=SimpleNamespace(),
+            request=SimpleNamespace(state=SimpleNamespace()),
             uow_factory=uow_factory,
         )
 
@@ -450,7 +450,7 @@ async def test_send_message_cancellation_releases_pubsub_subscription(
             data=SendMessageRequest(content="say ok"),
             user=SimpleNamespace(id=uuid4()),
             channel_service=channel_service,
-            request=SimpleNamespace(),
+            request=SimpleNamespace(state=SimpleNamespace()),
             uow_factory=uow_factory,
         )
 
@@ -485,7 +485,7 @@ class TestTheStreamSaysWhetherTheMessageStartedARun:
             data=SendMessageRequest(content="say ok"),
             user=SimpleNamespace(id=uuid4()),
             channel_service=_ChannelService(_empty_iterator()),
-            request=SimpleNamespace(),
+            request=SimpleNamespace(state=SimpleNamespace()),
             uow_factory=uow_factory,
         )
         chunks = [chunk async for chunk in response.body_iterator]

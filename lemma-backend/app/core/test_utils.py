@@ -6,6 +6,7 @@ import subprocess
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from collections.abc import Callable, Iterable
 from typing import Generator, Optional
 
 import psycopg
@@ -27,6 +28,115 @@ POSTGRES_USER = "test"
 POSTGRES_PASSWORD = "test"
 POSTGRES_DB = "test"
 DOCKER_LABEL = "lemma.e2e=true"
+
+#: Which pytest invocation started a container. Every sweep deletes by it:
+#: this invocation's own containers, or another's only once that invocation's
+#: process is gone. Several invocations share one Docker daemon as a matter of
+#: course -- parallel worktrees, a bench beside a suite -- and a tag that named
+#: only the harness let each one's cleanup delete the others' live Postgres and
+#: sandboxes mid-run.
+OWNER_LABEL_KEY = "lemma.e2e.owner"
+E2E_OWNER_PREFIX = "lemma-e2e"
+
+
+def invocation_pid() -> int:
+    """The pytest invocation's own pid: an xdist worker's parent started it."""
+    return os.getppid() if os.environ.get("PYTEST_XDIST_WORKER") else os.getpid()
+
+
+def invocation_owner() -> str:
+    return f"{E2E_OWNER_PREFIX}-{invocation_pid()}"
+
+
+def owner_pid(owner: str) -> int | None:
+    """The pid an owner tag names, or None for a tag that names none -- the
+    old fixed ``lemma-e2e``, or another stack's."""
+    prefix = f"{E2E_OWNER_PREFIX}-"
+    if not owner.startswith(prefix):
+        return None
+    head = owner[len(prefix) :].split("-", 1)[0]
+    return int(head) if head.isdigit() else None
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # someone else's process, alive
+    return True
+
+
+def owner_is_gone(owner: str, *, alive: Callable[[int], bool] = pid_alive) -> bool:
+    """Whether an owner's invocation has provably ended.
+
+    False for a tag that names no pid: nothing proves that owner gone, so its
+    containers are left to the age-gated reaper, which only takes stopped ones.
+    A reused pid reads as alive, which only delays a cleanup.
+    """
+    pid = owner_pid(owner)
+    return pid is not None and not alive(pid)
+
+
+def owned_by_gone(
+    rows: Iterable[tuple[str, str]], *, alive: Callable[[int], bool] = pid_alive
+) -> list[str]:
+    """The ids, of ``(id, owner)`` rows, whose owner is provably gone."""
+    return [
+        ident for ident, owner in rows if owner and owner_is_gone(owner, alive=alive)
+    ]
+
+
+def _labelled_rows(
+    kind: str, managed_filter: str, label_key: str
+) -> list[tuple[str, str]]:
+    key = "{{.ID}}" if kind == "ps" else "{{.Name}}"
+    command = (
+        ["docker", "ps", "-a"] if kind == "ps" else ["docker", "volume", "ls"]
+    ) + ["--filter", managed_filter, "--format", f'{key}\t{{{{.Label "{label_key}"}}}}']
+    listed = subprocess.run(command, capture_output=True, text=True, check=False)
+    rows = []
+    for line in listed.stdout.splitlines():
+        ident, _, owner = line.partition("\t")
+        if ident.strip():
+            rows.append((ident.strip(), owner.strip()))
+    return rows
+
+
+def sweep_gone_owners() -> list[str]:
+    """Remove the containers and sandbox volumes of invocations that ended
+    without cleaning up -- interrupted, killed. Never a live owner's."""
+    if not shutil.which("docker"):
+        return []
+    containers = owned_by_gone(
+        _labelled_rows("ps", f"label={OWNER_LABEL_KEY}", OWNER_LABEL_KEY)
+    ) + owned_by_gone(
+        _labelled_rows("ps", "label=managed-by=lemma-workspace", "lemma-owner")
+    )
+    if containers:
+        subprocess.run(
+            ["docker", "rm", "-f", "-v", *sorted(set(containers))],
+            check=False,
+            capture_output=True,
+        )
+    volumes = owned_by_gone(
+        _labelled_rows("volume", "label=managed-by=lemma-workspace", "lemma-owner")
+    )
+    if volumes:
+        subprocess.run(
+            [
+                "docker",
+                "volume",
+                "rm",
+                "-f",
+                *sorted(set(volumes)),
+                *(f"{v}-runtime" for v in volumes),
+            ],
+            check=False,
+            capture_output=True,
+        )
+    return containers + volumes
 
 
 class LemmaDockerContainer:
@@ -62,6 +172,11 @@ class LemmaDockerContainer:
             "-d",
             "--label",
             self.label,
+            *(
+                ("--label", f"{OWNER_LABEL_KEY}={invocation_owner()}")
+                if self.label == DOCKER_LABEL
+                else ()
+            ),
             "-p",
             f"127.0.0.1::{self.internal_port}",
         ]

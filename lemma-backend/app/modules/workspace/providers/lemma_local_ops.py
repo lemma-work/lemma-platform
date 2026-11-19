@@ -116,6 +116,7 @@ class LemmaLocalOpsMixin:
 
         from sandbox_runtime.errors import (
             SandboxPathConflict,
+            SandboxPathProtected,
             SandboxPathNotFound,
             SandboxProcessNotFound,
             SandboxRejected,
@@ -126,6 +127,7 @@ class LemmaLocalOpsMixin:
             WorkspaceRuntimeFileConflict,
             WorkspaceRuntimeFileNotFound,
             WorkspaceRuntimeFileRejected,
+            WorkspaceRuntimePathProtected,
             WorkspaceRuntimeProcessGone,
             WorkspaceRuntimeUnauthorized,
         )
@@ -142,6 +144,8 @@ class LemmaLocalOpsMixin:
                 raise SandboxPathNotFound(str(exc)) from exc
             except WorkspaceRuntimeFileConflict as exc:
                 raise SandboxPathConflict(str(exc)) from exc
+            except WorkspaceRuntimePathProtected as exc:
+                raise SandboxPathProtected(str(exc)) from exc
             except WorkspaceRuntimeFileRejected as exc:
                 # 413, 422 and 507: too big, not a path this runtime will take,
                 # no room. Docker has mapped these to a refusal since they
