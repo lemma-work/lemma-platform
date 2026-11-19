@@ -12727,6 +12727,20 @@
             "description": "GITHUB repo owner.",
             "title": "Owner"
           },
+          "path": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "pattern": "^[A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*(?:/[A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For GITHUB: the folder inside the repository that holds the bundle (its `pod.json`), e.g. 'install/mail', for a repository that holds several. Relative, with no leading '/' and no '.' or '..'. The job fails before planning when the folder is not there (GITHUB_PATH_NOT_FOUND) or holds no `pod.json` (GITHUB_PATH_NOT_A_BUNDLE). Omit for the repository itself. Refused with any other kind.",
+            "title": "Path"
+          },
           "ref": {
             "anyOf": [
               {
@@ -18992,7 +19006,7 @@
         "type": "object"
       },
       "PodRecipe": {
-        "description": "A record of a bundle installed into this pod (the durable trace of an\nimport; the ephemeral import job state is not kept). ``kind`` distinguishes an\nuploaded bundle from a GitHub-sourced one; ``repo_url`` is set for GitHub.",
+        "description": "A record of a bundle installed into this pod (the durable trace of an\nimport; the ephemeral import job state is not kept). ``kind`` distinguishes an\nuploaded bundle from a GitHub-sourced one; ``repo_url`` is set for GitHub, and\n``path`` when the bundle was a folder inside that repository.",
         "properties": {
           "format_version": {
             "anyOf": [
@@ -19029,6 +19043,17 @@
               }
             ],
             "title": "Name"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
           },
           "repo_url": {
             "anyOf": [
@@ -38310,7 +38335,7 @@
     },
     "/pods/{pod_id}/bundle/imports": {
       "post": {
-        "description": "Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from POST …/bundle/uploads); kind=GITHUB takes a repo (repo_url or owner+repo), fetched through the pod's `github` connector as the importer, or anonymously for a public repo; kind=TEMPLATE takes the name of a template that ships with Lemma (404 when there is none by that name). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.",
+        "description": "Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from POST …/bundle/uploads); kind=GITHUB takes a repo (repo_url or owner+repo), fetched through the pod's `github` connector as the importer, or anonymously for a public repo, and an optional `path` to a folder inside it that holds the bundle; kind=TEMPLATE takes the name of a template that ships with Lemma (404 when there is none by that name). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.",
         "operationId": "pod.bundle.import.start",
         "parameters": [
           {
