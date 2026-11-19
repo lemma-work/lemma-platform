@@ -10,8 +10,8 @@ purpose-built interface for one pod, so the people using the work do not have to
 understand the pod behind it.
 
 The promise for the person importing: nothing is applied until they have seen
-exactly what it will do to their pod. The promise for the person exporting:
-their credentials do not travel with it.
+exactly what it will do to their pod, and nothing they already have is replaced.
+The promise for the person exporting: their credentials do not travel with it.
 
 ---
 
@@ -50,12 +50,11 @@ their credentials do not travel with it.
 **Status:** covered
 
 - When a person starts an import, the system shall compare the bundle to their
-  pod and shall present a plan of what it would create, change, and remove.
+  pod and shall present a plan of what it would add, and of what it would keep
+  because the pod already has it.
 - The system shall say what the plan brings in plain language, and shall keep
   the component-by-component detail on the same screen for whoever wants it.
 - The system shall change nothing until the person approves the plan.
-- The system shall require explicit confirmation for anything destructive, named
-  individually rather than as a single blanket approval.
 - When an import starts, the system shall record `import.started`.
 
 **Contracts:** `pod.bundle.import.start`, `pod.bundle.import.get`, `pod.bundle.upload`, `import.started`
@@ -113,6 +112,22 @@ their credentials do not travel with it.
   shall say what is missing rather than importing something that cannot work.
 
 **Contracts:** `pod.bundle.import.apply`, `function.permissions.get`, `agent.permissions.get`
+
+### PS-PACK-015 — An import keeps what a pod already has
+**Status:** planned
+
+- When an import brings something the pod already has, the system shall keep
+  the pod's own as it is rather than replace it.
+- When an import brings a table the pod already has, the system shall add only
+  the columns the table lacks.
+- The system shall never remove a column, a record, a file, or anything else
+  from a pod during an import.
+- When an import brings records for a table the pod already has, the system
+  shall leave that table's records as they are.
+- The system shall say, in the plan, each thing it keeps because the pod
+  already has it.
+
+**Contracts:** `pod.bundle.import.start`, `pod.bundle.import.get`, `pod.bundle.import.apply`
 
 ---
 

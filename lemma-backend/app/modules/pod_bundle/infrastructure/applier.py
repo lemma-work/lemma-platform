@@ -1,9 +1,11 @@
 """Apply one plan step to the pod.
 
-Every applier is an **idempotent upsert against the pod's current state, not the
-plan**: it re-checks existence by name at apply time and creates or updates
-accordingly. That is what makes a crash between a step's DB commit and its Redis
-checkpoint safe to replay — re-running the step converges instead of duplicating.
+Every applier **creates what is missing against the pod's current state, not
+the plan**: it re-checks existence by name at apply time and leaves whatever is
+already there as it is -- a table only gains the columns it lacks. That is what
+makes a crash between a step's DB commit and its Redis checkpoint safe to
+replay, and it holds the rule the plan states (``kept_parts``) even for a part
+that appeared between plan and apply: an import never replaces anything.
 
 Each ``apply_step`` runs inside a short UoW + ``Context`` opened by the job; the
 applier never opens its own transaction.
@@ -114,7 +116,6 @@ class BundleApplier:
             add_table_column,
             create_table,
             get_table,
-            remove_table_column,
         )
 
         payload = self._load("tables", step.name)
@@ -139,10 +140,10 @@ class BundleApplier:
                 ctx=self._ctx,
             )
             return
-        # Update: add any new columns; drop removed columns only when the plan
-        # marked this step destructive (i.e. the importer confirmed).
+        # The table is the pod's: it gains the bundle's columns it lacks, and no
+        # column is dropped, retyped or altered -- whatever the step says, since
+        # a plan made before this rule could still carry `destructive`.
         existing_names = {c.name for c in existing.columns}
-        desired_names = {c.name for c in columns}
         for column in columns:
             if column.name not in existing_names:
                 await add_table_column(
@@ -150,18 +151,6 @@ class BundleApplier:
                     pod_id=self._pod_id,
                     table_name=step.name,
                     column=column,
-                    ctx=self._ctx,
-                )
-        if step.destructive:
-            pk = existing.primary_key_column
-            for name in existing_names - desired_names:
-                if name == pk or _is_system_column({"name": name}):
-                    continue
-                await remove_table_column(
-                    self._uow,
-                    pod_id=self._pod_id,
-                    table_name=step.name,
-                    column_name=name,
                     ctx=self._ctx,
                 )
 
@@ -299,7 +288,8 @@ class BundleApplier:
 
     async def _apply_function_grants(self, step: PlanStep) -> None:
         """Deferred grant step: replace a function's resource permission grants
-        once every resource it references has been applied.
+        once every resource it references has been applied. Planned only for a
+        function this import creates; one the pod had keeps its own.
 
         Functions used to have their grants written inline by the FUNCTION step's
         own runner, which runs before agents, apps, and files. A function granted

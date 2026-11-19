@@ -18,7 +18,8 @@ from lemma_pod_bundle.layout import _write_json
 from lemma_pod_bundle.normalize import _normalize_machine_payload
 
 from app.modules.pod_bundle.domain.errors import BundleInvalidError
-from app.modules.pod_bundle.domain.state import PlanStep, StepAction, StepKind
+from app.modules.pod_bundle.domain.state import PlanStep, StepKind
+from app.modules.pod_bundle.infrastructure import kept_parts
 
 if TYPE_CHECKING:
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -56,7 +57,8 @@ class MachineNames(Protocol):
 
 
 async def machine_steps(bundle_root: Path, pod: MachineNames) -> list[PlanStep]:
-    """One MACHINE step per bundled machine, UPDATE when the pod has it.
+    """One MACHINE step per bundled machine: CREATE, or kept when the pod
+    already has one of that name (``kept_parts``: an import never replaces).
 
     The plan puts these before the agents that name a machine as theirs and
     before every grants step, since a `machine.use` grant names the machine.
@@ -70,7 +72,12 @@ async def machine_steps(bundle_root: Path, pod: MachineNames) -> list[PlanStep]:
     if not type_dir.is_dir():
         return []
     dirs = sorted((d for d in type_dir.iterdir() if d.is_dir()), key=lambda p: p.name)
-    refusals = await pod.machine_refusals([_bundled(d) for d in dirs])
+    existing = await pod.machine_names()
+    # Only a machine the import creates has to fit the target's plan; a kept
+    # one is not built from the bundle at all.
+    refusals = await pod.machine_refusals(
+        [_bundled(d) for d in dirs if d.name not in existing]
+    )
     if refusals:
         raise BundleInvalidError(
             "This pod cannot have the bundle's machines as they are: "
@@ -79,16 +86,7 @@ async def machine_steps(bundle_root: Path, pod: MachineNames) -> list[PlanStep]:
             "allows them.",
             details={"machines": refusals},
         )
-    existing = await pod.machine_names()
-    return [
-        PlanStep(
-            index=0,
-            kind=StepKind.MACHINE,
-            name=d.name,
-            action=StepAction.UPDATE if d.name in existing else StepAction.CREATE,
-        )
-        for d in dirs
-    ]
+    return [kept_parts.create_or_keep(StepKind.MACHINE, d.name, existing) for d in dirs]
 
 
 def _bundled(machine_dir: Path) -> BundledMachine:

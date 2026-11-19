@@ -59,7 +59,7 @@ flowchart LR
     S["Upload or GitHub source"] --> V["Validate zip and limits"]
     V --> O["Stage in object storage"]
     O --> P["Snapshot pod + build diff plan"]
-    P --> H["Human reviews variables/destructive steps"]
+    P --> H["Human reviews what is added and what is kept"]
     H --> A["Apply idempotent steps"]
     A --> C["Redis checkpoint after each DB commit"]
     C --> R["Record recipe + cleanup"]
@@ -67,20 +67,45 @@ flowchart LR
 
 Every non-app apply step opens its own authorization/UoW scope and commits
 before the Redis `DONE` checkpoint. App steps self-scope around a sandbox
-build. A crash between commit and checkpoint replays an idempotent upsert. The
-format handles pod connectors, tables/data, pod machines, files, functions,
-agents/grants/toolsets, workflows, schedules, apps/source, surfaces, and pod
-metadata.
+build. A crash between commit and checkpoint replays a step that creates only
+what is still missing, so it converges. The format handles pod connectors,
+tables/data, pod machines, files, functions, agents/grants/toolsets, workflows, schedules,
+apps/source, surfaces, and pod metadata.
+
+**An import adds to a pod and never replaces what is there.** A person may have
+changed an app, added a column or rewritten an agent since it arrived, and
+installing another bundle -- a plugin that carries the base it builds on --
+must not undo it (`infrastructure/kept_parts.py`):
+
+| The pod already has | The plan | The apply |
+| --- | --- | --- |
+| A table | `UPDATE` with `detail.columns_to_add` when it lacks some of the bundle's columns, otherwise `SKIP` | Adds those columns. A column the bundle does not mention is never dropped, and one it defines differently is never altered: kept, listed in `detail.columns_kept`, and warned about |
+| A function, agent, workflow, schedule, surface or app, by name | `SKIP` | Not run. Its code, instructions, settings, visibility, grants and the release an app serves stay as they are; no grants step is planned for a kept function or agent |
+| A file or folder, by path | `SKIP` | Not run. What the bundle adds inside a kept folder is still created |
+| A table the bundle seeds | The rows' `TABLE_DATA` step is `SKIP` | Rows load only into a table the import creates: rows without ids would be added twice, and rows with ids would be written over a row someone edited |
+| A pod machine, by name | `SKIP` | Not run. Its template, size and run slots stay as they are; only a machine the import creates is checked against the target's plan |
+| A pod connector of the same connector and mode | `SKIP` (`EXISTS`) | Checked again, never redeclared |
+
+A kept step is planned `SKIP` and marked `SKIPPED`, with the reason in its
+`error` ("already exists here; kept as it is, …"), so the apply loop never runs
+it and the person approving sees why. Each applier also leaves alone a part it
+finds already there when it runs -- the import's own from before a crash, or
+one made between plan and apply -- so the rule holds at both ends. No plan
+has a destructive step any more; `confirm_destructive` stays on the apply
+request for compatibility.
+
+Nothing on this path replaces. A builder redeploying their own pod from a local
+bundle uses lemma-cli's direct import (`lemma pods import`, upsert by default),
+which writes through the API and never reaches this importer.
 
 A pod machine travels as `machines/<name>/<name>.json` — `name`, optional
 `display_name`, `template` (`workspace` | `workspace-docker`), optional `size`
-(`<vcpu>x<GB>`), `visibility` (`pod` | `restricted`), optional `run_slots`. Its
-disk, instance and member grants do not travel. The MACHINE step is planned
-after tables and before every function, agent and `*_GRANTS` step, and applies
-through `workspace.contracts.pod_machines` (create, or update everything but
-the template, under the plan's machine policy as the importer). An agent's
-`machine` ref is exported portable (`pod:<source pod>/<name>` becomes
-`pod:<name>`) and cleared on re-import when the bundle carries none; an agent's
+(`<vcpu>x<GB>`), optional `run_slots`. Its disk and instance do not travel. The
+MACHINE step is planned after tables and before every function, agent and
+`*_GRANTS` step, and creates the machine through
+`workspace.contracts.pod_machines` under the target's machine policy; a machine
+the pod already has is kept, like every other part. An agent's `machine` ref is
+exported portable (`pod:<source pod>:<name>` becomes `pod:<name>`); an agent's
 or function's `machine.use` grant names the machine by `resource_type: machine`.
 
 **Pod connectors** (`connectors/<slug>/<slug>.json`) carry the catalog
@@ -127,11 +152,11 @@ with what it added left out.
 
 **Grants** travel in the manifest of the agent or function that holds them
 (`permissions.grants`, by resource name), as a deferred `*_GRANTS` step after
-every resource they could name exists. They are conferral: the plan
+every resource they could name exists, planned only for a function or agent the
+import creates. They are conferral: the plan
 (`infrastructure/grant_planning.py`) asks the conferral bound, as the importer,
-about every grant whose resource already exists -- only what the write adds
-over what the same-named workload already holds, as the apply's
-`replace_grantee_resource_grants` does -- and keeps what fails on its step
+about every grant whose resource already exists, as the apply's
+`replace_grantee_resource_grants` does, and keeps what fails on its step
 (`detail.refused`) and in the plan's warnings. Applying such a plan is refused
 `403 CONFERRAL_EXCEEDS_HOLDER` with the pod untouched; the step itself asks
 again of everything when it writes.
@@ -162,7 +187,7 @@ From the caller's own words the agent's turn is staged with it. From a template
 the archive is staged before anything is written, the conversation is opened
 held -- its run written without its turn -- and `pod_bundle.set_up_lemma` is
 queued: it plans the import, applies it without the confirmation an uploaded
-bundle waits for (a shipped template, into a pod with nothing to overwrite),
+bundle waits for (a shipped template, and an import overwrites nothing),
 and starts the turn in its completion transaction. A plan that would need the
 person after all is left awaiting them, and the turn starts beside it. If the
 item dies, its `on_dead` hook ends the import and starts the turn in the same
@@ -172,7 +197,7 @@ commit, so no setup chat waits on a job that will not run again.
 
 Archive extraction is zip-slip and zip-bomb guarded. Import requires pod update;
 export/publish require pod read plus account ownership where applicable.
-Destructive table changes require explicit confirmation. Configurable per-item,
+No import removes or changes what a pod has. Configurable per-item,
 record, data, app, archive, and uncompressed-byte caps bound work, and a Redis
 daily limiter bounds starts. Download URLs are purpose-signed and require a
 logged-in user in addition to the token.
@@ -180,5 +205,5 @@ logged-in user in addition to the token.
 ## Tests and operations
 
 Unit/e2e tests cover format/diff, staging, limits, plan/apply idempotency,
-variables, executable imported resources, apps, surfaces, GitHub import/publish,
-SSE, expiry, and cleanup.
+keeping what a pod already has, variables, executable imported resources, apps,
+surfaces, GitHub import/publish, SSE, expiry, and cleanup.
