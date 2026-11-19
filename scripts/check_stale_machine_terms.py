@@ -92,6 +92,9 @@ SKIP_PATHS = (
     "lemma-backend/docs/modules/route-inventory.md",
     "lemma-backend/docs/contracts/*",
     "lemma-backend/app/core/log/event_catalog.py",
+    # Plugin demos are built bundles: each embeds the SDK it was built against.
+    "lemma-frontend/public/plugins/*/demo/*/assets/*",
+    "lemma-frontend/public/plugins/*/demo/assets/*",
 )
 MAX_BYTES = 2 * 1024 * 1024
 

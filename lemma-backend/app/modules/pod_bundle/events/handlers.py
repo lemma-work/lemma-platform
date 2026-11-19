@@ -28,6 +28,7 @@ from app.core.infrastructure.work import Defer
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.events import analytics as bundle_analytics
 from app.modules.pod_bundle.events.github_import import (
+    fetch_bundle_archive as _fetch_bundle_archive,
     github_import_fetcher as _github_import_fetcher,
     note_anonymous_access as _note_anonymous_access,
 )
@@ -462,9 +463,7 @@ async def import_pod_github(context: dict[str, str | None]) -> None:
             repo=(context.get("repo")),
         )
         fetcher = _github_import_fetcher(worker_ctx, state)
-        zip_bytes = await fetcher.fetch_zipball(
-            owner=owner, repo=repo, ref=state.source.ref
-        )
+        zip_bytes = await _fetch_bundle_archive(fetcher, state, owner=owner, repo=repo)
         _note_anonymous_access(fetcher, state)
         await _raise_if_cancelled(store, import_id)
         state.staging_key = await staging.put_archive(
@@ -871,6 +870,7 @@ async def _record_recipe(worker_ctx: BundleWorkerContext, state: ImportState) ->
         kind=state.source.kind.value,
         name=(state.plan.bundle_name if state.plan else None),
         repo_url=state.source.repo_url or state.source.url,
+        path=state.source.path,
         format_version=(state.plan.format_version if state.plan else None),
         imported_at=datetime.now(timezone.utc),
         imported_by=state.user_id,

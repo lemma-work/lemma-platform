@@ -296,6 +296,34 @@ choices: the plan's `connectors` lists each one's installations,
 answers them. `NEEDS_INSTALLATION` and `CONFLICT` refuse the apply (422) until
 resolved.
 
+## Installing from a GitHub repository
+
+A bundle pushed to a public repository installs from Lemma's site at
+`/import/github/<owner>/<repo>`: the person picks a Lemma, sees the plan, then
+installs. The API is the same import: `POST /pods/{pod}/bundle/imports` with
+`{"kind": "GITHUB", "owner": "<owner>", "repo": "<repo>"}` (or `"url"`), then
+apply.
+
+A repository can hold **several bundles, one per folder**. Each folder holds its
+own `pod.json`, and one of them installs by naming it:
+
+```text
+/import/github/<owner>/<repo>?path=install/<slug>
+POST /pods/{pod}/bundle/imports  {"kind": "GITHUB", "owner": "<owner>", "repo": "<repo>", "path": "install/<slug>"}
+```
+
+- The folder is the bundle: only what is inside it is planned and applied, and
+  the site names the new Lemma from its `pod.json` `name`, else from the folder.
+- `path` is relative to the repository's root, with no leading `/` and no `.` or
+  `..`; anything else is refused (422).
+- A folder that is not there fails the import with `GITHUB_PATH_NOT_FOUND`, and
+  one without its own `pod.json` with `GITHUB_PATH_NOT_A_BUNDLE`, before
+  anything is planned.
+- Without `path` the repository's root is the bundle (the shallowest `pod.json`
+  in it), so a repository of several bundles always needs one.
+- `lemma pods import` installs a local folder, not a repository: clone it and
+  import the folder, `lemma pods import ./<repo>/install/<slug>`.
+
 ## Limits And Gotchas
 
 - Import **does not create the pod** — create/select it first.
