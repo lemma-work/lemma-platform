@@ -104,11 +104,33 @@ must not undo it (`infrastructure/kept_parts.py`):
 
 A kept step is planned `SKIP` and marked `SKIPPED`, with the reason in its
 `error` ("already exists here; kept as it is, …"), so the apply loop never runs
-it and the person approving sees why. Each applier also leaves alone a part it
-finds already there when it runs -- the import's own from before a crash, or
-one made between plan and apply -- so the rule holds at both ends. No plan
-has a destructive step any more; `confirm_destructive` stays on the apply
-request for compatibility.
+it and the person approving sees why. No plan has a destructive step any more;
+`confirm_destructive` stays on the apply request for compatibility.
+
+**What the import created** is recorded on its state (`ImportState.created`,
+`KIND:name`), checkpointed with each step. The rule holds at apply time
+through it (`kept_parts.CreatedParts`):
+
+- A step that creates a part records it. One that finds its part already there
+  takes it as the import's own when the record has it, or when the step was
+  interrupted while running (its write committed, its checkpoint did not).
+  Otherwise someone made it between plan and apply: the step writes nothing
+  and is marked `SKIPPED` (`POD_BUNDLE_PART_KEPT`), and a table gains nothing
+  either. A function is created only (`create_function_for_import`), decided
+  in the unit of work that resolves the create. An agent is born with its email
+  surface, so when the import created the agent, the bundle's surface of that
+  name is that mailbox: the import's own, and it takes the bundle's settings.
+- A `*_GRANTS` step writes only to a function or agent the import created, and
+  a `TABLE_DATA` step only to a table it created, once.
+- A replan keeps the record of what the discarded plan made, and plans those
+  parts `CREATE` again rather than kept: their steps find them as the import's
+  own, so an agent created before a failure still gets its grants step, and an
+  app left half built is built.
+
+A fresh import of the same bundle has no such record, so a function or agent an
+earlier, unfinished import created is kept with whatever access it holds. The
+plan names each kept function or agent that lacks some of what its bundled
+copy is granted (`grant_planning.plan_kept_access`), and writes nothing to it.
 
 Nothing on this path replaces. A builder redeploying their own pod from a local
 bundle uses lemma-cli's direct import (`lemma pods import`, upsert by default),

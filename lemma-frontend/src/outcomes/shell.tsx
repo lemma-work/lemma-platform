@@ -37,7 +37,10 @@ import {
 import { useNeedsYou, usePodActivity, usePodDetails, useRecents } from "./data";
 import { looksNamed, named, slug, unnamed, type Names } from "./named-address";
 import { appName as nameOfApp, appsOf } from "./lemma-apps";
-import { FrameArrival, firstLemma } from "./arrival";
+import { FrameArrival } from "./arrival";
+import { firstLemma } from "./first-lemma";
+import { ArrivalFlow, type ArrivalStart, type Landing } from "@/arrival/flow";
+import { asksWorkOn, stillAsksWork } from "@/arrival/work";
 import { NewLemmaDialog } from "./new-lemma";
 import { Bars, Icon, Empty } from "./parts";
 import { Sidebar } from "./sidebar";
@@ -108,6 +111,10 @@ export interface Me {
     email?: string;
     first_name?: string;
     last_name?: string;
+    /** What they said they do, once asked; absent from a server that does
+     *  not ask. */
+    work?: unknown;
+    created_at?: string;
 }
 
 /** How many steps into the frame this history entry is, kept on the entry
@@ -453,6 +460,32 @@ export function OutcomesShell() {
         return section ? { section, focus: null, request: 1 } : null;
     });
     const [makingOrg, setMakingOrg] = useState(false);
+    /* The way in, held open while it runs: making somebody's organization
+       fills the list of organizations, and the frame must not take over in
+       the middle of a step. `first` is latched the moment the list comes
+       back empty; the others are opened from here. */
+    const firstArrival = orgs.isSuccess && orgs.data.length === 0;
+    const [arriving, setArriving] = useState<ArrivalStart | "first" | null>(null);
+    useEffect(() => {
+        if (firstArrival) setArriving((was) => was ?? "first");
+    }, [firstArrival]);
+    /* Somebody who came in another way -- a chat app, an install page -- and
+       has not been asked what they do, is asked once here, when they come to
+       Home. Never over a link to a chat, an app or a Lemma: they came for
+       that, as a link wins over a place of their own on the first arrival.
+       Ending the step any way at all, a failed save included, stops it for
+       this visit. */
+    const asksWork = source.label === "live" && stillAsksWork(me.data);
+    const asksName = Boolean(me.data) && !(me.data?.first_name ?? "").trim();
+    const [workSettled, setWorkSettled] = useState(false);
+    /* Read off the address itself, not the view: while a named address waits
+       for its names, and while an old link is being rewritten, the view
+       stands at Home without the reader being there. */
+    const workHere = !unread && asksWorkOn(readView(plain)?.name ?? "");
+    useEffect(() => {
+        if (asksWork && workHere && !workSettled && orgs.isSuccess && orgs.data.length > 0) setArriving((was) => was ?? { kind: "work" });
+    }, [asksWork, workHere, workSettled, orgs.isSuccess, orgs.data]);
+    const showingArrival = arriving ?? (firstArrival ? "first" : null);
     /* A new Lemma is made in a dialog over wherever the reader is, as a chat
        app makes a channel; its old address (`/l/new`) opens the same dialog
        over the list of Lemmas. */
@@ -507,6 +540,31 @@ export function OutcomesShell() {
 
     const myName = nameOf(me.data);
     const scoped = podOfView(view);
+    const enterFrom = useCallback(async (landing: Landing) => {
+        const was = arriving;
+        /* The organization list is read again before the way in lets go:
+           closed over a list still empty, it would open again at once. */
+        await Promise.all([
+            queryClient.invalidateQueries({ queryKey: ["orgs"] }),
+            queryClient.invalidateQueries({ queryKey: ["pods"] }),
+        ]).catch(() => undefined);
+        setArriving(null);
+        setWorkSettled(true);
+        if (landing.orgId) {
+            setChosen(landing.orgId);
+            try { localStorage.setItem(ORG_KEY, JSON.stringify(landing.orgId)); } catch { /* a private window keeps the choice for this tab only */ }
+        }
+        if (landing.startNew) {
+            go({ name: "hire" });
+            return;
+        }
+        /* Only the job question: they were somewhere already, and stay. */
+        if (was && was !== "first" && was.kind === "work") return;
+        /* Already at the Lemma they came for: stay on the exact address,
+           section and all, rather than its summary. */
+        if (landing.podId && landing.podId === scoped) return;
+        go(landing.podId ? outcomeView(landing.podId) : { name: landing.orgId ? "today" : "outcomes" });
+    }, [arriving, queryClient, go, scoped]);
     /* Who is in a Lemma costs two reads apiece, so it is asked only for the
        pods something on screen reads it for: every one on People and the
        Lemmas board, which list rosters and owners; otherwise the one in view
@@ -553,26 +611,15 @@ export function OutcomesShell() {
     }, [elsewhere]);
     const stranger = unlisted && linked.isError && isForbidden(linked.error) ? unlisted : null;
 
-    /* Somebody who belongs nowhere yet: in, without a decision they cannot
-       make well yet -- an invitation accepted, or an organization made for
-       them with its own Lemma -- landing on what they were invited to, or in
-       that Lemma. */
-    if (orgs.isSuccess && orgs.data.length === 0) {
-        return (
-            <FrameArrival
-                linkedPodId={scoped}
-                email={me.data?.email ?? null}
-                name={[me.data?.first_name, me.data?.last_name].filter(Boolean).join(" ") || null}
-                onEntered={(podId) => {
-                    void queryClient.invalidateQueries({ queryKey: ["orgs"] });
-                    void queryClient.invalidateQueries({ queryKey: ["pods"] });
-                    /* Already at the Lemma they came for: stay on the exact
-                       address, section and all, rather than its summary. */
-                    if (podId && podId === scoped) return;
-                    go(podId ? outcomeView(podId) : { name: "outcomes" });
-                }}
-            />
-        );
+    /* The way in, one look on every door: somebody who belongs nowhere yet
+       (an invitation accepted, their company's organization joined, or one
+       made with a Lemma everyone in it shares), an invitation just accepted
+       from Home, or the job question somebody has not been asked. */
+    if (showingArrival === "first") {
+        return <FrameArrival linkedPodId={scoped} asksWork={asksWork} asksName={asksName} onEntered={enterFrom} />;
+    }
+    if (showingArrival) {
+        return <ArrivalFlow start={showingArrival} asksWork={asksWork} asksName={asksName} onEntered={enterFrom} />;
     }
 
     let page;
@@ -595,7 +642,7 @@ export function OutcomesShell() {
     } else if (!org || pods.isPending) {
         page = <p className="ox-loading">Loading {org?.name ?? "your organization"}…</p>;
     } else if (view.name === "today") {
-        page = <Today org={org} pods={withPeople} activity={activity} channels={sideChannels} queue={queue} queueFailed={queueFailed} onRetryQueue={retryQueue} me={myName} go={go} onAsk={ask} />;
+        page = <Today org={org} pods={withPeople} activity={activity} channels={sideChannels} queue={queue} queueFailed={queueFailed} onRetryQueue={retryQueue} me={myName} go={go} onAsk={ask} onJoined={(invite) => setArriving({ kind: "joined", orgId: invite.orgId, orgName: invite.orgName, podId: invite.podId })} />;
     } else if (view.name === "apps") {
         page = <AppsPage pods={withPeople} go={go} />;
     } else if (view.name === "connectors") {

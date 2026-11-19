@@ -670,3 +670,66 @@ async def test_a_static_app_ignores_the_bundled_dist_and_serves_its_source(tmp_p
 
     assert dist_bytes == source_bytes
     assert dist_bytes != b"EXPORTED-DIST"
+
+
+# --- an app the pod already has -------------------------------------------------
+
+
+def _ready_app_runner(tmp_path, monkeypatch) -> tuple[AppStepRunner, Path, list[str]]:
+    """A runner over a pod that has a deployed `board`, and every deploy it does."""
+    root = tmp_path / "bundle"
+    (root / "apps" / "board").mkdir(parents=True)
+    (root / "apps" / "board" / "board.json").write_text(json.dumps({"name": "board"}))
+    runner = _runner(_ExplodingSandbox())
+    deployed: list[str] = []
+
+    async def _ensure_app(name, manifest, *, pod_id, user_id):
+        return True, "board"
+
+    async def _deploy(name, *args, **kwargs):
+        deployed.append(name)
+
+    monkeypatch.setattr(runner, "_ensure_app", _ensure_app)
+    monkeypatch.setattr(runner, "_deploy", _deploy)
+    return runner, root, deployed
+
+
+async def test_an_app_this_import_made_is_left_done(tmp_path, monkeypatch):
+    """Called as the apply loop calls it, with what the import made. A runner
+    that lost those arguments failed every APP step as a transient error."""
+    from app.modules.pod_bundle.infrastructure.kept_parts import CreatedParts
+
+    runner, root, deployed = _ready_app_runner(tmp_path, monkeypatch)
+
+    await runner.run(
+        PlanStep(index=0, kind=StepKind.APP, name="board", action=StepAction.CREATE),
+        pod_id=_POD,
+        user_id=uuid4(),
+        bundle_root=root,
+        replacements={},
+        created=CreatedParts(["APP:board"]),
+        resumed=False,
+    )
+
+    assert deployed == []
+
+
+async def test_an_app_someone_else_made_is_kept_and_said_so(tmp_path, monkeypatch):
+    from app.modules.pod_bundle.domain.errors import PartKeptError
+    from app.modules.pod_bundle.infrastructure.kept_parts import CreatedParts
+
+    runner, root, deployed = _ready_app_runner(tmp_path, monkeypatch)
+
+    with pytest.raises(PartKeptError):
+        await runner.run(
+            PlanStep(
+                index=0, kind=StepKind.APP, name="board", action=StepAction.CREATE
+            ),
+            pod_id=_POD,
+            user_id=uuid4(),
+            bundle_root=root,
+            replacements={},
+            created=CreatedParts(),
+        )
+
+    assert deployed == []

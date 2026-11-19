@@ -21,11 +21,17 @@
 
 /** Mailbox providers anybody can sign up to.
  *
+ *  The same list as the server's `PUBLIC_EMAIL_PROVIDER_DOMAINS`
+ *  (`identity/domain/email_domains.py`), which is the authority: a test holds
+ *  the two equal, because a domain on one list and not the other is a
+ *  workspace the web names after a mail provider, or one the server refuses
+ *  to open that the web said it would.
+ *
  *  Deliberately not a classifier. It cannot tell you that `alice@alice.design`
  *  is a personal address, and it is not asked to — the person answers that.
  *  Its one job is to refuse to hand a shared mailbox domain the keys, which is
  *  a question with a short and stable answer. */
-const OPEN_TO_ANYONE = new Set([
+export const OPEN_TO_ANYONE: ReadonlySet<string> = new Set([
     "gmail.com", "googlemail.com",
     "outlook.com", "hotmail.com", "hotmail.co.uk", "live.com", "msn.com",
     "yahoo.com", "yahoo.co.uk", "yahoo.co.in", "ymail.com", "rocketmail.com",
@@ -76,9 +82,24 @@ export function teamNameFor(email: string | null | undefined): string {
        suggestion that is confidently wrong, and it was offering to call a
        workspace Gmail. */
     if (!domain || OPEN_TO_ANYONE.has(domain)) return "";
-    const first = domain.split(".")[0] ?? "";
-    const words = first.replace(/[-_]+/g, " ").trim();
+    const words = companyLabel(domain).replace(/[-_]+/g, " ").trim();
     return words.slice(0, 1).toUpperCase() + words.slice(1);
+}
+
+/** Country-code domains whose second label is a registry, not the company:
+ *  `acme.co.uk` is Acme, not Co. The server's `_REGISTRY_SECOND_LEVEL_LABELS`. */
+const REGISTRY_LABELS = new Set(["ac", "co", "com", "edu", "gov", "net", "org"]);
+
+/** The label of a domain that names the company, the way the server reads
+ *  it (`organization_name_from_work_domain`): the one before the suffix, so
+ *  `eng.acme.com` is Acme and not Eng, and `acme.co.uk` is Acme too. */
+function companyLabel(domain: string): string {
+    const labels = domain.split(".").filter(Boolean);
+    if (labels.length < 2) return labels[0] ?? "";
+    const top = labels[labels.length - 1];
+    const second = labels[labels.length - 2];
+    const registry = labels.length >= 3 && top.length === 2 && REGISTRY_LABELS.has(second);
+    return registry ? labels[labels.length - 3] : second;
 }
 
 /** The same guess, unless it names an organization this person is already
