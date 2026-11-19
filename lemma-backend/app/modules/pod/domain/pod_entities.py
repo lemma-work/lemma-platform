@@ -251,6 +251,28 @@ class PodConfig(BaseModel):
     #: ``PodService.set_outcome``, which checks a measure before keeping it: a
     #: config written any other way keeps the outcome it had.
     outcome: PodOutcome | None = None
+    #: The app the pod opens on, by its name. Read before the apps' own order
+    #: (oldest first), which nobody chose. Omitted while nobody chose one, so
+    #: a config nobody touched reads as it did; a ``null`` somebody sent is
+    #: kept, because an update merges key by key and that ``null`` is how the
+    #: choice is handed back to the apps' order. A name no app has any longer
+    #: is no choice, and readers fall back the same way.
+    home_app: str | None = Field(
+        default=None,
+        description=(
+            "The name of the app this pod opens on. null opens on its first app."
+        ),
+    )
+
+    @field_validator("home_app", mode="before")
+    @classmethod
+    def _blank_home_app_is_none(cls, value: object) -> object:
+        """Blank is no choice. Never raises: ``from_raw`` answers a default
+        config for the whole pod when one field fails, and a stored name must
+        not cost the join policy beside it."""
+        if isinstance(value, str):
+            return value.strip() or None
+        return value if value is None else None
 
     @field_validator("outcome", mode="wrap")
     @classmethod
@@ -317,6 +339,8 @@ class PodConfig(BaseModel):
             data.pop("contacts", None)
         if data.get("outcome") is None:
             data.pop("outcome", None)
+        if data.get("home_app") is None and "home_app" not in self.model_fields_set:
+            data.pop("home_app", None)
         return data
 
 

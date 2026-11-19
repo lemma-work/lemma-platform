@@ -442,3 +442,41 @@ async def test_list_pods_by_organization_only_returns_member_pods(
     assert response.status_code == 200, response.text
     items = response.json().get("items", [])
     assert all(item["id"] != pod["id"] for item in items)
+
+
+@pytest.mark.asyncio
+async def test_a_pod_keeps_the_app_it_opens_on_until_it_is_handed_back(
+    authenticated_client,
+    fixed_test_org,
+):
+    """`config.home_app` is set, kept through an update of another config key,
+    shown in the list, and cleared with null -- which an update merged key by
+    key could not do if null were dropped on the way in."""
+    pod = await _create_pod(
+        authenticated_client, fixed_test_org["id"], name=f"Home {uuid4().hex[:8]}"
+    )
+    path = f"/pods/{pod['id']}"
+
+    chosen = await authenticated_client.put(
+        path, json={"config": {"home_app": "today"}}, follow_redirects=True
+    )
+    assert chosen.status_code == 200, chosen.text
+    assert chosen.json()["config"]["home_app"] == "today"
+
+    other = await authenticated_client.put(
+        path, json={"config": {"join_policy": "ORG_MEMBERS"}}, follow_redirects=True
+    )
+    assert other.status_code == 200, other.text
+    assert other.json()["config"]["home_app"] == "today"
+    listed = await authenticated_client.get(
+        f"/organizations/{fixed_test_org['id']}/pods", follow_redirects=True
+    )
+    mine = next(item for item in listed.json()["items"] if item["id"] == pod["id"])
+    assert mine["config"]["home_app"] == "today"
+
+    cleared = await authenticated_client.put(
+        path, json={"config": {"home_app": None}}, follow_redirects=True
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["config"]["home_app"] is None
+    assert cleared.json()["config"]["join_policy"] == "ORG_MEMBERS"

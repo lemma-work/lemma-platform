@@ -5555,6 +5555,12 @@
             ],
             "description": "SHARED only: one of your own accounts (the plan's `account_options`) to share with the pod for this connector to run as. Left out, the connector imports needing an account.",
             "title": "Share Account Id"
+          },
+          "skip": {
+            "default": false,
+            "description": "Leave this connector out: it is not declared, and grants on it are dropped. Only for one the bundle marks optional (`required: false`); one the plan says SKIPPED is left out unless you choose an installation or to create one.",
+            "title": "Skip",
+            "type": "boolean"
           }
         },
         "title": "ConnectorChoice",
@@ -5898,7 +5904,8 @@
           "NEEDS_ACCOUNT",
           "NEEDS_INSTALLATION",
           "EXISTS",
-          "CONFLICT"
+          "CONFLICT",
+          "SKIPPED"
         ],
         "title": "ConnectorPlanStatus",
         "type": "string"
@@ -8079,7 +8086,7 @@
                 "type": "null"
               }
             ],
-            "description": "The provider's probability for this value, when it measures one. Null from providers that do not, such as a language model.",
+            "description": "The provider's probability for this value, when it measures one; for several choices, that of the least certain per-option decision, not of the whole selection. Null from providers that do not, such as a language model.",
             "title": "Confidence"
           },
           "value": {
@@ -8103,7 +8110,7 @@
                 "type": "null"
               }
             ],
-            "description": "The answer, or null when the evidence did not support one. Null is an answer, not a failure: a failure is an error response.",
+            "description": "The answer, or null when the provider judged the evidence did not support one (the model provider does; Typesafe always answers the value it judged most likely). Treat null, or a confidence below your own threshold, as unsure. Null is an answer, not a failure: a failure is an error response.",
             "title": "Value"
           }
         },
@@ -17945,6 +17952,18 @@
               }
             ]
           },
+          "home_app": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The name of the app this pod opens on. null opens on its first app.",
+            "title": "Home App"
+          },
           "join_policy": {
             "$ref": "#/components/schemas/PodJoinPolicy",
             "default": "INVITE_ONLY"
@@ -25784,6 +25803,36 @@
         "title": "UpdateAppRequest",
         "type": "object"
       },
+      "UpdateColumnRequest": {
+        "additionalProperties": false,
+        "description": "Schema for changing an existing column.\n\nAn ENUM column's options can be added to, and a column's foreign key\ndropped; nothing else changes. Unknown fields are refused rather than\nignored, so a caller asking for a change this does not make hears so\ninstead of getting a 200 for nothing.",
+        "properties": {
+          "drop_foreign_key": {
+            "default": false,
+            "description": "Drop the column's foreign key: its values stay, and stop having to name a row of the other table. A column with none is left as it is. A foreign key cannot be added to an existing column.",
+            "title": "Drop Foreign Key",
+            "type": "boolean"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Every option the ENUM column should accept: all of its current options, plus any to add. Removing an option is refused, because rows may already hold it. Sending the current options changes nothing.",
+            "title": "Options"
+          }
+        },
+        "title": "UpdateColumnRequest",
+        "type": "object"
+      },
       "UpdateConversationRequest": {
         "properties": {
           "agent_runtime": {
@@ -28687,6 +28736,51 @@
         ],
         "title": "WorkflowMode",
         "type": "string"
+      },
+      "WorkflowRunAbout": {
+        "additionalProperties": false,
+        "description": "One record a run is about: a row of a table in the workflow's pod.",
+        "properties": {
+          "record_id": {
+            "description": "The record's primary key.",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Record Id",
+            "type": "string"
+          },
+          "table": {
+            "description": "The table's name.",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "table",
+          "record_id"
+        ],
+        "title": "WorkflowRunAbout",
+        "type": "object"
+      },
+      "WorkflowRunCreateRequest": {
+        "additionalProperties": false,
+        "description": "What a person may give a run they start: at most the record it is about.\n\nNot free-form input, which a run never takes (inputs arrive through FORM\nnodes): the record is read by the platform, as the person starting the\nrun, and handed to the run as ``start.payload`` -- the shape a table\nchange gives it -- so one workflow serves both a table trigger and a\nbutton about one row.",
+        "properties": {
+          "about": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowRunAbout"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The record this run is about. It is read as you: a record you cannot read is a 404. Its fields become `start.payload`, and `start.metadata` carries `table_name` and `record_id`."
+          }
+        },
+        "title": "WorkflowRunCreateRequest",
+        "type": "object"
       },
       "WorkflowRunFormSubmitRequest": {
         "additionalProperties": false,
@@ -47447,6 +47541,96 @@
           "result": "void",
           "verb": "remove"
         }
+      },
+      "patch": {
+        "description": "Add options to an ENUM column, drop a column's foreign key, or both. `options` must include every option the column has now: removing one is refused (422), because rows may already hold it, and sending `options` for a column that is not ENUM is refused too. `drop_foreign_key` works on any column. Sending what the column already is changes nothing.",
+        "operationId": "table.column.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "table_name",
+            "required": true,
+            "schema": {
+              "title": "Table Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "column_name",
+            "required": true,
+            "schema": {
+              "title": "Column Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateColumnRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The table stayed in use for a few seconds, so nothing was changed; try again."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Column",
+        "tags": [
+          "tables"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "table.column"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "table.column",
+          "result": "entity",
+          "verb": "update"
+        }
       }
     },
     "/pods/{pod_id}/datastore/tables/{table_name}/public-rows": {
@@ -48397,7 +48581,7 @@
     },
     "/pods/{pod_id}/decisions": {
       "post": {
-        "description": "Answer closed questions -- a choice, several choices, yes or no, a point on a scale -- about one piece of evidence. Nothing is stored: record the answer wherever it matters to you. An answer of null means the evidence did not support one. 422 means the request cannot be asked as sent; 429 and 503 mean ask again later.",
+        "description": "Answer closed questions -- a choice, several choices, yes or no, a point on a scale -- about one piece of evidence. Nothing is stored: record the answer wherever it matters to you. Treat an answer of null, or a confidence below your own threshold, as unsure. 422 means the request cannot be asked as sent; 429 and 503 mean ask again later.",
         "operationId": "decision.make",
         "parameters": [
           {
@@ -50666,6 +50850,118 @@
           "resource": "pod.member",
           "result": "entity",
           "verb": "lookup_by_user_id"
+        }
+      }
+    },
+    "/pods/{pod_id}/members/me/notices": {
+      "post": {
+        "description": "Tell the person this request acts for something, in their own channel:\na function or agent writing to the person it runs as, or a member writing\na note to themselves. There is no recipient to name. A workload needs\n`channel.notify_self` granted on the pod (`resource_type` `pod`,\n`resource_name` `/`); a member holds it with `channel.write`. Idempotency\nand the per-minute cap are the same as for a notice to another member.",
+        "operationId": "agent.notice.send_self",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoticeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoticeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request acts for nobody in this pod."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The person it acts for is not in this pod."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many notices this minute; see Retry-After."
+          }
+        },
+        "summary": "Send Self Notice",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.notice"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.notice",
+          "result": "entity",
+          "verb": "send_self"
         }
       }
     },
@@ -56029,7 +56325,7 @@
         }
       },
       "post": {
-        "description": "Create a new run for this workflow. Takes no request body: if the workflow's entry node is a FORM node the run is created WAITING on it (see `active_wait` in the response) and input is submitted via `workflow.run.form.submit`; otherwise the run executes immediately. Trigger payloads for scheduled/event/datastore starts are supplied by the platform, not through this endpoint. Send an `Idempotency-Key` header to make a retry safe: the same key, from the same person, for the same workflow, returns the run it already created.",
+        "description": "Create a new run for this workflow. The body is optional and names at most the record the run is about (`about`): the record is read as you (404 when you cannot read it) and becomes `start.payload`, as a table trigger's change would. A run takes no other input: if the workflow's entry node is a FORM node the run is created WAITING on it (see `active_wait` in the response) and input is submitted via `workflow.run.form.submit`; otherwise the run executes immediately. Send an `Idempotency-Key` header to make a retry safe: the same key, from the same person, for the same workflow, returns the run it already created.",
         "operationId": "workflow.run.create",
         "parameters": [
           {
@@ -56070,6 +56366,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/WorkflowRunCreateRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Data"
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
             "content": {
@@ -56080,6 +56393,26 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`about.record_id` is not a valid key for the table."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such workflow, or no record you can read matches `about`."
           },
           "422": {
             "content": {

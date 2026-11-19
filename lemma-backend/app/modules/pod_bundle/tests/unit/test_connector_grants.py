@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.authorization.context import ResourceType
+from app.modules.pod_bundle.domain.connector_plan import ConnectorChoice
 from app.modules.pod_bundle.domain.errors import BundleInvalidError
 from app.modules.pod_bundle.domain.state import StepKind
 from app.modules.pod_bundle.infrastructure.connector_grants import (
@@ -205,6 +206,20 @@ async def test_applying_declares_the_connector_and_grants_on_its_slug(monkeypatc
         "github-2",
         "github-2",
     ]
+
+    # A connector the import left out (optional, nothing to map it to): the
+    # grant on it is dropped and said, not written to fail by name.
+    warnings: list[str] = []
+    kept = await resolve_connector_grants(
+        object(),
+        SimpleNamespace(organization_id=_ORG),
+        pod_id=_POD,
+        grants=[table, _connector_grant("meet"), _connector_grant("gmail")],
+        choices={"meet": ConnectorChoice(skip=True)},
+        warnings=warnings,
+    )
+    assert [g.resource_name for g in kept] == ["tickets", "gmail"]
+    assert warnings == ["A grant on connector 'meet' was dropped: it was left out."]
 
 
 async def test_grants_with_no_connector_are_returned_untouched():

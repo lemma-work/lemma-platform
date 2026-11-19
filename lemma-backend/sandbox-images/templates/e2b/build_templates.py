@@ -139,6 +139,9 @@ def workspace_template():
                 "procps",
                 "ripgrep",
                 "socat",
+                # The tz database's old names (`Asia/Calcutta`). See the note
+                # in Dockerfile.workspace; the two images have to agree on it.
+                "tzdata-legacy",
                 # The human-facing view of the same Xvfb display. See the note
                 # in Dockerfile.workspace; the two images have to agree on
                 # this or the VNC pane connects on one fabric and not the
@@ -573,7 +576,9 @@ def function_template():
         Template(file_context_path=REPOSITORY_ROOT)
         .from_python_image("3.14")
         .apt_install(
-            ["bash", "ca-certificates", "curl", "procps"],
+            # `tzdata-legacy`: see Dockerfile.function, which this template
+            # has to agree with on the zone names a function can read.
+            ["bash", "ca-certificates", "curl", "procps", "tzdata-legacy"],
             no_install_recommends=True,
         )
         .copy("lemma-python", "/build/lemma-python")

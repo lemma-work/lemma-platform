@@ -92,6 +92,13 @@ class DatastoreTableColumnRemovedEvent(DatastoreDomainEvent):
     column_name: str
 
 
+class DatastoreTableColumnUpdatedEvent(DatastoreDomainEvent):
+    event_type: str = "datastore.table.column.updated"
+    table_id: UUID
+    table_name: str
+    column_name: str
+
+
 class DatastoreFileCreatedEvent(DatastoreDomainEvent):
     event_type: str = "datastore.file.created"
     file_id: UUID

@@ -65,6 +65,13 @@ RESOURCE_ACTIONS: dict[ResourceType, tuple[str, ...]] = {
     # workload's -- an agent that could resize or delete the machine it runs
     # on could also take it away from the pod.
     ResourceType.MACHINE: (Permissions.MACHINE_USE,),
+    # The pod itself (named "/" in a grant) is a grant target for two things:
+    # a run telling its own person something, and starting the pod's own
+    # assistant -- which is authorized against the pod (its row's id is the
+    # pod's), as a pod link's grant already is. Named agents keep their own
+    # rows. `channel.write` stays ungrantable here: it reaches every member
+    # and every group.
+    ResourceType.POD: (Permissions.CHANNEL_NOTIFY_SELF, Permissions.AGENT_EXECUTE),
 }
 
 # Owners get the full action set of resources they own. Schedules are owned by
@@ -76,6 +83,9 @@ OWNER_RESOURCE_ACTIONS: dict[ResourceType, tuple[str, ...]] = {
     # Declaring a pod connector confers nothing on whoever declared it: using
     # it is the role's or the grant's business, like anyone else's.
     ResourceType.CONNECTOR: (),
+    # Whoever created a pod gets nothing from that here: a person tells
+    # themselves something through `channel.write`, like everybody else.
+    ResourceType.POD: (),
     # Sharing is the owner's act and nobody else's (audit H3). It is here and
     # in no role, so a pod admin can remove an account from the pod but never
     # put someone's credential in front of anyone.

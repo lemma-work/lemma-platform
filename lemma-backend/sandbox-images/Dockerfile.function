@@ -66,8 +66,14 @@ ENV PYTHONUNBUFFERED=1 \
 
 # The logs go with the lists: they record when the install ran, which is the
 # one thing two builds of the same inputs disagree about.
+#
+# `tzdata-legacy` because Debian 13 moved the tz database's old names --
+# `Asia/Calcutta`, `Europe/Kiev`, `US/Eastern` -- out of `tzdata` and into it.
+# Browsers still report some of those names, so a function handed one by a
+# person's settings or a schedule raised ZoneInfoNotFoundError here while the
+# same name worked on the backend.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bash ca-certificates tini \
+    && apt-get install -y --no-install-recommends bash ca-certificates tini tzdata-legacy \
     && rm -rf /var/lib/apt/lists/* /var/log/apt /var/log/dpkg.log /var/log/alternatives.log \
     && groupadd --gid 10001 appuser \
     && useradd --uid 10001 --gid 10001 --home-dir /home/appuser --create-home appuser \

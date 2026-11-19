@@ -46,12 +46,26 @@ export class WorkflowsNamespace {
 
   readonly runs = {
     /**
-     * Create a run. Runs take no inputs: when the workflow starts with a
-     * form, the returned run is WAITING with `active_wait` describing the
-     * form to render and submit via `runs.submitForm`.
+     * Create a run. A run takes no free-form input: when the workflow starts
+     * with a form, the returned run is WAITING with `active_wait` describing
+     * the form to render and submit via `runs.submitForm`. `about` names the
+     * one record the run is about: it is read as you (404 when you cannot)
+     * and becomes `start.payload`, as a table trigger's change would.
      */
-    create: (workflowName: string) =>
-      this.client.request(() => WorkflowsService.workflowRunCreate(this.podId(), workflowName)),
+    create: (
+      workflowName: string,
+      options: { about?: { table: string; recordId: string }; idempotencyKey?: string } = {},
+    ) =>
+      this.client.request(() =>
+        WorkflowsService.workflowRunCreate(
+          this.podId(),
+          workflowName,
+          options.idempotencyKey,
+          options.about
+            ? { about: { table: options.about.table, record_id: options.about.recordId } }
+            : undefined,
+        ),
+      ),
 
     list: (workflowName: string, options: { limit?: number; pageToken?: string } = {}) =>
       this.client.request(() =>

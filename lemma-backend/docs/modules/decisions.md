@@ -38,11 +38,28 @@ refused with a 422 listing every problem. A closed answer can be checked, routed
 on and counted; an open one is extraction, and free text is where evidence gets
 copied into whatever reads the answer next.
 
-Every answer is `{value, confidence}`. `value` is `null` when the evidence did
-not support an answer -- an answer, not a failure. `confidence` is the
-provider's probability for the value when it measures one, and `null` when it
-does not (a language model's self-report is not used). A provider that could
-not answer at all is an error: 503 `DECISION_PROVIDER_UNAVAILABLE`, retryable.
+Every answer is `{value, confidence}`. `confidence` is the provider's
+probability for the value when it measures one, and `null` when it does not (a
+language model's self-report is not used). For several choices it is the
+confidence of the least certain per-option decision, not the probability of
+the whole selection: two options chosen at 0.9 each answer 0.9, not 0.81. A provider that could not answer at
+all is an error: 503 `DECISION_PROVIDER_UNAVAILABLE`, retryable.
+
+How a provider says "not sure" differs. The `model` provider answers `null`
+when it judges the evidence does not support an answer -- an answer, not a
+failure. `typesafe` never answers `null`: it answers the value it judged most
+likely and, where it reports one, that value's calibrated probability as
+`confidence` (`null` for a scale read from its score alone; for several
+choices, the least certain of its per-option decisions). A caller that
+wants to route "not sure" somewhere treats an answer as unsure when `value` is
+`null`, or `confidence` is not `null` and below its own threshold -- one rule
+that holds on either provider. A value whose `confidence` is `null` carries no
+measure to compare -- every answer of the `model` provider, and a `typesafe`
+scale read from its score alone -- so it is a case of its own, neither sure nor
+unsure, and where it goes is the caller's call per question. The threshold is the caller's because what a
+wrong answer costs differs per question; a cut-off inside the provider would be
+one number nobody could tune per question, it would hide the best guess, and
+answering `null` would change what existing `typesafe` callers get back.
 
 The instruction is the asker's and is trusted. The evidence and any examples
 are not: they are capped (64 KiB of evidence, 20 examples totalling 32 KiB) and

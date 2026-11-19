@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pytest
 
+from app.core.helpers.time_zones import RENAMED_ZONES
 from app.modules.agent.contracts.conversation_summaries import (
     DayActivity,
     PendingInteraction,
@@ -24,11 +25,7 @@ from app.modules.channels.contracts.asked_in_a_line import (
     offered_choices,
 )
 from app.modules.channels.contracts.contacts_waiting import ContactWaiting
-from app.modules.identity.domain.time_zones import (
-    RENAMED_ZONES,
-    known_zone,
-    last_days,
-)
+from app.modules.identity.domain.time_zones import known_zone, last_days
 from app.modules.identity.services.organization_needs_you import (
     NeedsYouKind,
     contact_items,

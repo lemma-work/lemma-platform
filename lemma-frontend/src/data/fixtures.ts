@@ -2661,6 +2661,13 @@ export const fixtureSource: PodSource = {
         if (clean) pod.description = clean;
         else delete pod.description;
     },
+    async setHomeApp(podId: string, app: string | null) {
+        await wait(160);
+        const pod = PODS.find((candidate) => candidate.id === podId);
+        if (!pod) return;
+        if (app) pod.homeApp = app;
+        else delete pod.homeApp;
+    },
     /* Real, in memory, for the reason renaming is: what deleting is judged by
        is the rail losing a face and the team page closing over the gap, and a
        refusal shows neither. Gone until the page reloads, like a hire. */
