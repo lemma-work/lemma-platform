@@ -261,3 +261,61 @@ def test_the_import_plan_shows_what_the_import_will_own():
     }
     plain = ImportPlanResponse.from_domain(ImportPlan(format_version=3))
     assert plain.outcome is None
+
+
+# --- a folder inside a repository ---------------------------------------------
+
+
+@pytest.mark.parametrize("path", ["install/mail", "mail", "a/b.c/d_e-f", ".lemma/x"])
+def test_a_github_import_takes_a_folder_inside_the_repository(path):
+    from app.modules.pod_bundle.api.schemas import ImportStartRequest
+
+    request = ImportStartRequest.model_validate(
+        {"kind": "GITHUB", "owner": "acme", "repo": "plugins", "path": path}
+    )
+    assert request.path == path
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "",
+        "/install/mail",
+        "install/mail/",
+        "install//mail",
+        "..",
+        "../secrets",
+        "install/../../etc",
+        "install/./mail",
+        "install/mail name",
+        "install\\mail",
+        "install/mail?x=1",
+        "a" * 256,
+    ],
+)
+def test_a_folder_that_could_leave_the_repository_is_refused(path):
+    """Relative, ordinary characters, and no segment of dots alone: nothing
+    a folder names can lie outside the repository it is read from."""
+    from app.modules.pod_bundle.api.schemas import ImportStartRequest
+
+    with pytest.raises(ValidationError):
+        ImportStartRequest.model_validate(
+            {"kind": "GITHUB", "owner": "acme", "repo": "plugins", "path": path}
+        )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"kind": "URL", "url": "https://lemma.example/b.zip"},
+        {"kind": "TEMPLATE", "template": "support"},
+    ],
+)
+def test_only_a_github_import_takes_a_folder(body):
+    """A downloaded bundle and a template have no repository to look inside, so
+    a folder beside them is refused rather than ignored."""
+    from app.modules.pod_bundle.api.schemas import ImportStartRequest
+
+    ImportStartRequest.model_validate(body)
+    with pytest.raises(ValidationError, match="path is only accepted"):
+        ImportStartRequest.model_validate({**body, "path": "install/mail"})

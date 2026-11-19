@@ -65,6 +65,22 @@ flowchart LR
     C --> R["Record recipe + cleanup"]
 ```
 
+**From GitHub.** `kind=GITHUB` fetches the repository's zipball through the
+pod's `github` connector as the importer, or anonymously for a public repository
+(`events/github_import.py`). Without `path` the whole repository is the archive,
+and its bundle is the shallowest `pod.json` in it. A repository that holds
+several bundles, one per folder (`install/<slug>/`), installs one of them with
+`path`: relative, ordinary characters, no `.` or `..` segment
+(`domain/state.BUNDLE_PATH_PATTERN`), and refused with any other kind. The job
+narrows the archive to that folder before staging it
+(`infrastructure/github_folder.py`), looking under GitHub's one wrapping
+`owner-repo-sha/` folder, so planning and applying read that bundle alone, under
+the same extraction checks. A folder that is not there fails the job
+`GITHUB_PATH_NOT_FOUND` (404), and one with no `pod.json` of its own
+`GITHUB_PATH_NOT_A_BUNDLE` (422), both before anything is planned and neither
+retried. The recipe records `path` beside `repo_url`, so the source is named in
+full.
+
 Every non-app apply step opens its own authorization/UoW scope and commits
 before the Redis `DONE` checkpoint. App steps self-scope around a sandbox
 build. A crash between commit and checkpoint replays a step that creates only

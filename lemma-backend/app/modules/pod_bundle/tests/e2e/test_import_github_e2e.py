@@ -436,3 +436,136 @@ async def test_github_import_rejects_bad_repo(authenticated_client, test_pod, wo
     )
     assert res.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY, res.text
     assert res.json()["code"] == "POD_BUNDLE_INVALID"
+
+
+# --- a bundle in a folder of a repository that holds several -----------------
+
+
+def _bundle_files(root: Path, *, name: str, table: str) -> None:
+    root.mkdir(parents=True)
+    (root / "pod.json").write_text(
+        json.dumps({"name": name, "format_version": 2, "variables": {}}),
+        encoding="utf-8",
+    )
+    tdir = root / "tables" / table
+    tdir.mkdir(parents=True)
+    (tdir / f"{table}.json").write_text(
+        json.dumps(
+            {
+                "name": table,
+                "primary_key_column": "id",
+                "columns": [{"name": "id", "type": "UUID", "required": True}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _plugins_repository_zip() -> bytes:
+    """A repository of several bundles, zipped the way GitHub zips one: every
+    file under a single `owner-repo-sha/` folder."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        repository = Path(tmp) / "archive" / "acme-plugins-1a2b3c4"
+        _bundle_files(repository / "install" / "mail", name="Mail", table="threads")
+        _bundle_files(repository / "install" / "crm", name="CRM", table="deals")
+        (repository / "docs").mkdir()
+        (repository / "docs" / "writing-a-plugin.md").write_text("# Writing one")
+        (repository / "README.md").write_text("# Plugins")
+        return pack_bundle(Path(tmp) / "archive")
+
+
+async def test_github_import_installs_one_folder_of_a_repository(
+    authenticated_client, test_pod, worker, github_fixture_server
+):
+    """`path` names the bundle: the plan is that folder's and nothing else's,
+    and the pod's recipe records the folder beside the repository."""
+    _serve_archive(github_fixture_server, _plugins_repository_zip())
+    pod_id = test_pod["id"]
+    repo = f"plugins-{uuid4().hex[:6]}"
+    started = await authenticated_client.post(
+        f"/pods/{pod_id}/bundle/imports",
+        json={"kind": "GITHUB", "owner": "acme", "repo": repo, "path": "install/mail"},
+    )
+    assert started.status_code == status.HTTP_202_ACCEPTED, started.text
+    import_id = started.json()["import_id"]
+
+    planned = await _wait(
+        authenticated_client,
+        pod_id,
+        import_id,
+        until={"AWAITING_CONFIRMATION", "FAILED"},
+    )
+    assert planned["status"] == "AWAITING_CONFIRMATION", planned
+    assert planned["plan"]["bundle_name"] == "Mail"
+    tables = {s["name"] for s in planned["plan"]["steps"] if s["kind"] == "TABLE"}
+    assert tables == {"threads"}
+
+    apply = await authenticated_client.post(
+        f"/pods/{pod_id}/bundle/imports/{import_id}/apply", json={}
+    )
+    assert apply.status_code == status.HTTP_202_ACCEPTED, apply.text
+    applied = await _wait(
+        authenticated_client, pod_id, import_id, until={"COMPLETED", "FAILED"}
+    )
+    assert applied["status"] == "COMPLETED", applied
+    threads = await authenticated_client.get(f"/pods/{pod_id}/datastore/tables/threads")
+    assert threads.status_code == status.HTTP_200_OK, threads.text
+    deals = await authenticated_client.get(f"/pods/{pod_id}/datastore/tables/deals")
+    assert deals.status_code == status.HTTP_404_NOT_FOUND, deals.text
+
+    pod = await authenticated_client.get(f"/pods/{pod_id}")
+    recipes = pod.json()["config"].get("recipes", [])
+    assert {(r["kind"], r["name"], r["repo_url"], r["path"]) for r in recipes} == {
+        ("GITHUB", "Mail", f"https://github.com/acme/{repo}", "install/mail")
+    }
+
+
+@pytest.mark.parametrize(
+    ("path", "code"),
+    [
+        ("install/calendar", "GITHUB_PATH_NOT_FOUND"),
+        ("docs", "GITHUB_PATH_NOT_A_BUNDLE"),
+        ("install", "GITHUB_PATH_NOT_A_BUNDLE"),
+    ],
+)
+async def test_github_import_of_a_folder_without_a_bundle_fails_before_planning(
+    authenticated_client, test_pod, worker, github_fixture_server, path, code
+):
+    _serve_archive(github_fixture_server, _plugins_repository_zip())
+    pod_id = test_pod["id"]
+    started = await authenticated_client.post(
+        f"/pods/{pod_id}/bundle/imports",
+        json={"kind": "GITHUB", "url": "https://github.com/acme/plugins", "path": path},
+    )
+    assert started.status_code == status.HTTP_202_ACCEPTED, started.text
+
+    final = await _wait(
+        authenticated_client,
+        pod_id,
+        started.json()["import_id"],
+        until={"AWAITING_CONFIRMATION", "FAILED"},
+    )
+    assert final["status"] == "FAILED", final
+    assert final["error_code"] == code
+    assert path in final["error"]
+    assert final["plan"] is None
+    assert final["retryable"] is False
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"kind": "GITHUB", "url": "https://github.com/acme/plugins", "path": "../x"},
+        {"kind": "GITHUB", "url": "https://github.com/acme/plugins", "path": "/x"},
+        {"kind": "TEMPLATE", "template": "support", "path": "install/mail"},
+    ],
+)
+async def test_github_import_refuses_a_folder_it_cannot_take(
+    authenticated_client, test_pod, body
+):
+    res = await authenticated_client.post(
+        f"/pods/{test_pod['id']}/bundle/imports", json=body
+    )
+    assert res.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY, res.text
