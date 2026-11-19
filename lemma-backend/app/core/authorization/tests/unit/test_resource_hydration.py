@@ -104,6 +104,9 @@ LEARNS_POD_WITHOUT_A_QUERY = {ResourceType.POD}
 #: login belongs to a person rather than a pod, and the repository filters every
 #: read by `user_id`. Nothing builds a ref for it *yet* — the resolution service
 #: that will is the one place that should, and it lands with a hydrator.
+#:
+#: `MACHINE` is decided by the workspace module's machine resolver, which reads
+#: its grant rows itself: a default machine has no pod at all.
 NO_LOOKUP = {
     ResourceType.CONNECTOR_AUTH_CONFIG,
     ResourceType.ORGANIZATION,
@@ -111,6 +114,7 @@ NO_LOOKUP = {
     ResourceType.POD_MEMBER,
     ResourceType.DATASTORE_RECORD,
     ResourceType.WEB_LOGIN,
+    ResourceType.MACHINE,
 }
 
 

@@ -10,6 +10,8 @@ The table below is generated from the committed OpenAPI specification by `script
 
 | Operation | Method | Path | Summary |
 | --- | --- | --- | --- |
+| `machine.browser.logins.forget` | DELETE | `/machines/{ref}/browser/logins/{site}` | Sign a machine's browser out of a site |
+| `machine.browser.logins.list` | GET | `/machines/{ref}/browser/logins` | The sites a machine's browser is signed in to |
 | `web_login.delete` | DELETE | `/web-logins` | Sign your browser out of a site |
 | `web_login.list` | GET | `/web-logins` | List the sites your browser is signed in to |
 | `web_login.sign_in.answer` | POST | `/web-logins/sign-ins/{conversation_id}/{tool_call_id}/answer` | Say whether you signed in |

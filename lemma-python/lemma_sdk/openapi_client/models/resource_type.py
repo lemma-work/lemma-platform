@@ -13,6 +13,7 @@ class ResourceType(str, Enum):
     DOCUMENT = "document"
     FOLDER = "folder"
     FUNCTION = "function"
+    MACHINE = "machine"
     ORGANIZATION = "organization"
     POD = "pod"
     POD_MEMBER = "pod_member"

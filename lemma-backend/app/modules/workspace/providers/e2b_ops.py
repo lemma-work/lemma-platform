@@ -48,7 +48,10 @@ from app.modules.workspace.providers.e2b_common import (
     sdk_best_effort,
     sdk_errors,
 )
-from app.modules.workspace.providers.e2b_paths import resolve_real_path
+from app.modules.workspace.providers.e2b_paths import (
+    refuse_protected,
+    resolve_real_path,
+)
 from app.modules.workspace.providers.e2b_ranged_read import read_range
 from app.modules.workspace.providers.e2b_reach import E2BReachMixin
 from app.modules.workspace.providers.e2b_process_index import (
@@ -409,6 +412,7 @@ class E2BOpsMixin(E2BReachMixin):
         self, instance: ProviderInstance, *, path: str, deadline_at: datetime
     ) -> None:
         sandbox = await self._connect(instance.provider_id)
+        await refuse_protected(sandbox, path, follow_last=True)
         with sdk_errors():
             await sandbox.files.make_dir(path)
 
@@ -439,6 +443,7 @@ class E2BOpsMixin(E2BReachMixin):
         deadline_at: datetime,
     ) -> FileStat:
         sandbox = await self._connect(instance.provider_id)
+        await refuse_protected(sandbox, path, follow_last=True)
         if expected_sha256 is not None:
             # A precondition on what is already at the path, which is what the
             # contract says and what the runtime-backed fabrics have always
@@ -458,7 +463,8 @@ class E2BOpsMixin(E2BReachMixin):
         payload = b"".join(blocks)
         with sdk_errors():
             info = await sandbox.files.write(path, payload)
-        return _to_stat(info)
+        # E2B's write answer carries no size; what was written is the size.
+        return replace(_to_stat(info), size_bytes=len(payload))
 
     async def _require_existing_digest(
         self, sandbox: object, *, path: str, expected_sha256: str
@@ -496,6 +502,8 @@ class E2BOpsMixin(E2BReachMixin):
         deadline_at: datetime,
     ) -> None:
         sandbox = await self._connect(instance.provider_id)
+        await refuse_protected(sandbox, source, follow_last=False)
+        await refuse_protected(sandbox, destination, follow_last=True)
         with sdk_errors(source):
             await sandbox.files.rename(source, destination)
 
@@ -508,6 +516,7 @@ class E2BOpsMixin(E2BReachMixin):
         deadline_at: datetime,
     ) -> bool:
         sandbox = await self._connect(instance.provider_id)
+        await refuse_protected(sandbox, path, follow_last=False)
         try:
             with sdk_errors(path):
                 await sandbox.files.remove(path)

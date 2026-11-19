@@ -25,7 +25,11 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.services.agent_service import AgentService
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.errors import AgentNotFoundError
+from app.modules.agent.domain.sentinels import UNSET, UnsetType
 from app.modules.agent.domain.value_objects import AgentToolset, JsonObject
+from app.modules.agent.services.agent_machine_grant import (
+    sync_agent_machine_grant as _sync_agent_machine_grant,
+)
 from app.modules.agent.services.agent_memory_grant import sync_memory_folder_grant
 
 
@@ -117,8 +121,13 @@ async def create_agent(
     visibility: str | None,
     metadata: JsonObject | None,
     ctx: Context,
+    machine: str | None = None,
 ) -> Agent:
-    """Create an agent, with the folder and grant its toolsets imply."""
+    """Create an agent, with the folder and grant its toolsets imply.
+
+    ``machine`` is a machine ref (``pod:<name>`` for one of the pod's
+    machines); ``None`` runs it on the default machine of whoever it acts for.
+    """
     return await AgentService.build(uow).create_agent(
         pod_id=pod_id,
         user_id=user_id,
@@ -132,6 +141,7 @@ async def create_agent(
         output_schema=output_schema,
         visibility=visibility,
         metadata=metadata,
+        machine=machine,
         ctx=ctx,
     )
 
@@ -151,8 +161,10 @@ async def update_agent(
     metadata: JsonObject | None,
     user_id: UUID,
     ctx: Context,
+    machine: str | None | UnsetType = UNSET,
 ) -> Agent:
-    """Overwrite an existing agent's definition."""
+    """Overwrite an existing agent's definition. ``machine`` left unset keeps
+    the agent's; ``None`` clears it."""
     return await AgentService.build(uow).update_agent(
         pod_id=pod_id,
         name=name,
@@ -164,6 +176,7 @@ async def update_agent(
         input_schema=input_schema,
         output_schema=output_schema,
         metadata=metadata,
+        machine=machine,
         requester_user_id=user_id,
         ctx=ctx,
     )
@@ -195,10 +208,32 @@ async def sync_agent_memory_grant(
     )
 
 
+async def sync_agent_machine_grant(
+    uow,
+    *,
+    pod_id: UUID,
+    agent_id: UUID,
+    machine: str | None,
+    ctx: Context,
+    created_by_user_id: UUID,
+) -> None:
+    """Re-derive the `machine.use` grant an agent's `machine:` implies, after
+    its grants were replaced -- the same ordering as the memory grant above."""
+    await _sync_agent_machine_grant(
+        uow,
+        pod_id=pod_id,
+        agent_id=agent_id,
+        machine=machine,
+        ctx=ctx,
+        created_by_user_id=created_by_user_id,
+    )
+
+
 __all__ = [
     "ensure_pod_default_agent",
     "pod_default_agent_exists",
     "create_agent",
+    "sync_agent_machine_grant",
     "get_agent",
     "list_agents",
     "provision_pod_default_agent",

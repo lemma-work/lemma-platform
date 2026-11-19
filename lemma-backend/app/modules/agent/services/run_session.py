@@ -29,7 +29,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from functools import partial
-from typing import TYPE_CHECKING, Protocol, TypedDict
+from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -58,7 +58,6 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
 )
 from app.modules.agent.domain.vision import AgentVisionMode, resolve_vision_mode
-from app.modules.agent.domain.project_repo import ProjectRepo
 from app.modules.agent.domain.workspace_location import (
     WorkspaceLocation,
     has_recorded_cwd,
@@ -77,6 +76,7 @@ from app.modules.agent.services.conversation_access import (
     validate_conversation_access,
 )
 from app.modules.agent.services.run_phase_spans import record_history_size, run_phase
+from app.modules.agent.services.run_context_fields import RunIdentity
 from app.modules.agent.domain.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
     assemble_runtime_history,
@@ -124,25 +124,6 @@ class SessionLoader(Protocol):
 
 #: The conversation a pod-scoped context stands in for: there is none.
 NIL_CONVERSATION_ID = UUID(int=0)
-
-
-class _Identity(TypedDict):
-    """The tool-context fields every variant of a run's context shares."""
-
-    user_id: UUID
-    org_id: UUID | None
-    pod_id: UUID
-    conversation_id: UUID
-    agent_name: str | None
-    agent_run_id: UUID | None
-    workload_type: str | None
-    workload_id: UUID | None
-    is_pod_default_agent: bool
-    runtime_profile: JsonObject | None
-    workspace_id: str
-    workspace_cwd: str
-    workspace_repo: ProjectRepo | None
-    pod_cwd: str
 
 
 @dataclass(slots=True)
@@ -305,7 +286,7 @@ class RunSession:
 
     # -- The context the tools see -------------------------------------------
 
-    def _identity(self, *, user_id: UUID, agent_run_id: UUID | None) -> _Identity:
+    def _identity(self, *, user_id: UUID, agent_run_id: UUID | None) -> RunIdentity:
         """What every variant of a run's tool context says the same way.
 
         ``workload_id`` is the principal ``pod_data_access`` builds its delegated
@@ -329,6 +310,7 @@ class RunSession:
             "runtime_profile": self.runtime_profile,
             "workspace_id": self.workspace.workspace_id,
             "workspace_cwd": self.workspace.cwd,
+            "machine": agent.machine if agent is not None else None,
             "workspace_repo": self.workspace.repo,
             "pod_cwd": pod_cwd_from_workspace_cwd(self.workspace.cwd),
         }
@@ -470,8 +452,6 @@ class RunSession:
         """
         from app.modules.agent.agent_host.api import (
             choose_host_workspace,
-        )
-        from app.modules.agent.agent_host.api import (
             settle_native_commands,
         )
 
@@ -502,9 +482,7 @@ class RunSession:
         it, or an approved `view_image` would tell the user a model that reads
         images cannot.
         """
-        from app.modules.agent.agent_host.api import (
-            recorded_host_workspace,
-        )
+        from app.modules.agent.agent_host.api import recorded_host_workspace
 
         assert self.agent is not None
         return ToolContext(

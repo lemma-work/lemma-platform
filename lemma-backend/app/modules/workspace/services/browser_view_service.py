@@ -66,8 +66,24 @@ MODE_VIEW = "view"
 MODE_CONTROL = "control"
 
 
+async def machine_row(service, key: UUID):
+    """The machine ``key`` names: a machine id, or a user's default machine.
+
+    The service's methods still call it ``user_id``: a default machine's id is
+    its user's, and the `/machines` routes pass the machine's own id.
+    """
+    existing = await service.get(key)
+    if existing is not None and existing.kind is SandboxKind.WORKSPACE:
+        return existing
+    return await service.resolve(
+        kind=SandboxKind.WORKSPACE,
+        owner_kind=SandboxOwnerKind.USER,
+        owner_id=key,
+    )
+
+
 class BrowserViewService:
-    """One person's browser, reachable from the API."""
+    """One machine's browser, reachable from the API."""
 
     def __init__(self, workspace: WorkspaceSandboxService | None = None) -> None:
         self._workspace = workspace or WorkspaceSandboxService()
@@ -99,12 +115,14 @@ class BrowserViewService:
 
         with suppress(Exception):
             service = get_sandbox_service()
-            sandbox = await service.resolve(
-                kind=SandboxKind.WORKSPACE,
-                owner_kind=SandboxOwnerKind.USER,
-                owner_id=user_id,
-            )
+            sandbox = await machine_row(service, user_id)
             await service.touch(sandbox.id)
+            # And the provider's own clock. E2B pauses a sandbox it has not
+            # heard from for its timeout, with no clean browser close -- the
+            # one pause that loses a login. An ensure reaches the provider,
+            # which is what re-arms that timeout, so a person watching their
+            # browser for an hour is never paused blind underneath it.
+            await service.ensure(sandbox.id)
 
     async def _relay(
         self, user_id: UUID, *, start: bool, deliver: bool = True
@@ -132,11 +150,7 @@ class BrowserViewService:
         )
 
         service = get_sandbox_service()
-        sandbox = await service.resolve(
-            kind=SandboxKind.WORKSPACE,
-            owner_kind=SandboxOwnerKind.USER,
-            owner_id=user_id,
-        )
+        sandbox = await machine_row(service, user_id)
 
         if not start:
             # Never provisions: a pane asking what to render must not be what

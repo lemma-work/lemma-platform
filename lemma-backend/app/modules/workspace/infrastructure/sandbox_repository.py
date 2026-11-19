@@ -9,6 +9,7 @@ row is billable compute nobody owns.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from uuid import UUID, uuid7
 
@@ -107,8 +108,12 @@ class SandboxRepository:
         display_name: str | None = None,
         profile_name: str = "",
         profile_digest: str = "",
+        machine: Mapping[str, object] | None = None,
     ) -> Sandbox:
         """Get or create the durable identity. Idempotent by (kind, owner, slug).
+
+        ``machine`` is the machine columns a new row starts with (size,
+        template, visibility...); an existing row keeps its own.
 
         The explicit ``sandbox_id`` is what lets a caller pin the id to the
         owner id, which the pre-consolidation volume labels require in order to
@@ -145,6 +150,7 @@ class SandboxRepository:
                 last_used_at=now,
                 created_at=now,
                 updated_at=now,
+                **dict(machine or {}),
             )
             .on_conflict_do_nothing()
         )

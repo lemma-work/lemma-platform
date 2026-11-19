@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from typing import Annotated, Protocol
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import CurrentUser
@@ -199,8 +199,14 @@ async def list_web_logins(
         ),
     ),
 ) -> WebLoginListResponse:
+    return await _list(browser, current_user.id, wake=wake)
+
+
+async def _list(browser: BrowserView, key: UUID, *, wake: bool) -> WebLoginListResponse:
+    """What one machine's browser is signed in to. ``key`` is the machine's
+    id; a person's default machine's id is their own."""
     try:
-        answer = await browser.signed_in_sites(current_user.id, wake=wake)
+        answer = await browser.signed_in_sites(key, wake=wake)
     except SandboxCapabilityUnsupported:
         # A fabric with no reachable browser. Not an error to a reader: there
         # is nothing signed in because there is nowhere to be signed in.
@@ -237,6 +243,10 @@ async def forget_web_login(
     browser: Browser,
     origin: str = Query(description="The site to forget, as an origin or a host."),
 ) -> ForgetResponse:
+    return await _forget(browser, current_user.id, origin)
+
+
+async def _forget(browser: BrowserView, key: UUID, origin: str) -> ForgetResponse:
     try:
         site = site_from_origin(normalize_origin(origin))
     except InvalidOrigin as exc:
@@ -245,7 +255,7 @@ async def forget_web_login(
         ) from exc
 
     try:
-        answer = await browser.signed_in_sites(current_user.id)
+        answer = await browser.signed_in_sites(key)
     except (SandboxCapabilityUnsupported, _relay_unavailable()) as exc:
         # Refusing rather than reporting success: a person pressing "forget"
         # on a sleeping computer has not had their browser signed out, and
@@ -278,10 +288,51 @@ async def forget_web_login(
     ]
     if not hosts:
         return ForgetResponse(site=site, forgotten=False)
-    dropped = await browser.forget_sites(
-        current_user.id, domains=sorted(set(hosts)), sites=[site]
-    )
+    dropped = await browser.forget_sites(key, domains=sorted(set(hosts)), sites=[site])
     return ForgetResponse(site=site, forgotten=dropped > 0)
+
+
+#: The same, per machine: `/machines/{ref}/browser/logins`. Here rather than
+#: in the workspace module because this module knows what a login is; the
+#: workspace module decides who may reach the machine.
+machine_router = APIRouter(
+    prefix="/machines/{ref}/browser/logins", tags=["Machine Logins"]
+)
+
+
+@machine_router.get(
+    "",
+    response_model=WebLoginListResponse,
+    operation_id="machine.browser.logins.list",
+    summary="The sites a machine's browser is signed in to",
+)
+async def list_machine_logins(
+    ref: str,
+    request: Request,
+    browser: Browser,
+    wake: bool = Query(default=False, description="Start the machine if it is paused."),
+) -> WebLoginListResponse:
+    from app.modules.workspace.contracts.machines import machine_id_for_request
+
+    machine_id = await machine_id_for_request(request, ref)
+    return await _list(browser, machine_id, wake=wake)
+
+
+@machine_router.delete(
+    "/{site}",
+    response_model=ForgetResponse,
+    operation_id="machine.browser.logins.forget",
+    summary="Sign a machine's browser out of a site",
+)
+async def forget_machine_login(
+    ref: str, site: str, request: Request, browser: Browser
+) -> ForgetResponse:
+    """Explicit and per site: the only way a login is removed from a machine
+    short of a confirmed `home` reset."""
+    from app.modules.workspace.contracts.machines import machine_id_for_request
+
+    machine_id = await machine_id_for_request(request, ref)
+    return await _forget(browser, machine_id, site)
 
 
 def _relay_unavailable() -> type[Exception]:

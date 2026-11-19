@@ -56,7 +56,7 @@ run_connector_operation {"connector": "gmail", "operation": "GMAIL_SEND_EMAIL",
 ```
 
 `{"file_id": "..."}` works too, and a list where the field takes several. The
-file is read with your access. A file only in your sandbox goes up first
+file is read with your access. A file only on your machine goes up first
 (`lemma files upload ./q3.pdf /me/reports/`). `describe_connector_operation`
 shows which fields take files.
 

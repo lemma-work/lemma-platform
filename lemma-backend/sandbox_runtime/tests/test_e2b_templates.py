@@ -29,21 +29,33 @@ _SPEC.loader.exec_module(build_templates)
 class _RecordingTemplate:
     copies: list[tuple[str, str]]
     commands: list[str]
-    steps: list[tuple[str, str]]
+    #: Every builder step in order, as `(method, first argument, user)`, so a
+    #: test can ask what ran *before* something else was in place.
+    steps: list[tuple[str, str, str | None]]
+    ready_commands: list[str]
+    start_commands: list[str]
 
     def __init__(self, **_: object) -> None:
         self.copies = []
         self.commands = []
         self.steps = []
+        self.ready_commands = []
+        self.start_commands = []
 
     def __getattr__(self, name: str):
-        def record(*args: object, **_: object) -> _RecordingTemplate:
+        def record(*args: object, **kwargs: object) -> _RecordingTemplate:
+            user = kwargs.get("user")
+            self.steps.append(
+                (name, str(args[0]) if args else "", str(user) if user else None)
+            )
             if name == "copy":
                 self.copies.append((str(args[0]), str(args[1])))
-                self.steps.append(("copy", str(args[1])))
             if name == "run_cmd" and args:
                 self.commands.append(str(args[0]))
-                self.steps.append(("run", str(args[0])))
+            if name == "set_ready_cmd":
+                self.ready_commands.append(str(args[0]))
+            if name == "set_start_cmd":
+                self.start_commands.append(str(args[0]))
             return self
 
         return record
@@ -150,27 +162,129 @@ def test_both_images_wire_the_overlay_the_same_way(monkeypatch) -> None:
     assert "/opt/lemma-runtime" in dockerfile
 
 
-_BARE_UV = re.compile(r"(?:^|[\s;&|(])uv\s")
+def _bare_uv_calls(command: str) -> list[str]:
+    """`uv` invoked by that name, as opposed to by a path or inside a word.
+
+    Matches `uv sync`, `uv cache clean`, `&& uv python ...` -- the name on PATH,
+    which is the `lemma-uv` shim -- and not `/usr/local/lib/lemma-uv-bin sync`,
+    `uvx` or `UV_CACHE_DIR`.
+    """
+    return re.findall(r"(?:^|[\s;&|(])uv\s+\w+", command)
 
 
-@pytest.mark.parametrize("template_name", ["workspace_template", "function_template"])
-def test_no_build_step_calls_uv_before_the_shim_is_there(
-    monkeypatch, template_name: str
-) -> None:
-    """`uv` on PATH is a shim copied in late; the real binary is installed
-    under another name. A build step that says bare `uv` before the copy
-    exits 127, and the function template never copies the shim at all -- both
-    templates were unbuildable that way.
+def test_no_build_step_calls_uv_before_the_shim_exists(monkeypatch) -> None:
+    """The workspace template could not be built from scratch.
+
+    `_install_uv_command` installs the real binary as
+    `/usr/local/lib/lemma-uv-bin`, and the name `uv` on PATH is the `lemma-uv`
+    shim, copied in near the end. The Python step between them ran a bare
+    `uv python install` / `uv sync`, which is `command not found` (exit 127)
+    on a cold build -- hidden for as long as every build hit a warm layer
+    cache. The function template has no shim at all, so the same holds there.
     """
     monkeypatch.setattr(build_templates, "Template", _RecordingTemplate)
-    template = getattr(build_templates, template_name)()
 
-    shim_copied = False
-    for kind, step in template.steps:
-        if kind == "copy" and step == "/usr/local/bin/uv":
-            shim_copied = True
-        if kind == "run" and not shim_copied:
-            assert not _BARE_UV.search(step), (
-                f"{template_name} runs bare `uv` before the shim is copied: "
-                f"call {build_templates.UV} instead"
-            )
+    for factory in (
+        build_templates.workspace_template,
+        build_templates.workspace_docker_template,
+        build_templates.function_template,
+    ):
+        template = factory()
+        shim_at = next(
+            (
+                index
+                for index, (method, source, _) in enumerate(template.steps)
+                if method == "copy" and source.endswith("scripts/lemma-uv")
+            ),
+            len(template.steps),
+        )
+        before_shim = [
+            source
+            for method, source, _ in template.steps[:shim_at]
+            if method == "run_cmd"
+        ]
+        offenders = [call for c in before_shim for call in _bare_uv_calls(c)]
+        assert not offenders, f"{factory.__name__} calls bare uv: {offenders}"
+
+
+def test_the_python_step_calls_uv_by_its_real_path(monkeypatch) -> None:
+    monkeypatch.setattr(build_templates, "Template", _RecordingTemplate)
+
+    script = "\n".join(build_templates.workspace_template().commands)
+
+    assert build_templates.UV == "/usr/local/lib/lemma-uv-bin"
+    assert (
+        f"install -m 0755 /tmp/uv-x86_64-unknown-linux-gnu/uv {build_templates.UV}"
+        in script
+    )
+    assert f"{build_templates.UV} python install" in script
+    assert f"{build_templates.UV} sync --project" in script
+    assert f"{build_templates.UV} cache clean" in script
+
+
+def _docker_steps(monkeypatch) -> tuple[_RecordingTemplate, str]:
+    monkeypatch.setattr(build_templates, "Template", _RecordingTemplate)
+    template = build_templates.workspace_docker_template()
+    workspace_steps = len(build_templates.workspace_template().steps)
+    return template, "\n".join(
+        source
+        for method, source, _ in template.steps[workspace_steps:]
+        if method == "run_cmd"
+    )
+
+
+def test_the_docker_template_is_the_workspace_with_docker_on_top(
+    monkeypatch,
+) -> None:
+    """Everything the workspace bakes, unchanged, then the Docker layers -- so
+    the two share a layer cache and a machine on either has the same tools."""
+    monkeypatch.setattr(build_templates, "Template", _RecordingTemplate)
+    workspace = build_templates.workspace_template()
+    docker = build_templates.workspace_docker_template()
+
+    assert docker.steps[: len(workspace.steps)] == workspace.steps
+    added = docker.steps[len(workspace.steps) :]
+    assert [method for method, _, _ in added] == ["run_cmd", "set_ready_cmd"]
+    assert added[0][2] == "root"
+
+
+def test_the_docker_apt_repository_is_debian(monkeypatch) -> None:
+    """`code-interpreter-v1` is Debian 13 (trixie), not Ubuntu. Docker's
+    `linux/ubuntu` suite has no `trixie`, so the wrong one fails `apt-get
+    update`; the codename comes from the image rather than being pinned."""
+    _, script = _docker_steps(monkeypatch)
+
+    assert "https://download.docker.com/linux/debian/gpg" in script
+    assert (
+        "https://download.docker.com/linux/debian ${VERSION_CODENAME} stable" in script
+    )
+    assert ". /etc/os-release" in script
+    assert "linux/ubuntu" not in script
+    for package in (
+        "docker-ce",
+        "docker-ce-cli",
+        "containerd.io",
+        "docker-buildx-plugin",
+        "docker-compose-plugin",
+        "iptables",
+    ):
+        assert f" {package}" in script, package
+
+
+def test_the_sandbox_user_runs_docker_without_sudo(monkeypatch) -> None:
+    _, script = _docker_steps(monkeypatch)
+
+    assert "usermod -aG docker user" in script
+
+
+def test_the_docker_template_is_ready_on_docker_info_with_no_start_command(
+    monkeypatch,
+) -> None:
+    """systemd starts `docker.service` at boot and on every filesystem-only
+    resume, so a start command would only race it. Ready means the daemon
+    answers."""
+    template, _ = _docker_steps(monkeypatch)
+
+    assert template.ready_commands == [build_templates.DOCKER_READY_COMMAND]
+    assert "docker info" in build_templates.DOCKER_READY_COMMAND
+    assert template.start_commands == []

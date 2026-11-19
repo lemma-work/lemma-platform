@@ -264,7 +264,7 @@ test("a PATCH carries only what changed", () => {
 });
 
 test("a cleared description is an explicit null, so it actually clears", () => {
-    const before = { description: "Plans meals.", instruction: "You plan meals.", reasoningEffort: "", maxOutputTokens: "", selections: {}, runtime: null };
+    const before = { description: "Plans meals.", instruction: "You plan meals.", reasoningEffort: "", maxOutputTokens: "", selections: {}, runtime: null, machine: "" };
 
     assert.deepEqual(agentChanges(before, { ...before, description: "   " }), { description: null });
 });
@@ -272,7 +272,7 @@ test("a cleared description is an explicit null, so it actually clears", () => {
 test("an emptied instruction is not sent, because the API will not take it", () => {
     // `UpdateAgentRequest.instruction` has min_length=1; sending "" is a 422,
     // and the form should say so rather than find out.
-    const before = { description: "", instruction: "You plan meals.", reasoningEffort: "", maxOutputTokens: "", selections: {}, runtime: null };
+    const before = { description: "", instruction: "You plan meals.", reasoningEffort: "", maxOutputTokens: "", selections: {}, runtime: null, machine: "" };
 
     assert.deepEqual(agentChanges(before, { ...before, instruction: "  " }), {});
     assert.equal(agentProblems({ ...before, instruction: "  " }).instruction,
@@ -290,8 +290,8 @@ test("an instruction is a document, so its blank lines survive a round trip", ()
 test("an instruction past the limit is refused before the round trip", () => {
     const over = "x".repeat(MAX_INSTRUCTION + 1);
 
-    assert.match(agentProblems({ description: "", instruction: over, reasoningEffort: "", maxOutputTokens: "", selections: {}, runtime: null }).instruction ?? "", /the limit is 60,000/);
-    assert.equal(agentProblems({ description: "", instruction: "x".repeat(MAX_INSTRUCTION), reasoningEffort: "", maxOutputTokens: "", selections: {}, runtime: null }).instruction, undefined);
+    assert.match(agentProblems({ description: "", instruction: over, reasoningEffort: "", maxOutputTokens: "", selections: {}, runtime: null, machine: "" }).instruction ?? "", /the limit is 60,000/);
+    assert.equal(agentProblems({ description: "", instruction: "x".repeat(MAX_INSTRUCTION), reasoningEffort: "", maxOutputTokens: "", selections: {}, runtime: null, machine: "" }).instruction, undefined);
 });
 
 /* ── what deleting breaks ──────────────────────────────────────── */
@@ -403,4 +403,15 @@ test("a coding agent's selections ride on the runtime, and are written back whol
         agentChanges(before, { ...before, reasoningEffort: "low" }).agent_runtime?.config_selections,
         { effort: "high" },
     );
+});
+
+test("the machine is sent when it changes, and going back to the default is a null", () => {
+    const before = draftOfAgent(readAgentDetail({ name: "builder", instruction: "You build.", machine: "pod:ci" }));
+    assert.equal(before.machine, "pod:ci");
+    assert.deepEqual(agentChanges(before, before), {});
+    assert.deepEqual(agentChanges(before, { ...before, machine: "pod:gpu" }), { machine: "pod:gpu" });
+    assert.deepEqual(agentChanges(before, { ...before, machine: "" }), { machine: null });
+
+    const unset = draftOfAgent(readAgentDetail({ name: "chef", instruction: "You plan meals." }));
+    assert.equal(unset.machine, "", "no machine is the default, not a ref");
 });
