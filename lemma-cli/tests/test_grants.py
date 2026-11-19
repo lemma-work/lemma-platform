@@ -152,6 +152,7 @@ def test_grant_presets_only_use_permissions_the_backend_accepts():
         },
         "schedule": {"schedule.read", "schedule.update", "schedule.delete"},
         "app": {"app.read", "app.update", "app.publish", "app.delete"},
+        "pod": {"channel.notify_self", "agent.execute"},
     }
     assert set(PERMISSION_PRESETS) == set(applicable)
     for resource_type, presets in PERMISSION_PRESETS.items():

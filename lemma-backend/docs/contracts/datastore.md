@@ -42,6 +42,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `record.update` | PATCH | `/pods/{pod_id}/datastore/tables/{table_name}/records/{record_id}` | Update Record |
 | `table.column.add` | POST | `/pods/{pod_id}/datastore/tables/{table_name}/columns` | Add Column |
 | `table.column.remove` | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/columns/{column_name}` | Remove Column |
+| `table.column.update` | PATCH | `/pods/{pod_id}/datastore/tables/{table_name}/columns/{column_name}` | Update Column |
 | `table.create` | POST | `/pods/{pod_id}/datastore/tables` | Create Table |
 | `table.delete` | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}` | Delete Table |
 | `table.get` | GET | `/pods/{pod_id}/datastore/tables/{table_name}` | Get Table |

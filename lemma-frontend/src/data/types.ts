@@ -208,6 +208,9 @@ export interface Pod {
     hiredAt?: string;
     /** Who hired it, as the account id (`user_id` on the pod). */
     hiredBy?: string;
+    /** The app it opens on, by name, when somebody chose one (`config.home_app`).
+     *  Absent: it opens on its first app. */
+    homeApp?: string;
 }
 
 /** Another teammate this one can ask. Through you: you are in both, so it asks
@@ -544,6 +547,9 @@ export interface PodSource {
     /** Change the one line that says what a teammate is for. The pod's
      *  `description`, which hiring fills with the job it was given. */
     describePod(podId: string, description: string): Promise<void>;
+    /** Choose the app a Lemma opens on, by its name; `null` hands it back to
+     *  its first app. Needs the right to change the Lemma (`pod.update`). */
+    setHomeApp(podId: string, app: string | null): Promise<void>;
     /** Delete a teammate. A soft delete on the server: the pod stops being
      *  listed or reachable, its schedules are disarmed, it leaves every channel
      *  it answered on, and its email address and pooled number are released.

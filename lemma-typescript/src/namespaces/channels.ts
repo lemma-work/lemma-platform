@@ -399,6 +399,16 @@ export class ChannelsNamespace {
     );
   }
 
+  /** Tell the person this runs as something, in their own channel: a
+   *  function's note to whoever it runs for, or a note to yourself. It names
+   *  no recipient. A function or agent needs `channel.notify_self` granted on
+   *  the pod (`resource_type` `pod`, `resource_name` `/`). */
+  notifyMe(podId: string, text: string, options: { idempotencyKey?: string } = {}) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentNoticeSendSelf(podId, { text }, options.idempotencyKey),
+    );
+  }
+
   /** Tell another member of the pod something: a line in their own channel.
    *  `to` is a pod member id, user id or email address. */
   notify(podId: string, body: { to: string; text: string }, options: { idempotencyKey?: string } = {}) {

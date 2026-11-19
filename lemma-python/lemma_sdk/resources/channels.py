@@ -6,7 +6,10 @@ from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
 from uuid import UUID
 
-from ..openapi_client.api.agent_surfaces import agent_notice_send
+from ..openapi_client.api.agent_surfaces import (
+    agent_notice_send,
+    agent_notice_send_self,
+)
 from ..openapi_client.api.channels import (
     channel_create,
     channel_delete,
@@ -638,6 +641,23 @@ class PodChannels(BoundResource):
             agent_notice_send,
             self._pod_uuid(),
             to,
+            body={"text": text},
+            body_model=NoticeRequest,
+            idempotency_key=_unset(idempotency_key),
+        )
+
+    def notify_me(
+        self, text: str, *, idempotency_key: str | None = None
+    ) -> NoticeResponse:
+        """Tell the person this runs as something, in their own channel: a
+        function's morning note to whoever it runs for, or a note to yourself.
+        It names no recipient. A function or agent needs ``channel.notify_self``
+        granted on the pod (``{"resource_type": "pod", "resource_name": "/",
+        "permission_ids": ["channel.notify_self"]}``); a member holds it with
+        ``channel.write``. The same ``idempotency_key`` is the same notice."""
+        return self._call(
+            agent_notice_send_self,
+            self._pod_uuid(),
             body={"text": text},
             body_model=NoticeRequest,
             idempotency_key=_unset(idempotency_key),

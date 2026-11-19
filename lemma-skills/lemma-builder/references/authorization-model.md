@@ -167,6 +167,8 @@ friendly verbs, or raw permission ids when you need one the presets don't cover.
 | `workflow:intake:execute` | `workflow` → `workflow.execute` | start a workflow |
 | `schedule:nightly:read` / `:write` | `schedule` → `schedule.read` / `.update` | inspect or retarget a schedule |
 | `app:dashboard:read` / `:write` / `:publish` | `app` → `app.*` | a Lemma **app** in this pod |
+| `pod:/:channel.notify_self` | `pod` `/` → `channel.notify_self` | tell **the person it runs as** something, in their own channel (below) |
+| `pod:/:agent.execute` (or `agent:pod_default:execute`) | `pod` `/` → `agent.execute` | start the Lemma's **own assistant** for the person it runs as |
 
 > `app:<name>:use` is the pre-rename spelling of a **connector** grant and still
 > works, with a note. Write `connector:<name>:use`. Bare `app:` now means a Lemma app.
@@ -186,6 +188,26 @@ is refused, because an account is put in front of anyone only by its **owner**.
 
 A slug is pod-local and the same in every pod that declares it, so connector
 grants port across pods and orgs as long as the target pod declares the slug.
+
+### Telling the person it runs as
+
+A function or agent that writes a morning note, a brief the evening before or a
+weekly review to **the person it runs as** is granted one thing on the pod,
+named `/`:
+
+```json
+{ "resource_type": "pod", "resource_name": "/",
+  "permission_ids": ["channel.notify_self"] }
+```
+
+and calls `POST /pods/{pod}/members/me/notices` (`pod.channels.notify_me(text)`
+in Python, `channels.notifyMe(podId, text)` in TypeScript). The route names no
+recipient: the line goes to that person's own channel and is pushed to them
+like any line of theirs. It reaches **nobody else** — `channel.write`, which
+writes to anyone, is never grantable to a workload (`400
+PERMISSION_RESOURCE_TYPE_MISMATCH`), and a run for a contact or a form has
+nobody to tell (403). The person must write in channels themselves: a viewer's
+runs are refused.
 
 ## §5 Permission implications
 

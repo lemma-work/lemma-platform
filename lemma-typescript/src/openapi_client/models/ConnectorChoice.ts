@@ -21,4 +21,8 @@ export type ConnectorChoice = {
      * SHARED only: one of your own accounts (the plan's `account_options`) to share with the pod for this connector to run as. Left out, the connector imports needing an account.
      */
     share_account_id?: (string | null);
+    /**
+     * Leave this connector out: it is not declared, and grants on it are dropped. Only for one the bundle marks optional (`required: false`); one the plan says SKIPPED is left out unless you choose an installation or to create one.
+     */
+    skip?: boolean;
 };

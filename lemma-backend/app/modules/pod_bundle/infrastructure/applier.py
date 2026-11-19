@@ -24,7 +24,11 @@ from lemma_pod_bundle.layout import TABLE_DATA_FILE
 
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
-from app.modules.pod_bundle.domain.errors import PartKeptError, PodBundleDomainError
+from app.modules.pod_bundle.domain.errors import (
+    PartKeptError,
+    PodBundleDomainError,
+    StepNotApplicableError,
+)
 from app.modules.pod_bundle.infrastructure.connector_grants import (
     resolve_connector_grants,
 )
@@ -42,14 +46,6 @@ from app.modules.pod_bundle.infrastructure.grants import (
 )
 
 logger = get_logger(__name__)
-
-
-class StepNotApplicableError(PodBundleDomainError):
-    """A step kind this slice does not yet apply (app/surface/grants). Marked
-    SKIPPED with a reason rather than failing the whole import."""
-
-    def __init__(self, message: str):
-        super().__init__(message, code="POD_BUNDLE_STEP_UNSUPPORTED", status_code=422)
 
 
 class BundleApplier:
@@ -401,11 +397,16 @@ class BundleApplier:
     async def _apply_grants(
         self, *, grantee_type: str, grantee_id: UUID, grants: list[_GrantInput]
     ) -> None:
-        """Replace the grantee's resource grants on the step's own short UoW
-        session (see infrastructure/grants.py), declaring first any connector
-        they name that the pod does not (see connector_grants.py)."""
+        """Replace the grantee's resource grants on the step's short UoW session,
+        declaring first any connector they name that the pod does not, and
+        dropping those on one the import left out (see connector_grants.py)."""
         grants = await resolve_connector_grants(
-            self._uow, self._ctx, pod_id=self._pod_id, grants=grants
+            self._uow,
+            self._ctx,
+            pod_id=self._pod_id,
+            grants=grants,
+            choices=self._connector_choices,
+            warnings=self._warnings,
         )
         await apply_grants(
             self._uow.session,

@@ -21,6 +21,7 @@ from ..openapi_client.api.records import (
 from ..openapi_client.api.tables import (
     table_column_add,
     table_column_remove,
+    table_column_update,
     table_create,
     table_delete,
     table_get,
@@ -45,6 +46,7 @@ from ..openapi_client.models.record_list_response import RecordListResponse
 from ..openapi_client.models.table_detail_response import TableDetailResponse
 from ..openapi_client.models.table_list_response import TableListResponse
 from ..openapi_client.models.table_opening_response import TableOpeningResponse
+from ..openapi_client.models.update_column_request import UpdateColumnRequest
 from ..openapi_client.models.update_record_request import UpdateRecordRequest
 from ..openapi_client.models.update_table_request import UpdateTableRequest
 from ..openapi_client.types import UNSET
@@ -152,6 +154,19 @@ class PodTables(BoundResource):
 
     def add_column(self, table: str, request: AddColumnRequest) -> TableDetailResponse:
         return self._call(table_column_add, self._pod_uuid(), table, body=request)
+
+    def update_column(
+        self, table: str, column: str, request: UpdateColumnRequest
+    ) -> TableDetailResponse:
+        """Add options to an ENUM column.
+
+        ``request.options`` must carry every option the column has now, plus
+        the new ones: removing an option is refused, as is a column that is not
+        ENUM. Sending the current options changes nothing.
+        """
+        return self._call(
+            table_column_update, self._pod_uuid(), table, column, body=request
+        )
 
     def remove_column(self, table: str, column: str) -> TableDetailResponse:
         return self._call(table_column_remove, self._pod_uuid(), table, column)

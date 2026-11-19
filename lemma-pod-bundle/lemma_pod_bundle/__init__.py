@@ -37,6 +37,10 @@ from .layout import (
     load_resource_payload,
     normalize_resource_dir_name,
 )
+from .workflow_schedules import (
+    schedules_sharing_a_global_workflow,
+    global_workflows_scheduled_twice,
+)
 from .normalize import (
     BundleValidationIssue,
     load_bundle_connectors,
@@ -66,8 +70,10 @@ __all__ = [
     "TableDiff",
     "bundle_format_version",
     "check_format_version",
+    "schedules_sharing_a_global_workflow",
     "diff_table_columns",
     "extract_bundle",
+    "global_workflows_scheduled_twice",
     "load_bundle_connectors",
     "load_resource_payload",
     "loads_jsonc",

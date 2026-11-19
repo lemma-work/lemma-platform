@@ -55,7 +55,7 @@ from app.modules.pod_bundle.infrastructure.bundle_contents import (
     resource_count,
 )
 from app.modules.pod_bundle.infrastructure.bundle_identity import read_bundle_id
-from app.modules.pod_bundle.infrastructure import bundle_outcome
+from app.modules.pod_bundle.infrastructure import bundle_home_app, bundle_outcome
 from app.modules.pod_bundle.infrastructure.realtime import (
     completed_payload,
     error_payload,
@@ -742,6 +742,10 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                 await _checkpoint(store, state, step)
             # Once every step has landed: its measure counts the tables applied.
             await bundle_outcome.carry(worker_ctx.uow_factory, state, bundle_root)
+            # And the apps: the one it opens on must be there to be chosen.
+            await bundle_home_app.carry_to_pod(
+                worker_ctx.uow_factory, state, bundle_root
+            )
 
         await _raise_if_cancelled(store, import_id)
         await _record_recipe(worker_ctx, state)

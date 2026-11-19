@@ -145,6 +145,37 @@ def test_confidence_is_the_probability_of_the_value_chosen() -> None:
     assert (model, input_tokens) == ("jev-1", 812)
 
 
+def test_an_unsure_answer_is_still_the_most_probable_value_never_null() -> None:
+    """System One answers every question, and unsure shows in the confidence,
+    not as `null`: the caller's own threshold on `confidence` is what says "not
+    sure" here, as `null` does from the `model` provider. A cut-off inside the
+    provider would be one number for every question and would hide the best
+    guess, and answering `null` would change what existing callers get back."""
+    task = _task()
+    request = build_request(task, model="m")
+    barely = {
+        **FULL,
+        "category": {
+            "choice": "bug",
+            "probabilities": {"billing": 0.49, "bug": 0.51},
+        },
+        "urgent": {"noul": 0.5},
+        "severity": {"probabilities": {"0": 0.5, "1": 0.5}},
+    }
+
+    answers, _, _ = parse_response(_answers(**barely), task, request.questions)
+
+    assert {
+        k: (a.value, a.confidence)
+        for k, a in answers.items()
+        if k in {"category", "urgent", "severity"}
+    } == {
+        "category": ("bug", 0.51),
+        "urgent": (True, 0.5),
+        "severity": (1, 0.5),
+    }
+
+
 def test_a_score_without_a_distribution_rounds_to_a_level() -> None:
     task = _task()
     request = build_request(task, model="m")
