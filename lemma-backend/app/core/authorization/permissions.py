@@ -99,6 +99,13 @@ class Permissions:
     CHANNEL_READ: ClassVar[str] = "channel.read"
     CHANNEL_WRITE: ClassVar[str] = "channel.write"
     CHANNEL_MANAGE: ClassVar[str] = "channel.manage"
+    #: Tell the person a run acts for something, in their own channel, and
+    #: nobody else. The one channel action a named agent or function can be
+    #: granted (on the pod, named ``/``): ``channel.write`` reaches every
+    #: member and every group, so it is held by people only. Whoever holds
+    #: ``channel.write`` holds this through ``IMPLIED_PERMISSIONS``; holding
+    #: this never satisfies ``channel.write``.
+    CHANNEL_NOTIFY_SELF: ClassVar[str] = "channel.notify_self"
 
     CONTACT_READ: ClassVar[str] = "contact.read"
     CONTACT_MESSAGE: ClassVar[str] = "contact.message"
@@ -352,6 +359,12 @@ PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
         "Rename, archive and delete any group, and change its members",
     ),
     PermissionDefinition(
+        Permissions.CHANNEL_NOTIFY_SELF,
+        PermissionScope.POD,
+        "pod",
+        "Tell the person it runs as something, in their own channel",
+    ),
+    PermissionDefinition(
         Permissions.CONTACT_READ,
         PermissionScope.POD,
         "contact",
@@ -532,9 +545,20 @@ IMPLIED_PERMISSIONS: dict[str, frozenset[str]] = {
         {Permissions.DATASTORE_TABLE_UPDATE, Permissions.DATASTORE_TABLE_READ}
     ),
     Permissions.CONVERSATION_WRITE: frozenset({Permissions.CONVERSATION_READ}),
-    Permissions.CHANNEL_WRITE: frozenset({Permissions.CHANNEL_READ}),
+    # Whoever may write to anybody may write to themselves: this is how every
+    # person who writes in channels holds `channel.notify_self` without a role
+    # row changing, and so passes the invoker ceiling when their software uses
+    # it. Not transitive (`equivalent_permission_ids` reads one level), so
+    # `channel.manage` names it as well.
+    Permissions.CHANNEL_WRITE: frozenset(
+        {Permissions.CHANNEL_READ, Permissions.CHANNEL_NOTIFY_SELF}
+    ),
     Permissions.CHANNEL_MANAGE: frozenset(
-        {Permissions.CHANNEL_WRITE, Permissions.CHANNEL_READ}
+        {
+            Permissions.CHANNEL_WRITE,
+            Permissions.CHANNEL_READ,
+            Permissions.CHANNEL_NOTIFY_SELF,
+        }
     ),
     # Writing to a contact is done looking at who they are and what they said.
     Permissions.CONTACT_MESSAGE: frozenset({Permissions.CONTACT_READ}),

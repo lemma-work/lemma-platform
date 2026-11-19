@@ -1033,7 +1033,7 @@ function ConnectorField({
                     }
                 >
                     {c.installations.length === 0 && (
-                        <option value="">Choose…</option>
+                        <option value="">{c.status === "SKIPPED" ? "Leave it out" : "Choose…"}</option>
                     )}
                     {c.installations.map((o) => (
                         <option key={o.auth_config_id} value={o.auth_config_id}>

@@ -458,6 +458,23 @@ class DatastoreTableEntity(AggregateRoot):
         self.columns = [c for c in self.columns if c.name != column_name]
         self.mark_column_removed(column_name, actor_id)
 
+    def update_column(self, column: ColumnSchema, *, actor_id: UUID) -> None:
+        """Replace the declared column of the same name with ``column``."""
+        from app.modules.datastore.domain.events import (
+            DatastoreTableColumnUpdatedEvent,
+        )
+
+        self.columns = [column if c.name == column.name else c for c in self.columns]
+        self.add_event(
+            DatastoreTableColumnUpdatedEvent(
+                pod_id=self.pod_id,
+                table_id=self.id,
+                table_name=self.table_name,
+                column_name=column.name,
+                actor_id=actor_id,
+            )
+        )
+
     def mark_created(self, actor_id: UUID) -> None:
         from app.modules.datastore.domain.events import DatastoreTableCreatedEvent
 

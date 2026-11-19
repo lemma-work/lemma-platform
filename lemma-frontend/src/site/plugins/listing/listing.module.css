@@ -1,0 +1,461 @@
+/* `/templates`: the built plugins first and big, how they stack, then the
+   rest of the catalog as one line each. Colours are the tokens', so the page
+   follows the site's light and dark; words are in Albert Sans (the app's
+   frame face, loaded by `app/(marketing)/templates/layout.tsx`) at every size, figures
+   in Inter. Weight never passes 500. */
+.root {
+    font-family: var(--font-frame), var(--ui);
+    overflow-x: clip;
+}
+.main {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 64px clamp(16px, 4vw, 48px) 120px;
+}
+.main a {
+    color: inherit;
+    text-decoration: none;
+}
+.main a:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: var(--r-md);
+}
+
+/* ── Hero ─────────────────────────────────────────────────────────────── */
+.hero {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+    gap: 56px;
+    align-items: center;
+}
+.heroPicture {
+    margin: 0;
+    min-width: 0;
+}
+.heroFrame {
+    display: block;
+    border-radius: var(--r-lg);
+    overflow: hidden;
+    box-shadow: var(--depth-raise), 0 0 0 1px var(--line-2);
+}
+.heroPicture figcaption {
+    margin-top: 12px;
+    font-size: 14px;
+    color: var(--ink-3);
+}
+.eyebrow {
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+}
+.title {
+    margin: 16px 0 0;
+    font-weight: 400;
+    font-size: clamp(40px, 4.6vw, 62px);
+    line-height: 1.02;
+    letter-spacing: -0.03em;
+    text-wrap: balance;
+}
+.intro {
+    margin: 22px 0 0;
+    max-width: 44ch;
+    font-size: 19px;
+    line-height: 1.55;
+    color: var(--ink-2);
+}
+
+/* ── Sections ─────────────────────────────────────────────────────────── */
+.section {
+    margin-top: 88px;
+    scroll-margin-top: 110px;
+}
+.section:first-of-type {
+    margin-top: 56px;
+}
+.sectionHead {
+    max-width: 720px;
+    margin-bottom: 28px;
+}
+.h2 {
+    margin: 10px 0 0;
+    font-weight: 400;
+    font-size: clamp(30px, 3.4vw, 42px);
+    line-height: 1.08;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+}
+.sectionHead > .h2:first-child {
+    margin-top: 0;
+}
+.lede {
+    margin: 14px 0 0;
+    font-size: 17px;
+    line-height: 1.6;
+    color: var(--ink-2);
+}
+.note {
+    margin: 8px 0 0;
+    font-size: 15px;
+    color: var(--ink-3);
+}
+
+/* ── The built plugins, big ───────────────────────────────────────────── */
+.cards {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 48px 32px;
+}
+.card {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+.cardPicture {
+    display: block;
+    border-radius: var(--r-lg);
+    overflow: hidden;
+    box-shadow: var(--depth-rest), 0 0 0 1px var(--line-2);
+    transition: box-shadow 160ms ease, transform 160ms ease;
+}
+.card:hover .cardPicture {
+    box-shadow: var(--depth-raise), 0 0 0 1px var(--line-2);
+    transform: translateY(-2px);
+}
+.cardText {
+    display: grid;
+    gap: 6px;
+}
+.cardHead {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.cardHead img {
+    flex: none;
+    width: 36px;
+    height: 36px;
+    object-fit: contain;
+}
+.cardName {
+    font-size: 22px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+}
+.cardJob {
+    font-size: 17px;
+    line-height: 1.45;
+    color: var(--ink);
+}
+.cardBrings {
+    font-size: 14px;
+    color: var(--ink-3);
+}
+
+/* ── How they stack ───────────────────────────────────────────────────── */
+.stackFigure {
+    margin: 0;
+    padding: clamp(20px, 3vw, 40px);
+    border-radius: var(--r-xl);
+    background: var(--paper);
+    box-shadow: var(--depth-rest), 0 0 0 1px var(--line);
+}
+.stack {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 220px;
+    gap: 40px;
+    align-items: end;
+}
+.stackColumn {
+    position: relative;
+}
+.stackLines {
+    position: absolute;
+    inset: 0 0 auto;
+    width: 100%;
+    overflow: visible;
+}
+.stackLines line {
+    stroke: var(--ink-3);
+    stroke-width: 1.5;
+}
+.stackLines line[data-kind="reads"] {
+    stroke-dasharray: 5 5;
+}
+.stackRow {
+    position: absolute;
+    left: 0;
+    right: 0;
+}
+.slot {
+    position: absolute;
+    top: 0;
+    transform: translateX(-50%);
+    width: max-content;
+    max-width: 32%;
+}
+.node,
+.band,
+.groundCell {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 100%;
+    padding: 0 16px 0 12px;
+    border-radius: var(--r-md);
+    background: var(--canvas);
+    box-shadow: 0 0 0 1px var(--line-2);
+    transition: box-shadow 160ms ease;
+}
+.node {
+    height: 64px;
+}
+.node:hover,
+.band:hover,
+.groundCell:hover {
+    box-shadow: 0 0 0 1px var(--ink-3);
+}
+.node img,
+.band img,
+.groundCell img {
+    flex: none;
+    width: 32px;
+    height: 32px;
+    object-fit: contain;
+}
+.nodeName {
+    display: block;
+    font-size: 16px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+.nodeOn {
+    display: none;
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.band {
+    background: var(--accent-soft);
+    box-shadow: 0 0 0 1px var(--accent-line);
+}
+.band small,
+.groundCell small {
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.band small {
+    margin-left: auto;
+}
+.ground {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    gap: 12px;
+}
+.groundCell {
+    background: var(--chrome);
+    box-shadow: 0 0 0 1px var(--line-2);
+}
+.groundCell > span {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+.beside {
+    display: grid;
+    gap: 12px;
+}
+.besideLabel {
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+}
+.beside .slot {
+    max-width: 100%;
+}
+.across {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--ink-3);
+}
+.legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 24px;
+    margin-top: 28px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line-2);
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+.legend i {
+    display: inline-block;
+    width: 28px;
+    border-top: 1.5px solid var(--ink-3);
+}
+.legend i[data-kind="reads"] {
+    border-top-style: dashed;
+}
+
+/* ── Coming next ──────────────────────────────────────────────────────── */
+.lines {
+    columns: 3 300px;
+    column-gap: 40px;
+}
+.line {
+    break-inside: avoid;
+    margin: 0 0 36px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line-2);
+}
+.lineName {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 0 8px;
+    font-size: 15px;
+    font-weight: 500;
+}
+.lineName small {
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--ink-3);
+}
+.lineList {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.lineList a {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 8px;
+    padding: 8px 0;
+    border-radius: var(--r-sm);
+}
+.lineList a:hover .plannedName {
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+}
+.position {
+    font-family: var(--ui);
+    font-variant-numeric: tabular-nums;
+    font-size: 13px;
+    line-height: 22px;
+    color: var(--ink-3);
+}
+.plannedName {
+    display: block;
+    font-size: 15px;
+    font-weight: 500;
+    line-height: 22px;
+}
+.plannedOne {
+    display: block;
+    font-size: 14px;
+    line-height: 1.45;
+    color: var(--ink-2);
+}
+
+/* ── Narrower screens ─────────────────────────────────────────────────── */
+@media (max-width: 960px) {
+    .hero {
+        display: block;
+    }
+    .heroPicture {
+        margin-top: 36px;
+    }
+}
+@media (max-width: 1080px) {
+    .stack {
+        grid-template-columns: 1fr;
+        gap: 32px;
+    }
+    .beside {
+        max-width: 320px;
+    }
+}
+@media (max-width: 760px) {
+    .main {
+        padding-top: 40px;
+    }
+    .cards {
+        grid-template-columns: 1fr;
+        gap: 40px;
+    }
+    .section {
+        margin-top: 72px;
+    }
+    /* On a phone the stack is read top to bottom, each plugin saying what it
+       stands on, with no lines to follow. */
+    .stackColumn {
+        height: auto !important;
+        display: grid;
+        gap: 10px;
+    }
+    .stackLines {
+        display: none;
+    }
+    .stackRow {
+        position: static;
+        height: auto !important;
+        display: grid;
+        gap: 10px;
+    }
+    .slot {
+        position: static;
+        transform: none;
+        width: auto;
+        max-width: none;
+    }
+    .node,
+    .band,
+    .groundCell {
+        height: auto;
+        min-height: 56px;
+        padding: 10px 14px 10px 10px;
+    }
+    .nodeOn {
+        display: block;
+    }
+    .band {
+        flex-wrap: wrap;
+    }
+    .band small {
+        margin-left: 42px;
+        flex-basis: 100%;
+    }
+    .ground {
+        grid-auto-flow: row;
+    }
+    .beside {
+        max-width: none;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .cardPicture,
+    .node,
+    .band,
+    .groundCell {
+        transition: none;
+    }
+    .card:hover .cardPicture {
+        transform: none;
+    }
+}

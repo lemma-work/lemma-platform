@@ -368,3 +368,63 @@ async def test_schema_dispatcher_rejects_when_inspection_reports_failure() -> No
             function_name="inspect_me",
             artifact=FunctionArtifact(revision_hash=f"sha256:{'a' * 64}"),
         )
+
+
+def _refused(url: str, name: str, message: str = "") -> httpx.Response:
+    return httpx.Response(
+        422,
+        request=httpx.Request("POST", url),
+        json={
+            "ok": False,
+            "schemas": None,
+            "error": {"name": name, "message": message},
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_inspection_that_failed_in_transit_is_asked_once_more() -> None:
+    """The runtime answers a dropped read while it fetched the code as a 422
+    `ReadError`, which read like a function that does not load: an import
+    failed where trying again worked."""
+    calls: list[str] = []
+
+    class _RuntimeClient:
+        async def post(self, url, *, headers, timeout):
+            del headers, timeout
+            calls.append(url)
+            if len(calls) == 1:
+                return _refused(url, "ReadError")
+            return _ok_response(url)
+
+    schemas = await _dispatcher(_RuntimeClient()).extract_schemas(
+        function_id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        function_name="inspect_me",
+        artifact=FunctionArtifact(revision_hash=f"sha256:{'a' * 64}"),
+    )
+
+    assert schemas.input == {"type": "object"}
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_function_that_does_not_load_is_not_asked_again() -> None:
+    calls: list[str] = []
+
+    class _RuntimeClient:
+        async def post(self, url, *, headers, timeout):
+            del headers, timeout
+            calls.append(url)
+            return _refused(url, "SyntaxError", "invalid syntax")
+
+    with pytest.raises(FunctionValidationError, match="SyntaxError: invalid syntax"):
+        await _dispatcher(_RuntimeClient()).extract_schemas(
+            function_id=uuid4(),
+            pod_id=uuid4(),
+            user_id=uuid4(),
+            function_name="inspect_me",
+            artifact=FunctionArtifact(revision_hash=f"sha256:{'a' * 64}"),
+        )
+    assert len(calls) == 1

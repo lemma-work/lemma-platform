@@ -88,6 +88,11 @@ def _normalize_pod_payload(
     owned = config.get("outcome") if isinstance(config, dict) else None
     if (outcome := _outcome_payload(owned)) is not None:
         payload["outcome"] = outcome
+    # The app the pod opens on, by name: one of the bundle's own `apps/<name>`.
+    # Skipped by a reader that does not know it, like `outcome`.
+    home = config.get("home_app") if isinstance(config, dict) else None
+    if isinstance(home, str) and home.strip():
+        payload["home_app"] = home.strip()
     return payload
 
 

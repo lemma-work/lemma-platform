@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from app.modules.datastore.domain.datastore_entities import ColumnSchema
 from app.modules.datastore.infrastructure.sql_identifiers import (
@@ -130,6 +130,43 @@ class AddColumnRequest(BaseModel):
             "Column definition to append to the table. Existing column names cannot be reused."
         ),
     )
+
+
+class UpdateColumnRequest(BaseModel):
+    """Schema for changing an existing column.
+
+    An ENUM column's options can be added to, and a column's foreign key
+    dropped; nothing else changes. Unknown fields are refused rather than
+    ignored, so a caller asking for a change this does not make hears so
+    instead of getting a 200 for nothing.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    options: Optional[List[str]] = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Every option the ENUM column should accept: all of its current "
+            "options, plus any to add. Removing an option is refused, because "
+            "rows may already hold it. Sending the current options changes "
+            "nothing."
+        ),
+    )
+    drop_foreign_key: bool = Field(
+        default=False,
+        description=(
+            "Drop the column's foreign key: its values stay, and stop having "
+            "to name a row of the other table. A column with none is left as "
+            "it is. A foreign key cannot be added to an existing column."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _asks_for_a_change(self) -> "UpdateColumnRequest":
+        if self.options is None and not self.drop_foreign_key:
+            raise ValueError("Send `options`, `drop_foreign_key`, or both.")
+        return self
 
 
 class TableResponse(BaseModel):

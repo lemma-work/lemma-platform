@@ -25,6 +25,9 @@ from ..openapi_client.models.workflow_graph_update_request import (
     WorkflowGraphUpdateRequest,
 )
 from ..openapi_client.models.workflow_list_response import WorkflowListResponse
+from ..openapi_client.models.workflow_run_create_request import (
+    WorkflowRunCreateRequest,
+)
 from ..openapi_client.models.workflow_run_form_submit_request import (
     WorkflowRunFormSubmitRequest,
 )
@@ -69,17 +72,34 @@ class PodWorkflows(BoundResource):
     def delete(self, name: str) -> None:
         self._call(workflow_delete, self._pod_uuid(), name)
 
-    def create_run(self, name: str) -> WorkflowRunResponse:
-        """Create a run. Takes no inputs: if the workflow's entry node is a
-        form, the returned run is WAITING with `active_wait` describing the
-        form to submit via submit_form()."""
-        return self._call(workflow_run_create, self._pod_uuid(), name)
+    def create_run(
+        self, name: str, *, about: tuple[str, str] | None = None
+    ) -> WorkflowRunResponse:
+        """Create a run. Takes no free-form input: if the workflow's entry node
+        is a form, the returned run is WAITING with `active_wait` describing
+        the form to submit via submit_form(). ``about`` is ``(table,
+        record_id)``, the one record the run is about: it is read as you (404
+        when you cannot) and becomes ``start.payload``, as a table trigger's
+        change would."""
+        if about is None:
+            return self._call(workflow_run_create, self._pod_uuid(), name)
+        table, record_id = about
+        return self._call(
+            workflow_run_create,
+            self._pod_uuid(),
+            name,
+            body=WorkflowRunCreateRequest.from_dict(
+                {"about": {"table": table, "record_id": str(record_id)}}
+            ),
+        )
 
-    def run(self, name: str) -> WorkflowRunResponse:
+    def run(
+        self, name: str, *, about: tuple[str, str] | None = None
+    ) -> WorkflowRunResponse:
         """Alias for :meth:`create_run`, for symmetry with ``functions.run`` /
         ``agents.run`` / ``queries.run``. Workflow inputs arrive via FORM nodes
-        (see :meth:`submit_form`), not at start, so this takes only a name."""
-        return self.create_run(name)
+        (see :meth:`submit_form`), not at start; ``about`` names a record."""
+        return self.create_run(name, about=about)
 
     def run_get(self, run_id: str) -> WorkflowRunResponse:
         return self._call(workflow_run_get, self._pod_uuid(), as_uuid(run_id))

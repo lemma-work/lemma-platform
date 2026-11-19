@@ -60,6 +60,10 @@ def declare_resource_names(
 # matching every document/folder in the pod (see sql_actions / service.py).
 _POD_WIDE_GRANT_NAME = "/"
 _PREFIX_GRANT_RESOURCE_TYPES = (ResourceType.FOLDER, ResourceType.DOCUMENT)
+# The pod itself is named "/" too, and by nothing else: a bundle cannot know the
+# name of the pod it will be installed in, and "/" already means "the whole
+# pod" in a grant. Its id is the pod's own.
+_NAMED_BY_POD_WIDE_NAME = (*_PREFIX_GRANT_RESOURCE_TYPES, ResourceType.POD)
 
 
 def _queryable_names(entry: ResourceNameTable, names: Iterable[str]) -> set[str]:
@@ -111,7 +115,7 @@ async def resolve_resource_id_by_name(
     resource types that are not name-addressable."""
     _require_registry()
     if (
-        resource_type in _PREFIX_GRANT_RESOURCE_TYPES
+        resource_type in _NAMED_BY_POD_WIDE_NAME
         and resource_name == _POD_WIDE_GRANT_NAME
     ):
         return pod_id
@@ -146,6 +150,11 @@ async def resolve_resource_ids_by_names(
     resolved: dict[tuple[ResourceType, str], UUID] = {}
     unsupported: set[ResourceType] = set()
     for resource_type, names in names_by_type.items():
+        if resource_type is ResourceType.POD:
+            # No table to ask: "/" is this pod, and any other name is no pod.
+            if _POD_WIDE_GRANT_NAME in names:
+                resolved[(resource_type, _POD_WIDE_GRANT_NAME)] = pod_id
+            continue
         entry = _NAME_REGISTRY.get(resource_type)
         if entry is None:
             unsupported.add(resource_type)
@@ -206,6 +215,10 @@ async def resolve_resource_names_by_ids(
 
     resolved: dict[tuple[ResourceType, UUID], str] = {}
     for resource_type, resource_ids in ids_by_type.items():
+        if resource_type is ResourceType.POD:
+            if pod_id in resource_ids:
+                resolved[(resource_type, pod_id)] = _POD_WIDE_GRANT_NAME
+            continue
         entry = _NAME_REGISTRY.get(resource_type)
         if entry is None:
             continue

@@ -260,6 +260,21 @@ def test_parse_grant_spec_function_and_agent_tools():
         parse_grant_spec("function:cycle_velocity:use")
 
 
+def test_parse_grant_spec_pod_grants_name_the_pod_as_slash():
+    """`pod:/:channel.notify_self`, as the docs write it, parses; so do the
+    friendly verbs. A pod grant on anything but `/` grants nothing."""
+    raw = parse_grant_spec("pod:/:channel.notify_self")
+    assert raw == {
+        "resource_type": "pod",
+        "resource_name": "/",
+        "permission_ids": ["channel.notify_self"],
+    }
+    both = parse_grant_spec("pod:/:notify-self,assistant")
+    assert both["permission_ids"] == ["channel.notify_self", "agent.execute"]
+    with pytest.raises(ScaffoldError):
+        parse_grant_spec("pod:mypod:notify-self")
+
+
 def test_parse_grant_spec_rejects_bad_input():
     with pytest.raises(ScaffoldError):
         parse_grant_spec("tickets")  # no perms

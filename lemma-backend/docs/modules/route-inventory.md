@@ -89,6 +89,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/channels/telegram-links` | `channel.telegram_link.create` | Telegram Link |
 | POST | `/pods/{pod_id}/channels/whatsapp-groups` | `channel.whatsapp_group.start` | Start Whatsapp Group |
 | POST | `/pods/{pod_id}/contacts/{contact_id}/outreach` | `contact.outreach.send` | Send Outreach |
+| POST | `/pods/{pod_id}/members/me/notices` | `agent.notice.send_self` | Send Self Notice |
 | POST | `/pods/{pod_id}/members/{member}/notices` | `agent.notice.send` | Send Notice |
 | POST | `/pods/{pod_id}/surface-setup/slack/apps` | `agent.surface.slack_app.create` | Create Slack App |
 | POST | `/pods/{pod_id}/surfaces` | `agent.surface.create` | Create Surface |
@@ -261,6 +262,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/outcome/standing` | `outcome.standing` | Where the pod stands |
 | PATCH | `/pods/{pod_id}/datastore/files/by-path` | `file.update` | Update File |
 | PATCH | `/pods/{pod_id}/datastore/tables/{table_name}` | `table.update` | Update Table |
+| PATCH | `/pods/{pod_id}/datastore/tables/{table_name}/columns/{column_name}` | `table.column.update` | Update Column |
 | PATCH | `/pods/{pod_id}/datastore/tables/{table_name}/records/{record_id}` | `record.update` | Update Record |
 | POST | `/pods/{pod_id}/datastore/files` | `file.upload` | Upload File |
 | POST | `/pods/{pod_id}/datastore/files/by-path/retry-processing` | `file.retry_processing` | Retry File Processing |
