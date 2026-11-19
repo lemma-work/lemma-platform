@@ -26,6 +26,7 @@ import typer
 from ..confirm import confirm_destructive
 from ..io import emit, to_plain
 from ..state import err_console, fail, run_with_client, state_from_ctx
+from . import machine_connect
 
 if TYPE_CHECKING:
     from lemma_sdk import Lemma
@@ -48,6 +49,9 @@ grants_app = typer.Typer(
 app.add_typer(preview_app, name="preview")
 app.add_typer(logins_app, name="logins")
 app.add_typer(grants_app, name="grants")
+# Joining this computer as a machine, and removing it (`machine_connect`).
+app.command("connect")(machine_connect.connect)
+app.command("disconnect")(machine_connect.disconnect)
 
 _REF_HELP = "Which machine: me, pod:<pod>:<name>, pod:<name>, mine:<name> or an id."
 

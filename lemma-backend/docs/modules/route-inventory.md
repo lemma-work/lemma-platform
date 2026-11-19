@@ -486,10 +486,13 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
+| DELETE | `/machine-connections/{connection_id}` | `machine_connections.delete` | Disconnect a machine |
 | DELETE | `/machines/{ref}/files` | `machine.files.delete` | Delete a file or directory on a machine |
 | DELETE | `/machines/{ref}/previews/{preview_id}` | `machine.preview.revoke` | Revoke a preview; its URL stops answering |
 | DELETE | `/machines/{ref}/processes/{process_id}` | `machine.process.kill` | Stop a process |
 | DELETE | `/pods/{pod_id}/machines/{name}` | `machine.pod.delete` | Delete a pod machine and its disk |
+| GET | `/machine-connections` | `machine_connections.list` | List your connected machines |
+| GET | `/machine-connections/pairings/{code}` | `machine_connections.pairing` | What a pairing code asks for |
 | GET | `/machine-previews/{label}:open` | `machine.preview.open` | Open a private preview as the signed-in person |
 | GET | `/machines` | `machine.list` | List the machines you can see |
 | GET | `/machines/{ref}` | `machine.get` | Get one machine |
@@ -506,6 +509,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/machines:policy` | `machine.policy` | Which machines you or a pod may create |
 | GET | `/pods/{pod_id}/machines/{name}/grants` | `machine.pod.grants.get` | Which agents and functions are granted a pod machine |
 | PATCH | `/pods/{pod_id}/machines/{name}` | `machine.pod.update` | Rename or resize a pod machine |
+| POST | `/machine-connections:pair` | `machine_connections.pair` | Approve a machine's pairing code |
 | POST | `/machines/{ref}/browser:access` | `machine.browser.access` | A signed link to a machine's browser |
 | POST | `/machines/{ref}/browser:display` | `machine.browser.display` | Set the size of a machine's browser display |
 | POST | `/machines/{ref}/browser:navigate` | `machine.browser.navigate` | Open a page in a machine's browser |

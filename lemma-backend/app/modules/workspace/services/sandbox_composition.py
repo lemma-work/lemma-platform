@@ -30,10 +30,15 @@ def get_sandbox_service() -> SandboxService:
     """The process-shared sandbox service.
 
     Keyed by event loop as well as provider: the Docker client underneath owns
-    an httpx.AsyncClient, which is bound to the loop that created it.
+    an httpx.AsyncClient, which is bound to the loop that created it. And by
+    whether connected machines are on, which puts their route in front.
     """
     global _service, _service_key
-    key = (id(asyncio.get_running_loop()), workspace_settings.provider)
+    key = (
+        id(asyncio.get_running_loop()),
+        workspace_settings.provider,
+        workspace_settings.machine_connections_enabled,
+    )
     if _service is not None and _service_key == key:
         return _service
     _service = SandboxService(

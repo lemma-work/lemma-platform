@@ -627,6 +627,13 @@ checkpoints and harnesses up, and the Lemma MCP tool calls the agent makes --
 everything but bulk bytes, which go over HTTP beside it
 ([Bulk bytes](#bulk-bytes)).
 
+A machine joined with `lemma machine connect` opens the same socket in the
+link's `compute` role (protocol 4): its first frame says `role: "compute"`,
+and everything after is described in
+[Connected machines](connected-machines.md). A first frame without a role is
+an Agent Host's, as every Desktop's is. The server accepts protocol 3 and 4
+from an Agent Host, since 4 changed nothing an Agent Host sends or reads.
+
 It replaced a 25-second HTTP long-poll plus one POST per streamed event. The
 poll was cheap: about 2.4 requests a minute, woken early by a Redis poke. The
 event uploads were not. While an agent streamed, every chunk, tool update and
@@ -1052,9 +1059,10 @@ opens the link, so it cannot be sent 4426. Its old routes answer with the one
 refusal it already understands and serve nothing else
 (`agent_host_legacy_controller.py`):
 
-- `POST /agent-host/poll` returns 200 with a poll response naming protocol 3.
-  The old host fails the poll on the version, shows the computer offline with
-  "target requested Agent Host protocol 3 is unsupported", and retries every
+- `POST /agent-host/poll` returns 200 with a poll response naming the current
+  protocol. The old host fails the poll on the version, shows the computer
+  offline with "target requested Agent Host protocol 4 is unsupported", and
+  retries every
   30 seconds. It keeps its pairing, so updating Desktop is all it takes to
   reconnect. The first such poll marks the host `UPGRADE_REQUIRED`, which the
   workspace shows as "Update needed", and logs

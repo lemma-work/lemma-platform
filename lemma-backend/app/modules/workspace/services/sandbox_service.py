@@ -62,6 +62,9 @@ from app.modules.workspace.services.sandbox_addressing import (
     SandboxAddressingMixin,
 )
 from app.modules.workspace.services.host_loopback_policy import no_host_loopback
+from app.modules.workspace.services.provider_factory import (
+    refuse_connected_machine_when_off,
+)
 from app.modules.workspace.services.sandbox_create_spec import provider_create_spec
 from app.modules.workspace.services.sandbox_sizing import machine_size_for
 from app.modules.workspace.services.sandbox_volumes import SandboxVolumeMixin
@@ -137,6 +140,7 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
         """Current state without provisioning anything; see `describe_sandbox`."""
         from app.modules.workspace.services.sandbox_describe import describe_sandbox
 
+        refuse_connected_machine_when_off(sandbox_id)
         return await describe_sandbox(
             sandbox_id, uow_factory=self._uow_factory, provider=self._provider
         )
@@ -154,6 +158,7 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
         dying externally mid-window, is one every caller already carries: it can
         happen between any ensure and the call it guards.
         """
+        refuse_connected_machine_when_off(sandbox_id)
         key = (id(asyncio.get_running_loop()), sandbox_id)
         cached = self._recent.get(key)
         if cached is not None:

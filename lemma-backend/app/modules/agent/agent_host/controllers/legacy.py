@@ -12,11 +12,12 @@ and serves nothing else. What the old host does with each (read against
 ``desktop/agent-host/src`` as of protocol 2, on main before the link merged):
 
 ``POST /agent-host/poll``
-    200 with a well-formed poll response naming protocol 3. ``TargetClient::poll``
-    (``api.rs``) checks ``protocol_version != PROTOCOL_VERSION`` right after
-    decoding and returns ``ApiError::Protocol(3)``. That is not a request
-    rejection, so the worker (``runtime/worker.rs``) records the target OFFLINE
-    with "target requested Agent Host protocol 3 is unsupported" as its last
+    200 with a well-formed poll response naming the current protocol (4).
+    ``TargetClient::poll`` (``api.rs``) checks ``protocol_version !=
+    PROTOCOL_VERSION`` right after decoding and returns ``ApiError::Protocol(4)``.
+    That is not a request rejection, so the worker (``runtime/worker.rs``)
+    records the target OFFLINE with "target requested Agent Host protocol 4 is
+    unsupported" as its last
     error and backs off to one attempt every 30 seconds. It keeps its pairing,
     so the updated app reconnects over the link with the same secret and no
     re-pair. The host's row is also marked UPGRADE_REQUIRED, which the

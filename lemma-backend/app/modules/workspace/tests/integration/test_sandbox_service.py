@@ -666,3 +666,89 @@ async def test_a_slow_create_does_not_let_a_second_caller_provision_again(
 
     assert len(provider.created) == 1, provider.created
     assert len({handle.provider_id for handle in handles}) == 1
+
+
+@dataclass
+class _UnreportedMachine(FakeProvider):
+    """A provider whose instance is not running until its runtime answers, and
+    whose runtime never answers: a connected machine before its first report."""
+
+    gate_calls: int = 0
+
+    async def wait_ready(self, instance, *, kind, deadline_at) -> None:
+        from app.modules.workspace.domain.machine_errors import MachineNotConnected
+
+        self.gate_calls += 1
+        raise MachineNotConnected("laptop")
+
+
+async def test_every_ensure_waits_for_a_machine_that_has_not_reported(
+    sandbox_uow_factory,
+) -> None:
+    """The first ensure stops at the readiness gate and leaves its instance
+    claimed; the second must reach the same gate, not adopt that instance."""
+    from app.modules.workspace.domain.machine_errors import MachineNotConnected
+
+    SandboxService._inflight.clear()
+    provider = _UnreportedMachine()
+    service = SandboxService(provider=provider, uow_factory=sandbox_uow_factory)
+    sandbox = await _workspace(service)
+
+    with pytest.raises(MachineNotConnected):
+        await service.ensure(sandbox.id)
+    with pytest.raises(MachineNotConnected):
+        await service.ensure(sandbox.id)
+
+    assert provider.gate_calls == 2
+
+
+async def test_a_port_reported_before_the_runtime_is_up_still_waits_for_it(
+    sandbox_uow_factory,
+) -> None:
+    """The real connected provider: the first ensure stops at the readiness
+    gate; the machine then reports its port with the runtime not up yet; the
+    second ensure must reach the same gate rather than reuse the instance."""
+    import dataclasses
+
+    from app.modules.workspace.domain.machine_connection import MachineConnection
+    from app.modules.workspace.domain.machine_errors import MachineNotConnected
+    from app.modules.workspace.providers.connected import ConnectedMachineProvider
+    from app.modules.workspace.providers.docker import RuntimeCredentialSigner
+
+    class Machine(ConnectedMachineProvider):
+        gate_calls = 0
+
+        async def wait_ready(self, instance, *, kind, deadline_at) -> None:
+            Machine.gate_calls += 1
+            raise MachineNotConnected(self.connection.name)
+
+    connection = MachineConnection(
+        id=uuid4(),
+        user_id=uuid4(),
+        name="laptop",
+        display_name="Laptop",
+        mode="host",
+        pod_id=None,
+        platform="macos",
+        home="/Users/me/lemma-machine",
+    )
+    signer = RuntimeCredentialSigner(key=b"integration-runtime-key-32-bytes!")
+    SandboxService._inflight.clear()
+    first = SandboxService(
+        provider=Machine(connection, signer), uow_factory=sandbox_uow_factory
+    )
+    sandbox = await _workspace(first)
+
+    with pytest.raises(MachineNotConnected):
+        await first.ensure(sandbox.id)
+
+    reported = dataclasses.replace(
+        connection, capabilities={"runtime_port": 18080, "runtime_ready": False}
+    )
+    second = SandboxService(
+        provider=Machine(reported, signer), uow_factory=sandbox_uow_factory
+    )
+    with pytest.raises(MachineNotConnected):
+        await second.ensure(sandbox.id)
+
+    assert Machine.gate_calls == 2

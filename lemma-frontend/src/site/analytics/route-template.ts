@@ -87,6 +87,7 @@ export const ROUTE_TEMPLATES: readonly string[] = [
     "/invitations/[invitationId]/reject",
     "/l/[[...path]]",
     "/logout",
+    "/machines/connect",
     "/needs",
     "/oauth/complete",
     "/organizations/new",

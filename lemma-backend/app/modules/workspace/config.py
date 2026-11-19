@@ -470,5 +470,35 @@ class WorkspaceSettings(BaseSettings):
         ),
     )
 
+    # --- Connected machines (docs/architecture/connected-machines.md) -------
+    machine_connections_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MACHINE_CONNECTIONS_ENABLED"),
+        description=(
+            "Let people join their own laptops and VMs as machines with "
+            "`lemma machine connect`. Off, pairing is refused and no compute "
+            "link is accepted."
+        ),
+    )
+    machine_link_replica_url: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("MACHINE_LINK_REPLICA_URL"),
+        description=(
+            "How the other API replicas reach this one to proxy a stream to "
+            "a machine whose link it holds. Unset, http:// to the pod's POD_IP "
+            "(else its resolved hostname) on MACHINE_LINK_REPLICA_PORT -- so "
+            "the proxied bytes (a machine's files, process I/O, browser) cross "
+            "the cluster network as plaintext ws://, signed but not "
+            "encrypted. Where that network is not trusted, set an https:// "
+            "URL this replica answers on (a mesh with mTLS, or an internal "
+            "TLS listener); it is dialled as wss://."
+        ),
+    )
+    machine_link_replica_port: int = Field(
+        default=8000,
+        validation_alias=AliasChoices("MACHINE_LINK_REPLICA_PORT"),
+        description="The port the API serves on, for MACHINE_LINK_REPLICA_URL's default",
+    )
+
 
 workspace_settings = WorkspaceSettings()

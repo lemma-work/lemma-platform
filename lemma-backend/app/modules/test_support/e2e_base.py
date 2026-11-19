@@ -1137,9 +1137,11 @@ def _import_e2e_models() -> None:
     from app.modules.usage.infrastructure import models as usage_models
     from app.modules.workflow.infrastructure import models as workflow_models
     from app.modules.workspace.infrastructure import models as workspace_models
+    from app.modules.workspace.infrastructure import machine_connection_models
 
     _ = (
         workspace_models,
+        machine_connection_models,
         agent_runtime_models,
         agent_host_models,
         work_models,

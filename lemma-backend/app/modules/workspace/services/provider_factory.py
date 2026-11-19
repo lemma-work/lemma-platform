@@ -8,8 +8,12 @@ the ones a given deployment will never install.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from app.core.log.log import get_logger
 from app.modules.workspace.config import workspace_settings
+from app.modules.workspace.domain.machine_connection import is_connected_machine_id
+from app.modules.workspace.domain.machine_errors import MachineConnectionsOff
 
 logger = get_logger(__name__)
 
@@ -30,12 +34,39 @@ def build_provider(name: str | None = None):
     """
     chosen = name or workspace_settings.provider
     if chosen == "e2b":
-        return _with_host_execution(_build_e2b_provider())
+        return _with_machines(_build_e2b_provider())
     if chosen == "lemma_local":
-        return _with_host_execution(_build_lemma_local_provider())
+        return _with_machines(_build_lemma_local_provider())
     if chosen == "docker":
-        return _with_host_execution(_build_docker_provider())
+        return _with_machines(_build_docker_provider())
     raise RuntimeError(f"unsupported workspace provider: {chosen}")
+
+
+def refuse_connected_machine_when_off(sandbox_id: UUID) -> None:
+    """Off, a connected machine has no route in front of the fabric -- in
+    either composition -- so the fabric would answer for it, building a sandbox
+    of its own under the machine's id. It is refused before that."""
+    if workspace_settings.machine_connections_enabled:
+        return
+    if is_connected_machine_id(sandbox_id):
+        raise MachineConnectionsOff()
+
+
+def _with_machines(provider):
+    """The configured fabric, with this Mac and connected machines beside it
+    where this deployment has them."""
+    routed = _with_host_execution(provider)
+    if not workspace_settings.machine_connections_enabled:
+        return routed
+    from app.modules.workspace.providers.host_routing import HostRoutingProvider
+    from app.modules.workspace.services.machine_link.handler import (
+        connected_fabric_provider,
+    )
+
+    if isinstance(routed, HostRoutingProvider):
+        routed.connected = connected_fabric_provider()
+        return routed
+    return HostRoutingProvider(routed, connected=connected_fabric_provider())
 
 
 def _with_host_execution(provider):
