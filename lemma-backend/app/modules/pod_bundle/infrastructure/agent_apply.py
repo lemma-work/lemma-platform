@@ -52,10 +52,11 @@ async def apply_machine(
 
 async def apply_agent(
     step: PlanStep, *, uow, ctx, pod_id: UUID, user_id: UUID, load: Load
-) -> None:
-    """Create the agent. One the pod already has is kept as it is
-    (``kept_parts``): the import's own from before a crash, or one made since
-    the plan. Its instructions, settings and machine are never replaced."""
+) -> bool:
+    """Create the agent, and say whether this call made it. One the pod
+    already has is kept as it is (``kept_parts``): the import's own from
+    before a crash, or one made since the plan, which the applier claims or
+    refuses. Its instructions, settings and machine are never replaced."""
     from app.modules.agent.contracts.provisioning import create_agent, get_agent
 
     payload = load("agents", step.name)
@@ -74,7 +75,7 @@ async def apply_agent(
         "machine": payload.get("machine"),
     }
     if await get_agent(uow, pod_id=pod_id, name=step.name, ctx=ctx) is not None:
-        return
+        return False
     await create_agent(
         uow,
         pod_id=pod_id,
@@ -85,6 +86,7 @@ async def apply_agent(
         ctx=ctx,
         **common,
     )
+    return True
 
 
 def _agent_runtime(payload: Mapping[str, object]):

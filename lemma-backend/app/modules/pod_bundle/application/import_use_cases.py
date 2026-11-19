@@ -432,6 +432,8 @@ class ImportUseCases:
             )
         retrying_failed_job = state.status is ImportStatus.FAILED
         state.status = ImportStatus.QUEUED
+        # What the discarded plan made: the new one finishes it, not keeps it.
+        state.remember_finished_creates()
         state.plan = None
         state.error = None
         state.error_type = None
@@ -503,14 +505,7 @@ class ImportUseCases:
                 if state.status is ImportStatus.PARTIALLY_CANCELLED:
                     # As the job says when it stops itself mid-apply: the
                     # steps that landed were not undone.
-                    applied = len(state.committed_steps)
-                    total = len(state.plan.steps) if state.plan else 0
-                    state.error = (
-                        f"Cancelled after {applied} of {total} steps had been "
-                        "applied to this pod. Those changes were not undone; "
-                        "import the bundle again to finish, or remove what it "
-                        "created."
-                    )
+                    state.error = state.cancelled_part_way_message()
                 state.current_step = None
                 state.completed_at = datetime.now(timezone.utc)
                 await self._state_store.stage_import(uow, state)

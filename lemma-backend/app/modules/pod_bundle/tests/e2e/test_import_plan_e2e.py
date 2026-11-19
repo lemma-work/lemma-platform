@@ -185,6 +185,56 @@ async def test_plan_keeps_what_the_pod_already_has(
     assert not any("score" in w for w in body["plan"]["warnings"])
 
 
+async def test_plan_names_access_a_kept_agent_lacks(
+    authenticated_client, fixed_test_org, worker, tmp_path
+):
+    """An agent left without its access -- by an earlier import that never
+    finished, say -- is kept, access included, when the bundle is imported
+    afresh. The plan writes nothing to it, and says what it lacks; once the
+    agent holds it, the plan says nothing."""
+    pod_id = await _new_pod(authenticated_client, fixed_test_org["id"])
+    await _create_table(authenticated_client, pod_id, "leads", [])
+    made = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={"name": "assistant", "instruction": "Mine."},
+    )
+    assert made.status_code == status.HTTP_201_CREATED, made.text
+    grant = {
+        "resource_type": "datastore_table",
+        "resource_name": "leads",
+        "permission_ids": ["datastore.record.read"],
+    }
+    root = tmp_path / "bundle-kept-access"
+    _write(root / "pod.json", {"name": "CRM", "format_version": 2, "variables": {}})
+    _write(
+        root / "agents" / "assistant" / "assistant.json",
+        {
+            "name": "assistant",
+            "instruction": "Theirs.",
+            "permissions": {"grants": [grant]},
+        },
+    )
+
+    import_id = await _upload_import(authenticated_client, pod_id, pack_bundle(root))
+    body = await _wait_for_plan(authenticated_client, pod_id, import_id)
+
+    assert body["status"] == "AWAITING_CONFIRMATION", body
+    kinds = {s["kind"] for s in body["plan"]["steps"]}
+    assert "AGENT_GRANTS" not in kinds
+    [warning] = [w for w in body["plan"]["warnings"] if "'assistant'" in w]
+    assert "keeps its own access" in warning
+    assert "datastore.record.read on datastore_table 'leads'" in warning
+
+    granted = await authenticated_client.put(
+        f"/pods/{pod_id}/agents/assistant/permissions", json={"grants": [grant]}
+    )
+    assert granted.status_code == status.HTTP_200_OK, granted.text
+    again = await _upload_import(authenticated_client, pod_id, pack_bundle(root))
+    body = await _wait_for_plan(authenticated_client, pod_id, again)
+
+    assert not [w for w in body["plan"]["warnings"] if "'assistant'" in w]
+
+
 async def test_get_import_expired_returns_410(authenticated_client, test_pod, worker):
     pod_id = test_pod["id"]
     res = await authenticated_client.get(f"/pods/{pod_id}/bundle/imports/{uuid4()}")

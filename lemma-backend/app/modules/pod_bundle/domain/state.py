@@ -120,6 +120,27 @@ class PlanStep(BaseModel):
     error: str | None = None
 
 
+def part_key(kind: StepKind, name: str) -> str:
+    """How :attr:`ImportState.created` names one part: ``AGENT:triage``."""
+    return f"{kind.value}:{name}"
+
+
+#: The steps that create one named part. A FILE step is left out: a file has
+#: no later step that writes to it, and a bundle may carry thousands.
+CREATING_KINDS = frozenset(
+    {
+        StepKind.TABLE,
+        StepKind.TABLE_DATA,
+        StepKind.FUNCTION,
+        StepKind.AGENT,
+        StepKind.WORKFLOW,
+        StepKind.SCHEDULE,
+        StepKind.APP,
+        StepKind.SURFACE,
+    }
+)
+
+
 class VariableSpec(BaseModel):
     """A ``${var}`` placeholder declared by the bundle that the importer may
     (or must) resolve — pod member references, app slugs."""
@@ -300,10 +321,70 @@ class ImportState(_BundleJobState):
     current_step: int | None = None
     committed_steps: list[int] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    #: The parts this import created (:func:`part_key`), and the tables whose
+    #: rows it loaded (``TABLE_DATA:``). Everything else the pod has is kept as
+    #: it is, so this is what tells a grants step or a seed step that the part
+    #: it writes to is the import's own -- across a crash, a failed step, and a
+    #: replan, which plans afresh against a pod already holding them.
+    created: list[str] = Field(default_factory=list)
 
     @property
     def is_terminal(self) -> bool:
         return self.status in IMPORT_TERMINAL_STATUSES
+
+    def apply_failure_message(self, step: PlanStep, exc: Exception) -> str:
+        """Say what the pod now holds, not just which step broke.
+
+        Apply commits each step in its own unit of work and there is no
+        rollback, so a failure part-way through an approved plan leaves the pod
+        changed. Telling the person only "Step X failed" leaves them with half a
+        pod, no idea that it is half a pod, and no stated way forward -- while
+        re-applying does in fact resume from the failed step rather than
+        duplicating the work already done.
+        """
+        applied = len(self.committed_steps)
+        total = len(self.plan.steps) if self.plan else 0
+        head = f"Step '{step.name}' failed: {exc}"
+        if not applied:
+            return f"{head} Nothing was applied to the pod."
+        return (
+            f"{head} {applied} of {total} steps were already applied to this pod "
+            f"and were not undone; apply this import again to continue from step "
+            f"'{step.name}'."
+        )
+
+    def cancelled_part_way_message(self) -> str:
+        """What a person who cancelled mid-apply is told: the steps that
+        landed were not undone, and importing again will not finish them.
+
+        A new import keeps everything already there, this one's half-made
+        parts included, and plans its grants and rows only for what it creates.
+        """
+        applied = len(self.committed_steps)
+        total = len(self.plan.steps) if self.plan else 0
+        return (
+            f"Cancelled after {applied} of {total} steps had been applied to this "
+            "pod. Those changes were not undone, and importing the bundle again "
+            "adds only what is still missing: to start clean, remove what this "
+            "import created first."
+        )
+
+    def remember_finished_creates(self) -> None:
+        """Add each part a finished CREATE step made to :attr:`created`.
+
+        An applier records a part as it creates it; this covers a step that
+        finished before the record existed, and keeps what a plan made before
+        a replan discards it. A CREATE step only finishes DONE on a part it
+        made: one it finds someone else's is marked SKIPPED."""
+        for step in self.plan.steps if self.plan else ():
+            key = part_key(step.kind, step.name)
+            if (
+                step.kind in CREATING_KINDS
+                and step.action is StepAction.CREATE
+                and step.status is StepStatus.DONE
+                and key not in self.created
+            ):
+                self.created.append(key)
 
 
 class ExportState(_BundleJobState):

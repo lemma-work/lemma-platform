@@ -25,6 +25,7 @@ from lemma_pod_bundle.layout import TABLE_DATA_FILE
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import (
+    PartKeptError,
     PodBundleDomainError,
     StepNotApplicableError,
 )
@@ -36,7 +37,8 @@ from app.modules.pod_bundle.infrastructure.connector_apply import apply_connecto
 from app.modules.pod_bundle.infrastructure.agent_apply import apply_agent, apply_machine
 from app.modules.pod_bundle.infrastructure.schedule_apply import apply_schedule
 from app.modules.pod_bundle.infrastructure.surface_apply import apply_surface
-from app.modules.pod_bundle.domain.state import PlanStep, StepKind
+from app.modules.pod_bundle.domain.state import PlanStep, StepAction, StepKind
+from app.modules.pod_bundle.infrastructure import kept_parts
 from app.modules.pod_bundle.infrastructure.grants import (
     GrantInput as _GrantInput,
     apply_grants,
@@ -59,8 +61,14 @@ class BundleApplier:
         replacements: dict[str, str] | None = None,
         warnings: list[str] | None = None,
         connector_choices: dict[str, ConnectorChoice] | None = None,
+        created: kept_parts.CreatedParts | None = None,
+        resumed: bool = False,
     ):
         self._uow = uow
+        #: What this import created; a step finding its part there asks it.
+        self._created = created or kept_parts.CreatedParts()
+        #: Whether this step was interrupted while running, and runs again.
+        self._resumed = resumed
         self._connector_choices = connector_choices or {}
         self._ctx = ctx
         self._pod_id = pod_id
@@ -134,10 +142,14 @@ class BundleApplier:
                 visibility=payload.get("visibility"),
                 ctx=self._ctx,
             )
+            self._created.add(StepKind.TABLE, step.name)
             return
-        # The table is the pod's: it gains the bundle's columns it lacks, and no
-        # column is dropped, retyped or altered -- whatever the step says, since
-        # a plan made before this rule could still carry `destructive`.
+        if step.action is StepAction.CREATE:
+            # Planned missing and here now: the import's own, or kept whole.
+            self._created.claim(step, resumed=self._resumed)
+        # The table gains the bundle's columns it lacks, and no column is
+        # dropped, retyped or altered -- whatever the step says, since a plan
+        # made before this rule could still carry `destructive`.
         existing_names = {c.name for c in existing.columns}
         for column in columns:
             if column.name not in existing_names:
@@ -155,6 +167,9 @@ class BundleApplier:
             seed_table_rows,
         )
 
+        self._created.require(StepKind.TABLE, step.name, kept_parts.ROWS_KEPT)
+        if self._created.made(StepKind.TABLE_DATA, step.name):
+            raise PartKeptError(kept_parts.ROWS_LOADED)
         data_path = self._root / "tables" / step.name / TABLE_DATA_FILE
         if not data_path.is_file():
             return
@@ -176,6 +191,7 @@ class BundleApplier:
             rows=rows,
             user_id=self._user_id,
         )
+        self._created.add(StepKind.TABLE_DATA, step.name)
 
     # --- files -----------------------------------------------------------
 
@@ -247,8 +263,10 @@ class BundleApplier:
         )
 
     async def _apply_agent(self, step: PlanStep) -> None:
-        """The dispatch table's uniform shape over `agent_apply.apply_agent`."""
-        await apply_agent(
+        """The dispatch table's uniform shape over `agent_apply.apply_agent`:
+        an agent it made is this import's own; one it found already there is
+        claimed, or refused when someone else made it (`kept_parts`)."""
+        made = await apply_agent(
             step,
             uow=self._uow,
             ctx=self._ctx,
@@ -256,6 +274,10 @@ class BundleApplier:
             user_id=self._user_id,
             load=self._load,
         )
+        if made:
+            self._created.add(StepKind.AGENT, step.name)
+        else:
+            self._created.claim(step, resumed=self._resumed)
 
     async def _connector_step(self, step: PlanStep) -> None:
         """The dispatch table's uniform shape over `connector_apply`."""
@@ -279,6 +301,8 @@ class BundleApplier:
             pod_id=self._pod_id,
             load=self._load,
             warnings=self._warnings,
+            created=self._created,
+            resumed=self._resumed,
         )
 
     async def _apply_function_grants(self, step: PlanStep) -> None:
@@ -297,6 +321,7 @@ class BundleApplier:
         while one with no ``permissions`` key leaves them alone."""
         from app.modules.function.contracts.provisioning import get_function
 
+        self._created.require(StepKind.FUNCTION, step.name, kept_parts.ACCESS_KEPT)
         payload = self._load("functions", step.name)
         if not _has_grants(payload):
             return
@@ -338,6 +363,7 @@ class BundleApplier:
             sync_agent_memory_grant,
         )
 
+        self._created.require(StepKind.AGENT, step.name, kept_parts.ACCESS_KEPT)
         payload = self._load("agents", step.name)
         if not _has_grants(payload):
             return
@@ -411,6 +437,8 @@ class BundleApplier:
             user_id=self._user_id,
             load=self._load,
             warnings=self._warnings,
+            created=self._created,
+            resumed=self._resumed,
         )
 
     # --- workflows (best-effort) -----------------------------------------
@@ -421,12 +449,12 @@ class BundleApplier:
             workflow_exists,
         )
 
-        payload = self._load("workflows", step.name)
         if await workflow_exists(
             self._uow, pod_id=self._pod_id, name=step.name, ctx=self._ctx
         ):
-            # Create-once by name, like schedules; the plan says SKIP for it.
+            self._created.claim(step, resumed=self._resumed)
             return
+        payload = self._load("workflows", step.name)
         await create_workflow(
             self._uow,
             pod_id=self._pod_id,
@@ -445,6 +473,7 @@ class BundleApplier:
             # imported workflow ran unbounded however its source was capped.
             max_concurrent_runs=payload.get("max_concurrent_runs"),
         )
+        self._created.add(StepKind.WORKFLOW, step.name)
 
 
 # --- module helpers ----------------------------------------------------------

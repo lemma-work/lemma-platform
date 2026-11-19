@@ -324,6 +324,50 @@ def _awaiting_state(pod_id, user_id, *, steps=None, variables=None):
     )
 
 
+async def test_a_replan_keeps_what_the_discarded_plan_made():
+    """A failed import is replanned from scratch against a pod that already
+    holds what its first plan created. The record of those parts outlives the
+    plan, so the new one finishes them rather than keeping them."""
+    from app.modules.pod_bundle.domain.state import (
+        ImportPlan,
+        PlanStep,
+        StepAction,
+        StepKind,
+        StepStatus,
+    )
+
+    uc, store, _, _ = _use_cases()
+    pod_id, user_id = uuid4(), uuid4()
+    state = _awaiting_state(pod_id, user_id)
+    state.status = ImportStatus.FAILED
+    state.plan = ImportPlan(
+        format_version=2,
+        steps=[
+            PlanStep(
+                index=0,
+                kind=StepKind.AGENT,
+                name="bot",
+                action=StepAction.CREATE,
+                status=StepStatus.DONE,
+            ),
+            PlanStep(
+                index=1,
+                kind=StepKind.AGENT_GRANTS,
+                name="bot",
+                action=StepAction.CREATE,
+                status=StepStatus.FAILED,
+            ),
+        ],
+    )
+    await store.save_import(state)
+
+    await uc.replan_import(pod_id=pod_id, import_id=state.import_id, user_id=user_id)
+
+    replanned = await store.get_import(state.import_id)
+    assert replanned.plan is None
+    assert replanned.created == ["AGENT:bot"]
+
+
 async def test_apply_enqueues_with_dedup_id():
     from app.modules.pod_bundle.application.import_use_cases import import_apply_job_id
 
