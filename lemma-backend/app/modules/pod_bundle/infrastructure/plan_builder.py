@@ -59,9 +59,8 @@ from app.modules.pod_bundle.infrastructure import (
     kept_parts,
 )
 from app.modules.pod_bundle.infrastructure.grants import has_grants
-from app.modules.pod_bundle.infrastructure.plan_variables import (
-    variables_from_manifest,
-)
+from app.modules.pod_bundle.infrastructure.one_schedule import refuse_shared_workflows
+from app.modules.pod_bundle.infrastructure.plan_variables import variables_from_manifest
 from app.modules.pod_bundle.infrastructure.grant_planning import (
     GrantConferral,
     NoGrantConferral,
@@ -312,9 +311,8 @@ class PlanBuilder:
             bundle_root, "agents", await self._existing.agent_names()
         )
         steps += functions + agents
-        steps += _create_or_keep(
-            bundle_root, "workflows", await self._existing.workflow_names()
-        )
+        existing_workflows = await self._existing.workflow_names()
+        steps += _create_or_keep(bundle_root, "workflows", existing_workflows)
         existing_schedules = await self._existing.schedule_names()
         for d in _resource_subdirs(bundle_root, "schedules"):
             step = kept_parts.create_or_keep(
@@ -391,6 +389,9 @@ class PlanBuilder:
             warnings,
             replacements={v.name: v.default for v in variables if v.default},
             check=self._accounts,
+        )
+        refuse_shared_workflows(
+            bundle_root, steps, existing_schedules, existing_workflows
         )
 
         outcome, notes = await bundle_outcome.plan_outcome(pod_manifest, self._outcome)

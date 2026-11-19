@@ -19,6 +19,7 @@ from app.modules.workflow.api.dependencies import (
 )
 from app.core.api.pagination import parse_uuid_page_token
 from app.modules.workflow.api.run_summaries import run_summaries
+from app.modules.workflow.api.run_about import run_about_record
 from app.modules.workflow.api.start_schemas import workflow_start_input_to_domain
 from app.modules.workflow.api.schemas import (
     WorkflowDetailResponse,
@@ -26,6 +27,7 @@ from app.modules.workflow.api.schemas import (
     WorkflowCreateRequest,
     WorkflowGraphUpdateRequest,
     WorkflowListResponse,
+    WorkflowRunCreateRequest,
     WorkflowRunListResponse,
     WorkflowRunResponse,
     WorkflowUpdateRequest,
@@ -293,16 +295,26 @@ async def delete_workflow(
     operation_id="workflow.run.create",
     summary="Create Workflow Run",
     description=(
-        "Create a new run for this workflow. Takes no request body: if the "
+        "Create a new run for this workflow. The body is optional and names at "
+        "most the record the run is about (`about`): the record is read as you "
+        "(404 when you cannot read it) and becomes `start.payload`, as a table "
+        "trigger's change would. A run takes no other input: if the "
         "workflow's entry node is a FORM node the run is created WAITING on it "
         "(see `active_wait` in the response) and input is submitted via "
         "`workflow.run.form.submit`; otherwise the run executes immediately. "
-        "Trigger payloads for scheduled/event/datastore starts are supplied by "
-        "the platform, not through this endpoint. Send an `Idempotency-Key` "
-        "header to make a retry safe: the same key, from the same person, for "
-        "the same workflow, returns the run it already created."
+        "Send an `Idempotency-Key` header to make a retry safe: the same key, "
+        "from the same person, for the same workflow, returns the run it "
+        "already created."
     ),
     dependencies=[WorkflowResourceExecuteDep],
+    responses={
+        400: {"description": "`about.record_id` is not a valid key for the table."},
+        404: {
+            "description": (
+                "No such workflow, or no record you can read matches `about`."
+            )
+        },
+    },
 )
 async def create_workflow_run(
     uow: UoWDep,
@@ -314,6 +326,7 @@ async def create_workflow_run(
     idempotency_key: str | None = Header(
         default=None, alias="Idempotency-Key", min_length=1, max_length=255
     ),
+    data: WorkflowRunCreateRequest | None = None,
 ) -> WorkflowRunResponse:
     workflow = await service.get_workflow_by_name(
         pod_id,
@@ -323,6 +336,7 @@ async def create_workflow_run(
     )
     _verify_pod(workflow, pod_id)
     assert workflow is not None
+    about = data.about if data is not None else None
 
     engine = build_workflow_engine(uow)
     # A double click, or a retry of a request whose answer was lost, used to
@@ -333,7 +347,22 @@ async def create_workflow_run(
         if idempotency_key is not None
         else None
     )
-    run = await engine.start_run(workflow.id, user.id, run_id=run_id, ctx=ctx)
+    # A retry of a run about a record answers with that run before reading the
+    # record again: the record may have changed, or gone, since the run began.
+    run = (
+        await engine.reserved_run(run_id, flow_id=workflow.id, user_id=user.id)
+        if run_id is not None and about is not None
+        else None
+    )
+    if run is None:
+        trigger = (
+            await run_about_record(uow, pod_id=pod_id, about=about, ctx=ctx)
+            if about is not None
+            else None
+        )
+        run = await engine.start_run(
+            workflow.id, user.id, run_id=run_id, ctx=ctx, trigger=trigger
+        )
     active_wait = await engine.get_active_wait(run.id)
     return run_response_from_domain(run, active_wait, workflow.run_title)
 

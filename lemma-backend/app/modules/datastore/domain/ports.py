@@ -40,6 +40,7 @@ from app.modules.datastore.domain.file_entities import (
 
 if TYPE_CHECKING:
     from app.modules.datastore.changes.capture import ChangeCapture
+    from app.modules.datastore.domain.column_changes import ColumnChange
     from app.core.domain.events import DomainEvent
     from app.modules.datastore.domain.live import (
         ChangePosition,
@@ -254,6 +255,10 @@ class DatastoreSchemaPort(Protocol):
 
     async def drop_column(
         self, pod_id: UUID, table_name: str, column_name: str
+    ) -> None: ...
+
+    async def change_column_constraints(
+        self, pod_id: UUID, table_name: str, change: ColumnChange
     ) -> None: ...
 
     async def set_table_rls(

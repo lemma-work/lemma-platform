@@ -286,11 +286,13 @@ function humanizeName(raw: string): string {
 function podSummary(pod: { id: string; name: string; organization_id: string; icon_url?: string | null; description?: string | null; created_at?: string | null; user_id?: string | null; config?: unknown }): Pod {
     const name = humanizeName(pod.name);
     const description = pod.description?.trim();
+    const home = (pod.config as { home_app?: unknown } | null | undefined)?.home_app;
     return { id: pod.id, orgId: pod.organization_id, name, iconUrl: pod.icon_url ?? null,
         ...(description ? { description } : {}),
         ...(sharedByEveryone(pod.config) ? { everyone: true } : {}),
         ...(pod.created_at ? { hiredAt: pod.created_at } : {}),
         ...(pod.user_id ? { hiredBy: pod.user_id } : {}),
+        ...(typeof home === "string" && home ? { homeApp: home } : {}),
         teammate: { name, initials: initialsOf(name), iconUrl: pod.icon_url ?? null },
         subtitle: "", members: [], waiting: "" };
 }
@@ -1729,6 +1731,13 @@ export const liveSource: PodSource = {
            that says nothing, and every place that reads one would have to
            tell the two apart. */
         await lemma(podId).pods.update(podId, { description: description.trim() || null });
+        forgetPod(podId);
+    },
+
+    async setHomeApp(podId: string, app: string | null): Promise<void> {
+        /* Only this field goes up: the config is merged field-wise, as
+           `setPodJoin` relies on, and `null` is how it is handed back. */
+        await lemma(podId).pods.update(podId, { config: { home_app: app } });
         forgetPod(podId);
     },
 

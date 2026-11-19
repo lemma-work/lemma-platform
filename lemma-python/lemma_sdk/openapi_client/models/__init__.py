@@ -711,6 +711,7 @@ _NAME_TO_MODULE = {
     'UpdateAnthropicCompatibleRuntimeProfileRequest': 'update_anthropic_compatible_runtime_profile_request',
     'UpdateAnthropicCompatibleRuntimeProfileRequestModelSettingsType0': 'update_anthropic_compatible_runtime_profile_request_model_settings_type_0',
     'UpdateAppRequest': 'update_app_request',
+    'UpdateColumnRequest': 'update_column_request',
     'UpdateConversationRequest': 'update_conversation_request',
     'UpdateConversationRequestMetadataType0': 'update_conversation_request_metadata_type_0',
     'UpdateFunctionRequest': 'update_function_request',
@@ -776,6 +777,8 @@ _NAME_TO_MODULE = {
     'WorkflowGraphUpdateRequest': 'workflow_graph_update_request',
     'WorkflowListResponse': 'workflow_list_response',
     'WorkflowMode': 'workflow_mode',
+    'WorkflowRunAbout': 'workflow_run_about',
+    'WorkflowRunCreateRequest': 'workflow_run_create_request',
     'WorkflowRunFormSubmitRequest': 'workflow_run_form_submit_request',
     'WorkflowRunFormSubmitRequestInputs': 'workflow_run_form_submit_request_inputs',
     'WorkflowRunListResponse': 'workflow_run_list_response',
@@ -1505,6 +1508,7 @@ if TYPE_CHECKING:
     from .update_anthropic_compatible_runtime_profile_request import UpdateAnthropicCompatibleRuntimeProfileRequest
     from .update_anthropic_compatible_runtime_profile_request_model_settings_type_0 import UpdateAnthropicCompatibleRuntimeProfileRequestModelSettingsType0
     from .update_app_request import UpdateAppRequest
+    from .update_column_request import UpdateColumnRequest
     from .update_conversation_request import UpdateConversationRequest
     from .update_conversation_request_metadata_type_0 import UpdateConversationRequestMetadataType0
     from .update_function_request import UpdateFunctionRequest
@@ -1570,6 +1574,8 @@ if TYPE_CHECKING:
     from .workflow_graph_update_request import WorkflowGraphUpdateRequest
     from .workflow_list_response import WorkflowListResponse
     from .workflow_mode import WorkflowMode
+    from .workflow_run_about import WorkflowRunAbout
+    from .workflow_run_create_request import WorkflowRunCreateRequest
     from .workflow_run_form_submit_request import WorkflowRunFormSubmitRequest
     from .workflow_run_form_submit_request_inputs import WorkflowRunFormSubmitRequestInputs
     from .workflow_run_list_response import WorkflowRunListResponse
@@ -2312,6 +2318,7 @@ __all__ = [
     'UpdateAnthropicCompatibleRuntimeProfileRequest',
     'UpdateAnthropicCompatibleRuntimeProfileRequestModelSettingsType0',
     'UpdateAppRequest',
+    'UpdateColumnRequest',
     'UpdateConversationRequest',
     'UpdateConversationRequestMetadataType0',
     'UpdateFunctionRequest',
@@ -2377,6 +2384,8 @@ __all__ = [
     'WorkflowGraphUpdateRequest',
     'WorkflowListResponse',
     'WorkflowMode',
+    'WorkflowRunAbout',
+    'WorkflowRunCreateRequest',
     'WorkflowRunFormSubmitRequest',
     'WorkflowRunFormSubmitRequestInputs',
     'WorkflowRunListResponse',

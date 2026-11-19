@@ -34,7 +34,10 @@ standing one to fall back on. `schedule_runs` is the
 durable idempotency/delivery ledger keyed by schedule plus source event; it
 records the run's single user owner, attempts, target run, payload, and terminal
 outcome. RLS datastore events assign that ownership to the row owner; other
-schedule sources assign it to the schedule owner. The three types are TIME
+schedule sources assign it to the schedule owner. A table without row security
+has no row owner, so its changes run as the schedule's owner: work that has to
+see one member's own rows belongs in a table with row security, whose rows are
+that member's. The three types are TIME
 (cron, or once with `scheduled_at`), WEBHOOK and DATASTORE.
 
 `GET /pods/{pod_id}/events` lists what a schedule can start on, in the MCP

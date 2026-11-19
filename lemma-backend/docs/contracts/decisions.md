@@ -30,9 +30,12 @@ Answers closed questions about one piece of evidence and stores nothing.
   read under the server-wide ceiling and then held to the same caps.
 - **Changes:** nothing but the organization's per-minute counter and the usage
   ledger, where the call is metered like a model call.
-- **Answers:** one per question, `{value, confidence}`. `value: null` means the
-  evidence did not support an answer; `confidence` is null unless the provider
-  measures one.
+- **Answers:** one per question, `{value, confidence}`. `confidence` is null
+  unless the provider measures one. `value: null` comes only from a provider
+  that judges the evidence insufficient (`model`); `typesafe` always answers
+  its most probable value with that value's probability as `confidence`. An
+  answer is unsure when `value` is null, or `confidence` is set and below the
+  caller's own threshold ([decisions module](../modules/decisions.md)).
 - **Refusals:** 429 `DECISION_RATE_LIMITED` with `Retry-After` when the
   organization is over its rate; 429 `USAGE_LIMIT_EXCEEDED` when spend has run
   out; 503 `DECISION_PROVIDER_UNAVAILABLE` (`details.reason`: `timeout`,

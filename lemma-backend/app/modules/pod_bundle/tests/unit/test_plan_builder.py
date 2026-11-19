@@ -746,3 +746,71 @@ async def test_an_import_that_sets_no_outcome_plans_none(tmp):
 
     assert plan.outcome is None
     assert plan.warnings == []
+
+
+async def test_two_schedules_on_one_global_workflow_are_refused_before_writing(tmp):
+    """The platform takes one schedule per person on a GLOBAL workflow and
+    refused the second at its step, after the rest of the bundle had landed."""
+    from app.modules.pod_bundle.domain.errors import BundleInvalidError
+
+    root = _build_bundle(tmp)
+    _write(
+        root / "workflows" / "triage" / "triage.json",
+        {"name": "triage", "mode": "GLOBAL"},
+    )
+    for name in ("on_ticket", "every_morning"):
+        _write(
+            root / "schedules" / name / f"{name}.json",
+            {"name": name, "schedule_type": "TIME", "workflow_name": "triage"},
+        )
+
+    with pytest.raises(BundleInvalidError) as excinfo:
+        await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
+    assert "workflow 'triage'" in str(excinfo.value)
+
+    # With no mode, this import creates the workflow USER: two schedules are fine.
+    _write(root / "workflows" / "triage" / "triage.json", {"name": "triage"})
+    plan = await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
+    assert {s.name for s in plan.steps if s.kind.value == "SCHEDULE"} == {
+        "on_ticket",
+        "every_morning",
+    }
+
+
+async def test_a_schedule_naming_an_account_the_importer_cannot_use_is_not_counted(
+    tmp,
+):
+    """The plan skips it, so it never reaches the GLOBAL workflow it names: the
+    other schedule on that workflow imports."""
+    from uuid import uuid4
+
+    class _Refused:
+        async def refusal(self, account_id):
+            del account_id
+            return "not yours"
+
+    root = _build_bundle(tmp)
+    _write(
+        root / "workflows" / "triage" / "triage.json",
+        {"name": "triage", "mode": "GLOBAL"},
+    )
+    _write(
+        root / "schedules" / "on_ticket" / "on_ticket.json",
+        {"name": "on_ticket", "schedule_type": "TIME", "workflow_name": "triage"},
+    )
+    _write(
+        root / "schedules" / "on_mail" / "on_mail.json",
+        {
+            "name": "on_mail",
+            "schedule_type": "TIME",
+            "workflow_name": "triage",
+            "account_id": str(uuid4()),
+        },
+    )
+
+    plan = await PlanBuilder(FakeExisting(), accounts=_Refused()).build_plan(
+        bundle_root=root
+    )
+
+    actions = {s.name: s.action.value for s in plan.steps if s.kind.value == "SCHEDULE"}
+    assert actions == {"on_ticket": "CREATE", "on_mail": "SKIP"}

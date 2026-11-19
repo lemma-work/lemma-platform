@@ -50,11 +50,13 @@ import {
     needsAnswer,
     statusLine,
     suggestedValue,
-    teammateName,
 } from "./plan";
+import { importRequest, installTitle } from "./github-source";
 import s from "./import.module.css";
 
-type Props = { owner: string; repo: string; title: string };
+/** `path` is the folder inside the repository that holds the bundle, or
+ *  `null` to install the repository itself. */
+type Props = { owner: string; repo: string; path: string | null; title: string };
 
 const NEW = "new";
 
@@ -186,7 +188,7 @@ function Steps({ at }: { at: 0 | 1 | 2 | 3 }) {
     );
 }
 
-function Journey({ repo, owner, title }: Props) {
+function Journey({ repo, owner, path, title }: Props) {
     const orgs = useQuery({
         queryKey: ["orgs"],
         queryFn: () => data.listOrgs(),
@@ -205,7 +207,9 @@ function Journey({ repo, owner, title }: Props) {
             "existing";
     const target =
         picked ?? (wantsExisting ? (pods.data?.[0]?.id ?? NEW) : NEW);
-    const [name, setName] = useState(() => title || teammateName(repo));
+    const [name, setName] = useState(
+        () => title || installTitle({ owner, repo, path }, {}),
+    );
     /* The teammate this page made for the install. Kept, so going back to
        the choice and on again reuses it rather than hiring a second one. */
     const [created, setCreated] = useState<Pod | null>(null);
@@ -294,18 +298,13 @@ function Journey({ repo, owner, title }: Props) {
             /* Fetched through the pod's `github` connector as the person
                installing, or anonymously for a public repository: no account
                is named here. A failure for want of one comes back on the job
-               with its `connect_url`. */
+               with its `connect_url`. A folder narrows the repository to the
+               one bundle it holds. */
             setJob(
                 await lemma(id).request<ImportStatusResponse>(
                     "POST",
                     "/pods/" + id + "/bundle/imports",
-                    {
-                        body: {
-                            kind: "GITHUB",
-                            owner,
-                            repo,
-                        },
-                    },
+                    { body: importRequest({ owner, repo, path }) },
                 ),
             );
         } catch (e) {
@@ -1009,7 +1008,7 @@ function ConnectorField({
                     }
                 >
                     {c.installations.length === 0 && (
-                        <option value="">Choose…</option>
+                        <option value="">{c.status === "SKIPPED" ? "Leave it out" : "Choose…"}</option>
                     )}
                     {c.installations.map((o) => (
                         <option key={o.auth_config_id} value={o.auth_config_id}>

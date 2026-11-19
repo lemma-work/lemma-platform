@@ -386,9 +386,10 @@ export function OutcomesShell() {
         else go(chatView({ kind: "chat", podId, id: NEW_CHAT }), { fill: words });
     }, [go, view]);
 
-    /* A Lemma asked for as itself opens on its first app, where it has one:
-       its apps are how people use it, and Home is a list of them. A Lemma
-       with none stays on Home, which says how to start it. */
+    /* A Lemma asked for as itself opens on an app, where it has one: the one
+       somebody chose for it, else its first. Its apps are how people use
+       it, and Home is a list of them. A Lemma with none stays on Home, which
+       says how to start it. */
     const landingPod = view.name === "outcome" && view.tab === "home" && (landing === ARRIVAL || landing === view.podId) ? view.podId : null;
     const landed = useQuery({
         queryKey: ["outcome-apps", landingPod],
@@ -396,12 +397,15 @@ export function OutcomesShell() {
         enabled: Boolean(landingPod),
         staleTime: 5 * 60_000,
     });
+    const landingHome = list.find((one) => one.id === landingPod)?.homeApp;
     useEffect(() => {
-        if (!landingPod || !landed.data) return;
-        const first = appsOf(landed.data)[0];
+        /* The list says which app was chosen: landing before it is read
+           would open the first app and then stay there. */
+        if (!landingPod || !landed.data || !pods.data) return;
+        const first = appsOf(landed.data, landingHome)[0];
         if (first) go({ name: "app", podId: landingPod, app: nameOfApp(first) }, { replace: true });
         else setLanding(null);
-    }, [landingPod, landed.data, go]);
+    }, [landingPod, landed.data, pods.data, landingHome, go]);
 
     /* Where the app in front says it is, and the app it asks for. Either is a
        step the address takes, so Back undoes it and the app is told. */

@@ -43,6 +43,7 @@ def schema_manager_mock() -> MagicMock:
     manager.drop_table = AsyncMock()
     manager.add_column = AsyncMock()
     manager.drop_column = AsyncMock()
+    manager.change_column_constraints = AsyncMock()
     manager.get_schema_name.return_value = "datastore_test"
     return manager
 

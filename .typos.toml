@@ -10,6 +10,9 @@ extend-exclude = [
     # regenerating, never by editing.
     "desktop/ui/vendor/",
     "lemma-typescript/public/",
+    # Plugin demos, captures and data, built and copied from the plugins'
+    # own repository by its site catalog script.
+    "lemma-frontend/public/plugins/",
     "lemma-backend/openapi_specs/",
     "**/openapi_client/",
     "**/generated/",

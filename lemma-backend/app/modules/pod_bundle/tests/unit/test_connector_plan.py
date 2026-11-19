@@ -232,6 +232,124 @@ async def test_an_installer_may_choose_to_create_the_missing_installation(tmp_pa
     assert resolved["crm"].create_installation is True
 
 
+def _with_optional_meet(root: Path, *, runs_through: bool = False) -> Path:
+    """The bundle, plus an optional connector only a grant names -- or, with
+    ``runs_through``, one a schedule runs through as well."""
+    _write(
+        root / "connectors" / "meet" / "meet.json",
+        {"connector": "googlemeet", "mode": "PER_MEMBER", "required": False},
+    )
+    _write(
+        root / "functions" / "due" / "due.json",
+        {
+            "name": "due",
+            "code": "def run(ctx):\n    return {}\n",
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "connector",
+                        "resource_name": "meet",
+                        "permission_ids": ["connector.use"],
+                    }
+                ]
+            },
+        },
+    )
+    if runs_through:
+        _write(
+            root / "schedules" / "on_meet" / "on_meet.json",
+            {"name": "on_meet", "schedule_type": "WEBHOOK", "pod_connector": "meet"},
+        )
+    return root
+
+
+def _everything_but_meet() -> _Lookup:
+    return _Lookup(
+        installations={"gmail": [_install("gmail")], "hubspot": [_install("hubspot")]}
+    )
+
+
+async def test_an_optional_connector_nobody_installed_is_left_out(tmp_path):
+    plan = await _plan(_with_optional_meet(_bundle(tmp_path)), _everything_but_meet())
+
+    meet = next(c for c in plan.connectors if c.slug == "meet")
+    assert meet.status is ConnectorPlanStatus.SKIPPED
+    assert "left out" in (meet.message or "")
+    assert any("Connector 'meet'" in w and "left out" in w for w in plan.warnings)
+    step = next(s for s in plan.steps if s.name == "meet")
+    # Still run at apply: it is declared after all if an installation is chosen.
+    assert step.status is StepStatus.PENDING
+    resolved, blocking = resolve_connector_choices(plan.connectors, {})
+    assert blocking == []
+    assert resolved["meet"].skip is True
+
+
+async def test_a_left_out_connector_comes_in_when_its_installation_is_created(
+    tmp_path,
+):
+    lookup = _everything_but_meet()
+    lookup._may_install, lookup._installable = True, {"googlemeet"}
+    plan = await _plan(_with_optional_meet(_bundle(tmp_path)), lookup)
+
+    meet = next(c for c in plan.connectors if c.slug == "meet")
+    assert meet.status is ConnectorPlanStatus.SKIPPED
+    assert meet.can_create_installation is True
+    resolved, blocking = resolve_connector_choices(
+        plan.connectors, {"meet": ConnectorChoice(create_installation=True)}
+    )
+    assert blocking == []
+    assert resolved["meet"].create_installation is True
+    assert resolved["meet"].skip is False
+
+
+async def test_an_optional_connector_something_runs_through_still_blocks(tmp_path):
+    """A schedule cannot be made without the connector it listens through, so
+    being optional does not let it go."""
+    plan = await _plan(
+        _with_optional_meet(_bundle(tmp_path), runs_through=True),
+        _everything_but_meet(),
+    )
+
+    meet = next(c for c in plan.connectors if c.slug == "meet")
+    assert meet.status is ConnectorPlanStatus.NEEDS_INSTALLATION
+    _, blocking = resolve_connector_choices(plan.connectors, {})
+    assert [b.slug for b in blocking] == ["meet"]
+
+
+async def test_an_importer_may_leave_out_an_optional_connector_but_not_a_required_one(
+    tmp_path,
+):
+    hubspot = _install("hubspot")
+    plan = await _plan(
+        _with_optional_meet(_bundle(tmp_path)),
+        _Lookup(
+            installations={
+                "gmail": [_install("gmail")],
+                "hubspot": [hubspot],
+                "googlemeet": [_install("googlemeet")],
+            }
+        ),
+    )
+    assert next(c for c in plan.connectors if c.slug == "meet").status is (
+        ConnectorPlanStatus.READY
+    )
+
+    resolved, blocking = resolve_connector_choices(
+        plan.connectors, {"meet": ConnectorChoice(skip=True)}
+    )
+    assert blocking == [] and resolved["meet"].skip is True
+
+    _, required = resolve_connector_choices(
+        plan.connectors, {"crm": ConnectorChoice(skip=True)}
+    )
+    assert [b.slug for b in required] == ["crm"]
+    _, both = resolve_connector_choices(
+        plan.connectors,
+        {"meet": ConnectorChoice(skip=True, auth_config_id=hubspot.auth_config_id)},
+    )
+    assert [b.slug for b in both] == ["meet"]
+
+
 async def test_a_slug_the_pod_already_declares_is_kept_or_conflicts(tmp_path):
     plan = await _plan(
         _bundle(tmp_path),

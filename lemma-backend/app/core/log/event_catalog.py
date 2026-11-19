@@ -1088,6 +1088,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'pod_bundle.handlers.pod_bundle_plan_transient.failed': EventSpec('warning', frozenset({'import_id'})),
     'pod_bundle.handlers.url_import_s_terminal_s.degraded': EventSpec('warning', frozenset({'import_id'})),
     'pod_bundle.handlers.url_import_transient.failed': EventSpec('warning', frozenset({'import_id'})),
+    'pod_bundle.home_app.write_failed.degraded': EventSpec('warning', frozenset({'import_id'})),
     'pod_bundle.import_use_cases.clean_staging_idle_cancelled_import.diagnostic': EventSpec('debug', frozenset({'import_id'})),
     'pod_bundle.job.dead': EventSpec('warning', frozenset({'job_id', 'kind', 'reason', 'terminalized'})),
     'pod_bundle.plan_builder.surface_snapshot_unavailable.degraded': EventSpec('warning', frozenset({'pod_id'})),

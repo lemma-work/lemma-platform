@@ -31,6 +31,7 @@ class PodConfig:
         contacts (None | PodContactSettings | Unset):
         default_profile_id (None | str | Unset):
         default_runtime (AgentRuntimeConfig | None | Unset):
+        home_app (None | str | Unset): The name of the app this pod opens on. null opens on its first app.
         join_policy (PodJoinPolicy | Unset): Who may self-join a pod, ordered from closed to open.
         outcome (None | PodOutcome | Unset):
         recipes (list[PodRecipe] | Unset):
@@ -41,6 +42,7 @@ class PodConfig:
     contacts: None | PodContactSettings | Unset = UNSET
     default_profile_id: None | str | Unset = UNSET
     default_runtime: AgentRuntimeConfig | None | Unset = UNSET
+    home_app: None | str | Unset = UNSET
     join_policy: PodJoinPolicy | Unset = UNSET
     outcome: None | PodOutcome | Unset = UNSET
     recipes: list[PodRecipe] | Unset = UNSET
@@ -76,6 +78,12 @@ class PodConfig:
             default_runtime = self.default_runtime.to_dict()
         else:
             default_runtime = self.default_runtime
+
+        home_app: None | str | Unset
+        if isinstance(self.home_app, Unset):
+            home_app = UNSET
+        else:
+            home_app = self.home_app
 
         join_policy: str | Unset = UNSET
         if not isinstance(self.join_policy, Unset):
@@ -115,6 +123,8 @@ class PodConfig:
             field_dict["default_profile_id"] = default_profile_id
         if default_runtime is not UNSET:
             field_dict["default_runtime"] = default_runtime
+        if home_app is not UNSET:
+            field_dict["home_app"] = home_app
         if join_policy is not UNSET:
             field_dict["join_policy"] = join_policy
         if outcome is not UNSET:
@@ -182,6 +192,15 @@ class PodConfig:
 
         default_runtime = _parse_default_runtime(d.pop("default_runtime", UNSET))
 
+        def _parse_home_app(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        home_app = _parse_home_app(d.pop("home_app", UNSET))
+
         _join_policy = d.pop("join_policy", UNSET)
         join_policy: PodJoinPolicy | Unset
         if isinstance(_join_policy, Unset):
@@ -237,6 +256,7 @@ class PodConfig:
             contacts=contacts,
             default_profile_id=default_profile_id,
             default_runtime=default_runtime,
+            home_app=home_app,
             join_policy=join_policy,
             outcome=outcome,
             recipes=recipes,

@@ -28,7 +28,7 @@ export function MarketingNav({ over = false }: { over?: boolean }) {
                         </div>
                     </div>
                     <Link href="/docs">Docs</Link>
-                    <Link href="/templates">Templates</Link>
+                    <Link href="/templates">Plugins</Link>
                     <a href={githubUrl} target="_blank" rel="noreferrer">GitHub</a>
                     <a href={discordUrl} target="_blank" rel="noreferrer">Discord</a>
                     <Link href="/home">Sign in</Link>
@@ -39,7 +39,7 @@ export function MarketingNav({ over = false }: { over?: boolean }) {
                     <div>
                         {PRODUCT_PAGES.map(page => <Link key={page.slug} href={"/product/" + page.slug}>{page.name}</Link>)}
                         <Link href="/docs">Docs</Link>
-                        <Link href="/templates">Templates</Link>
+                        <Link href="/templates">Plugins</Link>
                         <a href={githubUrl} target="_blank" rel="noreferrer">GitHub ↗</a>
                         <a href={discordUrl} target="_blank" rel="noreferrer">Discord ↗</a>
                         <Link href="/home">Sign in</Link>

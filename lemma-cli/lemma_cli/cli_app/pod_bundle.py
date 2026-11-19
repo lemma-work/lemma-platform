@@ -21,6 +21,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 # The `X as X` spellings are the explicit re-export form: those names exist for
 # importers of this module and are not used in the body, so without it they read
 # as dead imports and `make lint` fails on the whole file.
+from lemma_pod_bundle.workflow_schedules import schedules_sharing_a_global_workflow
 from lemma_pod_bundle.diff import (
     TableDiff as TableDiff,
     _is_system_table_column as _is_system_table_column,
@@ -90,6 +91,7 @@ from lemma_pod_bundle.normalize import (
     _surface_name_from_payload,
     _surface_platform_from_payload,
     _validate_function_payload,
+    referenced_connector_slugs,
 )
 from lemma_pod_bundle.portability import (
     _MEMBER_REF_FIELDS as _MEMBER_REF_FIELDS,
@@ -110,10 +112,12 @@ from lemma_pod_bundle.apply_fields import (
 
 from lemma_sdk import Lemma
 
+from .pod_bundle_home_app import bundle_home_app, carry_home_app, plan_home_app
 from .pod_bundle_outcome import bundle_outcome, carry_outcome, plan_outcome
 from .pod_bundle_connectors import (
     declare_pod_connectors,
     export_pod_connectors,
+    left_out,
     plan_pod_connectors,
 )
 from lemma_sdk.errors import LemmaAPIError
@@ -521,7 +525,9 @@ def _build_variable_applier(
 ):
     """Return ``apply(payload) -> payload`` that resolves the bundle's ``${name}``
     variables (and the legacy ``$POD_MEMBER`` token) and drops any that stay
-    unresolved. ``pod_member`` variables default to the importing user.
+    unresolved. ``pod_member`` variables default to the importing user; any
+    other with a recorded ``default`` (an app slug) to that default, as the
+    server's import reads it, unless ``--var`` names another.
 
     An ``account`` variable is deprecated: surfaces and schedules name the pod
     connector they run through by slug, and the importing pod's connector
@@ -588,10 +594,16 @@ def _build_variable_applier(
             if token not in serialized:
                 continue
             vtype = str((spec or {}).get("type") or "")
+            default = (spec or {}).get("default")
             if name in overrides:
                 replacements[token] = overrides[name]
-            elif vtype == "pod_member":
+            elif vtype in ("pod_member", "member"):
                 replacements[token] = member_default()
+            elif default is not None and vtype.lower() != "account":
+                # The bundle's own default, as the server's import reads it
+                # (`plan_variables`): an app slug otherwise fell back to the
+                # app's name. Never an account's: that is the exporting org's.
+                replacements[token] = str(default)
         if replacements:
             payload = substitute_placeholders(payload, replacements)
         return _strip_unresolved_placeholders(payload) if strip_unresolved else payload
@@ -605,6 +617,7 @@ def _resolve_grant_permissions(
     *,
     kind: str,
     name: str,
+    left_out: frozenset[str] = frozenset(),
 ) -> dict[str, Any] | None:
     """Resolve a resource's grants for the target pod.
 
@@ -628,6 +641,14 @@ def _resolve_grant_permissions(
         resource_name = grant.get("resource_name")
         if isinstance(resource_name, str) and _PLACEHOLDER_RE.fullmatch(resource_name):
             dropped.append(f"{grant.get('resource_type')} {resource_name}")
+            continue
+        if str(grant.get("resource_type")).lower() == "connector" and (
+            resource_name in left_out
+        ):
+            console.print(
+                f"[yellow]warning[/yellow] {kind} '{name}': dropped its grant on "
+                f"connector '{resource_name}', which this import left out."
+            )
             continue
         kept.append(grant)
     if dropped:
@@ -1269,6 +1290,7 @@ def _prepared_import_source(source_dir: Path) -> Iterator[Path]:
             root = Path(tmp)
             target = root / resource_type
             shutil.copytree(source_dir, target)
+            _carry_bundle_root(source_dir.parent, root)
             yield root
         return
 
@@ -1280,10 +1302,41 @@ def _prepared_import_source(source_dir: Path) -> Iterator[Path]:
             root = Path(tmp)
             target = root / parent_resource_type / source_dir.name
             shutil.copytree(source_dir, target)
+            _carry_bundle_root(source_dir.parent.parent, root)
             yield root
         return
 
     yield source_dir
+
+
+#: What a part imported on its own takes from the bundle it sits in. Its
+#: `${var}` placeholders are declared there, and `format_version` says how to
+#: read it. Nothing that acts on the pod as a whole comes along -- its name,
+#: what it owns, the app it opens on -- since importing one function must not
+#: rename the pod or change where it opens.
+_CARRIED_POD_KEYS = ("format_version", "variables")
+
+
+def _carry_bundle_root(bundle_root: Path, root: Path) -> None:
+    """Bring into ``root`` -- a temporary bundle holding one part, or one type
+    of part -- what that part needs from the bundle around it: its variables,
+    and the connectors it names (a grant on one, or one it runs through).
+
+    Without the variables, `--var` was refused as unknown and a placeholder's
+    default was never read; without the connectors, a grant on one the pod
+    has not declared yet was refused as naming nothing.
+    """
+    manifest_path = bundle_root / "pod.json"
+    if not manifest_path.is_file():
+        return
+    manifest = _read_json(manifest_path)
+    carried = {key: manifest[key] for key in _CARRIED_POD_KEYS if key in manifest}
+    if carried:
+        _write_json(root / "pod.json", carried)
+    for slug in referenced_connector_slugs(root):
+        connector_dir = bundle_root / "connectors" / slug
+        if connector_dir.is_dir():
+            shutil.copytree(connector_dir, root / "connectors" / slug)
 
 
 def _build_existing_map(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -1416,6 +1469,15 @@ def _build_import_plan(
                 )
         else:
             summary["tables"].append(f"created:{table_name}")
+    column_refusal = _column_changes_the_sdk_cannot_make(
+        pod_sdk, source_dir, existing_tables
+    )
+    if column_refusal is not None:
+        issues.append(
+            BundleValidationIssue(
+                path=str(source_dir / "tables"), message=column_refusal
+            )
+        )
 
     existing_functions = _build_existing_map(
         list_items(pod_sdk.functions.list(limit=1000))
@@ -1492,6 +1554,20 @@ def _build_import_plan(
                 )
         else:
             summary["schedules"].append(f"created:{schedule_name}")
+    # The platform refuses a second schedule on one GLOBAL workflow when it is
+    # created -- after everything before it has been written. Said here instead.
+    # A workflow this import creates through the API is GLOBAL unless its
+    # manifest says otherwise; what the pod already has is not counted.
+    clash = schedules_sharing_a_global_workflow(
+        source_dir,
+        default_mode="GLOBAL",
+        existing_schedules=set(existing_schedules),
+        existing_workflows=set(existing_workflows),
+    )
+    if clash is not None:
+        issues.append(
+            BundleValidationIssue(path=str(source_dir / "schedules"), message=clash)
+        )
 
     surface_dirs = _resource_dirs(source_dir, "surfaces")
     # Surfaces are addressed by their pod-unique name (defaulting to the
@@ -2145,6 +2221,107 @@ def _upload_bundled_files(pod_sdk: Any, files_root: Path) -> list[str]:
     return summaries
 
 
+def _column_updates_supported(pod_sdk: Any) -> bool:
+    """Whether the installed lemma-sdk can change an existing column: the
+    request model and the route came after SDKs this CLI still installs beside."""
+    try:
+        from lemma_sdk.openapi_client.models.update_column_request import (  # noqa: F401
+            UpdateColumnRequest,
+        )
+    except ImportError:
+        return False
+    return callable(getattr(pod_sdk.tables, "update_column", None))
+
+
+def _column_changes_the_sdk_cannot_make(
+    pod_sdk: Any, source_dir: Path, existing_tables: dict[str, Any]
+) -> str | None:
+    """Why the import cannot run when an existing column must change and the
+    installed SDK cannot change it, or ``None``. Asked by the plan, so a dry
+    run says so and an import stops before it writes anything; otherwise it
+    failed part-way, at that column. Reads the existing tables only when the
+    SDK is that old."""
+    if _column_updates_supported(pod_sdk):
+        return None
+    needed: list[str] = []
+    for resource_dir in _resource_dirs(source_dir, "tables"):
+        table_name = resource_dir.name
+        if table_name not in existing_tables:
+            continue
+        try:
+            payload = _sanitize_table_payload_for_import(
+                load_resource_payload(resource_dir, table_name)
+            )
+            payload["columns"] = canonical_columns(payload.get("columns") or [])
+        except Exception:
+            continue  # a manifest that does not load is the manifest pass's issue
+        diff = diff_table_columns(to_plain(pod_sdk.tables.get(table_name)), payload)
+        needed += [
+            f"{table_name}.{column}"
+            for column in sorted(
+                set(diff.options_to_add) | set(diff.foreign_keys_to_drop)
+            )
+        ]
+    if not needed:
+        return None
+    return (
+        f"This bundle changes existing column(s) {', '.join(needed)}, which "
+        "the installed lemma-sdk cannot do. Upgrade lemma-cli and import again."
+    )
+
+
+def _change_existing_columns(
+    pod_sdk: Any, table_name: str, diff: TableDiff, summary: list[str]
+) -> None:
+    """Bring a table's existing columns to the bundle's, as far as is safe.
+
+    A choice column gains the options the bundle adds, and keeps options of its
+    own (a row may hold one). A foreign key the bundle no longer declares is
+    dropped; one it adds or changes is not made, since an existing column's
+    rows may already point nowhere. "Updated" used to be said with none of
+    this done.
+    """
+    columns = sorted(set(diff.options_to_add) | set(diff.foreign_keys_to_drop))
+    if columns:
+        # Imported only when a column changes: the model is newer than the
+        # route-less SDKs this CLI still imports beside, and an import that
+        # needs it on such an SDK was refused at its plan
+        # (`_column_changes_the_sdk_cannot_make`).
+        from lemma_sdk.openapi_client.models.update_column_request import (
+            UpdateColumnRequest,
+        )
+    for column_name in columns:
+        change: dict[str, Any] = {}
+        if column_name in diff.options_to_add:
+            change["options"] = diff.options_to_add[column_name]
+            summary.append(f"options:{table_name}.{column_name}")
+        if column_name in diff.foreign_keys_to_drop:
+            change["drop_foreign_key"] = True
+            summary.append(f"foreign-key-dropped:{table_name}.{column_name}")
+        pod_sdk.tables.update_column(
+            table_name,
+            column_name,
+            build_request(
+                UpdateColumnRequest,
+                change,
+                context=f"table {table_name} column {column_name}",
+                strict=True,
+            ),
+        )
+    for column_name, kept in diff.options_kept.items():
+        console.print(
+            f"[yellow]warning[/yellow] table '{table_name}': kept option(s) "
+            f"{', '.join(kept)} of column '{column_name}', which the bundle "
+            "does not have; rows may hold them."
+        )
+    for column_name in diff.foreign_keys_kept:
+        console.print(
+            f"[yellow]warning[/yellow] table '{table_name}': column "
+            f"'{column_name}' keeps its foreign key as it is; the bundle's "
+            "cannot be added to an existing column."
+        )
+
+
 def _create_or_update_app(
     client: Lemma,
     *,
@@ -2466,11 +2643,24 @@ def import_pod_bundle(
     else:
         _, planned_connectors, kept_connectors = connector_plan
         summary["connectors"] = [
-            f"created:{item.connector.slug}" for item in planned_connectors
+            f"{'skipped' if item.skip else 'created'}:{item.connector.slug}"
+            for item in planned_connectors
         ] + [f"kept:{slug}" for slug in kept_connectors]
     owned_block = bundle_outcome(source_dir)
+    home_app = bundle_home_app(source_dir)
     if dry_run:
         summary["outcome"] = plan_outcome(client, pod_id, owned_block)
+        summary["home_app"] = plan_home_app(
+            client,
+            pod_id,
+            home_app,
+            apps_before=set(
+                _build_existing_map(list_items(pod_sdk.apps.list(limit=1000)))
+            )
+            if home_app
+            else set(),
+            source_dir=source_dir,
+        )
         return {
             "ok": len(issues) == 0,
             "dry_run": True,
@@ -2508,6 +2698,7 @@ def import_pod_bundle(
 
     assert connector_plan is not None, "a failed connector plan is an issue above"
     connector_sdk, planned_connectors, kept_connectors = connector_plan
+    connectors_left_out = left_out(planned_connectors)
     summary["connectors"].extend(
         declare_pod_connectors(
             connector_sdk,
@@ -2591,7 +2782,8 @@ def import_pod_bundle(
             names = ", ".join(diff.incompatible)
             raise ValueError(
                 f"Table {table_name} has incompatible column changes for: {names}. "
-                "Current CLI import supports add/remove columns and config updates, but not in-place column mutations."
+                "Current CLI import adds and removes columns, adds options to a choice column, "
+                "and updates config, but does not change a column in place."
             )
         for column in diff.to_add:
             pod_sdk.tables.add_column(
@@ -2605,6 +2797,7 @@ def import_pod_bundle(
             )
         for column_name in diff.to_remove:
             pod_sdk.tables.remove_column(table_name, column_name)
+        _change_existing_columns(pod_sdk, table_name, diff, summary["tables"])
         summary["tables"].append(f"updated:{table_name}")
         _progress_done("table", table_name, "updated")
 
@@ -2636,7 +2829,11 @@ def import_pod_bundle(
         )
         payload = _sanitize_function_payload_for_import(apply_variables(payload))
         permissions_payload = _resolve_grant_permissions(
-            apply_variables, permissions_payload, kind="function", name=function_name
+            apply_variables,
+            permissions_payload,
+            kind="function",
+            name=function_name,
+            left_out=connectors_left_out,
         )
         if function_name in existing_functions:
             if not upsert:
@@ -2683,7 +2880,11 @@ def import_pod_bundle(
         )
         payload = _sanitize_agent_payload_for_import(apply_variables(payload))
         permissions_payload = _resolve_grant_permissions(
-            apply_variables, permissions_payload, kind="agent", name=agent_name
+            apply_variables,
+            permissions_payload,
+            kind="agent",
+            name=agent_name,
+            left_out=connectors_left_out,
         )
         if agent_name in existing_agents:
             if not upsert:
@@ -2721,6 +2922,9 @@ def import_pod_bundle(
             pending_permissions.append(("agent", agent_name, permissions_payload))
 
     apps = _build_existing_map(list_items(pod_sdk.apps.list(limit=1000)))
+    # What the pod had before this import: a pod with apps of its own keeps
+    # opening where it did (`carry_home_app`).
+    apps_before = set(apps)
     for resource_dir in _resource_dirs(source_dir, "apps"):
         app_name = resource_dir.name
         payload = _sanitize_app_payload_for_import(
@@ -3001,7 +3205,12 @@ def import_pod_bundle(
     summary["outcome"], owned_notes = carry_outcome(client, pod_id, owned_block)
     for note in owned_notes:
         console.print(f"[yellow]advisory[/yellow] {note}")
-    advisories = [*advisories, *owned_notes]
+    summary["home_app"], home_notes = carry_home_app(
+        client, pod_id, home_app, apps_before=apps_before
+    )
+    for note in home_notes:
+        console.print(f"[yellow]advisory[/yellow] {note}")
+    advisories = [*advisories, *owned_notes, *home_notes]
 
     return {
         "ok": True,

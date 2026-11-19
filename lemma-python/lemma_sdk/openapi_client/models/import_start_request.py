@@ -26,6 +26,10 @@ class ImportStartRequest:
         account_id (None | Unset | UUID): Deprecated and ignored: a private repo is fetched through the pod's `github`
             connector, as you.
         owner (None | str | Unset): GITHUB repo owner.
+        path (None | str | Unset): For GITHUB: the folder inside the repository that holds the bundle (its `pod.json`),
+            e.g. 'install/mail', for a repository that holds several. Relative, with no leading '/' and no '.' or '..'. The
+            job fails before planning when the folder is not there (GITHUB_PATH_NOT_FOUND) or holds no `pod.json`
+            (GITHUB_PATH_NOT_A_BUNDLE). Omit for the repository itself. Refused with any other kind.
         ref (None | str | Unset): GITHUB branch/tag/sha (optional).
         repo (None | str | Unset): GITHUB repo name.
         template (None | str | Unset): For TEMPLATE: the template's name, e.g. 'support'. Required with TEMPLATE and
@@ -37,6 +41,7 @@ class ImportStartRequest:
     kind: BundleSourceKind
     account_id: None | Unset | UUID = UNSET
     owner: None | str | Unset = UNSET
+    path: None | str | Unset = UNSET
     ref: None | str | Unset = UNSET
     repo: None | str | Unset = UNSET
     template: None | str | Unset = UNSET
@@ -58,6 +63,12 @@ class ImportStartRequest:
             owner = UNSET
         else:
             owner = self.owner
+
+        path: None | str | Unset
+        if isinstance(self.path, Unset):
+            path = UNSET
+        else:
+            path = self.path
 
         ref: None | str | Unset
         if isinstance(self.ref, Unset):
@@ -94,6 +105,8 @@ class ImportStartRequest:
             field_dict["account_id"] = account_id
         if owner is not UNSET:
             field_dict["owner"] = owner
+        if path is not UNSET:
+            field_dict["path"] = path
         if ref is not UNSET:
             field_dict["ref"] = ref
         if repo is not UNSET:
@@ -136,6 +149,15 @@ class ImportStartRequest:
 
         owner = _parse_owner(d.pop("owner", UNSET))
 
+        def _parse_path(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        path = _parse_path(d.pop("path", UNSET))
+
         def _parse_ref(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -176,6 +198,7 @@ class ImportStartRequest:
             kind=kind,
             account_id=account_id,
             owner=owner,
+            path=path,
             ref=ref,
             repo=repo,
             template=template,
