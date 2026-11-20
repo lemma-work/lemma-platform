@@ -219,9 +219,14 @@ class AppSandboxBuilder:
                 f"rm -rf {shlex.quote(build_dir)} && mkdir -p {shlex.quote(src_dir)}",
             )
             await self._upload(session, source_zip, f"{build_dir}/source.zip")
+            # Python's zipfile both ways, not `unzip` and `zip`: every sandbox
+            # image has python3, and the Docker workspace image has neither
+            # tool -- E2B's base happens to -- so every local import of an app
+            # failed here. Nothing is lost against `unzip` restoring modes: the
+            # bundle was unpacked server-side with none (`extract_bundle`).
             await self._sh(
                 session,
-                f"cd {shlex.quote(build_dir)} && unzip -oq source.zip -d src",
+                f"cd {shlex.quote(build_dir)} && python3 -m zipfile -e source.zip src",
             )
             await self._run_build(session, src_dir, workspace=workspace)
             dist_index = f"{src_dir}/dist/index.html"
@@ -233,9 +238,12 @@ class AppSandboxBuilder:
                 raise AppBuildFailedError(
                     f"App '{app_slug}' build produced no dist/index.html."
                 )
+            # `.` is the one path zipfile's CLI names nothing, so the members
+            # land at the archive root, where the host looks for index.html.
             await self._sh(
                 session,
-                f"cd {shlex.quote(src_dir)}/dist && zip -rq {shlex.quote(build_dir)}/dist.zip .",
+                f"cd {shlex.quote(src_dir)}/dist && "
+                f"python3 -m zipfile -c {shlex.quote(build_dir)}/dist.zip .",
             )
             return await self._download(session, f"{build_dir}/dist.zip")
 
