@@ -473,15 +473,9 @@ class CallAgents:
         """Whose a child run that just started is: the coordinator run going
         now that called a spawning tool, else the newest one that ended
         waiting to hear. A child of another run never counts for this one."""
-        going = [
-            state
-            for run_id, state in self._runs.items()
-            if state.spawned and run_id in self._live
-        ]
-        if going:
-            return going[-1]
+        going = [s for r, s in self._runs.items() if s.spawned and r in self._live]
         waiting = list(self._awaiting_children.values())
-        return waiting[-1] if waiting else None
+        return (going or waiting or [None])[-1]
 
     def _finish_unless_children(self, run_id: str, state: _RunState) -> None:
         self._awaiting_children[run_id] = state
