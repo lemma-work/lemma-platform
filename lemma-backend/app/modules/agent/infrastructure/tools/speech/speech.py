@@ -145,12 +145,14 @@ async def listen_internal(deps: ToolContext, request: ListenRequest) -> ListenRe
 
 
 def _resolve_output(
-    request: SayRequest, default_format: str = "mp3"
+    request: SayRequest, default_format: str = "mp3", *, force: bool = False
 ) -> tuple[str, str, str]:
     """Return (directory_path, file_name, output_format) for the generated audio.
 
     With no explicit ``output_file_path`` the file is named with ``default_format``
     (the platform-native voice format), so the saved copy matches what's delivered.
+    ``force`` makes that format win over the path's own extension: a voice note
+    on WhatsApp or Telegram is OGG/Opus or it is not a voice note.
     """
     fmt = default_format if default_format in _SUPPORTED_TTS_FORMATS else "mp3"
     raw = (request.output_file_path or "").strip()
@@ -160,6 +162,9 @@ def _resolve_output(
     directory = posixpath.dirname(absolute) or "/me/speech"
     name = posixpath.basename(absolute) or f"{uuid7().hex}.{fmt}"
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if force and ext != fmt:
+        stem = name.rsplit(".", 1)[0] if ext in _SUPPORTED_TTS_FORMATS else name
+        return directory, f"{stem}.{fmt}", fmt
     if ext not in _SUPPORTED_TTS_FORMATS:
         name = f"{name}.{fmt}"
         ext = fmt
@@ -233,7 +238,9 @@ async def say_internal(deps: ToolContext, request: SayRequest) -> SayResponse:
         return SayResponse(success=False, error="text is required.")
 
     default_format = _voice_note_format_for(getattr(deps, "surface_platform", None))
-    directory, name, output_format = _resolve_output(request, default_format)
+    directory, name, output_format = _resolve_output(
+        request, default_format, force=default_format != "mp3"
+    )
     try:
         provider = get_speech_provider()
         audio_bytes = await provider.synthesize(

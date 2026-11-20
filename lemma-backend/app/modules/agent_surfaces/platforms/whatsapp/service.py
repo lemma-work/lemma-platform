@@ -320,6 +320,34 @@ class WhatsAppPlatformService(WhatsAppInteractiveRenders):
             caption=caption,
         )
 
+    async def send_voice_bytes(
+        self,
+        event: ParsedInboundSurfaceEvent,
+        *,
+        file_name: str,
+        audio_bytes: bytes,
+        mime_type: str,
+    ) -> bool:
+        """Send OGG/Opus audio as a voice note. False for anything else, or a
+        refusal, so the caller sends the same bytes as an audio file."""
+        if "ogg" not in mime_type.lower() and "opus" not in mime_type.lower():
+            return False
+        phone_number_id = self._arrival_number(event)
+        recipient = recipient_of(event)
+        if not self._access_token or not phone_number_id or recipient is None:
+            return False
+        return await media.send_file(
+            self._client,
+            phone_number_id=phone_number_id,
+            recipient_wa_id=recipient.to,
+            recipient_type=recipient.recipient_type,
+            file_name=file_name,
+            file_bytes=audio_bytes,
+            # The type Meta takes a voice note under: OGG with the Opus codec.
+            mime_type="audio/ogg",
+            voice=True,
+        )
+
     def _whatsapp_metadata(
         self,
         ctx: ToolContext,

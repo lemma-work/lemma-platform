@@ -113,6 +113,7 @@ async def test_a_resumed_call_reads_back_its_whole_tree_and_what_it_missed(
     from app.modules.agent.contracts.calls import (
         CALL_TRANSCRIPT_KEY,
         call_conversations,
+        call_lineage,
         held_call,
         missed_relays,
         set_call_live,
@@ -172,6 +173,10 @@ async def test_a_resumed_call_reads_back_its_whole_tree_and_what_it_missed(
         tree = await call_conversations(uow, UUID(call_id))
         assert set(map(str, tree)) == {call_id, child, grandchild}
         assert unrelated not in map(str, tree)
+        lineage = await call_lineage(uow, UUID(call_id))
+        assert {str(row[0]) for row in lineage} == {call_id, child, grandchild}
+        # Made outside a run here: no spawning run, and so no place it ran.
+        assert all(row[1] is None and row[2] is None for row in lineage)
         assert await missed_relays(uow, UUID(call_id)) == [
             ("Found three venues.", "now")
         ]
@@ -181,3 +186,115 @@ async def test_a_resumed_call_reads_back_its_whole_tree_and_what_it_missed(
         mark = await held_call(uow, UUID(call_id))
     assert mark is not None and mark.live is False
     assert mark.held_seconds == pytest.approx(90.0)
+
+
+async def test_a_catch_up_finds_a_missed_relay_behind_any_number_heard(
+    scenario,
+) -> None:
+    """More relays than the read's bound were heard live; the one missed after
+    them is still found, because heard ones are left out in the query."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.agent.contracts.calls import relays_since
+    from app.modules.agent.infrastructure.db.calls import (
+        MAX_MISSED_RELAYS,
+        MAX_RELAY_PAGES,
+    )
+    from app.modules.agent.infrastructure.models import MessageModel
+
+    await scenario.create_org_with_pod(name_prefix="calls-catchup")
+    call_id = UUID(await _chat(scenario, "The call"))
+    heard_count = MAX_MISSED_RELAYS * MAX_RELAY_PAGES + 30
+    start = datetime.now(UTC)
+    async with async_session_maker() as session:
+        session.add_all(
+            [
+                MessageModel(
+                    conversation_id=call_id,
+                    sequence=index + 1,
+                    role="assistant",
+                    kind="TOOL_CALL",
+                    tool_name="relay_to_voice",
+                    tool_call_id=f"heard-{index}",
+                    tool_args={"text": f"note {index}", "urgency": "context"},
+                    created_at=start + timedelta(milliseconds=index),
+                )
+                for index in range(heard_count)
+            ]
+            + [
+                MessageModel(
+                    conversation_id=call_id,
+                    sequence=heard_count + 1,
+                    role="assistant",
+                    kind="TOOL_CALL",
+                    tool_name="relay_to_voice",
+                    tool_call_id="missed",
+                    tool_args={"text": "India 143 for 1.", "urgency": "now"},
+                    created_at=start + timedelta(seconds=5),
+                )
+            ]
+        )
+        await session.commit()
+
+    heard = frozenset(f"heard-{index}" for index in range(heard_count))
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        found = await relays_since(
+            uow, call_id, start - timedelta(seconds=1), heard=heard
+        )
+    assert found == [("missed", "India 143 for 1.", "now", None)]
+
+
+async def test_a_catch_up_finds_a_missed_relay_behind_rows_it_cannot_say(
+    scenario,
+) -> None:
+    """Relay rows stored without a usable text do not use up the read's bound:
+    the sayable one after more of them than the bound is still found."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.agent.contracts.calls import relays_since
+    from app.modules.agent.infrastructure.db.calls import (
+        MAX_MISSED_RELAYS,
+        MAX_RELAY_PAGES,
+    )
+    from app.modules.agent.infrastructure.models import MessageModel
+
+    await scenario.create_org_with_pod(name_prefix="calls-unsayable")
+    call_id = UUID(await _chat(scenario, "The call"))
+    unsayable = MAX_MISSED_RELAYS * MAX_RELAY_PAGES + 10
+    start = datetime.now(UTC)
+    shapes: list[object] = [{}, {"text": None}, {"text": 7}, "not an object"]
+    async with async_session_maker() as session:
+        session.add_all(
+            [
+                MessageModel(
+                    conversation_id=call_id,
+                    sequence=index + 1,
+                    role="assistant",
+                    kind="TOOL_CALL",
+                    tool_name="relay_to_voice",
+                    tool_call_id=f"bad-{index}",
+                    tool_args=shapes[index % len(shapes)],
+                    created_at=start + timedelta(milliseconds=index),
+                )
+                for index in range(unsayable)
+            ]
+            + [
+                MessageModel(
+                    conversation_id=call_id,
+                    sequence=unsayable + 1,
+                    role="assistant",
+                    kind="TOOL_CALL",
+                    tool_name="relay_to_voice",
+                    tool_call_id="missed",
+                    tool_args={"text": "India 143 for 1.", "urgency": "now"},
+                    created_at=start + timedelta(seconds=5),
+                )
+            ]
+        )
+        await session.commit()
+
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        found = await relays_since(uow, call_id, start - timedelta(seconds=1))
+    assert found == [("missed", "India 143 for 1.", "now", None)]

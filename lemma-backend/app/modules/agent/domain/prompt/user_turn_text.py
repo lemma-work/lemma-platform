@@ -187,11 +187,21 @@ def _shared_files_blocks(metadata: dict, platform: object) -> list[str]:
         if transcribed:
             spoken = "\n".join(f"- {path}" for path in sorted(transcribed))
             blocks.append(
-                "The message above IS the transcript of the voice note they "
-                "sent — their spoken words, already transcribed on arrival. "
-                "Treat it as what they said and answer it directly. Calling "
-                "`listen` on the file returns this same text and tells you "
-                "nothing new. The audio itself is saved at:\n" + spoken
+                "The voice note(s) they sent are in the message above, as "
+                "transcripts (after any caption they typed) — their spoken "
+                "words, already transcribed on arrival. Treat them as what "
+                "they said and answer directly, in the language they spoke. "
+                "Do not call `listen` on them: it returns this same text and "
+                "tells you nothing new. The audio itself is saved at:\n" + spoken
+            )
+        if metadata.get("voice_transcription_failed"):
+            blocks.append(
+                "They sent a voice note that could NOT be transcribed "
+                "automatically, so its words are not in the message above; "
+                "the audio is among the files listed. If you have `listen`, "
+                "try it once on that file. Otherwise tell them you could not "
+                "make it out and ask them to type it or send it again — do not "
+                "guess what it said."
             )
         if blocks:
             return blocks

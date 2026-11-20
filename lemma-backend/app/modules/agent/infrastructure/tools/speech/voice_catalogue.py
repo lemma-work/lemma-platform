@@ -57,6 +57,11 @@ FALLBACK_VOICE_BY_LANGUAGE: dict[str, str] = {
     "ja": "aura-2-uzume-ja",
 }
 
+#: Languages the Aura catalogue has no voice for, spoken by a Flux voice
+#: (``/v2/speak``) instead. Hindi is why: an Aura voice reads Devanagari as
+#: nothing a Hindi speaker would recognise.
+FLUX_VOICE_BY_LANGUAGE: dict[str, str] = {"hi": "flux-anjali-hi"}
+
 _voice_cache: RedisJsonCache | None = None
 
 
@@ -188,9 +193,9 @@ async def load_voices(
 def default_voice_for(language: str | None, voices: tuple[Voice, ...]) -> str | None:
     """A voice that speaks ``language``, preferring the catalogue over the map.
 
-    None means the provider has none for that language — Hindi is the live
-    example — and the caller must say so rather than reading Hindi aloud in an
-    English accent.
+    Then the Flux voices, for a language Aura has none of (Hindi). None means
+    neither speaks it, and the caller must say so rather than reading it aloud
+    in an English accent.
     """
     base = _base_language(language or "")
     if not base:
@@ -198,4 +203,4 @@ def default_voice_for(language: str | None, voices: tuple[Voice, ...]) -> str | 
     for voice in voices:
         if voice.speaks(base):
             return voice.name
-    return FALLBACK_VOICE_BY_LANGUAGE.get(base)
+    return FALLBACK_VOICE_BY_LANGUAGE.get(base) or FLUX_VOICE_BY_LANGUAGE.get(base)

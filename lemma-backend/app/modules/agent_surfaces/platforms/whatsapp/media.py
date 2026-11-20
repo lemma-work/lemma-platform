@@ -63,8 +63,13 @@ async def send_file(
     mime_type: str,
     caption: str | None = None,
     recipient_type: str = "individual",
+    voice: bool = False,
 ) -> bool:
     """Upload + send raw file bytes to a chat.
+
+    ``voice`` asks for a voice note: only audio is sent that way, and there is
+    no document retry -- a voice note Meta refuses is the caller's to send as
+    an ordinary attachment instead.
 
     Returns True on success; False when the upload is rejected so the caller
     falls back to a link. A media type Meta refuses at send time is retried once
@@ -94,7 +99,9 @@ async def send_file(
         return False
     if not media_id:
         return False
-    kinds = [send_type] if send_type == "document" else [send_type, "document"]
+    if voice and send_type != "audio":
+        return False
+    kinds = [send_type] if send_type == "document" or voice else [send_type, "document"]
     for kind in kinds:
         try:
             message_id = await client.send_media(
@@ -105,6 +112,7 @@ async def send_file(
                 send_type=kind,
                 file_name=file_name,
                 caption=to_plain_text(caption) if caption else None,
+                voice=voice,
             )
         except WhatsAppApiError as exc:
             if kind == kinds[-1] or exc.status_code >= 500 or exc.status_code == 429:

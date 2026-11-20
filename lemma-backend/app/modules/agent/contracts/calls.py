@@ -36,6 +36,8 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.infrastructure.db.calls import CALL_TRANSCRIPT_KEY, Calls
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.live import publish_conversation_event
+from app.modules.agent.domain.live_events import message_payload, message_to_payload
 from app.modules.agent.infrastructure.repositories import AgentRepository
 from app.modules.agent.services.conversation_access import resolve_agent
 from app.modules.agent.services.runtime_availability import (
@@ -202,6 +204,14 @@ async def call_conversations(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> list[U
     return await Calls(uow).conversations(call_id)
 
 
+async def call_lineage(
+    uow: SqlAlchemyUnitOfWork, call_id: UUID
+) -> list[tuple[UUID, UUID | None, UUID | None]]:
+    """The call's conversations, each with the run that spawned it: whose
+    work a sub-agent is, read from the store rather than guessed from timing."""
+    return await Calls(uow).lineage(call_id)
+
+
 async def call_working(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> bool:
     """Whether anyone in the call -- the coordinator or a sub-agent -- has a
     run going, read when the voice cannot have been told."""
@@ -219,6 +229,18 @@ async def missed_relays(
     live events only, so one sent while the line was down was never heard.
     """
     return await Calls(uow).relays_since_last_transcript(call_id)
+
+
+async def relays_since(
+    uow: SqlAlchemyUnitOfWork,
+    call_id: UUID,
+    since: datetime,
+    *,
+    heard: frozenset[str] = frozenset(),
+) -> list[tuple[str, str, str, str | None]]:
+    """The relays sent after ``since`` that were not ``heard`` live, with their
+    tool call ids and the runs that sent them."""
+    return await Calls(uow).relays_since(call_id, since, heard=heard)
 
 
 async def speak_into_call(
@@ -245,11 +267,19 @@ async def keep_in_call(
 ) -> None:
     """A line kept in the call's conversation, in no run: part of its
     transcript (``call_transcript``) or a note about something that went wrong."""
-    await Messages(uow).append_message(
+    saved = await Messages(uow).append_message(
         conversation_id=call_id,
         agent_run_id=None,
         draft=MessageDraft.of_notification(text, metadata=metadata),
     )
+    frame = message_payload(None, message_to_payload(saved))
+
+    async def _publish() -> None:
+        # After the commit: a client that re-reads on it finds the line. A
+        # live frame, not the outbox -- the next read recovers a lost one.
+        await publish_conversation_event(call_id, frame)
+
+    uow.after_commit(_publish)
 
 
 async def call_canvas(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> list[CanvasItem]:
@@ -295,11 +325,13 @@ __all__ = [
     "OpenedCall",
     "call_canvas",
     "call_conversations",
+    "call_lineage",
     "call_transcripts",
     "call_working",
     "held_call",
     "keep_in_call",
     "missed_relays",
+    "relays_since",
     "open_call",
     "owned_call",
     "retire_empty_call",

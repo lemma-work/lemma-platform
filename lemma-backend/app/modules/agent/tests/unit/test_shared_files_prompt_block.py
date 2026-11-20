@@ -119,3 +119,17 @@ def test_a_saved_file_and_a_lost_one_are_both_reported():
 
     assert "/me/whatsapp/image.jpg" in joined
     assert "did NOT reach you" in joined
+
+
+def test_a_voice_note_that_could_not_be_transcribed_is_said_to_be_one():
+    blocks = _shared_files_blocks(
+        {
+            "ingested_files": ["/me/whatsapp/voice-1.ogg"],
+            "voice_transcription_failed": True,
+        },
+        "WHATSAPP",
+    )
+    text = "\n".join(blocks)
+    assert "/me/whatsapp/voice-1.ogg" in text
+    assert "could NOT be transcribed" in text
+    assert "do not guess what it said" in text

@@ -71,8 +71,20 @@ async def test_a_call_nothing_was_said_in_leaves_no_conversation_in_the_list(
         with pytest.raises(websockets.ConnectionClosed):
             await socket.recv()
 
-    conversation = await scenario.owner_client.get(
-        f"/pods/{pod_id}/conversations/{call_id}"
+    # Archived after the socket closes, as the server finishes the call: a
+    # condition to wait on, not something the close already guarantees.
+    from app.modules.test_support.e2e.waiters import eventually
+
+    async def read() -> dict[str, object]:
+        conversation = await scenario.owner_client.get(
+            f"/pods/{pod_id}/conversations/{call_id}"
+        )
+        assert conversation.status_code == 200, conversation.text
+        return conversation.json()
+
+    await eventually(
+        label="the empty call archived",
+        probe=read,
+        done=lambda body: body["is_archived"] is True,
+        timeout_seconds=10,
     )
-    assert conversation.status_code == 200, conversation.text
-    assert conversation.json()["is_archived"] is True

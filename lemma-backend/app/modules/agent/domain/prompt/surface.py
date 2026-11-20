@@ -427,9 +427,9 @@ def _delivery_section(facts: PlatformFacts) -> str:
         )
     delivery.append(approvals)
     delivery.append(
-        "- Voice: reply with text by default. Only when the user wants a spoken "
-        f"reply, call `say` — {_voice_delivery(facts)} and saves the audio. Do "
-        "NOT also call display_resource for it."
+        "- Voice: reply with text by default. When the user sent a voice note "
+        f"or wants a spoken reply, call `say` — {_voice_delivery(facts)} and "
+        "saves the audio. Do NOT also call display_resource for it."
     )
     return "\n".join(delivery)
 
@@ -437,7 +437,7 @@ def _delivery_section(facts: PlatformFacts) -> str:
 def _voice_delivery(facts: PlatformFacts) -> str:
     """How ``say`` reaches the person here.
 
-    Only Telegram renders a voice-note bubble. Everywhere else the same audio is
+    Telegram and WhatsApp render a voice-note bubble. Everywhere else the same audio is
     an ordinary attachment, or a link into Lemma where the platform cannot
     receive a file at all, and saying "native voice note" of those promised a
     bubble the person would never see.

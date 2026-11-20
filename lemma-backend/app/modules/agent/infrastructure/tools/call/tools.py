@@ -28,7 +28,9 @@ async def relay_to_voice(
 
     Write notes, not a script: the voice says it in its own words. `context`
     is known but not said now; `when_idle` is said at the next pause; `now` is
-    said as soon as the person stops talking, for failures and questions only.
+    said once the voice finishes its sentence and the person is not talking --
+    for failures, questions, and the answer they are waiting on. One or two
+    spoken sentences' worth, in English; detail goes on the canvas.
     """
     del ctx
     # Recorded, not delivered: the call's voice may still drop it, so the

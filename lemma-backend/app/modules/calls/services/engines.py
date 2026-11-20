@@ -79,7 +79,7 @@ async def _cascade(
 ) -> VoiceEngine:
     from app.modules.calls.infrastructure.engines.cascade import CascadeEngine
     from app.modules.calls.infrastructure.engines.deepgram import (
-        AuraSpeaker,
+        DeepgramSpeaker,
         FluxListener,
     )
 
@@ -97,9 +97,11 @@ async def _cascade(
             api_key=key,
             model=settings.cascade_stt_model,
             eager_eot_threshold=settings.cascade_eager_eot_threshold,
+            language_hints=tuple(settings.cascade_stt_language_hints),
         ),
-        speaker=AuraSpeaker(api_key=key, voice=settings.cascade_tts_voice),
+        speaker=DeepgramSpeaker(api_key=key, voice=settings.cascade_tts_voice),
         talker=talker,
+        voices=settings.cascade_tts_voices,
     )
 
 

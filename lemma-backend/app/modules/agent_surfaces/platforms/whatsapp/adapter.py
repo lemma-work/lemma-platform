@@ -238,6 +238,22 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
             event, attachment
         )
 
+    async def _render_voice(
+        self,
+        *,
+        credentials: SurfaceCredentials,
+        event: ParsedInboundSurfaceEvent,
+        file_name: str,
+        audio_bytes: bytes,
+        mime: str,
+        caption: str | None = None,
+    ) -> bool:
+        # WhatsApp voice notes take no caption; the words go in the reply.
+        del caption
+        return await WhatsAppPlatformService(credentials).send_voice_bytes(
+            event, file_name=file_name, audio_bytes=audio_bytes, mime_type=mime
+        )
+
     async def _render_file(
         self,
         *,

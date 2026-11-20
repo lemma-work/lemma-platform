@@ -944,9 +944,11 @@ OPENAI_REALTIME_VOICE=marin
 
 # cascade: Deepgram listens and speaks, a Lemma model answers.
 DEEPGRAM_API_KEY=
-CASCADE_STT_MODEL=flux-general-en        # flux-general-multi for other languages
+CASCADE_STT_MODEL=flux-general-multi     # ten languages incl. Hindi; flux-general-en for English only
+CASCADE_STT_LANGUAGE_HINTS=[]            # e.g. ["hi","en"]; empty detects freely
 CASCADE_EAGER_EOT_THRESHOLD=0.5          # empty waits for the confirmed end of turn
-CASCADE_TTS_VOICE=aura-2-thalia-en
+CASCADE_TTS_VOICE=aura-2-thalia-en       # the default voice
+CASCADE_TTS_VOICES={"hi":"flux-anjali-hi"}  # voice per caller language; Flux voices speak Hindi
 CASCADE_TALKER_MODEL=                    # public name; empty: the default model
 CASCADE_TALKER_REASONING_EFFORT=none
 
