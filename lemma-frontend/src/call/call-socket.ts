@@ -18,6 +18,14 @@ export type CallFrame =
     | { type: "transcript"; speaker: "caller" | "voice"; text: string; final: boolean }
     | { type: "clear" }
     | { type: "work"; running: boolean }
+    /** A run started on the call's own conversation: the chat beside the
+     *  call reads it again and follows it. Sent for every run, also while
+     *  the call is already working. */
+    | { type: "run"; agent_run_id: string }
+    /** The call wrote into its conversation outside any run -- part of the
+     *  transcript, a note about something that went wrong -- which no run's
+     *  stream carries: the chat beside the call reads it again. */
+    | { type: "chat" }
     /** Something the person should know that the voice is also saying: a
      *  request the team cannot take, and why. The call stays up. */
     | { type: "notice"; text: string }

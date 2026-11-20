@@ -34,7 +34,8 @@ from app.modules.calls.domain.voice import (
     VoiceEngine,
 )
 from app.modules.calls.domain.voice_brief import voice_brief
-from app.modules.calls.services.agents import CallAgents, Party, as_caller
+from app.modules.calls.services.agents import CallAgents
+from app.modules.calls.services.caller import Party, as_caller
 from app.modules.calls.services.engines import build_engine, engines_offered
 from app.modules.calls.services.gate import Caller, route_turn
 from app.modules.calls.services.lease import CallLease

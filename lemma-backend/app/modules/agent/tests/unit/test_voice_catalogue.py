@@ -73,12 +73,12 @@ def test_the_fallback_covers_every_language_it_ever_shipped():
 
 
 def test_a_language_with_no_voice_is_told_so_rather_than_given_one():
-    """Hindi is the live case: nova-3 transcribes it and Aura-2 cannot speak it.
+    """Tamil is the live case: nova-3 may transcribe it and no voice speaks it.
 
-    Returning an English voice would read Hindi aloud in an English accent,
-    which is the same defect as a wrong transcript.
+    Returning an English voice would read it aloud in an English accent, which
+    is the same defect as a wrong transcript. (Hindi has a Flux voice now.)
     """
-    assert default_voice_for("hi", ()) is None
+    assert default_voice_for("ta", ()) is None
 
 
 class _UnreachableCache:

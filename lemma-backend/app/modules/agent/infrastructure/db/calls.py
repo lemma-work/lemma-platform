@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import exists, or_, select, update
+from sqlalchemy import exists, func, or_, select, tuple_, update
 from sqlalchemy.orm import aliased
 
 from app.modules.agent.domain.calls import (
@@ -40,6 +40,8 @@ MAX_RESUMED_TRANSCRIPTS = 10
 
 #: Relays a resumed call reads back, at most.
 MAX_MISSED_RELAYS = 20
+#: Pages of relays a catch-up reads at most.
+MAX_RELAY_PAGES = 10
 
 #: The message metadata key a connection's transcript is recorded under.
 CALL_TRANSCRIPT_KEY = "call_transcript"
@@ -114,6 +116,34 @@ class Calls(UnitOfWorkRepository):
             .limit(MAX_CALL_CONVERSATIONS)
         )
         return list(reversed(rows.scalars().all()))
+
+    async def lineage(
+        self, call_id: UUID
+    ) -> list[tuple[UUID, UUID | None, UUID | None]]:
+        """Each conversation in the call with the run that spawned it and the
+        conversation that run ran in (None for the call's own, or one made
+        outside a run), oldest first: the whole chain from the store, so a
+        sub-agent's own sub-agent traces back without its parent's frames."""
+        pod_id = await self._pod_of(call_id)
+        spawner = aliased(AgentRunModel)
+        rows = await self.session.execute(
+            select(
+                ConversationModel.id,
+                ConversationModel.parent_run_id,
+                spawner.conversation_id,
+            )
+            .outerjoin(spawner, spawner.id == ConversationModel.parent_run_id)
+            .where(
+                ConversationModel.pod_id == pod_id,
+                or_(
+                    ConversationModel.id == call_id,
+                    ConversationModel.call["call_id"].astext == str(call_id),
+                ),
+            )
+            .order_by(ConversationModel.created_at.desc())
+            .limit(MAX_CALL_CONVERSATIONS)
+        )
+        return [(row[0], row[1], row[2]) for row in reversed(rows.all())]
 
     async def _pod_of(self, call_id: UUID) -> UUID | None:
         return await self.session.scalar(
@@ -199,6 +229,67 @@ class Calls(UnitOfWorkRepository):
         for args in rows.scalars():
             if isinstance(args, dict) and isinstance(args.get("text"), str):
                 relays.append((args["text"], str(args.get("urgency") or "when_idle")))
+        return relays
+
+    async def relays_since(
+        self, call_id: UUID, since: datetime, *, heard: frozenset[str] = frozenset()
+    ) -> list[tuple[str, str, str, str | None]]:
+        """``(tool_call_id, text, urgency, agent_run_id)`` of each relay sent
+        after ``since``,
+        oldest first: what a stream that dropped and came back may have missed.
+
+        The ones the caller ``heard`` live are left out in the query, so no
+        number of them hides one it missed: the bound below counts unheard
+        relays only, and more than that is more than a voice could say.
+        """
+        relays: list[tuple[str, str, str]] = []
+        after: tuple[datetime, UUID] | None = None
+        for _page in range(MAX_RELAY_PAGES):
+            query = (
+                select(
+                    MessageModel.created_at,
+                    MessageModel.id,
+                    MessageModel.tool_call_id,
+                    MessageModel.tool_args,
+                    MessageModel.agent_run_id,
+                )
+                .where(
+                    MessageModel.conversation_id == call_id,
+                    MessageModel.kind == MessageKind.TOOL_CALL.value,
+                    MessageModel.tool_name == RELAY_TOOL_NAME,
+                    MessageModel.created_at > since,
+                    MessageModel.tool_call_id.is_not(None),
+                    # Only rows that can be said: a call whose arguments were
+                    # stored without a text must not use up the bound below.
+                    func.jsonb_typeof(MessageModel.tool_args) == "object",
+                    func.jsonb_typeof(MessageModel.tool_args["text"]) == "string",
+                    *([MessageModel.tool_call_id.not_in(heard)] if heard else []),
+                )
+                .order_by(MessageModel.created_at, MessageModel.id)
+                .limit(MAX_MISSED_RELAYS)
+            )
+            if after is not None:
+                query = query.where(
+                    tuple_(MessageModel.created_at, MessageModel.id) > after
+                )
+            rows = (await self.session.execute(query)).all()
+            for created_at, message_id, tool_call_id, args, run_id in rows:
+                after = (created_at, message_id)
+                if (
+                    tool_call_id
+                    and isinstance(args, dict)
+                    and isinstance(args.get("text"), str)
+                ):
+                    relays.append(
+                        (
+                            tool_call_id,
+                            args["text"],
+                            str(args.get("urgency") or "when_idle"),
+                            str(run_id) if run_id else None,
+                        )
+                    )
+            if len(rows) < MAX_MISSED_RELAYS:
+                break
         return relays
 
     async def canvas_messages(

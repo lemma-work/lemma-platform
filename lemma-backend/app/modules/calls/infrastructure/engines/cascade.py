@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Protocol
 
 from openai import APIError
@@ -44,7 +44,7 @@ from app.modules.calls.domain.voice import (
 )
 from app.modules.calls.infrastructure.engines.deepgram import (
     SPEAK_SAMPLE_RATE,
-    AuraSpeaker,
+    DeepgramSpeaker,
     FluxListener,
 )
 from app.modules.calls.infrastructure.engines.talker import Line
@@ -90,10 +90,21 @@ class CascadeEngine:
     output_sample_rate = SPEAK_SAMPLE_RATE
 
     def __init__(
-        self, *, listener: FluxListener, speaker: AuraSpeaker, talker: Talker
+        self,
+        *,
+        listener: FluxListener,
+        speaker: DeepgramSpeaker,
+        talker: Talker,
+        voices: Mapping[str, str] | None = None,
     ) -> None:
         self._listener = listener
         self._speaker = speaker
+        #: The voice for each language the caller may speak, by base code;
+        #: any other is spoken in the speaker's own voice.
+        self._voices = {code.lower(): voice for code, voice in (voices or {}).items()}
+        self._default_voice = speaker.voice
+        #: The language the caller last finished a turn in.
+        self._language: str | None = None
         self._talker = talker
         self._events: asyncio.Queue[VoiceEvent] = asyncio.Queue(maxsize=EVENT_BACKLOG)
         self._history: list[Line] = []
@@ -168,6 +179,8 @@ class CascadeEngine:
                         ):
                             await self._cancel_reply()
                     case "EndOfTurn":
+                        if turn.languages:
+                            self._language = turn.languages[0]
                         self._end_of_turn(turn.transcript)
         except EngineUnavailable:
             # The speaker could not reconnect while the caller barged in.
@@ -287,11 +300,18 @@ class CascadeEngine:
                     lambda: self._speaker.flush_count >= target
                 )
 
+    def _voice_for(self, language: str | None) -> str:
+        base = (language or "").split("-", 1)[0].lower()
+        return self._voices.get(base, self._default_voice)
+
     async def _say(self, reply: _Reply, sentence: str) -> None:
         await reply.committed.wait()
         if not reply.spoken:
-            # The first words of a new reply: audio from here on is wanted.
+            # The first words of a new reply: audio from here on is wanted,
+            # in the voice of the language the caller spoke last. Between
+            # replies, so nothing half-said is cut by the switch.
             self._dropping_audio = False
+            await self._speaker.use_voice(self._voice_for(self._language))
         reply.spoken.append(sentence)
         offer(self._events, Said(sentence + " ", final=False))
         await self._speaker.speak(sentence)

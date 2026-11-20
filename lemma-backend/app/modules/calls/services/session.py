@@ -54,11 +54,12 @@ from app.modules.calls.domain.voice import (
 )
 from app.modules.calls.domain.voice_brief import TEAM_NOTE
 from app.modules.calls.services import narration
-from app.modules.calls.services.agents import (
-    CallAgents,
+from app.modules.calls.services.agents import CallAgents
+from app.modules.calls.services.signals import (
     Failed,
     Finished,
     Relay,
+    RunStarted,
     Shown,
     Working,
 )
@@ -152,7 +153,8 @@ class CallSession:
         self._floor = Floor(quiet_window_ms=limits.quiet_window_ms)
         self._muted = muted
         self._working: bool | None = None
-        self._transcript = Transcript(agents.record)
+        self._draining = False
+        self._transcript = Transcript(self._record)
         self._lines = self._transcript.lines
         #: What was said since the agents last got a turn, numbered in order,
         #: so a turn takes only what came before it.
@@ -244,8 +246,8 @@ class CallSession:
         self.end_reason = self.end_reason or "Something went wrong on the call."
 
     async def _drain(self) -> None:
-        """The call's own tasks -- a turn being routed, a note being written --
-        get a moment to finish, then are cancelled: none outlives the call."""
+        """The call's own tasks get a moment to finish, then are cancelled."""
+        self._draining = True
         if not self._tasks:
             return
         routing = any(task.get_name() == _ROUTE_TASK for task in self._tasks)
@@ -446,6 +448,24 @@ class CallSession:
             # The same store that just failed may fail again; the voice and
             # the screen have already said it.
             logger.warning("calls.session.note.failed", exc_info=True)
+            return
+        self._tell_chat()
+
+    async def _record(self, transcript: str) -> None:
+        """A transcript chunk kept, and the chat beside the call told."""
+        await self._agents.record(transcript)
+        self._tell_chat()
+
+    def _tell_chat(self) -> None:
+        """Off the write's path, so a stuck notice never leaves a kept chunk
+        looking unkept; none once draining, when nobody is left to tell."""
+        if not self._draining:
+            self._spawn(self._chat_changed(), name="calls.session.chat_changed")
+
+    async def _chat_changed(self) -> None:
+        """Tell the chat beside the call to re-read: no run carries this line."""
+        with contextlib.suppress(OSError, RuntimeError):
+            await self.send({"type": "chat"})
 
     async def _refused(self, reason: str) -> None:
         await self._engine.inject(narration.refused(reason), Inject.CONTEXT)
@@ -480,6 +500,10 @@ class CallSession:
                         await self._engine.inject(
                             narration.team_working(running), Inject.CONTEXT
                         )
+                case RunStarted(agent_run_id=run_id):
+                    # The chat beside the call follows each run, whether or
+                    # not the call was already working.
+                    await self.send({"type": "run", "agent_run_id": run_id})
                 case Failed(reason=reason):
                     self._queue(narration.team_failed(reason), Urgency.NOW)
                     await self._notice(reason)
@@ -556,7 +580,9 @@ class CallSession:
                 except DomainError as exc:
                     self.end_reason = exc.message
                     return
-            if self._working and now - last_recheck >= _WORKING_RECHECK_SECONDS:
+            # Both ways: a run whose start the streams never carried is found
+            # here as surely as one whose end was lost.
+            if now - last_recheck >= _WORKING_RECHECK_SECONDS:
                 last_recheck = now
                 await self._recheck_working()
 
@@ -566,7 +592,8 @@ class CallSession:
         except DomainError, SQLAlchemyError, OSError, RedisError:
             logger.warning("calls.session.recheck.failed", exc_info=True)
             return
-        if not running and self._working:
-            self._working = False
-            await self.send({"type": "work", "running": False})
-            await self._engine.inject(narration.team_working(False), Inject.CONTEXT)
+        if running == bool(self._working):
+            return
+        self._working = running
+        await self.send({"type": "work", "running": running})
+        await self._engine.inject(narration.team_working(running), Inject.CONTEXT)

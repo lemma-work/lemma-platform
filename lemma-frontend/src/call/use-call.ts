@@ -5,13 +5,19 @@ import { foldTranscript, type CallLine } from "./call-transcript";
 import { canvasItemFrom, type CanvasItem } from "./canvas";
 import { callSocketUrl, openCallSocket, type CallConnection, type CallFrame, type CallStart } from "./call-socket";
 
-/** Times a dropped call is joined again before it is given up as ended. */
-const MAX_REJOINS = 2;
+/** Drops in a row joined again before the call is given up as ended. A
+ *  rejoin that connects starts the count over: a long call on a flaky
+ *  network is not ended by its third blip. */
+const MAX_REJOINS = 4;
 /** The wait before the first rejoin, doubled for the next: a server
  *  restarting or a network coming back is not there the instant it went. */
 const REJOIN_DELAY_MS = 1_000;
 /** How long a notice stays up: it says something once, it is not a state. */
 const NOTICE_MS = 12_000;
+/** When a call ends without the server saying it saved, how long until its
+ *  chat is read again anyway: the server goes on draining the last turn and
+ *  writing the transcript after this tab has stopped waiting. */
+const LATE_SETTLE_MS = 10_000;
 
 export type CallStatus = "idle" | "connecting" | "live" | "ended" | "error";
 
@@ -35,8 +41,9 @@ export function useCall() {
     const [transcript, setTranscript] = useState<CallLine[]>([]);
     /** Someone in the call -- the teammate or a sub-agent -- has a run going. */
     const [working, setWorking] = useState(false);
-    /** Moves each time the call connects and each time work starts, so the
-     *  conversation on screen reattaches to the run that is now going. */
+    /** Moves each time the call connects, each time a run starts on the
+     *  call's conversation and each time work starts or stops, so the
+     *  conversation on screen re-reads and reattaches to the run now going. */
     const [liveEpoch, setLiveEpoch] = useState(0);
     const [canvas, setCanvas] = useState<CanvasItem[]>([]);
     /** The canvas item on screen, by id; null shows the newest. */
@@ -54,6 +61,10 @@ export function useCall() {
     const settle = useCallback((callId: string | null) => {
         if (callId) setSettled((last) => ({ callId, count: (last?.count ?? 0) + 1 }));
     }, []);
+    /** Whether this call got as far as `ready`, on any of its connections: a
+     *  call that was live has a transcript to read back however it ended --
+     *  a rejoin that never connects does not unmake that. */
+    const readyRef = useRef(false);
 
     const attemptRef = useRef(0);
     const connectionRef = useRef<CallConnection | null>(null);
@@ -79,7 +90,18 @@ export function useCall() {
         const connection = connectionRef.current;
         const callId = callIdRef.current;
         teardown();
-        void connection?.close().then((saved) => { if (saved) settle(callId); });
+        /* Mid-rejoin there is no connection to close, and still a call whose
+           transcript the server is writing. */
+        if (!connection) {
+            settle(callId);
+            window.setTimeout(() => settle(callId), LATE_SETTLE_MS);
+        }
+        void connection?.close().then((saved) => {
+            settle(callId);
+            /* Not saved in time: the server is still writing the last turn and
+               the transcript. Read the chat again once it has likely done so. */
+            if (!saved) window.setTimeout(() => settle(callId), LATE_SETTLE_MS);
+        });
         setMuted(false); mutedRef.current = false;
         setWorking(false);
         setNotice(null);
@@ -100,6 +122,8 @@ export function useCall() {
             case "ready":
                 playerRef.current?.stop();
                 playerRef.current = createPCMPlayer(frame.sample_rate);
+                readyRef.current = true;
+                rejoinsRef.current = 0;
                 setStatus("live");
                 setLiveEpoch((epoch) => epoch + 1);
                 break;
@@ -112,7 +136,13 @@ export function useCall() {
                 break;
             case "work":
                 setWorking(frame.running);
-                if (frame.running) setLiveEpoch((epoch) => epoch + 1);
+                /* Stopping too: a run the chat was not attached to has its
+                   answer in the conversation now, to be read. */
+                setLiveEpoch((epoch) => epoch + 1);
+                break;
+            case "run":
+            case "chat":
+                setLiveEpoch((epoch) => epoch + 1);
                 break;
             case "notice":
                 // Beside the call's status, for a while; the call carries on.
@@ -120,7 +150,12 @@ export function useCall() {
                 break;
             case "canvas.item": {
                 const item = canvasItemFrom(frame.item);
-                if (!item) break;
+                if (!item) {
+                    /* The voice was told it is on screen: say it is not, so
+                       whoever drew it shows something that can be drawn. */
+                    if (frame.item?.tool_call_id) connectionRef.current?.send({ type: "canvas.render_failed", tool_call_id: frame.item.tool_call_id, error: "This screen could not read the item." });
+                    break;
+                }
                 setCanvas((items) => (items.some((one) => one.id === item.id) ? items : [...items, item]));
                 /* The newest takes the screen, replayed or new: after a rejoin
                    the server tells the voice the newest is up, so the screen
@@ -136,6 +171,7 @@ export function useCall() {
         if (!rejoin) rejoinsRef.current = 0;
         callIdRef.current = callId;
         const attempt = ++attemptRef.current;
+        if (!rejoin) readyRef.current = false;
         // A rejoin keeps what is on screen: the server replays the canvas and
         // it lands on the same items, so the person never sees it blank out.
         setError(null); setWorking(false);
@@ -188,7 +224,11 @@ export function useCall() {
                             return;
                         }
                         teardown();
-                        if (!reason) settle(callId);
+                        /* The server saves the transcript however it ended
+                           the call -- a time limit, a budget, taken over
+                           elsewhere -- so a call that was live reads its chat
+                           again whatever the reason. */
+                        if (!reason || readyRef.current) settle(callId);
                         if (reason) { setError(reason); setStatus("error"); } else setStatus("ended");
                     },
                 },
