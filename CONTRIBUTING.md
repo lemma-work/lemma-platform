@@ -22,6 +22,12 @@ make dev         # infra + backend + frontend
 8710 (backend). `make dev-frontend` runs the frontend alone, for a backend you
 run some other way.
 
+To use pod apps signed in, start it with `make dev DEV_ONE_SITE=1` and open
+http://lemma.localhost:3000. On plain `localhost` the web app and the apps
+(`<slug>.apps.lemma.localhost`) are different sites, so a framed app gets no
+session. In one-site mode a connector's OAuth sign-in returns to
+`api.lemma.localhost`, which the provider must accept as a redirect URI.
+
 ### Toolchain versions
 
 Node is pinned by [`.nvmrc`](.nvmrc) at the repo root, and that file is the only
