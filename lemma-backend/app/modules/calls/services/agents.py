@@ -546,16 +546,20 @@ class CallAgents:
                 self._updated(data)
             self._pending_args[call_id] = args
         elif tool in _SPAWN_TOOLS:
-            run_id = data.get("agent_run_id")
-            if conversation_id == self.call_id and isinstance(run_id, str):
-                state = self._runs.setdefault(run_id, _RunState())
-                if not state.spawned:
-                    state.spawned = True
-                    state.children_before = self._children_started
-            if self._discovering is None or self._discovering.done():
-                self._discovering = create_inherited_task(
-                    self._discover_soon(), name="calls.agents.discover"
-                )
+            self._on_spawn(conversation_id, data.get("agent_run_id"))
+
+    def _on_spawn(self, conversation_id: UUID, run_id: JsonValue) -> None:
+        """A spawning call: note it on the coordinator's run, and look for the
+        conversations it makes, whose return may not come until they finish."""
+        if conversation_id == self.call_id and isinstance(run_id, str):
+            state = self._runs.setdefault(run_id, _RunState())
+            if not state.spawned:
+                state.spawned = True
+                state.children_before = self._children_started
+        if self._discovering is None or self._discovering.done():
+            self._discovering = create_inherited_task(
+                self._discover_soon(), name="calls.agents.discover"
+            )
 
     def _on_return(
         self, conversation_id: UUID, tool: str, call_id: str, result: JsonValue
