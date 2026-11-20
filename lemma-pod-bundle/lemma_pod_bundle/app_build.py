@@ -56,13 +56,14 @@ def app_source_files(source_dir: Path) -> list[tuple[str, Path]]:
     """Every file of an app's source as ``(posix path below source_dir, path)``,
     in path order, without :data:`APP_SOURCE_EXCLUDE_DIRS`."""
     files: list[tuple[str, Path]] = []
-    for path in source_dir.rglob("*"):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(source_dir)
-        if any(part in APP_SOURCE_EXCLUDE_DIRS for part in rel.parts):
-            continue
-        files.append((rel.as_posix(), path))
+    for folder, dirnames, filenames in source_dir.walk():
+        # Pruned here, not filtered after: a source someone installed in holds
+        # a node_modules far larger than the app, and walking it is the cost.
+        dirnames[:] = [d for d in dirnames if d not in APP_SOURCE_EXCLUDE_DIRS]
+        for filename in filenames:
+            path = folder / filename
+            if path.is_file():
+                files.append((path.relative_to(source_dir).as_posix(), path))
     files.sort(key=lambda item: item[0])
     return files
 
