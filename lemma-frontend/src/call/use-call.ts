@@ -61,8 +61,9 @@ export function useCall() {
     const settle = useCallback((callId: string | null) => {
         if (callId) setSettled((last) => ({ callId, count: (last?.count ?? 0) + 1 }));
     }, []);
-    /** Whether this attempt's socket got as far as `ready`: a call that was
-     *  live has a transcript to read back however it ended. */
+    /** Whether this call got as far as `ready`, on any of its connections: a
+     *  call that was live has a transcript to read back however it ended --
+     *  a rejoin that never connects does not unmake that. */
     const readyRef = useRef(false);
 
     const attemptRef = useRef(0);
@@ -89,6 +90,12 @@ export function useCall() {
         const connection = connectionRef.current;
         const callId = callIdRef.current;
         teardown();
+        /* Mid-rejoin there is no connection to close, and still a call whose
+           transcript the server is writing. */
+        if (!connection) {
+            settle(callId);
+            window.setTimeout(() => settle(callId), LATE_SETTLE_MS);
+        }
         void connection?.close().then((saved) => {
             settle(callId);
             /* Not saved in time: the server is still writing the last turn and
@@ -164,7 +171,7 @@ export function useCall() {
         if (!rejoin) rejoinsRef.current = 0;
         callIdRef.current = callId;
         const attempt = ++attemptRef.current;
-        readyRef.current = false;
+        if (!rejoin) readyRef.current = false;
         // A rejoin keeps what is on screen: the server replays the canvas and
         // it lands on the same items, so the person never sees it blank out.
         setError(null); setWorking(false);

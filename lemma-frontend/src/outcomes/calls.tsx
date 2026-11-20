@@ -28,16 +28,18 @@ export interface Calls {
 export function useCalls(go: Go): { huddle: Huddle; calls: Calls; resume: () => void } {
     const huddle = useHuddle();
     const queryClient = useQueryClient();
-    const { start: place, expand, callConversationId: held, target, liveEpoch, active, settled, error } = huddle;
+    const { start: place, expand, callConversationId: held, target, liveEpoch, active, settled, error, thinking } = huddle;
     /* Back to the call that is on: its own chat first, which is where the
        call is shown beside, then the call itself. */
     const heldPod = target?.pod.id ?? null;
     /* The sidebar's chats -- the running ring, unread, order, title -- move
        with the call's work: read them again as runs start and stop and once
        the call settles, rather than at the next minute's poll. */
+    /* As work starts and stops, not on every frame: a refresh reloads the
+       list to its first page, and a call sends a frame per transcript chunk. */
     useEffect(() => {
         if (heldPod) void refreshConversationLists(queryClient, heldPod);
-    }, [heldPod, liveEpoch, queryClient]);
+    }, [heldPod, thinking, queryClient]);
     /* A call settles after it has ended, when the huddle no longer holds its
        Lemma -- or holds the next call's. Each call's Lemma is kept by its id,
        so the one that settled is the one read again. */

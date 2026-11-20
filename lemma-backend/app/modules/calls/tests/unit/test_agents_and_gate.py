@@ -559,3 +559,46 @@ async def test_an_earlier_runs_busy_child_does_not_swallow_a_later_runs_answer(
     finished = [s for s in _signals(agents) if isinstance(s, Finished)]
     assert finished == [Finished(answer="Already on it.")]
     await agents.close()
+
+
+async def test_a_child_started_by_a_later_run_is_not_counted_for_an_earlier_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run A delegates but starts no child and ends; run B then starts one
+    while A waits to hear. A's answer still reaches the person."""
+    from app.modules.calls.services import agents as agents_module
+
+    monkeypatch.setattr(agents_module, "_SPAWN_SETTLE_SECONDS", 0.05)
+    agents, _ = _agents()
+
+    def delegate(run_id: str, tool_call_id: str) -> None:
+        agents._read(
+            agents.call_id,
+            _message(
+                "TOOL_CALL", "delegate", tool_call_id, agent_run_id=run_id, tool_args={}
+            ),
+        )
+
+    agents._read(agents.call_id, _run_frame("message", "rA", data={}))
+    delegate("rA", "dA")
+    agents._read(
+        agents.call_id,
+        {
+            "type": "message",
+            "data": {
+                "agent_run_id": "rA",
+                "role": "assistant",
+                "kind": "TEXT",
+                "text": "Nothing to hand off.",
+            },
+        },
+    )
+    agents._read(agents.call_id, _run_frame("completed", "rA", data={}))
+    # Run B, during A's wait, delegates and its child starts.
+    agents._read(agents.call_id, _run_frame("message", "rB", data={}))
+    delegate("rB", "dB")
+    agents._read(uuid4(), _run_frame("message", "cB", data={}))
+    await asyncio.sleep(0.15)
+    finished = [s for s in _signals(agents) if isinstance(s, Finished)]
+    assert finished == [Finished(answer="Nothing to hand off.")]
+    await agents.close()
