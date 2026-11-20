@@ -39,7 +39,7 @@ from app.modules.agent.contracts.calls import (
     CALL_TRANSCRIPT_KEY,
     CanvasItem,
     call_canvas,
-    call_conversations,
+    call_lineage,
     call_transcripts,
     call_working,
     keep_in_call,
@@ -59,6 +59,7 @@ from app.modules.calls.services.signals import (
 )
 
 from app.modules.calls.services.caller import Party, as_caller
+from app.modules.calls.services.lineage import Lineage, children_started
 
 logger = get_logger(__name__)
 
@@ -87,19 +88,6 @@ _CATCH_UP_MARGIN = timedelta(seconds=30)
 #: Attempts at a stream that keeps failing before the call says so.
 _FOLLOW_ATTEMPTS = 5
 _FOLLOW_BACKOFF_SECONDS = 1.0
-
-
-def _children_started(result: dict[str, object]) -> list[str]:
-    """The child conversations a spawning call's return names."""
-    named = [result.get("conversation_id")]
-    children = result.get("children")
-    if isinstance(children, list):
-        named.extend(
-            child.get("conversation_id")
-            for child in children
-            if isinstance(child, dict)
-        )
-    return [child for child in named if isinstance(child, str)]
 
 
 @dataclass(slots=True)
@@ -167,6 +155,7 @@ class CallAgents:
         #: Coordinator runs that called a spawning tool and ended, waiting to
         #: learn whether a child of theirs started, by run id, oldest first.
         self._awaiting_children: dict[str, _RunState] = {}
+        self._lineage = Lineage(call_id)
 
     async def send_turn(self, content: str) -> None:
         async with as_caller(self._party) as scope:
@@ -218,7 +207,7 @@ class CallAgents:
         anything is still running. Before the canvas is replayed, so nothing
         shown in between falls through the gap."""
         async with as_caller(self._party) as scope:
-            known = await call_conversations(scope.uow, self.call_id)
+            known = self._learn(await call_lineage(scope.uow, self.call_id))
         for conversation_id in known:
             self._watch(conversation_id)
         # Subscribed first, really: ``_watch`` only starts the task that
@@ -249,9 +238,14 @@ class CallAgents:
         """Watch every conversation the store says is in the call: a child
         made by a tool whose return has not come back is found here."""
         async with as_caller(self._party) as scope:
-            known = await call_conversations(scope.uow, self.call_id)
+            known = self._learn(await call_lineage(scope.uow, self.call_id))
         for conversation_id in known:
             self._watch(conversation_id)
+
+    def _learn(self, lineage: list[tuple[UUID, UUID | None]]) -> list[UUID]:
+        for conversation_id, by_run in lineage:
+            self._lineage.spawned(conversation_id, str(by_run) if by_run else None)
+        return [conversation_id for conversation_id, _ in lineage]
 
     async def _discover_soon(self) -> None:
         waited = 0.0
@@ -439,8 +433,10 @@ class CallAgents:
     def _started(self, conversation_id: UUID, run_id: str) -> None:
         self._observed += 1
         self._live[run_id] = conversation_id
+        self._lineage.ran(run_id, conversation_id)
         if conversation_id != self.call_id:
-            owner = self._child_owner()
+            parent = self._lineage.coordinator_run(conversation_id) or ""
+            owner = self._runs.get(parent) or self._awaiting_children.get(parent)
             if owner is not None:
                 owner.has_child = True
         if conversation_id == self.call_id:
@@ -468,14 +464,6 @@ class CallAgents:
         # Another run of the same conversation may still be going.
         if conversation_id not in self._live.values():
             self._set_running(conversation_id, False)
-
-    def _child_owner(self) -> _RunState | None:
-        """Whose a child run that just started is: the coordinator run going
-        now that called a spawning tool, else the newest one that ended
-        waiting to hear. A child of another run never counts for this one."""
-        going = [s for r, s in self._runs.items() if s.spawned and r in self._live]
-        waiting = list(self._awaiting_children.values())
-        return (going or waiting or [None])[-1]
 
     def _finish_unless_children(self, run_id: str, state: _RunState) -> None:
         self._awaiting_children[run_id] = state
@@ -511,7 +499,7 @@ class CallAgents:
         if data.get("kind") == "TOOL_CALL":
             self._on_call(conversation_id, tool, call_id, data.get("tool_args"), data)
         elif data.get("kind") == "TOOL_RETURN":
-            self._on_return(conversation_id, tool, call_id, data.get("tool_result"))
+            self._on_return(conversation_id, tool, call_id, data)
 
     def _note_answer(self, data: dict[str, JsonValue]) -> None:
         """Keep the coordinator's last written words, for a run that ends
@@ -572,11 +560,16 @@ class CallAgents:
             )
 
     def _on_return(
-        self, conversation_id: UUID, tool: str, call_id: str, result: JsonValue
+        self, conversation_id: UUID, tool: str, call_id: str, data: dict[str, JsonValue]
     ) -> None:
+        result = data.get("tool_result")
         if tool in _SPAWN_TOOLS and isinstance(result, dict):
-            for child in _children_started(result):
+            run_id = data.get("agent_run_id")
+            for child in children_started(result):
                 with contextlib.suppress(ValueError):
+                    self._lineage.spawned(
+                        UUID(child), run_id if isinstance(run_id, str) else None
+                    )
                     self._watch(UUID(child))
             return
         if tool not in _CANVAS_TOOLS:

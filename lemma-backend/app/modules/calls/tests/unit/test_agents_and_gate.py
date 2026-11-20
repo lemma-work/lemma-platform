@@ -387,6 +387,8 @@ async def test_a_run_that_handed_work_to_sub_agents_is_not_called_finished(
         agents.call_id,
         _message("TOOL_CALL", "delegate", "d1", agent_run_id="r1", tool_args={}),
     )
+    # Discovery reads the child's `parent_run_id`.
+    agents._lineage.spawned(child, "r1")
     agents._read(child, _run_frame("message", "c1", data={}))
     agents._read(agents.call_id, _run_frame("completed", "r1", data={}))
     await asyncio.sleep(0.05)
@@ -537,6 +539,7 @@ async def test_an_earlier_runs_busy_child_does_not_swallow_a_later_runs_answer(
     # Run 1 delegates, and its child is still working.
     agents._read(agents.call_id, _run_frame("message", "r1", data={}))
     delegate("r1", "d1")
+    agents._lineage.spawned(earlier_child, "r1")
     agents._read(earlier_child, _run_frame("message", "c1", data={}))
     agents._read(agents.call_id, _run_frame("completed", "r1", data={}))
     # Run 2 delegates too, but starts no child of its own.
@@ -597,8 +600,73 @@ async def test_a_child_started_by_a_later_run_is_not_counted_for_an_earlier_one(
     # Run B, during A's wait, delegates and its child starts.
     agents._read(agents.call_id, _run_frame("message", "rB", data={}))
     delegate("rB", "dB")
-    agents._read(uuid4(), _run_frame("message", "cB", data={}))
+    child_of_b = uuid4()
+    agents._lineage.spawned(child_of_b, "rB")
+    agents._read(child_of_b, _run_frame("message", "cB", data={}))
     await asyncio.sleep(0.15)
     finished = [s for s in _signals(agents) if isinstance(s, Finished)]
     assert finished == [Finished(answer="Nothing to hand off.")]
     await agents.close()
+
+
+async def test_a_late_child_of_an_ended_run_is_its_own_not_the_live_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run A delegates and ends; A's child first starts while run B -- which
+    also called a spawning tool but started nothing -- is live. The child is
+    A's (its `parent_run_id`), so A is held back and B's answer goes out."""
+    from app.modules.calls.services import agents as agents_module
+
+    monkeypatch.setattr(agents_module, "_SPAWN_SETTLE_SECONDS", 0.05)
+    agents, _ = _agents()
+
+    def delegate(run_id: str, tool_call_id: str) -> None:
+        agents._read(
+            agents.call_id,
+            _message(
+                "TOOL_CALL", "delegate", tool_call_id, agent_run_id=run_id, tool_args={}
+            ),
+        )
+
+    def says(run_id: str, text: str) -> None:
+        agents._read(
+            agents.call_id,
+            {
+                "type": "message",
+                "data": {
+                    "agent_run_id": run_id,
+                    "role": "assistant",
+                    "kind": "TEXT",
+                    "text": text,
+                },
+            },
+        )
+
+    agents._read(agents.call_id, _run_frame("message", "rA", data={}))
+    delegate("rA", "dA")
+    says("rA", "Handed it off.")
+    agents._read(agents.call_id, _run_frame("completed", "rA", data={}))
+    agents._read(agents.call_id, _run_frame("message", "rB", data={}))
+    delegate("rB", "dB")
+    child_of_a = uuid4()
+    agents._lineage.spawned(child_of_a, "rA")
+    agents._read(child_of_a, _run_frame("message", "cA", data={}))
+    says("rB", "Nothing more to do.")
+    agents._read(agents.call_id, _run_frame("completed", "rB", data={}))
+    await asyncio.sleep(0.15)
+    finished = [s for s in _signals(agents) if isinstance(s, Finished)]
+    assert finished == [Finished(answer="Nothing more to do.")]
+    await agents.close()
+
+
+def test_a_sub_agents_own_sub_agent_traces_back_to_the_coordinator_run() -> None:
+    from app.modules.calls.services.lineage import Lineage
+
+    call_id, child, grandchild = uuid4(), uuid4(), uuid4()
+    lineage = Lineage(call_id)
+    lineage.ran("r1", call_id)
+    lineage.spawned(child, "r1")
+    lineage.ran("c1", child)
+    lineage.spawned(grandchild, "c1")
+    assert lineage.coordinator_run(grandchild) == "r1"
+    assert lineage.coordinator_run(uuid4()) is None

@@ -117,6 +117,24 @@ class Calls(UnitOfWorkRepository):
         )
         return list(reversed(rows.scalars().all()))
 
+    async def lineage(self, call_id: UUID) -> list[tuple[UUID, UUID | None]]:
+        """Each conversation in the call with the run that spawned it (None for
+        the call's own, or one made outside a run), oldest first."""
+        pod_id = await self._pod_of(call_id)
+        rows = await self.session.execute(
+            select(ConversationModel.id, ConversationModel.parent_run_id)
+            .where(
+                ConversationModel.pod_id == pod_id,
+                or_(
+                    ConversationModel.id == call_id,
+                    ConversationModel.call["call_id"].astext == str(call_id),
+                ),
+            )
+            .order_by(ConversationModel.created_at.desc())
+            .limit(MAX_CALL_CONVERSATIONS)
+        )
+        return [(row[0], row[1]) for row in reversed(rows.all())]
+
     async def _pod_of(self, call_id: UUID) -> UUID | None:
         return await self.session.scalar(
             select(ConversationModel.pod_id).where(ConversationModel.id == call_id)

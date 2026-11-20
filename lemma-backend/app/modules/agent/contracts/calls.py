@@ -204,6 +204,14 @@ async def call_conversations(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> list[U
     return await Calls(uow).conversations(call_id)
 
 
+async def call_lineage(
+    uow: SqlAlchemyUnitOfWork, call_id: UUID
+) -> list[tuple[UUID, UUID | None]]:
+    """The call's conversations, each with the run that spawned it: whose
+    work a sub-agent is, read from the store rather than guessed from timing."""
+    return await Calls(uow).lineage(call_id)
+
+
 async def call_working(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> bool:
     """Whether anyone in the call -- the coordinator or a sub-agent -- has a
     run going, read when the voice cannot have been told."""
@@ -317,6 +325,7 @@ __all__ = [
     "OpenedCall",
     "call_canvas",
     "call_conversations",
+    "call_lineage",
     "call_transcripts",
     "call_working",
     "held_call",
