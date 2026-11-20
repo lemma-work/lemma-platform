@@ -57,6 +57,22 @@ def _message(kind: str, tool: str, call_id: str, **fields: object) -> dict[str, 
     }
 
 
+async def _decided(agents: CallAgents) -> None:
+    """Until every pending decision -- whether a spawning run is finished --
+    has been made: a condition, not a clock."""
+
+    async def idle() -> bool:
+        return not agents._catching_up
+
+    await eventually(
+        label="the call's pending decisions",
+        probe=idle,
+        done=bool,
+        timeout_seconds=2,
+        interval_seconds=0.01,
+    )
+
+
 def _signals(agents: CallAgents) -> list[object]:
     out = []
     while not agents._signals.empty():
@@ -391,7 +407,7 @@ async def test_a_run_that_handed_work_to_sub_agents_is_not_called_finished(
     agents._lineage.spawned(child, "r1")
     agents._read(child, _run_frame("message", "c1", data={}))
     agents._read(agents.call_id, _run_frame("completed", "r1", data={}))
-    await asyncio.sleep(0.05)
+    await _decided(agents)
     assert not [s for s in _signals(agents) if isinstance(s, Finished)]
     await agents.close()
 
@@ -421,7 +437,7 @@ async def test_a_delegate_that_started_no_child_still_reaches_the_person(
         },
     )
     agents._read(agents.call_id, _run_frame("completed", "r1", data={}))
-    await asyncio.sleep(0.05)
+    await _decided(agents)
     assert Finished(answer="Nothing to hand off.") in _signals(agents)
     await agents.close()
 
@@ -558,7 +574,7 @@ async def test_an_earlier_runs_busy_child_does_not_swallow_a_later_runs_answer(
         },
     )
     agents._read(agents.call_id, _run_frame("completed", "r2", data={}))
-    await asyncio.sleep(0.05)
+    await _decided(agents)
     finished = [s for s in _signals(agents) if isinstance(s, Finished)]
     assert finished == [Finished(answer="Already on it.")]
     await agents.close()
@@ -603,7 +619,7 @@ async def test_a_child_started_by_a_later_run_is_not_counted_for_an_earlier_one(
     child_of_b = uuid4()
     agents._lineage.spawned(child_of_b, "rB")
     agents._read(child_of_b, _run_frame("message", "cB", data={}))
-    await asyncio.sleep(0.15)
+    await _decided(agents)
     finished = [s for s in _signals(agents) if isinstance(s, Finished)]
     assert finished == [Finished(answer="Nothing to hand off.")]
     await agents.close()
@@ -653,7 +669,7 @@ async def test_a_late_child_of_an_ended_run_is_its_own_not_the_live_runs(
     agents._read(child_of_a, _run_frame("message", "cA", data={}))
     says("rB", "Nothing more to do.")
     agents._read(agents.call_id, _run_frame("completed", "rB", data={}))
-    await asyncio.sleep(0.15)
+    await _decided(agents)
     finished = [s for s in _signals(agents) if isinstance(s, Finished)]
     assert finished == [Finished(answer="Nothing more to do.")]
     await agents.close()
@@ -670,3 +686,46 @@ def test_a_sub_agents_own_sub_agent_traces_back_to_the_coordinator_run() -> None
     lineage.spawned(grandchild, "c1")
     assert lineage.coordinator_run(grandchild) == "r1"
     assert lineage.coordinator_run(uuid4()) is None
+
+
+async def test_a_catch_up_retries_a_store_that_blinked_then_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC, datetime
+
+    from app.modules.calls.services import agents as agents_module
+
+    monkeypatch.setattr(agents_module, "_CATCH_UP_RETRY_SECONDS", (0.0, 0.0, 0.0))
+    agents, _ = _agents()
+    tries = 0
+
+    async def read_back(conversation_id, since):
+        nonlocal tries
+        tries += 1
+        if tries < 3:
+            raise OperationalError("select", {}, Exception("connection reset"))
+        return [("missed", "India 143 for 1.", "now")], [], False
+
+    agents._read_back = read_back  # type: ignore[method-assign]
+    await agents._catch_up(agents.call_id, datetime.now(UTC))
+    assert tries == 3
+    assert Relay(text="India 143 for 1.", urgency="when_idle") in _signals(agents)
+
+
+async def test_a_catch_up_that_cannot_recover_tells_the_voice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC, datetime
+
+    from app.modules.calls.services import agents as agents_module
+
+    monkeypatch.setattr(agents_module, "_CATCH_UP_RETRY_SECONDS", (0.0,))
+    agents, _ = _agents()
+
+    async def read_back(conversation_id, since):
+        raise OperationalError("select", {}, Exception("down"))
+
+    agents._read_back = read_back  # type: ignore[method-assign]
+    await agents._catch_up(agents.call_id, datetime.now(UTC))
+    relays = [s for s in _signals(agents) if isinstance(s, Relay)]
+    assert relays == [Relay(text=agents_module._CATCH_UP_LOST, urgency="when_idle")]

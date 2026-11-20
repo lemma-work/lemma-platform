@@ -186,21 +186,76 @@ def test_the_multilingual_listener_takes_language_hints_and_others_do_not() -> N
     assert "language_hint" not in english._url
 
 
+class _SpeakSocket:
+    """The provider end of a speak socket: records what is sent, plays back
+    the frames it is given, then stays open."""
+
+    class state:  # noqa: N801 - websockets' ``State`` attribute shape
+        name = "OPEN"
+
+    def __init__(self, frames: list[str | bytes] | None = None) -> None:
+        self.sent: list[dict[str, object]] = []
+        self._frames = frames or []
+
+    async def send(self, raw: str) -> None:
+        import json
+
+        self.sent.append(json.loads(raw))
+
+    async def close(self) -> None: ...
+
+    def __aiter__(self):
+        return self._play()
+
+    async def _play(self):
+        for frame in self._frames:
+            yield frame
+        await asyncio.Event().wait()
+
+
 async def test_a_flux_voice_speaks_on_v2_and_is_interrupted_not_cleared() -> None:
     from app.modules.calls.infrastructure.engines.deepgram import DeepgramSpeaker
 
-    sent: list[dict[str, str]] = []
     speaker = DeepgramSpeaker(api_key="k", voice="aura-2-thalia-en")
     assert "/v1/speak" in speaker._url
     await speaker.use_voice("flux-anjali-hi")
     assert "/v2/speak" in speaker._url and "model=flux-anjali-hi" in speaker._url
-
-    async def record(frame: dict[str, str]) -> None:
-        sent.append(frame)
-
-    speaker._send = record  # type: ignore[method-assign]
+    socket = _SpeakSocket()
+    speaker._socket = socket  # type: ignore[assignment]
     await speaker.clear()
-    assert sent == [{"type": "Interrupt"}]
+    assert socket.sent == [{"type": "Interrupt"}]
+
+
+async def test_a_flux_reply_is_done_on_speech_metadata_not_flushed() -> None:
+    """On Flux audio can follow `Flushed`; `SpeechMetadata` closes the turn."""
+    import json
+
+    from app.modules.calls.infrastructure.engines.deepgram import DeepgramSpeaker
+
+    speaker = DeepgramSpeaker(api_key="k", voice="flux-anjali-hi")
+    speaker._socket = _SpeakSocket(  # type: ignore[assignment]
+        [
+            json.dumps({"type": "Flushed"}),
+            b"tail",
+            json.dumps({"type": "SpeechMetadata"}),
+        ]
+    )
+    speaker._opened.set()
+    heard: list[bytes] = []
+
+    async def play() -> None:
+        async for pcm in speaker.audio():
+            heard.append(pcm)
+
+    playing = asyncio.create_task(play())
+    async with speaker.flushed:
+        await asyncio.wait_for(
+            speaker.flushed.wait_for(lambda: speaker.flush_count >= 1), timeout=2
+        )
+    # Counted once, on SpeechMetadata, after the trailing audio was read.
+    assert speaker.flush_count == 1
+    assert heard == [b"tail"]
+    playing.cancel()
 
 
 def test_flux_turn_info_carries_the_languages_heard() -> None:

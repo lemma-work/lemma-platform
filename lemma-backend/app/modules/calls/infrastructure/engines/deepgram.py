@@ -182,6 +182,13 @@ class DeepgramSpeaker:
         endpoint = self._endpoint or (_SPEAK_FLUX if speaks_on_flux(voice) else _SPEAK)
         return f"{endpoint}?{urlencode(params)}"
 
+    @property
+    def _turn_done(self) -> str:
+        """What says a reply's audio has all been sent: ``Flushed`` on Aura.
+        On Flux audio can still follow ``Flushed``; ``SpeechMetadata`` closes
+        the turn, and a voice switch after it cuts nothing off."""
+        return "SpeechMetadata" if speaks_on_flux(self.voice) else "Flushed"
+
     async def open(self) -> None:
         self._socket = await _open(self._url, self._api_key)
         self._opened.set()
@@ -239,7 +246,7 @@ class DeepgramSpeaker:
                 async for raw in socket:
                     if isinstance(raw, bytes):
                         yield raw
-                    elif decode(raw).get("type") == "Flushed":
+                    elif decode(raw).get("type") == self._turn_done:
                         async with self.flushed:
                             self.flush_count += 1
                             self.flushed.notify_all()

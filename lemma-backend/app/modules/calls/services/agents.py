@@ -85,6 +85,9 @@ _SUBSCRIBE_WAIT_SECONDS = 5.0
 #: noticed late -- the failure surfaces after frames already went missing --
 #: and what it reads twice is told apart: relays by id, the canvas by item.
 _CATCH_UP_MARGIN = timedelta(seconds=30)
+#: Waits between catch-up tries; past the last the voice is told.
+_CATCH_UP_RETRY_SECONDS = (1.0, 3.0, 9.0)
+_CATCH_UP_LOST = "Team updates may have been lost; promise nothing you were not told."
 #: Attempts at a stream that keeps failing before the call says so.
 _FOLLOW_ATTEMPTS = 5
 _FOLLOW_BACKOFF_SECONDS = 1.0
@@ -350,9 +353,7 @@ class CallAgents:
     async def _read_back(
         self, conversation_id: UUID, since: datetime
     ) -> tuple[list[tuple[str, str, str]], list[CanvasItem], bool]:
-        """What a stream may have missed since ``since``: the call's relays
-        (only its own conversation relays), its canvas, and whether anyone in
-        it is working."""
+        """What a stream may have missed since ``since``: relays, canvas, working."""
         async with as_caller(self._party) as scope:
             relays = (
                 await relays_since(
@@ -365,15 +366,25 @@ class CallAgents:
         return relays, canvas, await self.still_working()
 
     async def _catch_up(self, conversation_id: UUID, since: datetime) -> None:
-        try:
-            relays, canvas, working = await self._read_back(conversation_id, since)
-        except DomainError, SQLAlchemyError, OSError, RedisError:
-            logger.warning(
-                "calls.agents.catch_up.failed",
-                conversation_id=str(conversation_id),
-                exc_info=True,
-            )
-            return
+        # From the same boundary each try: a store that blinks while the
+        # stream comes back must not lose what the drop did.
+        for attempt, wait in enumerate((*_CATCH_UP_RETRY_SECONDS, None)):
+            try:
+                relays, canvas, working = await self._read_back(conversation_id, since)
+                break
+            except DomainError, SQLAlchemyError, OSError, RedisError:
+                logger.warning(
+                    "calls.agents.catch_up.failed",
+                    conversation_id=str(conversation_id),
+                    attempt=attempt,
+                    exc_info=True,
+                )
+                if wait is None:
+                    offer(
+                        self._signals, Relay(text=_CATCH_UP_LOST, urgency="when_idle")
+                    )
+                    return
+                await asyncio.sleep(wait)
         for tool_call_id, text, urgency in relays:
             if tool_call_id in self._heard_relays:
                 continue
@@ -534,13 +545,12 @@ class CallAgents:
             and isinstance(args, dict)
         ):
             text, urgency = args.get("text"), args.get("urgency") or "when_idle"
-            if call_id in self._heard_relays:
-                # A catch-up after a drop already said it.
-                return
-            self._heard_relays.add(call_id)
             if isinstance(text, str) and text.strip():
+                # The run relayed, said now or by a catch-up already.
                 self._updated(data)
-                offer(self._signals, Relay(text=text.strip(), urgency=str(urgency)))
+                if call_id not in self._heard_relays:
+                    offer(self._signals, Relay(text=text.strip(), urgency=str(urgency)))
+            self._heard_relays.add(call_id)
         elif tool in _CANVAS_TOOLS:
             if conversation_id == self.call_id:
                 self._updated(data)

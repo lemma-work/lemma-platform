@@ -255,6 +255,9 @@ class GeminiLiveEngine:
         async with self._text_lock:
             while self._after_turn and (force or not self._holding()):
                 await self._send_text(self._after_turn.pop(0))
+            if self._after_turn:
+                # The voice began again first: what is left keeps its deadline.
+                self._start_hold_timer()
 
     async def _send_text(self, frame: Frame) -> None:
         """Text for the voice is kept, not dropped, across a reconnect: a

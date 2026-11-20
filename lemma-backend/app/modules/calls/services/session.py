@@ -153,6 +153,7 @@ class CallSession:
         self._floor = Floor(quiet_window_ms=limits.quiet_window_ms)
         self._muted = muted
         self._working: bool | None = None
+        self._draining = False
         self._transcript = Transcript(self._record)
         self._lines = self._transcript.lines
         #: What was said since the agents last got a turn, numbered in order,
@@ -245,8 +246,8 @@ class CallSession:
         self.end_reason = self.end_reason or "Something went wrong on the call."
 
     async def _drain(self) -> None:
-        """The call's own tasks -- a turn being routed, a note being written --
-        get a moment to finish, then are cancelled: none outlives the call."""
+        """The call's own tasks get a moment to finish, then are cancelled."""
+        self._draining = True
         if not self._tasks:
             return
         routing = any(task.get_name() == _ROUTE_TASK for task in self._tasks)
@@ -456,15 +457,13 @@ class CallSession:
         self._tell_chat()
 
     def _tell_chat(self) -> None:
-        """Off the write's path: the chunk is kept once its write returns, and
-        a notice stuck behind a closing socket must not make it look unkept --
-        the transcript would write it again."""
-        self._spawn(self._chat_changed(), name="calls.session.chat_changed")
+        """Off the write's path, so a stuck notice never leaves a kept chunk
+        looking unkept; none once draining, when nobody is left to tell."""
+        if not self._draining:
+            self._spawn(self._chat_changed(), name="calls.session.chat_changed")
 
     async def _chat_changed(self) -> None:
-        """The call wrote into its conversation outside any run, which the chat
-        beside it does not follow: say so, so it reads the line now. The last
-        chunk is written as the call closes, with nobody left to tell."""
+        """Tell the chat beside the call to re-read: no run carries this line."""
         with contextlib.suppress(OSError, RuntimeError):
             await self.send({"type": "chat"})
 

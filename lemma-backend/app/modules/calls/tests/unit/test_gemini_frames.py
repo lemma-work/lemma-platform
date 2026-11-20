@@ -164,9 +164,20 @@ class _Socket:
         self.sent.append(json.loads(raw))
 
 
-async def _settle() -> None:
-    for _ in range(5):
-        await asyncio.sleep(0)
+async def _settle(engine: GeminiLiveEngine) -> None:
+    """Until no queued text is still being sent: a condition, not a clock."""
+    from app.modules.test_support.e2e.waiters import eventually
+
+    async def idle() -> bool:
+        return not engine._sending
+
+    await eventually(
+        label="queued text sent",
+        probe=idle,
+        done=bool,
+        timeout_seconds=2,
+        interval_seconds=0.01,
+    )
 
 
 async def test_text_sent_while_the_voice_talks_waits_for_its_turn_to_end() -> None:
@@ -179,11 +190,11 @@ async def test_text_sent_while_the_voice_talks_waits_for_its_turn_to_end() -> No
 
     await engine.inject("India 143 for 1.", Inject.CONTEXT)
     await engine.inject("Tell them the score.", Inject.SPEAK)
-    await _settle()
+    await _settle(engine)
     assert socket.sent == []
 
     engine._handle_frame({"serverContent": {"turnComplete": True}})
-    await _settle()
+    await _settle(engine)
     assert socket.sent == [
         {
             "clientContent": {
@@ -206,12 +217,12 @@ async def test_held_text_outlasts_a_barge_in_until_the_voice_answers() -> None:
     engine._handle_frame({"serverContent": {"turnComplete": True}})
     # The caller has the floor; a later note queues behind the held one.
     await engine.inject("second", Inject.CONTEXT)
-    await _settle()
+    await _settle(engine)
     assert socket.sent == []
 
     engine._handle_frame({"serverContent": _audio(b"\x01\x00" * 4)})
     engine._handle_frame({"serverContent": {"turnComplete": True}})
-    await _settle()
+    await _settle(engine)
     assert [next(iter(frame)) for frame in socket.sent] == [
         "realtimeInput",
         "clientContent",
@@ -253,11 +264,11 @@ async def test_a_note_after_a_barge_in_waits_for_the_answer_even_with_nothing_he
     engine._handle_frame({"serverContent": {"interrupted": True}})
     engine._handle_frame({"serverContent": {"turnComplete": True}})
     await engine.inject("news", Inject.SPEAK)
-    await _settle()
+    await _settle(engine)
     assert socket.sent == []
     engine._handle_frame({"serverContent": _audio(b"\x01\x00" * 4)})
     engine._handle_frame({"serverContent": {"turnComplete": True}})
-    await _settle()
+    await _settle(engine)
     assert socket.sent == [{"realtimeInput": {"text": "news"}}]
 
 
@@ -270,8 +281,28 @@ async def test_a_note_injected_as_held_ones_are_released_goes_after_them() -> No
     engine._handle_frame({"serverContent": {"turnComplete": True}})
     # Before the release task has run.
     await engine.inject("B", Inject.SPEAK)
-    await _settle()
+    await _settle(engine)
     assert socket.sent == [
         {"realtimeInput": {"text": "A"}},
         {"realtimeInput": {"text": "B"}},
     ]
+
+
+async def test_text_left_when_the_voice_starts_again_keeps_its_deadline() -> None:
+    engine = _engine()
+    socket = _Socket()
+    engine._socket = socket  # type: ignore[assignment]
+    engine._handle_frame({"serverContent": _audio(b"\x01\x00" * 4)})
+    await engine.inject("A", Inject.SPEAK)
+    # The turn ends and a release is scheduled; the voice starts again first.
+    engine._handle_frame({"serverContent": {"turnComplete": True}})
+    engine._handle_frame({"serverContent": _audio(b"\x01\x00" * 4)})
+    await _settle(engine)
+    assert socket.sent == []
+    # The deadline is armed again for what is left...
+    assert engine._turn_hold is not None
+    engine._turn_hold.cancel()
+    # ...and when it comes, the text goes.
+    engine._hold_expired()
+    await _settle(engine)
+    assert socket.sent == [{"realtimeInput": {"text": "A"}}]
