@@ -498,8 +498,8 @@ async def test_a_stream_back_after_a_drop_reads_back_only_what_was_missed() -> N
         since_seen.append(since)
         return (
             [
-                ("heard", "On it.", "context"),
-                ("missed", "India 143 for 1.", "when_idle"),
+                ("heard", "On it.", "context", None),
+                ("missed", "India 143 for 1.", "when_idle", None),
             ],
             [],
             True,
@@ -704,7 +704,7 @@ async def test_a_catch_up_retries_a_store_that_blinked_then_recovers(
         tries += 1
         if tries < 3:
             raise OperationalError("select", {}, Exception("connection reset"))
-        return [("missed", "India 143 for 1.", "now")], [], False
+        return [("missed", "India 143 for 1.", "now", None)], [], False
 
     agents._read_back = read_back  # type: ignore[method-assign]
     await agents._catch_up(agents.call_id, datetime.now(UTC))
@@ -729,3 +729,33 @@ async def test_a_catch_up_that_cannot_recover_tells_the_voice(
     await agents._catch_up(agents.call_id, datetime.now(UTC))
     relays = [s for s in _signals(agents) if isinstance(s, Relay)]
     assert relays == [Relay(text=agents_module._CATCH_UP_LOST, urgency="when_idle")]
+
+
+async def test_a_relay_a_catch_up_recovered_marks_its_run_as_having_relayed() -> None:
+    from datetime import UTC, datetime
+
+    agents, _ = _agents()
+    agents._read(agents.call_id, _run_frame("message", "r1", data={}))
+
+    async def read_back(conversation_id, since):
+        return [("x1", "India 143 for 1.", "now", "r1")], [], True
+
+    agents._read_back = read_back  # type: ignore[method-assign]
+    await agents._catch_up(agents.call_id, datetime.now(UTC))
+    agents._read(agents.call_id, _run_frame("completed", "r1", data={}))
+    # Said once, by the catch-up -- and not followed by "finished, nothing to say".
+    assert not [s for s in _signals(agents) if isinstance(s, Finished)]
+
+
+def test_a_grandchild_traces_back_from_the_store_alone() -> None:
+    """The child's run was never heard; the store's lineage still says where
+    it ran, so its own sub-agent is credited to the coordinator run."""
+    from app.modules.calls.services.lineage import Lineage
+
+    call_id, child, grandchild = uuid4(), uuid4(), uuid4()
+    r1, c1 = uuid4(), uuid4()
+    lineage = Lineage(call_id)
+    lineage.learn(
+        [(call_id, None, None), (child, r1, call_id), (grandchild, c1, child)]
+    )
+    assert lineage.coordinator_run(grandchild) == str(r1)

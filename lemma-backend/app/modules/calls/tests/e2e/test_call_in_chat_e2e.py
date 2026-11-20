@@ -113,6 +113,7 @@ async def test_a_resumed_call_reads_back_its_whole_tree_and_what_it_missed(
     from app.modules.agent.contracts.calls import (
         CALL_TRANSCRIPT_KEY,
         call_conversations,
+        call_lineage,
         held_call,
         missed_relays,
         set_call_live,
@@ -172,6 +173,10 @@ async def test_a_resumed_call_reads_back_its_whole_tree_and_what_it_missed(
         tree = await call_conversations(uow, UUID(call_id))
         assert set(map(str, tree)) == {call_id, child, grandchild}
         assert unrelated not in map(str, tree)
+        lineage = await call_lineage(uow, UUID(call_id))
+        assert {str(row[0]) for row in lineage} == {call_id, child, grandchild}
+        # Made outside a run here: no spawning run, and so no place it ran.
+        assert all(row[1] is None and row[2] is None for row in lineage)
         assert await missed_relays(uow, UUID(call_id)) == [
             ("Found three venues.", "now")
         ]
@@ -237,4 +242,4 @@ async def test_a_catch_up_finds_a_missed_relay_behind_any_number_heard(
         found = await relays_since(
             uow, call_id, start - timedelta(seconds=1), heard=heard
         )
-    assert found == [("missed", "India 143 for 1.", "now")]
+    assert found == [("missed", "India 143 for 1.", "now", None)]

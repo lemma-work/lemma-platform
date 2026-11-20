@@ -227,19 +227,26 @@ async def test_a_flux_voice_speaks_on_v2_and_is_interrupted_not_cleared() -> Non
 
 
 async def test_a_flux_reply_is_done_on_speech_metadata_not_flushed() -> None:
-    """On Flux audio can follow `Flushed`; `SpeechMetadata` closes the turn."""
+    """On Flux audio can follow `Flushed`; `SpeechMetadata` closes the turn.
+    The provider pauses after the trailing audio, so a speaker that counted
+    `Flushed` would already show the reply done."""
     import json
 
     from app.modules.calls.infrastructure.engines.deepgram import DeepgramSpeaker
+    from app.modules.test_support.e2e.waiters import eventually
+
+    release = asyncio.Event()
+
+    class Paused(_SpeakSocket):
+        async def _play(self):
+            yield json.dumps({"type": "Flushed"})
+            yield b"tail"
+            await release.wait()
+            yield json.dumps({"type": "SpeechMetadata"})
+            await asyncio.Event().wait()
 
     speaker = DeepgramSpeaker(api_key="k", voice="flux-anjali-hi")
-    speaker._socket = _SpeakSocket(  # type: ignore[assignment]
-        [
-            json.dumps({"type": "Flushed"}),
-            b"tail",
-            json.dumps({"type": "SpeechMetadata"}),
-        ]
-    )
+    speaker._socket = Paused()  # type: ignore[assignment]
     speaker._opened.set()
     heard: list[bytes] = []
 
@@ -248,13 +255,31 @@ async def test_a_flux_reply_is_done_on_speech_metadata_not_flushed() -> None:
             heard.append(pcm)
 
     playing = asyncio.create_task(play())
-    async with speaker.flushed:
-        await asyncio.wait_for(
-            speaker.flushed.wait_for(lambda: speaker.flush_count >= 1), timeout=2
-        )
-    # Counted once, on SpeechMetadata, after the trailing audio was read.
-    assert speaker.flush_count == 1
+
+    async def read() -> list[bytes]:
+        return heard
+
+    await eventually(
+        label="trailing audio read",
+        probe=read,
+        done=bool,
+        timeout_seconds=2,
+        interval_seconds=0.01,
+    )
     assert heard == [b"tail"]
+    assert speaker.flush_count == 0
+    release.set()
+
+    async def count() -> int:
+        return speaker.flush_count
+
+    await eventually(
+        label="turn closed",
+        probe=count,
+        done=lambda n: n == 1,
+        timeout_seconds=2,
+        interval_seconds=0.01,
+    )
     playing.cancel()
 
 

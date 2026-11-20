@@ -117,12 +117,22 @@ class Calls(UnitOfWorkRepository):
         )
         return list(reversed(rows.scalars().all()))
 
-    async def lineage(self, call_id: UUID) -> list[tuple[UUID, UUID | None]]:
-        """Each conversation in the call with the run that spawned it (None for
-        the call's own, or one made outside a run), oldest first."""
+    async def lineage(
+        self, call_id: UUID
+    ) -> list[tuple[UUID, UUID | None, UUID | None]]:
+        """Each conversation in the call with the run that spawned it and the
+        conversation that run ran in (None for the call's own, or one made
+        outside a run), oldest first: the whole chain from the store, so a
+        sub-agent's own sub-agent traces back without its parent's frames."""
         pod_id = await self._pod_of(call_id)
+        spawner = aliased(AgentRunModel)
         rows = await self.session.execute(
-            select(ConversationModel.id, ConversationModel.parent_run_id)
+            select(
+                ConversationModel.id,
+                ConversationModel.parent_run_id,
+                spawner.conversation_id,
+            )
+            .outerjoin(spawner, spawner.id == ConversationModel.parent_run_id)
             .where(
                 ConversationModel.pod_id == pod_id,
                 or_(
@@ -133,7 +143,7 @@ class Calls(UnitOfWorkRepository):
             .order_by(ConversationModel.created_at.desc())
             .limit(MAX_CALL_CONVERSATIONS)
         )
-        return [(row[0], row[1]) for row in reversed(rows.all())]
+        return [(row[0], row[1], row[2]) for row in reversed(rows.all())]
 
     async def _pod_of(self, call_id: UUID) -> UUID | None:
         return await self.session.scalar(
@@ -223,8 +233,9 @@ class Calls(UnitOfWorkRepository):
 
     async def relays_since(
         self, call_id: UUID, since: datetime, *, heard: frozenset[str] = frozenset()
-    ) -> list[tuple[str, str, str]]:
-        """``(tool_call_id, text, urgency)`` of each relay sent after ``since``,
+    ) -> list[tuple[str, str, str, str | None]]:
+        """``(tool_call_id, text, urgency, agent_run_id)`` of each relay sent
+        after ``since``,
         oldest first: what a stream that dropped and came back may have missed.
 
         The ones the caller ``heard`` live are left out in the query, so no
@@ -240,6 +251,7 @@ class Calls(UnitOfWorkRepository):
                     MessageModel.id,
                     MessageModel.tool_call_id,
                     MessageModel.tool_args,
+                    MessageModel.agent_run_id,
                 )
                 .where(
                     MessageModel.conversation_id == call_id,
@@ -257,7 +269,7 @@ class Calls(UnitOfWorkRepository):
                     tuple_(MessageModel.created_at, MessageModel.id) > after
                 )
             rows = (await self.session.execute(query)).all()
-            for created_at, message_id, tool_call_id, args in rows:
+            for created_at, message_id, tool_call_id, args, run_id in rows:
                 after = (created_at, message_id)
                 if (
                     tool_call_id
@@ -269,6 +281,7 @@ class Calls(UnitOfWorkRepository):
                             tool_call_id,
                             args["text"],
                             str(args.get("urgency") or "when_idle"),
+                            str(run_id) if run_id else None,
                         )
                     )
             if len(rows) < MAX_MISSED_RELAYS:

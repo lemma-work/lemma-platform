@@ -210,7 +210,7 @@ class CallAgents:
         anything is still running. Before the canvas is replayed, so nothing
         shown in between falls through the gap."""
         async with as_caller(self._party) as scope:
-            known = self._learn(await call_lineage(scope.uow, self.call_id))
+            known = self._lineage.learn(await call_lineage(scope.uow, self.call_id))
         for conversation_id in known:
             self._watch(conversation_id)
         # Subscribed first, really: ``_watch`` only starts the task that
@@ -241,14 +241,9 @@ class CallAgents:
         """Watch every conversation the store says is in the call: a child
         made by a tool whose return has not come back is found here."""
         async with as_caller(self._party) as scope:
-            known = self._learn(await call_lineage(scope.uow, self.call_id))
+            known = self._lineage.learn(await call_lineage(scope.uow, self.call_id))
         for conversation_id in known:
             self._watch(conversation_id)
-
-    def _learn(self, lineage: list[tuple[UUID, UUID | None]]) -> list[UUID]:
-        for conversation_id, by_run in lineage:
-            self._lineage.spawned(conversation_id, str(by_run) if by_run else None)
-        return [conversation_id for conversation_id, _ in lineage]
 
     async def _discover_soon(self) -> None:
         waited = 0.0
@@ -352,7 +347,7 @@ class CallAgents:
 
     async def _read_back(
         self, conversation_id: UUID, since: datetime
-    ) -> tuple[list[tuple[str, str, str]], list[CanvasItem], bool]:
+    ) -> tuple[list[tuple[str, str, str, str | None]], list[CanvasItem], bool]:
         """What a stream may have missed since ``since``: relays, canvas, working."""
         async with as_caller(self._party) as scope:
             relays = (
@@ -385,7 +380,10 @@ class CallAgents:
                     )
                     return
                 await asyncio.sleep(wait)
-        for tool_call_id, text, urgency in relays:
+        for tool_call_id, text, urgency, run_id in relays:
+            # Its run relayed, so its end is not a silent one.
+            if run_id is not None and run_id in self._runs:
+                self._runs[run_id].updated = True
             if tool_call_id in self._heard_relays:
                 continue
             self._heard_relays.add(tool_call_id)

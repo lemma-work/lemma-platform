@@ -206,7 +206,7 @@ async def call_conversations(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> list[U
 
 async def call_lineage(
     uow: SqlAlchemyUnitOfWork, call_id: UUID
-) -> list[tuple[UUID, UUID | None]]:
+) -> list[tuple[UUID, UUID | None, UUID | None]]:
     """The call's conversations, each with the run that spawned it: whose
     work a sub-agent is, read from the store rather than guessed from timing."""
     return await Calls(uow).lineage(call_id)
@@ -237,9 +237,9 @@ async def relays_since(
     since: datetime,
     *,
     heard: frozenset[str] = frozenset(),
-) -> list[tuple[str, str, str]]:
+) -> list[tuple[str, str, str, str | None]]:
     """The relays sent after ``since`` that were not ``heard`` live, with their
-    tool call ids."""
+    tool call ids and the runs that sent them."""
     return await Calls(uow).relays_since(call_id, since, heard=heard)
 
 

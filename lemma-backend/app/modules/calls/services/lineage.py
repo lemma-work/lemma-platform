@@ -24,9 +24,26 @@ class Lineage:
         #: Each run heard, by the conversation it ran in.
         self._ran_in: dict[str, UUID] = {}
 
-    def spawned(self, conversation_id: UUID, by_run: str | None) -> None:
+    def spawned(
+        self,
+        conversation_id: UUID,
+        by_run: str | None,
+        by_conversation: UUID | None = None,
+    ) -> None:
+        """``conversation_id`` was spawned by ``by_run``, which ran in
+        ``by_conversation`` when the store says so -- known without having
+        heard that run's frames."""
         if by_run:
             self._spawned_by.setdefault(conversation_id, by_run)
+            if by_conversation is not None:
+                self._ran_in.setdefault(by_run, by_conversation)
+
+    def learn(self, lineage: list[tuple[UUID, UUID | None, UUID | None]]) -> list[UUID]:
+        """Take the store's ``(conversation, spawned by run, which ran in)``
+        rows; returns the conversations, to watch."""
+        for conversation_id, by_run, ran_in in lineage:
+            self.spawned(conversation_id, str(by_run) if by_run else None, ran_in)
+        return [conversation_id for conversation_id, _, _ in lineage]
 
     def ran(self, run_id: str, conversation_id: UUID) -> None:
         self._ran_in[run_id] = conversation_id
