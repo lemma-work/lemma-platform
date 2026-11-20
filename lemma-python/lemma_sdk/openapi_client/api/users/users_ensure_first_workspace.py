@@ -70,8 +70,10 @@ def sync_detailed(
 ) -> Response[ErrorResponse | FirstWorkspaceResponse]:
     """Ensure The Current User Has A Workspace
 
-     Select an eligible organization and idempotently ensure the current user has a private pod and
-    assistant.
+     Put the current user in an organization, making one if they belong to none, and say which Lemma they
+    land in. Pending invitations are accepted first, then an organization they already belong to is
+    used, then their company's organization open to their verified work domain is joined; otherwise one
+    is made, with a Lemma everyone in it shares. Safe to repeat: a second call makes nothing new.
 
     Args:
         body (FirstWorkspaceRequest | None | Unset):
@@ -102,8 +104,10 @@ def sync(
 ) -> ErrorResponse | FirstWorkspaceResponse | None:
     """Ensure The Current User Has A Workspace
 
-     Select an eligible organization and idempotently ensure the current user has a private pod and
-    assistant.
+     Put the current user in an organization, making one if they belong to none, and say which Lemma they
+    land in. Pending invitations are accepted first, then an organization they already belong to is
+    used, then their company's organization open to their verified work domain is joined; otherwise one
+    is made, with a Lemma everyone in it shares. Safe to repeat: a second call makes nothing new.
 
     Args:
         body (FirstWorkspaceRequest | None | Unset):
@@ -129,8 +133,10 @@ async def asyncio_detailed(
 ) -> Response[ErrorResponse | FirstWorkspaceResponse]:
     """Ensure The Current User Has A Workspace
 
-     Select an eligible organization and idempotently ensure the current user has a private pod and
-    assistant.
+     Put the current user in an organization, making one if they belong to none, and say which Lemma they
+    land in. Pending invitations are accepted first, then an organization they already belong to is
+    used, then their company's organization open to their verified work domain is joined; otherwise one
+    is made, with a Lemma everyone in it shares. Safe to repeat: a second call makes nothing new.
 
     Args:
         body (FirstWorkspaceRequest | None | Unset):
@@ -159,8 +165,10 @@ async def asyncio(
 ) -> ErrorResponse | FirstWorkspaceResponse | None:
     """Ensure The Current User Has A Workspace
 
-     Select an eligible organization and idempotently ensure the current user has a private pod and
-    assistant.
+     Put the current user in an organization, making one if they belong to none, and say which Lemma they
+    land in. Pending invitations are accepted first, then an organization they already belong to is
+    used, then their company's organization open to their verified work domain is joined; otherwise one
+    is made, with a Lemma everyone in it shares. Safe to repeat: a second call makes nothing new.
 
     Args:
         body (FirstWorkspaceRequest | None | Unset):

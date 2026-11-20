@@ -3,7 +3,7 @@ import { readOrigins, type Contact, type ContactReach, type ContactsCap, type We
 import type { Audience, OfferedColumn, TableOpening } from "./public-rows";
 import { NEW_CONVERSATION } from "./types";
 import type { AgentSurfaceResponse, AvailableSurfaceChannelsResponse, SurfaceSetupResponse } from "lemma-sdk";
-import type { Conversation, FileContent, Invitation, LibraryItem, LinkShare, Member, Message, NewOrg, Org, Profile, Pod, PodSource, SharedLink, SlackAppWorkspace, SlackManagedWorkspace, SlackPersonLink, Surface, Tab } from "./types";
+import type { Conversation, FileContent, Invitation, LibraryItem, LinkShare, Member, Message, NewOrg, Org, FirstWorkspace, Profile, Pod, PodSource, SharedLink, SlackAppWorkspace, SlackManagedWorkspace, SlackPersonLink, Surface, Tab } from "./types";
 import { displayAgentName, isPodDefaultAgent } from "./agent-names";
 import { originOf } from "@/thread/conversation-origin";
 import { sampleListing } from "@/thread/memory-notes";
@@ -345,7 +345,7 @@ const CONVERSATION: Conversation = {
             sequence: 4.1,
             created_at: new Date().toISOString(),
             tool_name: "exec_command",
-            tool_args: { cmd: "wc -w drafts/monday-launch-v3.md", workdir: "/workspace/launch" },
+            tool_args: { cmd: "wc -w drafts/monday-launch-v3.md", workdir: "/home/user/lemma/launch" },
             tool_call_id: "call_wc",
         },
         {
@@ -377,7 +377,7 @@ const CONVERSATION: Conversation = {
             tool_name: "exec_command",
             tool_args: {
                 cmd: "grep -rn \"a more human way to work\" drafts/",
-                workdir: "/workspace/launch",
+                workdir: "/home/user/lemma/launch",
                 comment: "Checking the old headline is gone everywhere, not just from v3.",
             },
             tool_call_id: "call_grep",
@@ -792,7 +792,7 @@ const CONVERSATION: Conversation = {
             tool_args: {
                 /* Relative, which is the ordinary spelling and the whole
                    difficulty: it resolves against the conversation's own
-                   directory, not against `/workspace`. */
+                   directory, not against `~/lemma`. */
                 workspace_file_path: "images/plans-table.png",
                 instructions: "Read the three column headers and the price under each one.",
             },
@@ -2661,6 +2661,13 @@ export const fixtureSource: PodSource = {
         if (clean) pod.description = clean;
         else delete pod.description;
     },
+    async setHomeApp(podId: string, app: string | null) {
+        await wait(160);
+        const pod = PODS.find((candidate) => candidate.id === podId);
+        if (!pod) return;
+        if (app) pod.homeApp = app;
+        else delete pod.homeApp;
+    },
     /* Real, in memory, for the reason renaming is: what deleting is judged by
        is the rail losing a face and the team page closing over the gap, and a
        refusal shows neither. Gone until the page reloads, like a hire. */
@@ -3157,9 +3164,19 @@ export const fixtureSource: PodSource = {
         await wait(200);
         return true;
     },
-    async ensureFirstWorkspace() {
+    async ensureFirstWorkspace(): Promise<FirstWorkspace> {
         await wait(400);
-        return { orgId: ORGS[0].id };
+        const shared = PODS.find((pod) => pod.orgId === ORGS[0].id) ?? null;
+        return {
+            orgId: ORGS[0].id,
+            orgName: ORGS[0].name,
+            entry: "existing",
+            orgCreated: false,
+            podId: shared?.id ?? null,
+            podName: shared?.name ?? null,
+            orgPodId: shared?.id ?? null,
+            openToDomain: null,
+        };
     },
     async startSlackInstall() {
         await wait(400);

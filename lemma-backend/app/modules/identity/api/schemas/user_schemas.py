@@ -5,6 +5,47 @@ from pydantic import EmailStr, Field, field_validator
 
 from app.core.api.schemas import BaseSchema
 from app.core.helpers.identifiers import normalize_mobile_e164
+from app.modules.identity.domain.user_preferences import WORK_OTHER_MAX_CHARS, Job
+
+#: More than there are jobs, so a list repeating some is still taken (and each
+#: kept once); a bound so a body cannot be a megabyte of them.
+_WORK_JOBS_MAX = 32
+
+
+class WorkAnswerRequest(BaseSchema):
+    """What the person does, in answer to the one time they are asked."""
+
+    jobs: list[Job] = Field(
+        max_length=_WORK_JOBS_MAX,
+        description=(
+            "What they do, any number of them, each kept once in the order "
+            "given. Empty with no `other` records that they skipped the "
+            "question, which still stops it being asked again."
+        ),
+    )
+    other: str | None = Field(
+        default=None,
+        max_length=WORK_OTHER_MAX_CHARS,
+        description=(
+            "Something else, in their words. Trimmed; empty is no answer. "
+            f"At most {WORK_OTHER_MAX_CHARS} characters once trimmed."
+        ),
+    )
+
+    @field_validator("other", mode="before")
+    @classmethod
+    def _blank_is_nothing(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
+
+class WorkAnswerResponse(BaseSchema):
+    """What the person said they do, and when."""
+
+    jobs: list[Job]
+    other: str | None = None
+    answered_at: datetime
 
 
 class UserProfileRequest(BaseSchema):
@@ -55,6 +96,17 @@ class UserResponse(BaseSchema):
     date_of_birth: date | None = None
     created_at: datetime
     updated_at: datetime
+    # Filled only where a person reads their own record (`/users/me`), never
+    # where this schema describes somebody else -- a member list, a pod's
+    # people -- since what someone does is theirs to tell colleagues.
+    work: WorkAnswerResponse | None = Field(
+        default=None,
+        description=(
+            "What they said they do, or null until they have been asked. An "
+            "answer with no jobs and no `other` means they skipped it. Only "
+            "on the current user's own record."
+        ),
+    )
 
 
 class AccountDeletionRequest(BaseSchema):

@@ -16,7 +16,7 @@ SHELL := /bin/bash
 #   make coverage      full coverage report (unit + e2e per component)
 # ──────────────────────────────────────────────────────────────────────────────
 
-.PHONY: help init dev dev-public stop stop-all logs otel-up otel-down otel-tail otel-smoke \
+.PHONY: help init streamer-test dev dev-public stop stop-all logs otel-up otel-down otel-tail otel-smoke \
         observability-up observability-down observability-open \
         _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-sandbox-images _wait-backend \
         _ensure-native-connectors _desktop-verify-dist-app _desktop-ensure-sidecars \
@@ -137,6 +137,10 @@ DEV_APP_BASE_DOMAIN   := apps.lemma.localhost:$(DEV_BACKEND_PORT)
 # or hosts-file setup in every current browser.
 DEV_BROWSER_BASE_DOMAIN := browser.lemma.localhost:$(DEV_BACKEND_PORT)
 DEV_APPS_DOMAIN_SUFFIX := apps.lemma.localhost
+# Machine previews, each on its own `p-<id>.` origin under this domain. Unset,
+# previews are off -- which is right for a deployment without a wildcard
+# certificate, and wrong for a laptop, where `*.localhost` needs nothing.
+DEV_MACHINE_PREVIEW_DOMAIN := machines.localhost:$(DEV_BACKEND_PORT)
 DEV_DATABASE_URL      := postgresql+asyncpg://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/lemma
 DEV_DATASTORE_DATABASE_URL := postgresql+asyncpg://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/lemma_datastore
 DEV_REDIS_URL         := redis://localhost:$(DEV_REDIS_PORT)/0
@@ -365,7 +369,9 @@ WORKSPACE_DEV_ENV := \
 	FUNCTION_IMAGE=$(DEV_FUNCTION_IMAGE) \
 	WORKSPACE_DOCKER_ALLOW_MUTABLE_IMAGES=true \
 	WORKSPACE_ADD_HOST_GATEWAY=true \
-	WORKSPACE_HOST_ALIAS=host.lemma.internal
+	WORKSPACE_HOST_ALIAS=host.lemma.internal \
+	MACHINE_PREVIEW_DOMAIN=$(DEV_MACHINE_PREVIEW_DOMAIN) \
+	MACHINE_PREVIEW_SCHEME=http
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 
@@ -841,9 +847,9 @@ _run-backend:
 	@cd $(BACKEND_DIR) && rm -f $(notdir $(BACKEND_PID_FILE)) && \
 		$(COMMON_DEV_ENV) $(BACKEND_DEV_ENV) $(WORKSPACE_DEV_ENV) $(OTEL_DEV_ENV) $(LLM_OTEL_DEV_ENV) \
 		bash -c "if [ '$(RELOAD)' = '1' ]; then \
-			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --ws-max-size 1048576 --reload & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
+			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --ws-max-size 1048576 --ws-per-message-deflate false --reload & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
 		else \
-			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --ws-max-size 1048576 & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
+			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --ws-max-size 1048576 --ws-per-message-deflate false & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
 		fi; wait"
 
 _run-frontend:
@@ -2110,6 +2116,7 @@ QUALITY_GATES := \
 	qg-swallowed-errors \
 	qg-memory-hazards \
 	qg-public-prose \
+	qg-stale-machine-terms \
 	qg-migration-order \
 	qg-in-subject-test-doubles \
 	qg-import-budget \
@@ -2132,6 +2139,12 @@ QUALITY_GATES := \
 .PHONY: quality $(QUALITY_GATES)
 
 QUALITY_JOBS ?=
+
+# The browser streamer's Go tests, in the builder image the workspace image uses:
+# go vet, go test (encoders included, with cgo), then the binaries into out/.
+streamer-test:
+	@docker build -f lemma-backend/sandbox-images/streamer/Dockerfile --target out \
+		-o type=local,dest=out/streamer lemma-backend/sandbox-images/streamer
 
 quality:
 	@python3 scripts/run_quality_gates.py $(if $(QUALITY_JOBS),--jobs $(QUALITY_JOBS)) $(QUALITY_GATES)
@@ -2194,6 +2207,14 @@ qg-memory-hazards:
 qg-public-prose:
 	@echo "→ Public prose…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-public-prose
+
+# The per-user workspace sandbox became a machine. Old paths, deprecated
+# routes and SDK names, and "the sandbox" in agent-facing text all survive a
+# rename unless something reads for them, and an agent acts on what it reads.
+# The rules and the allowlist are in scripts/check_stale_machine_terms.py.
+qg-stale-machine-terms:
+	@echo "→ Stale machine terms…"
+	@python3 scripts/check_stale_machine_terms.py
 
 qg-migration-order:
 	@echo "→ Migration order…"

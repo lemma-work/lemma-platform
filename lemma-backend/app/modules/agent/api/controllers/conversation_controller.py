@@ -18,6 +18,7 @@ from app.core.authorization.scope import pod_context_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import AgentRun
+from app.modules.agent.domain.value_objects import AgentRunStartResult, JsonObject
 from app.modules.agent.services.runtime_availability import (
     check_conversation_runtime_for_pod,
 )
@@ -362,7 +363,9 @@ async def send_message(
         conversation_id=conversation_id,
         user_id=user.id,
         pod_id=pod_id,
-        start_run=lambda uow: SendMessage.build(uow).send(
+        start_run=partial(
+            _send_recording_app,
+            request=request,
             conversation_id=conversation_id,
             user_id=user.id,
             content=data.content,
@@ -372,6 +375,35 @@ async def send_message(
             client_message_id=data.client_message_id,
         ),
     )
+
+
+async def _send_recording_app(
+    uow,
+    *,
+    request: Request,
+    conversation_id: UUID,
+    user_id: UUID,
+    content: str,
+    pod_id: UUID,
+    message_metadata: JsonObject | None,
+    typed_in_lemma: bool,
+    client_message_id: str | None,
+) -> AgentRunStartResult:
+    """A person's send, with the pod app that sent it -- if a pinned app's page
+    did -- recorded on the run (``domain/app_turns``)."""
+    from app.modules.agent.services.app_started_runs import record_app_turn
+
+    result = await SendMessage.build(uow).send(
+        conversation_id=conversation_id,
+        user_id=user_id,
+        content=content,
+        pod_id=pod_id,
+        message_metadata=message_metadata,
+        typed_in_lemma=typed_in_lemma,
+        client_message_id=client_message_id,
+    )
+    await record_app_turn(uow, request, result)
+    return result
 
 
 @router.post(
@@ -404,7 +436,9 @@ async def append_message(
     async with member_unit_of_work(
         uow_factory, request=request, user_id=user.id, pod_id=pod_id
     ) as uow:
-        result = await SendMessage.build(uow).send(
+        result = await _send_recording_app(
+            uow,
+            request=request,
             conversation_id=conversation_id,
             user_id=user.id,
             content=data.content,

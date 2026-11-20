@@ -39,9 +39,9 @@ snapshot changes materially. Do not overwrite the identity of an older source.
 | --- | --- |
 | `source_id` | Stable `S01`, `S02`, ... |
 | `title` | Exact title or concise file label |
-| `source_type` | pod, workspace, web, dataset, interview, or other |
+| `source_type` | pod, machine, web, dataset, interview, or other |
 | `publisher_author` | Responsible organization or author |
-| `location` | Pod path, workspace path, canonical URL, or dataset identifier |
+| `location` | Pod path, machine path, canonical URL, or dataset identifier |
 | `published_effective` | Publication, effective, revision, or data-period dates |
 | `retrieved_at` | ISO date; include time and timezone for volatile material |
 | `version` | Edition, commit, document revision, or snapshot marker |
@@ -118,7 +118,7 @@ changes. Add a direct link when one exists.
   `/knowledge/policies/refunds.pdf`.
 - Pod text: `[S04, lines 22-31]`; register source type `pod` and path
   `/me/research-notes/context.md`.
-- Workspace source: `[S05, src/policy.ts:88]`; record repository revision or commit.
+- Machine source: `[S05, src/policy.ts:88]`; record repository revision or commit.
 - Web source: `[S06, "Eligibility"](https://canonical.example/policy)`.
 - Dataset: `[S07, table orders, rows through 2026-07-31]`.
 - Video or audio: `[S08, 12:14-13:02]`.

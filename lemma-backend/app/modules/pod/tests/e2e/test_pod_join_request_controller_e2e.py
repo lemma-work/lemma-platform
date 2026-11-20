@@ -110,6 +110,16 @@ async def test_pod_join_request_lifecycle(
         for item in visible_pods_response.json().get("items", [])
     )
 
+    # Approving made them a member of the organization, and that membership
+    # grants what a member holds: organization permissions are read from role
+    # assignments, which the approval has to write beside the row.
+    permissions = await async_client.get(
+        f"/organizations/{org_id}/permissions/me",
+        headers={"Authorization": f"Bearer {outsider_token}"},
+    )
+    assert permissions.status_code == 200, permissions.text
+    assert "org.read" in permissions.json()["actions"]
+
 
 @pytest.mark.asyncio
 async def test_pod_self_join_policies(

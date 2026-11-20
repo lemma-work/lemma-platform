@@ -2,6 +2,8 @@
 set -euo pipefail
 
 DISPLAY_VALUE="${DISPLAY:-:99}"
+DISPLAY_NUMBER="${DISPLAY_VALUE#:}"
+DISPLAY_NUMBER="${DISPLAY_NUMBER%%.*}"
 # The framebuffer Xvfb allocates. It is both the size the display starts at
 # and the ceiling on every later resize: RandR can pick a smaller mode out of a
 # big framebuffer but cannot grow one, so a viewer asking for a display that
@@ -24,12 +26,75 @@ DISPLAY_VALUE="${DISPLAY:-:99}"
 # branch that restarts Xvfb kills both first.
 SCREEN="${WORKSPACE_XVFB_MAX_SCREEN:-${WORKSPACE_XVFB_SCREEN:-1920x1200x24}}"
 START_SCREEN="${WORKSPACE_XVFB_SCREEN:-1440x960x24}"
+
+# Native density: Chrome at a device scale factor of 2, so a person watching
+# on a high-density screen reads text at its own pixels instead of a 1x
+# picture scaled up. Twice the pixels to render and encode, so only on a
+# machine with a second vCPU -- Chrome at DPR 2 takes a whole one on its own
+# -- and only when the server allows it, in the file it delivers on every
+# session beside the browser proxy decision
+# (`workspace_runtime_bundle._ensure_browser_proxy`).
+#
+# **Decided once, when the display is created, and fixed for its life.**
+# Density rides in the browser's launch digest below, and a digest change
+# restarts Chrome with `close --all`. It used to be re-decided on every run
+# from a file only the view path delivered, so a person opening the screen
+# changed the answer and the agent's next command restarted its Chrome
+# mid-task, tabs and all. Now the decision is written beside the X server
+# when this script starts one, and every later run reads it back while that
+# server lives: opening, closing or reconnecting a view never changes it, and
+# a server-side change to the flag reaches a machine when its display is next
+# created (a resume, a new machine).
+#
+# The cost is the agent's too: it is the agent's Chrome, so its screenshots
+# are taken at the same density. See docs/architecture/sandbox/live-browser-view.md.
+#
+# The framebuffer ceiling follows the CPUs, not the flag: it is fixed when
+# Xvfb starts, so a two-vCPU machine allocates room for a doubled preset.
+cpus_x100() {
+  local quota period
+  if read -r quota period < "${LEMMA_CPU_MAX_FILE:-/sys/fs/cgroup/cpu.max}" 2>/dev/null && [ "$quota" != "max" ]; then
+    echo $((quota * 100 / period))
+  else
+    echo $(($(nproc 2>/dev/null || echo 1) * 100))
+  fi
+}
+DISPLAY_DECISION_FILE="${LEMMA_DISPLAY_DECISION_FILE:-/tmp/lemma-relay/display.json}"
+# Beside the X server's own lock, not under /tmp/lemma-browser: quiesce
+# sweeps that directory while an E2B pause can keep Xvfb alive, and the
+# stamp is only ever believed while the server it describes is running.
+DISPLAY_DENSITY_FILE="${LEMMA_DISPLAY_DENSITY_FILE:-/tmp/.X${DISPLAY_NUMBER}-lemma-density}"
+DENSITY_STAMP="${LEMMA_BROWSER_DENSITY_STAMP:-/tmp/lemma-browser/density.active}"
+DENSE=0
+[ "$(cpus_x100)" -ge 200 ] && DENSE=1
+if [ "$DENSE" = "1" ]; then
+  SCREEN="${WORKSPACE_XVFB_DENSE_MAX_SCREEN:-2880x2400x24}"
+fi
+read_density() {
+  local value=""
+  [ -r "$1" ] && { IFS= read -r value < "$1" || true; }
+  [ "$value" = "2" ] && echo 2 || echo 1
+}
+if pgrep -f "Xvfb ${DISPLAY_VALUE} " >/dev/null 2>&1; then
+  # The display exists: keep what it was created with. A display started by
+  # an older copy of this script has no stamp, and what its Chrome was
+  # launched at is the next best record -- either way nothing restarts.
+  if [ -r "$DISPLAY_DENSITY_FILE" ]; then
+    DENSITY="$(read_density "$DISPLAY_DENSITY_FILE")"
+  else
+    DENSITY="$(read_density "$DENSITY_STAMP")"
+  fi
+else
+  DENSITY=1
+  if [ "$DENSE" = "1" ] \
+    && grep -Eq '"native_density": *true' "$DISPLAY_DECISION_FILE" 2>/dev/null; then
+    DENSITY=2
+  fi
+fi
 PROFILE_DIR="${AGENT_BROWSER_PROFILE:-/home/user/.lemma/browser/profile}"
 RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/lemma-browser/runtime}"
 CONFIG_PATH="${AGENT_BROWSER_CONFIG:-/tmp/lemma-browser/config.json}"
 EXECUTABLE_PATH="${AGENT_BROWSER_EXECUTABLE_PATH:-/usr/local/bin/workspace-chrome}"
-DISPLAY_NUMBER="${DISPLAY_VALUE#:}"
-DISPLAY_NUMBER="${DISPLAY_NUMBER%%.*}"
 HOME_DIR="${HOME:-/home/user}"
 if ! mkdir -p "$HOME_DIR" 2>/dev/null || [ ! -w "$HOME_DIR" ]; then
   HOME_DIR="/tmp/lemma-home-${UID:-10001}"
@@ -44,6 +109,9 @@ export AGENT_BROWSER_SESSION="${AGENT_BROWSER_SESSION:-workspace}"
 unset AGENT_BROWSER_SESSION_NAME
 
 mkdir -p "$PROFILE_DIR" /tmp/.X11-unix
+# Chrome will not create the download directory itself, and a download into a
+# missing one fails with nothing on screen to say why.
+[ -n "${AGENT_BROWSER_DOWNLOAD_PATH:-}" ] && mkdir -p "$AGENT_BROWSER_DOWNLOAD_PATH" 2>/dev/null || true
 # No lock-file cleanup here, and none in quiesce either.
 #
 # This removed `SingletonCookie`, `SingletonLock`, `SingletonSocket` and
@@ -57,6 +125,31 @@ mkdir -p "$PROFILE_DIR" /tmp/.X11-unix
 # running browser's port, and this script is idempotent by `pgrep` -- a
 # second run leaves the existing Chrome alone -- so deleting it here left a
 # browser that nothing could find, for as long as the sandbox lived.
+#
+# One exception, and only by host. `SingletonLock` is a link to
+# `<hostname>-<pid>`, and Chrome checks the pid only when the host is its own.
+# The profile lives on the home volume, which outlives the container -- a
+# reset, an image upgrade, a container that was removed under a running
+# browser -- and a lock naming the old container's host is one Chrome will not
+# call stale: it puts "The profile appears to be in use by another Chromium
+# process on another computer" on the display in an `xmessage` and never
+# starts, for good. No browser on this host can hold a lock naming another, so
+# those three files go; `DevToolsActivePort` stays, as above.
+clear_foreign_profile_locks() {
+  local here lock owner profile
+  here="$(hostname 2>/dev/null)" || return 0
+  [ -n "$here" ] || return 0
+  for lock in "$(dirname "$PROFILE_DIR")"/*/SingletonLock "$PROFILE_DIR/SingletonLock"; do
+    [ -L "$lock" ] || continue
+    owner="$(readlink "$lock" 2>/dev/null)" || continue
+    case "$owner" in
+      "$here"-*) continue ;;
+    esac
+    profile="$(dirname "$lock")"
+    rm -f "$profile/SingletonLock" "$profile/SingletonSocket" "$profile/SingletonCookie"
+  done
+}
+clear_foreign_profile_locks
 # `--disable-blink-features=AutomationControlled` is the one that matters for
 # the journey this feature exists for. Chrome otherwise sets
 # `navigator.webdriver` and turns on the AutomationControlled blink feature,
@@ -81,7 +174,19 @@ mkdir -p "$PROFILE_DIR" /tmp/.X11-unix
 # bubble; it does not make this a "test build" of Chrome, which is a
 # different thing -- the binary is whatever `workspace-chrome` points at,
 # Debian Chromium on the Docker image and `google-chrome-stable` on E2B.
-CHROME_ARGS="--no-sandbox,--test-type,--disable-dev-shm-usage,--no-first-run,--no-default-browser-check,--disable-blink-features=AutomationControlled"
+#
+# `--hide-crash-restore-bubble` because this Chrome is killed rather than
+# closed more often than not: the memory guard SIGKILLs it, and the relay's
+# recovery from a collided daemon (`chrome.restart_daemon`) kills the Chrome
+# holding the profile lock. The next start then greets the person with a
+# "Restore pages?" bubble over the page they were sent to sign in to -- a
+# question about tabs nobody here chose to open. Here rather than in the
+# image because this script ships in the runtime overlay, so it reaches
+# sandboxes without a rebuild.
+CHROME_ARGS="--no-sandbox,--test-type,--disable-dev-shm-usage,--no-first-run,--no-default-browser-check,--disable-blink-features=AutomationControlled,--hide-crash-restore-bubble"
+if [ "$DENSITY" = "2" ]; then
+  CHROME_ARGS="${CHROME_ARGS},--force-device-scale-factor=2"
+fi
 # Chrome's own size is *not* set here, and cannot be: this list is
 # comma-separated (agent-browser splits it), and every flag that would say a
 # size takes a comma inside its value. `--window-size=1920,1200` arrives at
@@ -244,7 +349,12 @@ EOF
 # `close --all` rather than a signal: it is the only stop that writes the
 # profile back, so changing the proxy does not cost the person their logins.
 PROXY_STAMP="/tmp/lemma-browser/proxy.active"
-PROXY_WANTED="$(printf '%s' "$BROWSER_PROXY" | sha256sum | cut -d" " -f1)"
+# The density rides in the same digest, so changing it restarts the browser
+# the same way a proxy change does -- `close --all`, which keeps the profile.
+# Only when it is not 1, so a machine at 1x keeps the digest it already had.
+DENSITY_SUFFIX=""
+[ "$DENSITY" != "1" ] && DENSITY_SUFFIX="|density=$DENSITY"
+PROXY_WANTED="$(printf '%s' "$BROWSER_PROXY$DENSITY_SUFFIX" | sha256sum | cut -d" " -f1)"
 PROXY_ACTIVE=""
 if [ -r "$PROXY_STAMP" ]; then
   IFS= read -r PROXY_ACTIVE < "$PROXY_STAMP" || PROXY_ACTIVE=""
@@ -291,7 +401,12 @@ if ! pgrep -f "Xvfb ${DISPLAY_VALUE} " >/dev/null 2>&1; then
   # Only in this branch: if Xvfb is still up, its clients are attached to the
   # server we are keeping and restarting them would be the bug rather than the
   # fix.
+  # Whichever VNC server the image has: `start-vnc-bridge` prefers TigerVNC's
+  # `X0tigervnc` and falls back to x11vnc, and both outlive their display. The
+  # WebRTC streamer holds an X connection too and goes with them.
   pkill -f "x11vnc .*-rfbport ${LEMMA_BROWSER_VNC_PORT:-5900}" >/dev/null 2>&1 || true
+  pkill -f "X0tigervnc .*-rfbport ${LEMMA_BROWSER_VNC_PORT:-5900}" >/dev/null 2>&1 || true
+  pkill -x lemma-streamer >/dev/null 2>&1 || true
   pkill -f "matchbox-window-manager -display ${DISPLAY_VALUE}" >/dev/null 2>&1 || true
   # `setsid`, not just `nohup` -- the same reason `start-browser-relay` needs it.
   # This script is usually reached from an `exec_command` the backend makes, and
@@ -307,6 +422,8 @@ if ! pgrep -f "Xvfb ${DISPLAY_VALUE} " >/dev/null 2>&1; then
   # the viewer's shape is the whole point of `/display:resize`.
   setsid nohup Xvfb "$DISPLAY_VALUE" -screen 0 "$SCREEN" -ac +extension RANDR \
     >/tmp/lemma-xvfb.log 2>&1 < /dev/null &
+  # The density this display is created with, for every later run to keep.
+  printf '%s\n' "$DENSITY" > "$DISPLAY_DENSITY_FILE" 2>/dev/null || true
   # Waited for, not slept through. Xvfb binds in ~23ms on an idle native
   # container, so 0.4s looked generous -- but it is a fixed guess either way,
   # and on a loaded or emulated machine losing that guess costs a failed browser
@@ -422,6 +539,8 @@ if [ "$START_SCREEN" != "$SCREEN" ] && command -v set-display-size >/dev/null 2>
   start_w="${START_SCREEN%%x*}"
   start_rest="${START_SCREEN#*x}"
   start_h="${start_rest%%x*}"
+  start_w=$((start_w * DENSITY))
+  start_h=$((start_h * DENSITY))
   if ! DISPLAY="$DISPLAY_VALUE" set-display-size "$start_w" "$start_h" \
     >/tmp/lemma-initial-size.log 2>&1; then
     echo "[lemma-ensure-display] could not size the display to ${start_w}x${start_h}" >&2
@@ -571,6 +690,10 @@ fi
 if [ "$open_status" = "0" ]; then
   mkdir -p "$(dirname "$PROXY_STAMP")"
   printf '%s\n' "$PROXY_WANTED" > "$PROXY_STAMP"
+  # What the running browser was launched at, which the relay multiplies a
+  # preset by (`browser_relay/display.py`). Beside the proxy stamp, and like
+  # it ephemeral: it describes a running process.
+  printf '%s\n' "$DENSITY" > "$DENSITY_STAMP"
 fi
 if [ "$opened_cold" = "1" ] && [ "$open_status" = "0" ]; then
   close_new_tab_page

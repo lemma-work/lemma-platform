@@ -141,14 +141,29 @@ async def approve_join_request(
     data: PodJoinRequestApproveRequest,
     pod_join_request_service: PodJoinRequestServiceDep,
     user: CurrentUser,
+    uow: UoWDep,
 ) -> PodJoinRequestCreateResponse:
-    join_request = await pod_join_request_service.approve_join_request(
+    (
+        join_request,
+        created_org_member,
+    ) = await pod_join_request_service.approve_join_request(
         pod_id,
         join_request_id,
         user.id,
         org_role=data.org_role,
         pod_role=data.pod_role,
     )
+    if created_org_member is not None:
+        # The role the new membership was written with, which the approver
+        # chose; without the assignment it grants no organization permission.
+        await AuthorizationDataService(uow.session).assign_roles(
+            organization_id=created_org_member.organization_id,
+            pod_id=None,
+            principal_type="ORG_MEMBER",
+            principal_id=created_org_member.id,
+            role_names=[OrganizationRole(created_org_member.role).value],
+            assigned_by_user_id=user.id,
+        )
     return PodJoinRequestCreateResponse.model_validate(join_request)
 
 

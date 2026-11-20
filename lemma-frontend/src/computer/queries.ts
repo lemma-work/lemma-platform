@@ -11,7 +11,7 @@ export function useWorkspaceStatus(enabled: boolean) {
     const cache = useQueryClient();
     const result = useQuery({
         queryKey: ["computer", "status"],
-        queryFn: () => lemma().workspace.status(),
+        queryFn: () => lemma().machines.startup("me"),
         enabled: live() && enabled,
         refetchInterval: (query) => startupProgress(query.state.data) ? 3_000 : 15_000,
         refetchOnWindowFocus: true,
@@ -31,9 +31,10 @@ export function useWorkspaceStatus(enabled: boolean) {
 
 /** Reading the computer without starting it.
  *
- *  The installed SDK has no namespace for these, so the paths are written out
- *  once here rather than at each call site — the same arrangement the usage
- *  calls are in, for the same reason.
+ *  Everything here is the person's own default machine, `me`, under
+ *  `/machines/me`. The paths are written out once here rather than through the
+ *  SDK's `machines` namespace because these hooks want the raw shapes in
+ *  `machine.ts` and, for file bodies, the whole `Response`.
  *
  *  One rule runs through the whole file and it is a cost rule, not a
  *  correctness one: **looking must not start a machine.** A paused sandbox is
@@ -64,7 +65,7 @@ export function useFiles(path: string | null, wake: boolean, enabled = true) {
     return useInfiniteQuery({
         queryKey: ["computer", "files", path ?? "", wake],
         initialPageParam: undefined as string | undefined,
-        queryFn: ({ pageParam }) => lemma().request<Listing>("GET", "/workspace/files", {
+        queryFn: ({ pageParam }) => lemma().request<Listing>("GET", "/machines/me/files", {
             params: { path: path ?? undefined, wake: wake || undefined, after: pageParam },
         }),
         /* The server's cursor, in the server's order. The view sorts folders
@@ -87,7 +88,7 @@ export function useBrowser(enabled: boolean) {
         queryKey: ["computer", "browser"],
         queryFn: async () => {
             const found = await lemma().request<{ state?: string; detail?: string | null }>(
-                "GET", "/workspace/browser/status",
+                "GET", "/machines/me/browser",
             );
             return (found?.state ?? "unavailable") as BrowserState;
         },
@@ -122,7 +123,7 @@ async function slice(path: string, options: { length?: number }): Promise<Blob> 
 /** The same read, with the status it came back with — which is how a ranged
  *  read knows it got the slice it asked for. See `whole-file.ts`. */
 async function sliceWithStatus(path: string, options: { length?: number; range?: { start: number; end: number } }): Promise<Slice> {
-    const response = await lemma().streamResponse("/workspace/files:content", {
+    const response = await lemma().streamResponse("/machines/me/files:content", {
         method: "GET",
         params: { path, length: options.length },
         headers: options.range ? { Range: `bytes=${options.range.start}-${options.range.end}` } : undefined,
@@ -175,7 +176,7 @@ export function useFileStat(path: string | null) {
     return useQuery({
         queryKey: ["computer", "stat", path ?? ""],
         queryFn: () => lemma().request<{ size_bytes: number }>(
-            "GET", "/workspace/files:stat", { params: { path: path! } },
+            "GET", "/machines/me/files:stat", { params: { path: path! } },
         ),
         enabled: live() && Boolean(path),
         staleTime: 30_000,
@@ -201,7 +202,7 @@ export function wholeFile(path: string, sizeBytes = 0): Promise<Blob> {
 export function useBrowserAccess() {
     return useMutation({
         mutationFn: () => lemma().request<{ url: string; expires_at: string }>(
-            "POST", "/workspace/apps/browser/access", { body: { ttl_seconds: 1800 } },
+            "POST", "/machines/me/browser:access", { body: { ttl_seconds: 1800 } },
         ),
     });
 }
@@ -226,24 +227,71 @@ export function useOpenBrowserTab() {
     return { open, busy: access.isPending, failed: access.isError };
 }
 
-/** Fit the sandbox display to the pane showing it.
+/** Put the machine's screen at one of the presets (`presets.ts`).
  *
- *  The pane is a box of an arbitrary shape and the display is a real screen
- *  with a fixed size, so one of them has to move. Scaling the picture is what
- *  made the browser a small letterboxed rectangle ringed with dead space;
- *  resizing the display means the pixels sent are the pixels shown — and a
- *  narrow pane gets a narrow *viewport*, so a site serves its mobile layout to
- *  somebody signing in on a phone.
+ *  Asked once, when somebody picks a preset or a driving pane connects — never
+ *  because the pane changed shape, which only rescales the picture locally.
+ *  `viewer` names the pane, so the machine can hold the size for whoever is
+ *  driving and tell a second driver who has it.
  *
- *  A failure here is not a failure for the person: they keep the picture they
- *  had. The route says so itself by answering `{size: null}` rather than a
- *  status code, so there is nothing to catch and nothing to show.
+ *  A refusal is not an error for the person: they keep the screen they had.
+ *  The route answers `{size: null, reason}` rather than a status code, and
+ *  the reason is a sentence the toolbar shows.
  */
 export function useBrowserResize() {
     return useMutation({
-        mutationFn: (size: { width: number; height: number }) =>
-            lemma().request<{ size: string | null }>("POST", "/workspace/browser/display-size", { body: size }),
+        mutationFn: (size: { width: number; height: number; viewer: string }) =>
+            lemma().request<{ size: string | null; reason?: string | null }>(
+                "POST", "/machines/me/browser:display", { body: size },
+            ),
     });
+}
+
+/** What the screen's toolbar shows: transport, density, the display's size
+ *  and who holds it, who is watching, and whether the agent is driving.
+ *  Refreshed while somebody is looking; never starts anything. */
+export interface BrowserDetails {
+    state: BrowserState;
+    transport?: "vnc" | "webrtc" | "auto" | null;
+    density?: number | null;
+    size?: string | null;
+    presets?: Record<string, string> | null;
+    lease?: string | null;
+    watching?: { viewer: string; mode: string; transport: string }[];
+    agent_driving?: boolean;
+}
+
+export function useBrowserDetails(enabled: boolean) {
+    return useQuery({
+        queryKey: ["computer", "browser", "details"],
+        queryFn: async () => {
+            const found = await lemma().request<Partial<BrowserDetails>>("GET", "/machines/me/browser");
+            return { ...found, state: (found?.state ?? "unavailable") as BrowserState } as BrowserDetails;
+        },
+        enabled: live() && enabled,
+        refetchInterval: 10_000,
+        retry: false,
+    });
+}
+
+export interface BrowserTab { id: string; title: string; url: string }
+
+export type BrowserCommand =
+    | { command: "navigate"; url: string }
+    | { command: "back" | "forward" | "reload" | "tabs" }
+    | { command: "activate" | "close"; target: string };
+
+/** One toolbar command — back, forward, reload, go, tabs — and the tabs after it. */
+export function useBrowserCommand() {
+    return useMutation({
+        mutationFn: (action: BrowserCommand) =>
+            lemma().request<{ tabs: BrowserTab[] }>("POST", "/machines/me/browser:command", { body: { action } }),
+    });
+}
+
+/** How a viewing session went, said once when it ends (`beacon.ts`). */
+export function sendStreamBeacon(beacon: Record<string, unknown>): void {
+    void lemma().request("POST", "/machines/me/browser:beacon", { body: beacon }).catch(() => undefined);
 }
 
 /** Where the browser signing in to `origin` actually is.
@@ -258,7 +306,7 @@ export function useCurrentPage(origin: string | null, enabled: boolean) {
         queryKey: ["computer", "page", origin ?? ""],
         queryFn: async () => {
             const found = await lemma().request<{ url: string | null }>(
-                "GET", "/workspace/browser/current-page-url", { params: { origin: origin! } },
+                "GET", "/machines/me/browser/current-page-url", { params: { origin: origin! } },
             );
             return found?.url ?? null;
         },

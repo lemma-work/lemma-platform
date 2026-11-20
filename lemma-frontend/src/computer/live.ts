@@ -5,13 +5,14 @@
  */
 
 /** Why the socket closed, in numbers. These match the `CLOSE_*` constants in
- *  `browser_view_controller.py`, and they are read off the WebSocket's own
+ *  `machine_socket_auth.py` and `machine_browser_view_controller.py`, and they are read off the WebSocket's own
  *  close event rather than RFB's `disconnect`, which reports only whether the
  *  close was clean — not enough to tell "no browser is running yet" (worth
  *  retrying, the agent may start one) from "your session ended" (retrying with
  *  the same expired cookie can never succeed). */
 const CLOSE_UNAUTHENTICATED = 4401;
 const CLOSE_ORIGIN_REFUSED = 4403;
+const CLOSE_NOT_FOUND = 4404;
 const CLOSE_NO_BROWSER = 4409;
 const CLOSE_UNSUPPORTED = 4422;
 const CLOSE_STALE_IMAGE = 4426;
@@ -29,6 +30,8 @@ export type LiveState =
 export function stateFromClose(code: number): LiveState {
     if (code === CLOSE_UNAUTHENTICATED) return "signed-out";
     if (code === CLOSE_ORIGIN_REFUSED) return "refused";
+    /* No machine by that ref: retrying asks for the same missing thing. */
+    if (code === CLOSE_NOT_FOUND) return "unsupported";
     if (code === CLOSE_NO_BROWSER) return "no-browser";
     if (code === CLOSE_UNSUPPORTED) return "unsupported";
     if (code === CLOSE_STALE_IMAGE) return "stale-image";
@@ -63,15 +66,57 @@ export function socketUrl(
         /** The bearer token, where this browser has one. Absent on a cookie
          *  session, which is the case that needs no credential in a URL. */
         accessToken?: string | null;
+        /** `rtc` carries WebRTC signalling instead of the VNC picture. */
+        transport?: "vnc" | "rtc";
+        /** This pane's name, which the resize lease follows. See `presets.ts`. */
+        viewer?: string | null;
     },
 ): string {
     const base = api.replace(/^http/, "ws").replace(/\/$/, "");
     const query = new URLSearchParams({ mode: options.mode });
+    if (options.transport === "rtc") query.set("transport", "rtc");
+    if (options.viewer) query.set("viewer", options.viewer);
     /* One or the other, never both: a sign-in names the site it is for, and
        the server resolves the session from that. Sending a conversation beside
        it would be a second answer to a question with one. */
     if (options.origin) query.set("origin", options.origin);
     else if (options.conversationId) query.set("conversation", options.conversationId);
     if (options.accessToken) query.set("access_token", options.accessToken);
-    return `${base}/workspace/browser/view?${query.toString()}`;
+    return `${base}/machines/me/browser/view?${query.toString()}`;
+}
+
+/** How long the page may be hidden before its screen disconnects. */
+export const HIDDEN_DISCONNECT_MS = 60_000;
+
+interface HidingDocument {
+    hidden: boolean;
+    addEventListener(type: "visibilitychange", listener: () => void): void;
+    removeEventListener(type: "visibilitychange", listener: () => void): void;
+}
+
+/** Calls `onAway(true)` once the document has been hidden for `delayMs`, and
+ *  `onAway(false)` as soon as it is shown again after that.
+ *
+ *  An open screen is a socket that keeps the machine awake and a stream the
+ *  machine keeps encoding, so a tab left in the background spends compute and
+ *  relay traffic on nobody. A minute, not at once, so switching tabs to copy
+ *  something does not cost a reconnect. Returns the cleanup.
+ */
+export function watchHidden(doc: HidingDocument, onAway: (away: boolean) => void, delayMs = HIDDEN_DISCONNECT_MS): () => void {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let away = false;
+    const update = () => {
+        if (doc.hidden) {
+            if (!timer && !away) timer = setTimeout(() => { timer = null; away = true; onAway(true); }, delayMs);
+            return;
+        }
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (away) { away = false; onAway(false); }
+    };
+    doc.addEventListener("visibilitychange", update);
+    update();
+    return () => {
+        doc.removeEventListener("visibilitychange", update);
+        if (timer) clearTimeout(timer);
+    };
 }

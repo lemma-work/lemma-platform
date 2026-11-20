@@ -343,9 +343,27 @@ jobs:
           tags: lemma-backend:security
           load: true
           cache-from: type=gha,scope=lemma-backend-amd64
+      # Trivy from its GitHub release, not through the action's setup-trivy:
+      # that downloads from get.trivy.dev, which stopped resolving (curl exit
+      # 6 on every run without a cached binary, 2026-11-04). Same tarball,
+      # checked against the release's own checksums.
+      - name: Install Trivy
+        env:
+          TRIVY_VERSION: "0.70.0"
+        run: |
+          tarball="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          base="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          cd "$RUNNER_TEMP"
+          curl -fsSLO --retry 3 "$base/$tarball"
+          curl -fsSLO --retry 3 "$base/trivy_${TRIVY_VERSION}_checksums.txt"
+          grep " ${tarball}\$" "trivy_${TRIVY_VERSION}_checksums.txt" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf "$tarball" -C "$HOME/.local/bin" trivy
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Scan high and critical vulnerabilities
         uses: aquasecurity/trivy-action@v0.36.0
         with:
+          skip-setup-trivy: true
           image-ref: lemma-backend:security
           format: table
           exit-code: "1"

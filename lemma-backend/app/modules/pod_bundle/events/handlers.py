@@ -28,6 +28,7 @@ from app.core.infrastructure.work import Defer
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.events import analytics as bundle_analytics
 from app.modules.pod_bundle.events.github_import import (
+    fetch_bundle_archive as _fetch_bundle_archive,
     github_import_fetcher as _github_import_fetcher,
     note_anonymous_access as _note_anonymous_access,
 )
@@ -37,6 +38,7 @@ from app.modules.pod_bundle.domain.errors import (
     BundleInvalidError,
     BundleStagingMissingError,
     BundleStateConflictError,
+    PartKeptError,
 )
 from app.modules.pod_bundle.domain.state import (
     ExportState,
@@ -54,7 +56,7 @@ from app.modules.pod_bundle.infrastructure.bundle_contents import (
     resource_count,
 )
 from app.modules.pod_bundle.infrastructure.bundle_identity import read_bundle_id
-from app.modules.pod_bundle.infrastructure import bundle_outcome
+from app.modules.pod_bundle.infrastructure import bundle_home_app, bundle_outcome
 from app.modules.pod_bundle.infrastructure.realtime import (
     completed_payload,
     error_payload,
@@ -132,13 +134,7 @@ async def _finalize_import_cancellation(store, staging, state: ImportState) -> N
         # The status name alone was the only signal that the pod had been
         # modified. Cancelling mid-apply does not undo the steps that landed,
         # and the person who cancelled is the one who needs to know that.
-        applied = len(current.committed_steps)
-        total = len(current.plan.steps) if current.plan else 0
-        current.error = (
-            f"Cancelled after {applied} of {total} steps had been applied to "
-            f"this pod. Those changes were not undone; import the bundle again "
-            f"to finish, or remove what it created."
-        )
+        current.error = current.cancelled_part_way_message()
     current.completed_at = _now()
     try:
         await store.save_import(current)
@@ -395,6 +391,7 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
                 )
                 from app.modules.pod_bundle.infrastructure.grant_planning import (
                     ServiceGrantConferral,
+                    ServiceHeldGrants,
                 )
                 from app.modules.pod_bundle.infrastructure.plan_builder import (
                     PlanBuilder,
@@ -411,8 +408,10 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
                     directory,
                     connectors=ServiceConnectorLookup(**scope, user_id=state.user_id),
                     grants=ServiceGrantConferral(**scope),
+                    held=ServiceHeldGrants(**scope),
                     accounts=ServiceAccountUsability(**scope),
                     outcome=bundle_outcome.owned_for_plan(state, uow.session),
+                    created=state.created,  # a replan's: what it made, it finishes
                 ).build_plan(bundle_root=bundle_root)
 
     await _raise_if_cancelled(store, import_id)
@@ -462,9 +461,7 @@ async def import_pod_github(context: dict[str, str | None]) -> None:
             repo=(context.get("repo")),
         )
         fetcher = _github_import_fetcher(worker_ctx, state)
-        zip_bytes = await fetcher.fetch_zipball(
-            owner=owner, repo=repo, ref=state.source.ref
-        )
+        zip_bytes = await _fetch_bundle_archive(fetcher, state, owner=owner, repo=repo)
         _note_anonymous_access(fetcher, state)
         await _raise_if_cancelled(store, import_id)
         state.staging_key = await staging.put_archive(
@@ -598,7 +595,10 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         StepNotApplicableError,
     )
     from app.modules.pod_bundle.domain.state import StepKind, StepStatus
+    from app.modules.pod_bundle.infrastructure.kept_parts import CreatedParts
 
+    state.remember_finished_creates()
+    created = CreatedParts(state.created)  # live, checkpointed with each step
     try:
         await _raise_if_cancelled(store, import_id)
         state.status = ImportStatus.APPLYING
@@ -638,6 +638,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
             while (step := state.plan.next_pending_step()) is not None:
                 yield_point()  # every earlier step is committed and checkpointed
                 await _raise_if_cancelled(store, import_id)
+                resumed = step.status is StepStatus.RUNNING  # it was interrupted
                 step.status = StepStatus.RUNNING
                 state.current_step = step.index
                 await store.save_import(state)
@@ -661,9 +662,12 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                             user_id=user_id,
                             bundle_root=bundle_root,
                             replacements=replacements,
+                            created=created,
+                            resumed=resumed,
                         )
                         cancelled = await _cancellation_requested(store, import_id)
                         if cancelled is not None:
+                            cancelled.created = state.created
                             if step.index not in cancelled.committed_steps:
                                 cancelled.committed_steps.append(step.index)
                             if cancelled.plan is not None:
@@ -699,6 +703,8 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                                     # and read back by the status endpoint.
                                     warnings=state.warnings,
                                     connector_choices=state.connector_choices,
+                                    created=created,
+                                    resumed=resumed,
                                 )
                                 await applier.apply_step(step)
                                 await _raise_if_cancelled(store, import_id)
@@ -713,8 +719,8 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                     step.status = StepStatus.DONE
                     if step.index not in state.committed_steps:
                         state.committed_steps.append(step.index)
-                except StepNotApplicableError as exc:
-                    # Deferred kind (app/surface/grants) — skip, don't fail.
+                except (StepNotApplicableError, PartKeptError) as exc:
+                    # Not applied here, or the pod's own and kept: skip, not fail.
                     step.status = StepStatus.SKIPPED
                     step.error = str(exc)
                 except DomainError as exc:
@@ -725,7 +731,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                         store,
                         state,
                         exc,
-                        public_message=_apply_failure_message(state, step, exc),
+                        public_message=state.apply_failure_message(step, exc),
                     )
                     logger.debug(
                         "pod_bundle.handlers.import_s_step_s_s.diagnostic",
@@ -735,6 +741,10 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                 await _checkpoint(store, state, step)
             # Once every step has landed: its measure counts the tables applied.
             await bundle_outcome.carry(worker_ctx.uow_factory, state, bundle_root)
+            # And the apps: the one it opens on must be there to be chosen.
+            await bundle_home_app.carry_to_pod(
+                worker_ctx.uow_factory, state, bundle_root
+            )
 
         await _raise_if_cancelled(store, import_id)
         await _record_recipe(worker_ctx, state)
@@ -781,27 +791,6 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
             import_id=import_id,
             exc_info=True,
         )
-
-
-def _apply_failure_message(state: ImportState, step, exc: Exception) -> str:
-    """Say what the pod now holds, not just which step broke.
-
-    Apply commits each step in its own unit of work and there is no rollback, so
-    a failure part-way through an approved plan leaves the pod changed. Telling
-    the person only "Step X failed" leaves them with half a pod, no idea that it
-    is half a pod, and no stated way forward -- while re-applying does in fact
-    resume from the failed step rather than duplicating the work already done.
-    """
-    applied = len(state.committed_steps)
-    total = len(state.plan.steps) if state.plan else 0
-    head = f"Step '{step.name}' failed: {exc}"
-    if not applied:
-        return f"{head} Nothing was applied to the pod."
-    return (
-        f"{head} {applied} of {total} steps were already applied to this pod and "
-        f"were not undone; apply this import again to continue from step "
-        f"'{step.name}'."
-    )
 
 
 async def _checkpoint(store, state: ImportState, step) -> None:
@@ -867,6 +856,7 @@ async def _record_recipe(worker_ctx: BundleWorkerContext, state: ImportState) ->
         kind=state.source.kind.value,
         name=(state.plan.bundle_name if state.plan else None),
         repo_url=state.source.repo_url or state.source.url,
+        path=state.source.path,
         format_version=(state.plan.format_version if state.plan else None),
         imported_at=datetime.now(timezone.utc),
         imported_by=state.user_id,

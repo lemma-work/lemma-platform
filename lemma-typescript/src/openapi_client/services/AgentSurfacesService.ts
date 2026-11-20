@@ -68,6 +68,44 @@ export class AgentSurfacesService {
         });
     }
     /**
+     * Send Self Notice
+     * Tell the person this request acts for something, in their own channel:
+     * a function or agent writing to the person it runs as, or a member writing
+     * a note to themselves. There is no recipient to name. A workload needs
+     * `channel.notify_self` granted on the pod (`resource_type` `pod`,
+     * `resource_name` `/`); a member holds it with `channel.write`. Idempotency
+     * and the per-minute cap are the same as for a notice to another member.
+     * @param podId
+     * @param requestBody
+     * @param idempotencyKey
+     * @returns NoticeResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentNoticeSendSelf(
+        podId: string,
+        requestBody: NoticeRequest,
+        idempotencyKey?: (string | null),
+    ): CancelablePromise<NoticeResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/members/me/notices',
+            path: {
+                'pod_id': podId,
+            },
+            headers: {
+                'Idempotency-Key': idempotencyKey,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                403: `The request acts for nobody in this pod.`,
+                404: `The person it acts for is not in this pod.`,
+                422: `Validation Error`,
+                429: `Too many notices this minute; see Retry-After.`,
+            },
+        });
+    }
+    /**
      * Send Notice
      * Tell another member of the pod something, in their own channel. The
      * same `Idempotency-Key` from the same member is the same notice; sent with

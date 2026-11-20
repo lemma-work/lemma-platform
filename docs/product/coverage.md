@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 178 |
-| `gap` | 4 |
-| `manual` | 32 |
-| `planned` | 35 |
+| `covered` | 180 |
+| `gap` | 5 |
+| `manual` | 37 |
+| `planned` | 37 |
 | `withdrawn` | 2 |
-| **total** | **251** |
+| **total** | **261** |
 
-Scenario tests declaring a promise: 459.
+Scenario tests declaring a promise: 461.
 
 ## Contract coverage
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 260 | 387 |
+| OpenAPI operations | 262 | 421 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -175,19 +175,23 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-005` A person chooses comfortable chat text on their device | `manual` | — |
 | `PS-ONB-006` Authentication resumes the person's requested destination | `manual` | — |
 | `PS-ONB-007` A new person confirms their name and can prove their phone before they start | `manual` | — |
+| `PS-ONB-008` A person is asked what they do once, and the answer stays with them | `covered` | `test_what_a_person_does_stays_with_them` |
+| `PS-ONB-009` Every way in looks the same and says what a Lemma is | `manual` | — |
 | `PS-ONB-010` The person who creates an organization owns it | `covered` | `test_creator_of_an_organization_owns_it`, `test_a_person_can_own_several_organizations` |
 | `PS-ONB-011` An organization has a handle that survives being renamed | `covered` | `test_renaming_an_organization_keeps_its_handle`, `test_handle_availability_is_checkable` |
 | `PS-ONB-014` Two organizations may share a display name | `covered` | `test_two_organizations_may_share_a_display_name` |
 | `PS-ONB-013` Only an owner changes what the organization is | `covered` | `test_only_an_owner_changes_the_organization` |
-| `PS-ONB-015` A new organization opens in a Lemma everyone in it can find | `manual` | — |
+| `PS-ONB-015` A new organization opens in a Lemma everyone in it shares | `covered` | `test_a_new_organization_opens_in_a_lemma_everyone_shares` |
 | `PS-ONB-016` An organization's own Lemma starts by bringing the team's stuff in | `manual` | — |
 | `PS-ONB-020` An invited person joins with the role they were offered | `covered` | `test_an_invited_person_joins_with_the_offered_role`, `test_an_editor_invites_up_to_their_own_level`, `test_an_invitation_is_addressed` |
 | `PS-ONB-021` An invitation can carry a pod, and accepting it grants both | `covered` | `test_an_invitation_cannot_smuggle_a_pod_administrator`, `test_an_invitation_carries_its_pod`, `test_an_invitation_to_a_vanished_pod_is_not_silently_half_applied` |
 | `PS-ONB-022` An invitation stops working when it should | `covered` | `test_a_revoked_invitation_is_dead`, `test_an_invitation_is_single_use` |
 | `PS-ONB-023` Inviting someone already inside is refused clearly | `covered` | `test_inviting_an_existing_member_is_refused` |
 | `PS-ONB-024` A person can see the invitations waiting for them | `covered` | `test_an_unproven_address_is_not_shown_its_invitations`, `test_an_owner_sees_sent_invitations` |
+| `PS-ONB-025` An invited person sees the Lemmas they can join | `manual` | — |
 | `PS-ONB-030` A person is offered the organizations they could join | `covered` | `test_suggestions_are_empty_without_a_matching_domain` |
 | `PS-ONB-031` A person joins an organization that is open to them | `covered` | `test_invite_only_refuses_self_join`, `test_an_open_organization_admits_anyone_as_a_member`, `test_joining_again_changes_nothing` |
+| `PS-ONB-032` Colleagues from one work domain land in one organization | `planned` | — |
 | `PS-ONB-040` Whoever manages people changes what a member may do | `covered` | `test_an_owner_changes_a_role`, `test_a_member_cannot_change_roles`, `test_an_editor_changes_roles_up_to_their_own_level`, `test_an_editor_cannot_make_an_owner`, `test_an_editor_cannot_reach_over_an_owner`, `test_a_member_manages_nobody` |
 | `PS-ONB-041` An organization always has at least one owner | `covered` | `test_the_last_owner_cannot_step_down` |
 | `PS-ONB-042` Removal respects the role hierarchy | `covered` | `test_an_editor_cannot_reach_over_an_owner`, `test_an_editor_removes_members_and_editors`, `test_a_member_manages_nobody`, `test_removing_a_member_takes_their_access` |
@@ -195,7 +199,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-080` A person deletes their own account, from the app or the website | `planned` | — |
 | `PS-ONB-081` Deleting an account unlinks the person from work they shared | `planned` | — |
 | `PS-ONB-082` An account is not deleted out from under what depends on it | `planned` | — |
-| `PS-ONB-050` First-chat setup yields one usable personal workspace | `covered` | `test_first_chat_workspace_is_ready_and_reused`, `test_importer_can_defer_personal_pod_creation` |
+| `PS-ONB-050` First-chat setup lands the person in their organization's Lemma | `covered` | `test_first_chat_workspace_is_ready_and_reused`, `test_no_private_pod_is_made_beside_the_organizations_lemma` |
 | `PS-ONB-070` A new person is shown what Lemma is and where everything is | `manual` | — |
 | `PS-ONB-071` A person can ask how the place they are in works | `manual` | — |
 | `PS-ONB-060` A visitor can learn about Lemma without signing in | `covered` | `test_public_guides_and_company_pages` |
@@ -231,11 +235,16 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-PACK-012` Applying an import either finishes or can be safely retried | `covered` | `test_a_bundle_round_trips` |
 | `PS-PACK-013` A hostile bundle cannot damage the platform | `covered` | `test_a_hostile_bundle_cannot_reach_outside_the_pod`, `test_a_bundle_that_expands_enormously_is_refused` |
 | `PS-PACK-014` An imported pod works without further wiring | `covered` | `test_an_imported_function_actually_runs` |
+| `PS-PACK-015` An import keeps what a pod already has | `planned` | — |
 | `PS-PACK-020` A person publishes a pod so others can install it | `covered` | `test_an_expired_publication_says_so`, `test_publishing_needs_an_account` |
 | `PS-PACK-021` A shared bundle can be viewed before it is installed | `covered` | `test_a_stranger_can_read_a_shared_bundle`, `test_reading_a_bundle_grants_nothing_else`, `test_a_forged_link_is_refused` |
 | `PS-PACK-030` A person builds an app for a pod | `covered` | `test_an_app_can_be_changed`, `test_a_bad_bundle_is_refused`, `test_an_earlier_deployment_can_be_restored`, `test_an_app_is_created`, `test_a_duplicate_app_name_is_refused`, `test_deleting_an_app_removes_it`, `test_promoting_a_missing_result_is_refused` |
 | `PS-PACK-031` An app reaches the people it is meant for | `covered` | `test_an_asset_without_a_release_is_not_found`, `test_shipping_a_release_publishes_the_app`, `test_opening_an_app_starts_a_session`, `test_an_outsider_cannot_read_apps`, `test_private_app_address_requires_app_access` |
 | `PS-PACK-032` A person can retrieve what an app was built from | `covered` | `test_an_app_without_a_release_is_honest`, `test_an_apps_source_is_returned_byte_for_byte`, `test_an_outsider_cannot_take_the_source` |
+| `PS-PACK-033` An app opened inside a Lemma takes the Lemma's look | `manual` | — |
+| `PS-PACK-034` A Lemma with apps opens on its apps | `manual` | — |
+| `PS-PACK-035` Where a person is in an app is an address they can share | `manual` | — |
+| `PS-PACK-036` One app opens another app of the same Lemma | `manual` | — |
 
 ## [Scheduling and triggers](journeys/scheduling-and-triggers.md)
 
@@ -290,6 +299,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-BROWSER-020` A login is the person's own, and it stays | `covered` | `test_one_persons_logins_are_not_anothers` |
 | `PS-BROWSER-021` A login that has stopped working says so | `manual` | — |
 | `PS-BROWSER-022` A person sees and undoes what their browser holds | `covered` | `test_nothing_saved_is_an_empty_list`, `test_signing_out_without_a_running_browser_is_refused` |
+| `PS-BROWSER-023` Nothing short of the person's own say-so loses a login | `gap` | — |
 | `PS-BROWSER-030` A person can watch, and drive, their own browser | `gap` | `test_asking_whether_a_browser_can_be_watched_starts_nothing` |
 
 ## [Surfaces and notifications](journeys/surfaces-and-notifications.md)

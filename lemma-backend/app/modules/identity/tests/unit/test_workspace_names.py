@@ -12,10 +12,13 @@ from __future__ import annotations
 import pytest
 
 from app.modules.identity.domain.workspace_names import (
+    first_name_from_address,
     first_pod_name,
     generated_organization_name,
+    organization_lemma_name,
     organization_name_candidate,
     organization_name_from_work_domain,
+    personal_organization_name,
     to_title_case,
 )
 
@@ -58,6 +61,10 @@ def test_the_same_address_always_gets_the_same_name() -> None:
         ("acme.co.uk", "Acme"),
         ("shop.acme.com", "Acme"),
         ("north-wind.io", "North Wind"),
+        # A team's subdomain is still the company.
+        ("eng.acme.com", "Acme"),
+        ("eng.acme.co.uk", "Acme"),
+        ("acme.io", "Acme"),
         # Nothing to name a company after.
         ("localhost", None),
     ],
@@ -77,8 +84,85 @@ def test_a_taken_company_name_falls_back_before_it_gives_up() -> None:
     assert not organization_name_candidate(**kwargs, attempt=10).startswith("Acme")
 
 
-def test_a_personal_address_skips_straight_to_a_generated_name() -> None:
-    assert organization_name_candidate(email="ada@gmail.com") == "Golden Summit"
+def test_a_personal_address_is_named_after_the_person_it_spells() -> None:
+    """Never a generated phrase: a workspace of one says whose it is."""
+    assert organization_name_candidate(email="ada@gmail.com") == "Ada's workspace"
+    assert organization_name_candidate(email="ada@gmail.com", attempt=3) == (
+        "Ada's workspace"
+    )
+    assert organization_name_candidate(email="x9@gmail.com") == "My workspace"
+
+
+@pytest.mark.parametrize(
+    "email,expected",
+    [
+        ("ada@gmail.com", "Ada"),
+        ("ADA@gmail.com", "Ada"),
+        ("ada.lovelace@gmail.com", "Ada"),
+        ("ada_lovelace@gmail.com", "Ada"),
+        ("ada-lovelace@gmail.com", "Ada"),
+        ("ada+work@gmail.com", "Ada"),
+        # Unicode letters are letters.
+        ("josé.garcía@gmail.com", "José"),
+        ("émile@gmail.com", "Émile"),
+        # A mailbox is not a name: digits, one letter, or nothing at all.
+        ("ada0196+99@gmail.com", None),
+        ("a@gmail.com", None),
+        ("a.lovelace@gmail.com", None),
+        ("1ada@gmail.com", None),
+        ("+ada@gmail.com", None),
+        ("@gmail.com", None),
+        ("not-an-address", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_an_address_spells_a_first_name_only_when_it_reads_as_one(
+    email, expected
+) -> None:
+    assert first_name_from_address(email) == expected
+
+
+@pytest.mark.parametrize(
+    "full_name,email,expected",
+    [
+        ("Ada Lovelace", "x9@gmail.com", "Ada's workspace"),
+        # The first word, however it is spaced.
+        ("  Ada   Lovelace ", None, "Ada's workspace"),
+        # A name given wins over the address.
+        ("Grace", "ada@gmail.com", "Grace's workspace"),
+        (None, "grace.hopper@gmail.com", "Grace's workspace"),
+        ("   ", "grace@gmail.com", "Grace's workspace"),
+        (None, "x9@gmail.com", "My workspace"),
+        (None, None, "My workspace"),
+    ],
+)
+def test_a_workspace_of_one_is_named_after_its_person(
+    full_name, email, expected
+) -> None:
+    assert personal_organization_name(full_name, email) == expected
+
+
+@pytest.mark.parametrize(
+    "organization_name,team,expected",
+    [
+        ("Acme", True, "Acme"),
+        ("North Wind", True, "North Wind"),
+        # Folded to what a pod name allows.
+        ("Café Ünïcode", True, "Cafe Unicode"),
+        ("Ada's workspace", True, "Adas workspace"),
+        ("-Acme-", True, "Acme"),
+        # Nothing a pod may be called survives the fold.
+        ("東京", True, "Everyone"),
+        # A workspace of one has one Lemma, and it is theirs.
+        ("Ada's workspace", False, "Personal"),
+        ("Acme", False, "Personal"),
+    ],
+)
+def test_an_organizations_lemma_is_called_what_it_is(
+    organization_name, team, expected
+) -> None:
+    assert organization_lemma_name(organization_name, team=team) == expected
 
 
 def test_a_personal_workspace_is_named_after_its_person() -> None:

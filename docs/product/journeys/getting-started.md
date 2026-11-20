@@ -9,12 +9,14 @@ first organization — by making one, by being invited to one, or by finding one
 that already exists. It stops at the point where a pod is worth making, which is
 [Building a pod](building-a-pod.md).
 
-After identity verification, first-chat setup selects an eligible organization
-and ensures a private personal pod with an assistant. Web and shared Lemma bots
-reuse an eligible workspace before creating one. A company Slack or Teams
+Every way in — the web app, a plugin's install page, a WhatsApp or Telegram
+sign-up, a company's Slack or Teams installation — puts a person in their first
+organization by one rule. Invitations waiting for them come first, then an
+organization they already belong to, then their company's organization when it
+is open to their verified work domain; otherwise one is made, with a Lemma
+everyone in it shares, and they land in that Lemma. A company Slack or Teams
 installation fixes the organization: signup cannot grant access to another
-organization or bypass the company's membership policy. Importing a pod may
-prepare only the organization, without creating a spare personal pod.
+organization or bypass the company's membership policy.
 
 Onboarding keeps its primary Continue, Create, or Join action visible within
 the window, including at the desktop's minimum size and with enlarged text.
@@ -151,6 +153,55 @@ are shown with a retry action rather than an indefinite loading message.
 - The system shall not ask an account that already has both, an account older
   than its first week, or a person who has already continued or skipped in that
   browser.
+- Where the way in already asked for the name (PS-ONB-009), the step shall not
+  ask it again; it opens only for a phone still to prove.
+
+### PS-ONB-008 — A person is asked what they do once, and the answer stays with them
+**Status:** covered
+
+- When a person starts for the first time, the system shall ask what they do,
+  offering sales, marketing, product, founder, operations, HR, project
+  management, engineering and support, any number of them, and a few words of
+  their own.
+- The system shall keep the answer on the person, not on a browser or an
+  organization, so every device and every organization they work in reads the
+  same answer.
+- Skipping the question shall be an answer too: the system shall not ask a
+  person who has answered or skipped again.
+- Answering shall change nothing else the person has set.
+- The system shall show the answer to the person alone: not in an
+  organization's or a Lemma's list of people, and not to an app.
+- If an answer names a job the system does not offer, or its own words run past
+  120 characters, then the system shall refuse it and keep the answer it had.
+
+**Contracts:** `users.work.set`, `user.current.get`
+
+### PS-ONB-009 — Every way in looks the same and says what a Lemma is
+**Status:** manual
+
+> **Verified by:** on a stack running this build, signing up on the web with a
+> work address, then a colleague from the same domain, then a person invited
+> to a Lemma, then accepting an invitation to an organization from Home, then
+> signing up from a plugin's install page with a personal address: each opens
+> on the same sentence about what a Lemma is, in the same steps and type, and
+> the install page carries on to choosing where the plugin goes. `npm test` in
+> `lemma-frontend` checks the steps each door walks
+> (`tests/arrival-flow.test.ts`) and the words they use
+> (`tests/outcomes-copy.test.ts`).
+
+- Whichever way a person arrives — the web app, a plugin's install page, an
+  invitation — the system shall show the same steps in the same look, opening
+  with one sentence about what a Lemma is.
+- The system shall decide nothing a person could decide better: where their
+  company's organization is open to them, it shall offer it and let them start
+  their own instead; otherwise it shall make or join without asking.
+- A name the account lacks shall be asked on the same screen as what they do,
+  not again in a dialog over the Lemma they land in.
+- Somebody who came in another way (a chat app, an install page) and was not
+  asked what they do shall be asked when they next come to Home, never in place
+  of a chat, an app or a Lemma a link opened.
+
+**Contracts:** `users.ensure_first_workspace`, `users.work.set`
 
 ---
 
@@ -199,25 +250,30 @@ are shown with a retry action rather than an indefinite loading message.
 
 **Contracts:** `org.update`, `org.get`
 
-### PS-ONB-015 — A new organization opens in a Lemma everyone in it can find
-**Status:** manual
+### PS-ONB-015 — A new organization opens in a Lemma everyone in it shares
+**Status:** covered
 
-> **Verified by:** signing up in the web app with an address on a company
-> domain, on a stack running this build: the organization is made, a Lemma
-> called what the organization is called opens, and its header says everyone
-> in the organization can find it. Then making a second organization from the
-> organization menu, which opens in its own Lemma the same way.
+> **Verified by:** the scenario for the organization a first workspace makes.
+> The organization menu is checked in the app, on a stack running this build:
+> making a second organization from it opens in its own Lemma the same way, and
+> that Lemma's header says everyone in the organization can find it.
 
-- When the web app makes an organization for a person who belongs to none, or
-  a person makes one from the organization menu, the system shall also make a
-  Lemma in it and open it: called what the organization is called, or
-  Personal for a workspace of one.
+- When the system makes an organization for a person who belongs to none — on
+  the web, from a plugin's install page, or in a chat sign-up — or a person
+  makes one from the organization menu, the system shall also make a Lemma in
+  it and land them there: called what the organization is called, or Personal
+  for a workspace of one person.
 - That Lemma shall be open to every member of the organization, and everyone
-  who joins the organization afterwards shall be in it (PS-POD-024).
+  who joins the organization afterwards shall be in it (PS-POD-024), from the
+  moment they arrive.
+- The person who made the organization shall own it and administer its Lemma,
+  with everything an owner may do from the first moment.
 - If that Lemma cannot be made, then the system shall still open the
   organization, on its list of Lemmas, where one can be made.
+- Asking again for a first workspace shall make nothing new: not a second
+  organization, and not a second Lemma beside the first.
 
-**Contracts:** `org.create`, `pod.create`
+**Contracts:** `users.ensure_first_workspace`, `org.create`, `pod.create`, `pod.get`
 
 ### PS-ONB-016 — An organization's own Lemma starts by bringing the team's stuff in
 **Status:** manual
@@ -328,6 +384,31 @@ are shown with a retry action rather than an indefinite loading message.
 
 ---
 
+### PS-ONB-025 — An invited person sees the Lemmas they can join
+**Status:** manual
+
+> **Verified by:** on a stack running this build, signing up as somebody
+> invited to one Lemma, and accepting an invitation to an organization alone
+> from Home while working in another: the Lemma they were invited to leads,
+> then the organization's own Lemma with them already in it, then the Lemmas
+> open to everyone there with Join, then "Start a new one"; continuing from
+> Home lands in the organization they joined. The backend's e2e suite proves
+> they are in the organization's Lemma in the answer to accepting
+> (`test_first_workspace_api_e2e.py`).
+
+- When a person accepts an invitation, at sign-up or from Home, the system shall
+  show them that organization's Lemmas: the one they were invited to first,
+  then the ones they are in, then the ones open to everyone there, each with a
+  way to join it, and a way to start a new one.
+- A person new to the organization shall be in the Lemma everyone in it shares
+  from the moment they accept.
+- When they continue, the system shall open the organization they joined, on
+  the Lemma they were invited to when there was one.
+
+**Contracts:** `org.invitation.accept`, `pod.list_joinable`, `pod.join`
+
+---
+
 ## Capability: Join an organization that already exists
 
 ### PS-ONB-030 — A person is offered the organizations they could join
@@ -357,6 +438,32 @@ are shown with a retry action rather than an indefinite loading message.
   leave their existing membership and role untouched.
 
 **Contracts:** `org.join_auto_join`, `organization.member_joined`
+
+### PS-ONB-032 — Colleagues from one work domain land in one organization
+**Status:** planned
+
+> **Verified by:** the backend's own e2e suite
+> (`test_first_workspace_e2e.py`, `test_first_workspace_api_e2e.py`). The
+> scenario suite boots with email verification off, and an unproven address
+> claims no domain; a lane with verification on would let a scenario prove it.
+
+- When the first person from a work domain signs up with a verified address and
+  belongs nowhere, the system shall make their company's organization, named
+  after the company, and shall leave it open to verified addresses from that
+  domain unless its owner closes it.
+- When a colleague from the same domain then signs up, the system shall put
+  them in that organization and in its shared Lemma, rather than making them an
+  organization of their own.
+- Where a person would rather not join their company's organization, the system
+  shall let them start one of their own instead, open by invitation only.
+- If another organization already holds the domain, then the system shall still
+  make the new organization, open by invitation only, rather than refuse the
+  sign-up.
+- An address on a public mail provider, or one not yet verified, shall claim no
+  domain and shall join no organization by its email domain. An invitation it
+  accepts still brings it in.
+
+**Contracts:** `users.ensure_first_workspace`, `org.suggested`
 
 ---
 
@@ -490,15 +597,22 @@ are shown with a retry action rather than an indefinite loading message.
 
 ## Capability: Prepare the first conversation
 
-### PS-ONB-050 — First-chat setup yields one usable personal workspace
+### PS-ONB-050 — First-chat setup lands the person in their organization's Lemma
 **Status:** covered
 
-- First-chat setup shall reuse an eligible organization and ensure a private pod
-  owned solely by the person, with its assistant ready. Retrying or concurrently
-  requesting setup shall return the same workspace without creating duplicates.
+- First-chat setup — a WhatsApp or Telegram sign-up, or the web's first
+  workspace — shall follow PS-ONB-015 and PS-ONB-032, and land the person in the
+  Lemma their organization shares, with its assistant ready; a chat sign-up
+  shall make that Lemma's assistant the one their chat reaches.
+- Where an invitation brought them to a particular pod, they shall land there
+  instead, and still be told which Lemma the organization shares.
+- Only in an organization with no shared Lemma, or one whose shared Lemma the
+  person left, and only when asked, shall setup make a private pod owned solely
+  by the person, so the chat has somewhere to go. Asking again shall not put
+  back somebody who left the shared Lemma.
+- Retrying or concurrently requesting setup shall return the same workspace
+  without creating duplicates.
 - Only a verified email domain may select or claim an email-domain organization.
-- Organization-only setup for an importer shall create no spare personal pod;
-  a later first-chat request shall still ensure a pod and assistant.
 
 **Contracts:** `users.ensure_first_workspace`
 

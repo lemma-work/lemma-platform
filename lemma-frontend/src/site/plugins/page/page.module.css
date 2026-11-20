@@ -1,0 +1,581 @@
+/* A plugin's page, `/templates/<slug>`: the hero, the app's real pictures,
+   then its data as a sheet of labelled rows. Colours are the tokens', so the
+   page follows the site's light and dark; words in Albert Sans at every size
+   (loaded by `app/(marketing)/templates/layout.tsx`), figures in Inter. Weight never passes 500. */
+.root {
+    font-family: var(--font-frame), var(--ui);
+    overflow-x: clip;
+}
+.main {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 40px clamp(16px, 4vw, 48px) 96px;
+}
+.main a {
+    color: inherit;
+}
+.main a:focus-visible,
+.main button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: var(--r-sm);
+}
+
+/* ── Hero: the words, and the first real picture or the app itself ───── */
+.hero {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+    gap: 56px;
+    align-items: center;
+}
+.heroPlain {
+    max-width: 780px;
+}
+.crumbs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 14px;
+    color: var(--ink-3);
+}
+.crumbs a {
+    text-decoration: none;
+}
+.crumbs a:hover {
+    color: var(--ink);
+}
+.heading {
+    display: grid;
+    gap: 14px;
+    margin: 36px 0 0;
+    font-weight: 400;
+}
+.nameLine {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.nameLine img {
+    flex: none;
+    width: 48px;
+    height: 48px;
+    object-fit: contain;
+}
+.name {
+    font-size: 22px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+}
+.job {
+    font-weight: 400;
+    font-size: clamp(34px, 3.9vw, 54px);
+    line-height: 1.04;
+    letter-spacing: -0.03em;
+    text-wrap: balance;
+}
+.intro {
+    margin: 20px 0 0;
+    max-width: 46ch;
+    font-size: 19px;
+    line-height: 1.55;
+    color: var(--ink-2);
+}
+.actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 18px;
+    margin-top: 28px;
+}
+.main .add {
+    display: inline-flex;
+    align-items: center;
+    min-height: 48px;
+    padding: 0 22px;
+    border-radius: 99px;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-size: 16px;
+    text-decoration: none;
+}
+.tryButton {
+    display: inline-flex;
+    align-items: center;
+    min-height: 48px;
+    padding: 0 22px;
+    border: 0;
+    border-radius: 99px;
+    background: var(--accent);
+    color: var(--on-accent);
+    font: inherit;
+    font-size: 16px;
+    cursor: pointer;
+}
+.tryButton[aria-pressed="true"] {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    color: var(--ink);
+}
+.soon {
+    display: inline-flex;
+    align-items: center;
+    min-height: 48px;
+    padding: 0 22px;
+    border-radius: 99px;
+    border: 1px dashed var(--line-2);
+    background: var(--paper);
+    color: var(--ink-2);
+    font-size: 16px;
+    cursor: default;
+}
+.soonWhy {
+    max-width: 34ch;
+    font-size: 14px;
+    line-height: 1.45;
+    color: var(--ink-3);
+}
+.forJobs {
+    margin: 18px 0 0;
+    font-size: 14px;
+    color: var(--ink-3);
+}
+.order {
+    margin: 22px 0 0;
+    font-size: 17px;
+    line-height: 1.55;
+    color: var(--ink-2);
+}
+.figure {
+    font-family: var(--ui);
+    font-variant-numeric: tabular-nums;
+}
+
+/* ── The app's pictures ───────────────────────────────────────────────── */
+.app {
+    margin-top: 48px;
+}
+.gallery {
+    display: grid;
+    gap: 16px;
+}
+.frame {
+    border-radius: var(--r-lg);
+    overflow: hidden;
+    box-shadow: var(--depth-raise), 0 0 0 1px var(--line-2);
+}
+.frame [hidden] {
+    display: none;
+}
+.tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.tabs button {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    padding: 8px 16px 8px 8px;
+    border: 0;
+    border-radius: 99px;
+    background: transparent;
+    box-shadow: 0 0 0 1px var(--line-2);
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+}
+.tabs button:hover {
+    color: var(--ink);
+}
+.tabs button[aria-selected="true"] {
+    background: var(--paper);
+    box-shadow: 0 0 0 1px var(--ink-3);
+    color: var(--ink);
+}
+.tabNumber {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--chrome);
+    font-family: var(--ui);
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+}
+.tabs button[aria-selected="true"] .tabNumber {
+    background: var(--ink);
+    color: var(--canvas);
+}
+.caption,
+.sample {
+    margin: 0;
+    font-size: 14px;
+    color: var(--ink-3);
+}
+.sample {
+    margin-top: 12px;
+}
+
+/* ── The stage: a picture, or the demo running in its place ──────────── */
+.stage {
+    margin: 0;
+    min-width: 0;
+}
+.stageFrame {
+    position: relative;
+    border-radius: var(--r-lg);
+    overflow: hidden;
+    background: var(--paper);
+    box-shadow: var(--depth-raise), 0 0 0 1px var(--line-2);
+}
+.stageFrame[data-live] {
+    height: min(76vh, 640px);
+}
+.poster {
+    display: block;
+    position: relative;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+}
+.posterTry {
+    position: absolute;
+    right: 16px;
+    bottom: 16px;
+    display: inline-flex;
+    align-items: center;
+    min-height: 40px;
+    padding: 0 18px;
+    border-radius: 99px;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-size: 15px;
+    box-shadow: var(--depth-raise);
+}
+.poster:hover .posterTry {
+    box-shadow: var(--depth-raise), 0 0 0 3px var(--accent-line);
+}
+.demo {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: var(--paper);
+}
+.stageCaption {
+    margin-top: 12px;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--ink-3);
+}
+
+/* ── The sheet ────────────────────────────────────────────────────────── */
+.rows {
+    margin-top: 72px;
+    border-top: 1px solid var(--line-2);
+}
+.row {
+    display: grid;
+    grid-template-columns: 260px minmax(0, 1fr);
+    gap: 32px;
+    padding: 32px 0;
+    border-bottom: 1px solid var(--line-2);
+}
+.rowTitle {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 500;
+    line-height: 1.5;
+}
+.rowBody {
+    display: grid;
+    gap: 14px;
+    max-width: 720px;
+    font-size: 16px;
+    line-height: 1.6;
+}
+.plain,
+.through {
+    margin: 0;
+}
+.through {
+    color: var(--ink-2);
+}
+.through a {
+    text-underline-offset: 0.2em;
+}
+.does,
+.steps {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 12px;
+}
+.does li {
+    position: relative;
+    padding-left: 22px;
+}
+.does li::before {
+    content: "";
+    position: absolute;
+    left: 2px;
+    top: 0.62em;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--brand);
+}
+.steps {
+    counter-reset: step;
+}
+.steps li {
+    counter-increment: step;
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 10px;
+}
+.steps li::before {
+    content: counter(step);
+    display: inline-grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    margin-top: 1px;
+    border-radius: 50%;
+    background: var(--chrome);
+    font-family: var(--ui);
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+}
+.accounts {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 14px;
+}
+.account {
+    display: grid;
+    gap: 2px;
+}
+.accountName {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    font-weight: 500;
+}
+.optional {
+    padding: 1px 8px;
+    border-radius: 99px;
+    background: var(--chrome);
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--ink-2);
+}
+.accountWhy {
+    color: var(--ink-2);
+}
+.minis {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 10px;
+}
+.mini {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 14px;
+    border-radius: var(--r-md);
+    background: var(--paper);
+    box-shadow: 0 0 0 1px var(--line-2);
+    text-decoration: none;
+    transition: box-shadow 160ms ease;
+}
+.mini:hover {
+    box-shadow: 0 0 0 1px var(--ink-3);
+}
+.mini img {
+    flex: none;
+    width: 32px;
+    height: 32px;
+    object-fit: contain;
+}
+.mini > span {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+.miniName {
+    font-weight: 500;
+}
+.miniLine {
+    font-size: 14px;
+    line-height: 1.45;
+    color: var(--ink-2);
+}
+.ties {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 10px;
+}
+.day {
+    margin: 0;
+    display: grid;
+    gap: 18px;
+}
+.dayGroup {
+    display: grid;
+    gap: 6px;
+}
+.day dt {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+}
+.day dd {
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+}
+.dayFrom {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 500;
+    text-decoration: none;
+}
+.dayFrom img {
+    width: 20px;
+    height: 20px;
+    object-fit: contain;
+    align-self: center;
+}
+.note {
+    margin: 0;
+    padding: 16px 18px;
+    border-radius: var(--r-md);
+    background: var(--paper);
+    box-shadow: inset 3px 0 0 var(--brand), 0 0 0 1px var(--line-2);
+    font-size: 15px;
+    line-height: 1.6;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+}
+.note code {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    padding: 0 2px;
+    border-radius: 4px;
+    background: var(--chrome);
+}
+
+/* ── Before and after it ──────────────────────────────────────────────── */
+.neighbours {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 16px;
+    margin-top: 48px;
+}
+.neighbours a {
+    display: grid;
+    gap: 2px;
+    text-decoration: none;
+}
+.neighbours a small {
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.neighbours a span {
+    font-size: 16px;
+    font-weight: 500;
+}
+.neighbours a:hover span {
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+}
+.neighbours .after {
+    justify-self: end;
+    text-align: right;
+}
+.neighbours .all {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 18px;
+    border-radius: 99px;
+    box-shadow: 0 0 0 1px var(--line-2);
+    font-size: 14px;
+}
+
+/* ── Narrower screens ─────────────────────────────────────────────────── */
+@media (max-width: 960px) {
+    .hero {
+        display: block;
+    }
+    .stage {
+        margin-top: 36px;
+    }
+    .stageFrame[data-live] {
+        height: 74vh;
+    }
+}
+@media (max-width: 860px) {
+    .row {
+        grid-template-columns: 1fr;
+        gap: 14px;
+        padding: 26px 0;
+    }
+}
+@media (max-width: 600px) {
+    .main {
+        padding-top: 28px;
+    }
+    .heading {
+        margin-top: 26px;
+    }
+    .intro {
+        font-size: 17px;
+    }
+    .app {
+        margin-top: 36px;
+    }
+    .tabs {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .tabs button {
+        border-radius: var(--r-md);
+    }
+    .rows {
+        margin-top: 52px;
+    }
+    .neighbours {
+        grid-template-columns: 1fr 1fr;
+    }
+    .neighbours .all {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        justify-self: center;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .mini {
+        transition: none;
+    }
+}

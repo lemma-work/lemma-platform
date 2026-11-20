@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { frameThemeKeeper } from "./app-theme";
 import { AppWindowPanel } from "./app-window";
 import { useAppFrame } from "./pod-apps";
 
@@ -28,6 +30,11 @@ export function AppFrameView({
     onFrameLoad: (view: Window | null) => void;
 }) {
     const frame = useAppFrame(url);
+    /* The app is drawn in this Lemma's theme: told on each of its loads and on
+       every appearance change, until the frame goes or points elsewhere. */
+    const [theme] = useState(() => frameThemeKeeper());
+    const src = frame.kind === "frame" ? frame.src : null;
+    useEffect(() => () => theme.stop(), [theme, src]);
     if (frame.kind === "window") return <AppWindowPanel url={url} hidden={hidden} reason={frame.reason} />;
     /* No frame yet: the shell answers in milliseconds, and a frame on the
        app's own address first would load it signed out and then swap. Said,
@@ -47,7 +54,11 @@ export function AppFrameView({
             title="App"
             src={frame.src}
             hidden={hidden}
-            onLoad={event => onFrameLoad(event.currentTarget.contentWindow)}
+            onLoad={event => {
+                const view = event.currentTarget.contentWindow;
+                theme.loaded(view, frame.src);
+                onFrameLoad(view);
+            }}
         />
     );
 }

@@ -65,9 +65,29 @@ class _NoPodConnectors:
         return {"items": []}
 
 
+class _NoPodMachines:
+    """A pod with no machines of its own, for fakes that predate them."""
+
+    @staticmethod
+    def list(*_args, **_kwargs):
+        return {"machines": []}
+
+    @staticmethod
+    def policy(*_args, **_kwargs):
+        return {
+            "default_size": "1x2",
+            "templates": [
+                {"template": "workspace", "sizes": ["1x2", "2x4", "4x8", "8x16"]},
+                {"template": "workspace-docker", "sizes": ["4x8", "8x16"]},
+            ],
+        }
+
+
 class FakeClient(SimpleNamespace):
     #: Export reads the pod's connectors; a fake that names none has none.
     connectors = _NoPodConnectors()
+    #: Export reads the pod's machines; likewise.
+    machines = _NoPodMachines()
 
     def pod(self, pod_id):
         files = getattr(self, "files", None)
@@ -760,6 +780,7 @@ def test_import_pod_bundle_agent_update_strips_name_and_clears_absent_schemas(
                 "toolsets": ["WORKSPACE_CLI"],
                 "output_schema": None,
                 "input_schema": None,
+                "machine": None,
             },
         )
     ]
@@ -4119,3 +4140,386 @@ def test_exported_no_build_app_re_imports(tmp_path: Path):
     assert result["errors"] == []
     assert result["ok"] is True
     assert result["summary"]["apps"] == ["created:support_app"]
+
+
+def test_variable_applier_falls_back_to_a_free_variables_default(tmp_path: Path):
+    """An app slug variable carries the slug it was exported with as its
+    default; the server's import reads it, and so does this one, rather than
+    dropping the slug and naming the app after itself."""
+    from lemma_cli.cli_app.pod_bundle import _build_variable_applier
+
+    (tmp_path / "pod.json").write_text(
+        json.dumps(
+            {
+                "name": "demo",
+                "variables": {
+                    "meetings_slug": {"type": "app_slug", "default": "meetings"}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def applier(overrides):
+        return _build_variable_applier(
+            client=None,
+            pod_sdk=None,
+            source_dir=tmp_path,
+            var_overrides=overrides,
+            member_override=None,
+        )
+
+    assert applier(None)({"public_slug": "${meetings_slug}"}) == {
+        "public_slug": "meetings"
+    }
+    assert applier({"meetings_slug": "mine"})({"public_slug": "${meetings_slug}"}) == {
+        "public_slug": "mine"
+    }
+
+
+def test_one_part_imported_alone_reads_its_bundles_variables_and_connectors(
+    tmp_path: Path,
+):
+    """Importing `functions/due` on its own: its `${var}`s are declared in the
+    bundle's pod.json, and its grant names a connector the bundle declares.
+    Nothing that acts on the whole pod -- its name, what it owns, the app it
+    opens on -- comes along."""
+    from lemma_cli.cli_app.pod_bundle import _prepared_import_source
+
+    bundle = tmp_path / "meetings"
+    (bundle / "connectors" / "meet").mkdir(parents=True)
+    (bundle / "connectors" / "meet" / "meet.json").write_text(
+        json.dumps({"connector": "googlemeet", "mode": "PER_MEMBER"}), encoding="utf-8"
+    )
+    (bundle / "connectors" / "crm").mkdir(parents=True)
+    (bundle / "connectors" / "crm" / "crm.json").write_text(
+        json.dumps({"connector": "hubspot", "mode": "PER_MEMBER"}), encoding="utf-8"
+    )
+    function_dir = bundle / "functions" / "due"
+    function_dir.mkdir(parents=True)
+    (function_dir / "due.json").write_text(
+        json.dumps(
+            {
+                "name": "due",
+                "permissions": {
+                    "grants": [
+                        {
+                            "resource_type": "connector",
+                            "resource_name": "meet",
+                            "permission_ids": ["connector.use"],
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    variables = {"meetings_slug": {"type": "app_slug", "default": "meetings"}}
+    (bundle / "pod.json").write_text(
+        json.dumps(
+            {
+                "format_version": 4,
+                "name": "Meetings",
+                "home_app": "meetings",
+                "outcome": {"sentence": "Every meeting prepared", "kind": "rate"},
+                "variables": variables,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with _prepared_import_source(function_dir) as root:
+        assert json.loads((root / "pod.json").read_text()) == {
+            "format_version": 4,
+            "variables": variables,
+        }
+        assert (root / "functions" / "due" / "due.json").is_file()
+        assert sorted(p.name for p in (root / "connectors").iterdir()) == ["meet"]
+
+
+def test_an_existing_choice_column_gains_the_bundles_new_options(
+    tmp_path: Path, capsys
+):
+    """ "updated" used to be said with the new options never added: the column
+    diff did not look at a choice column's options at all."""
+    resource_dir = tmp_path / "tables" / "deals"
+    resource_dir.mkdir(parents=True)
+    (resource_dir / "deals.json").write_text(
+        json.dumps(
+            {
+                "name": "deals",
+                "columns": [
+                    {
+                        "name": "stage",
+                        "type": "ENUM",
+                        "options": ["lead", "qualified", "won"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    widened: list[tuple[str, str, dict]] = []
+
+    client = _bare_pod_client()
+    client.tables = SimpleNamespace(
+        list=lambda pod_id, limit=1000: {"items": [{"name": "deals"}]},
+        get=lambda pod_id, name: {
+            "name": name,
+            "columns": [
+                {"name": "stage", "type": "ENUM", "options": ["lead", "won", "lost"]}
+            ],
+            "enable_rls": False,
+        },
+        update=lambda pod_id, name, payload: {"name": name},
+        update_column=lambda pod_id, table, column, request: widened.append(
+            (table, column, _plain(request))
+        ),
+    )
+
+    result = import_pod_bundle(client, pod_id="pod_1", source_dir=tmp_path)
+
+    assert widened == [
+        ("deals", "stage", {"options": ["lead", "won", "lost", "qualified"]})
+    ]
+    assert "options:deals.stage" in result["summary"]["tables"]
+    out = " ".join(capsys.readouterr().err.split())
+    assert "kept option(s) lost" in out
+
+
+def test_a_foreign_key_the_bundle_no_longer_declares_is_dropped(tmp_path: Path):
+    resource_dir = tmp_path / "tables" / "deals"
+    resource_dir.mkdir(parents=True)
+    (resource_dir / "deals.json").write_text(
+        json.dumps(
+            {"name": "deals", "columns": [{"name": "customer_id", "type": "UUID"}]}
+        ),
+        encoding="utf-8",
+    )
+    changed: list[tuple[str, str, dict]] = []
+
+    client = _bare_pod_client()
+    client.tables = SimpleNamespace(
+        list=lambda pod_id, limit=1000: {"items": [{"name": "deals"}]},
+        get=lambda pod_id, name: {
+            "name": name,
+            "columns": [
+                {
+                    "name": "customer_id",
+                    "type": "UUID",
+                    "foreign_key": {"references": "customers.id"},
+                }
+            ],
+            "enable_rls": False,
+        },
+        update=lambda pod_id, name, payload: {"name": name},
+        update_column=lambda pod_id, table, column, request: changed.append(
+            (table, column, _plain(request))
+        ),
+    )
+
+    result = import_pod_bundle(client, pod_id="pod_1", source_dir=tmp_path)
+
+    assert changed == [("deals", "customer_id", {"drop_foreign_key": True})]
+    assert "foreign-key-dropped:deals.customer_id" in result["summary"]["tables"]
+
+
+def test_an_sdk_that_cannot_change_a_column_is_refused_at_the_plan(
+    tmp_path: Path,
+):
+    """An older lemma-sdk has no column update: the import used to fail at
+    that column, after the pod and its connectors and the table's other
+    changes had been written. The plan says so, dry run or not."""
+    resource_dir = tmp_path / "tables" / "deals"
+    resource_dir.mkdir(parents=True)
+    (resource_dir / "deals.json").write_text(
+        json.dumps(
+            {
+                "name": "deals",
+                "columns": [
+                    {"name": "stage", "type": "ENUM", "options": ["lead", "won"]},
+                    {"name": "note", "type": "TEXT"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "pod.json").write_text(json.dumps({"name": "Deals"}), encoding="utf-8")
+    writes: list[str] = []
+
+    client = _bare_pod_client()
+    client.tables = SimpleNamespace(  # no update_column: an older SDK
+        list=lambda pod_id, limit=1000: {"items": [{"name": "deals"}]},
+        get=lambda pod_id, name: {
+            "name": name,
+            "columns": [{"name": "stage", "type": "ENUM", "options": ["lead"]}],
+            "enable_rls": False,
+        },
+        update=lambda pod_id, name, payload: writes.append("table"),
+        add_column=lambda pod_id, name, request: writes.append("column"),
+    )
+    client.pods = SimpleNamespace(
+        get=lambda pod_id: {"id": pod_id, "config": {}},
+        update=lambda pod_id, request: writes.append("pod"),
+    )
+
+    planned = import_pod_bundle(
+        client, pod_id="pod_1", source_dir=tmp_path, dry_run=True
+    )
+    assert planned["ok"] is False
+    assert "deals.stage" in planned["errors"][0]["message"]
+
+    with pytest.raises(ValueError, match=r"deals\.stage"):
+        import_pod_bundle(
+            client, pod_id="pod_1", source_dir=tmp_path, set_pod_meta=True
+        )
+    assert writes == []
+
+
+def test_an_unreadable_table_manifest_is_an_issue_not_a_crash_on_an_older_sdk(
+    tmp_path: Path,
+):
+    """The SDK check reads existing tables' manifests again; one that does not
+    load is left to the manifest pass, which says so."""
+    resource_dir = tmp_path / "tables" / "deals"
+    resource_dir.mkdir(parents=True)
+    (resource_dir / "deals.json").write_text("{not json", encoding="utf-8")
+
+    client = _bare_pod_client()
+    client.tables = SimpleNamespace(  # no update_column: an older SDK
+        list=lambda pod_id, limit=1000: {"items": [{"name": "deals"}]},
+        get=lambda pod_id, name: {"name": name, "columns": []},
+    )
+
+    planned = import_pod_bundle(
+        client, pod_id="pod_1", source_dir=tmp_path, dry_run=True
+    )
+
+    assert planned["ok"] is False
+    assert any("deals" in error["path"] for error in planned["errors"])
+
+
+def test_two_schedules_on_one_global_workflow_stop_the_import_before_writing(
+    tmp_path: Path,
+):
+    """The second schedule used to be refused at its create, after the
+    workflow and the first schedule had been written."""
+    (tmp_path / "pod.json").write_text(
+        json.dumps({"name": "tasks", "format_version": 3}), encoding="utf-8"
+    )
+    workflow_dir = tmp_path / "workflows" / "triage"
+    workflow_dir.mkdir(parents=True)
+    (workflow_dir / "triage.json").write_text(
+        json.dumps({"name": "triage", "start": {"type": "MANUAL"}}), encoding="utf-8"
+    )
+    for name in ("on_ticket", "every_morning"):
+        schedule_dir = tmp_path / "schedules" / name
+        schedule_dir.mkdir(parents=True)
+        (schedule_dir / f"{name}.json").write_text(
+            json.dumps(
+                {
+                    "name": name,
+                    "schedule_type": "TIME",
+                    "config": {"cron": "0 9 * * *"},
+                    "workflow_name": "triage",
+                }
+            ),
+            encoding="utf-8",
+        )
+    client = _bare_pod_client()
+
+    with pytest.raises(ValueError, match="workflow 'triage'"):
+        import_pod_bundle(client, pod_id="pod_1", source_dir=tmp_path)
+
+
+def test_import_creates_a_pod_machine_before_the_agent_that_runs_on_it(
+    tmp_path: Path,
+):
+    root = tmp_path / "bundle"
+    (root / "machines" / "builder").mkdir(parents=True)
+    (root / "agents" / "coder").mkdir(parents=True)
+    (root / "pod.json").write_text(json.dumps({"name": "dev"}), encoding="utf-8")
+    (root / "machines" / "builder" / "builder.json").write_text(
+        json.dumps(
+            {
+                "name": "builder",
+                "template": "workspace-docker",
+                "size": "4x8",
+                "run_slots": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "agents" / "coder" / "coder.json").write_text(
+        json.dumps(
+            {"name": "coder", "instruction": "Write code.", "machine": "pod:builder"}
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, object]] = []
+
+    class Machines(_NoPodMachines):
+        def list(self, pod_id=None):
+            return {"machines": []}
+
+        def create(self, name, **kwargs):
+            calls.append(("machine", {"name": name, **kwargs}))
+            return {"name": name}
+
+    client = FakeClient(
+        machines=Machines(),
+        tables=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        functions=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        agents=SimpleNamespace(
+            list=lambda pod_id, limit=1000: {"items": []},
+            create=lambda pod_id, payload: (
+                calls.append(("agent", _plain(payload))) or {"name": "coder"}
+            ),
+        ),
+        workflows=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        apps=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        files=SimpleNamespace(
+            tree=lambda pod_id, root_path="/", files_per_directory=20: {
+                "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
+            }
+        ),
+    )
+
+    result = import_pod_bundle(client, pod_id="pod_123", source_dir=root)
+
+    assert result["ok"] is True, result
+    assert result["summary"]["machines"] == ["created:builder"]
+    assert [kind for kind, _ in calls] == ["machine", "agent"]
+    assert calls[0][1] == {
+        "name": "builder",
+        "pod_id": "pod_123",
+        "template": "workspace-docker",
+        "size": "4x8",
+        "run_slots": 2,
+        "display_name": None,
+    }
+    assert calls[1][1]["machine"] == "pod:builder"
+
+
+def test_a_bundled_machine_without_a_template_fails_the_plan(tmp_path: Path):
+    root = tmp_path / "bundle"
+    (root / "machines" / "builder").mkdir(parents=True)
+    (root / "pod.json").write_text(json.dumps({"name": "dev"}), encoding="utf-8")
+    (root / "machines" / "builder" / "builder.json").write_text(
+        json.dumps({"name": "builder", "visibility": "pod"}), encoding="utf-8"
+    )
+    client = FakeClient(
+        tables=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        functions=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        agents=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        files=SimpleNamespace(
+            tree=lambda pod_id, root_path="/", files_per_directory=20: {
+                "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
+            }
+        ),
+    )
+
+    result = import_pod_bundle(client, pod_id="pod_123", source_dir=root, dry_run=True)
+
+    assert result["ok"] is False
+    assert any("template" in error["message"] for error in result["errors"])

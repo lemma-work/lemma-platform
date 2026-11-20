@@ -12,6 +12,13 @@
  * cannot reach a port at all.
  */
 export type BrowserStatusResponse = {
+    agent_driving?: boolean;
+    density?: (number | null);
     detail?: (string | null);
+    lease?: (string | null);
+    presets?: (Record<string, string> | null);
+    size?: (string | null);
     state: string;
+    transport?: (string | null);
+    watching?: Array<Record<string, string>>;
 };

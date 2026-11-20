@@ -130,6 +130,9 @@ export interface GoOptions {
     replace?: boolean;
     handoff?: Handoff;
     fill?: Fill;
+    /** The Lemma itself was asked for, by its name in a list, rather than
+     *  its Home: one that has apps opens on the first. */
+    landing?: boolean;
 }
 
 export type Go = (view: View, options?: GoOptions) => void;
@@ -164,6 +167,14 @@ const STARTED_BY_LEMMA = new Set(["schedule", "workflow", "notification", "task"
 export function startedByLemma(conversation: Pick<ConversationRef, "origin">): boolean {
     const kind = conversation.origin?.kind;
     return kind ? STARTED_BY_LEMMA.has(kind) : false;
+}
+
+/** `apps` with the one a Lemma opens on first: `home`, an app's name (its tab
+ *  id without `app:`), when the Lemma still has it. Otherwise as given, and
+ *  the first of those is the one it opens on. */
+export function homeFirst<T>(apps: readonly T[], home: string | undefined, idOf: (app: T) => string): T[] {
+    const chosen = home ? apps.findIndex((app) => idOf(app) === "app:" + home) : -1;
+    return chosen > 0 ? [apps[chosen], ...apps.slice(0, chosen), ...apps.slice(chosen + 1)] : [...apps];
 }
 
 function localDay(ms: number): string {

@@ -23,9 +23,12 @@ X server would be testing Xvfb.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import socket
+import os
 import subprocess
+import sys
 
 import pytest
 
@@ -564,3 +567,166 @@ class TestLoopbackFallsThroughToTheHost:
         assert config["proxy"] == "http://residential.invalid:9091"
         assert "127.0.0.1:4851" not in config["args"]
         assert "loopback" not in config["args"]
+
+
+class TestAProfileLockFromAnotherContainer:
+    """The home volume outlives its container; Chrome's lock names the host.
+
+    A lock naming another host is one Chrome will not call stale -- it puts a
+    "profile in use on another computer" dialog on the display and never
+    starts -- so it goes. One naming this host is Chrome's own business.
+    """
+
+    def _locked(self, tmp_path: Path, vnc_port: int, owner: str):
+        environment, _ = _workspace(tmp_path, browser_live=True, vnc_port=vnc_port)
+        _stub(tmp_path / "bin", "hostname", "echo this-container")
+        profile = Path(environment["AGENT_BROWSER_PROFILE"])
+        login = tmp_path / "login-github.com"
+        login.mkdir()
+        for directory in (profile, login):
+            (directory / "SingletonLock").symlink_to(owner)
+            (directory / "SingletonSocket").symlink_to("/tmp/gone/SingletonSocket")
+            (directory / "SingletonCookie").symlink_to("123")
+        return environment, (profile, login)
+
+    def test_a_lock_naming_another_host_is_cleared_in_every_profile(
+        self, tmp_path: Path, vnc_port: int
+    ) -> None:
+        environment, profiles = self._locked(tmp_path, vnc_port, "old-container-3924")
+
+        result = _run(environment)
+
+        assert result.returncode == 0, result.stderr
+        for profile in profiles:
+            assert not os.path.lexists(profile / "SingletonLock")
+            assert not os.path.lexists(profile / "SingletonSocket")
+            assert not os.path.lexists(profile / "SingletonCookie")
+        assert (profiles[0] / "DevToolsActivePort").exists()
+
+    def test_a_lock_naming_this_host_is_left_for_chrome(
+        self, tmp_path: Path, vnc_port: int
+    ) -> None:
+        environment, profiles = self._locked(tmp_path, vnc_port, "this-container-77")
+
+        result = _run(environment)
+
+        assert result.returncode == 0, result.stderr
+        for profile in profiles:
+            assert os.path.lexists(profile / "SingletonLock")
+
+
+class TestDensityIsFixedWhenTheDisplayIsCreated:
+    """Opening the screen must never restart the agent's Chrome.
+
+    Density rides in the browser's launch digest, and a digest change restarts
+    Chrome with `close --all`. It used to be re-decided on every run from a
+    file only the view path delivered, so a person opening the screen turned
+    density 2 on and the agent's next command lost its tabs. The decision is
+    now made once, when this script creates the X server, and read back on
+    every later run while that server lives.
+    """
+
+    _DENSE = "--force-device-scale-factor=2"
+
+    def _sandbox(
+        self,
+        tmp_path: Path,
+        vnc_port: int,
+        *,
+        display_up: bool,
+        cpus: int,
+        allowed: bool,
+    ) -> dict[str, str]:
+        environment, _ = _workspace(tmp_path, browser_live=True, vnc_port=vnc_port)
+        binaries = tmp_path / "bin"
+        _stub(
+            binaries,
+            "pgrep",
+            'case "$*" in *Xvfb*) exit ' + ("0" if display_up else "1") + " ;; esac\n"
+            "exit 0",
+        )
+        # `setsid` is not on macOS, and the X server the script starts has to
+        # leave a socket behind for its wait to end.
+        _stub(binaries, "setsid", 'exec "$@"')
+        socket_path = Path(f"/tmp/.X11-unix/X{self._display_number}")
+        (binaries / "Xvfb").write_text(
+            f"#!{sys.executable}\n"
+            "import socket\n"
+            f"socket.socket(socket.AF_UNIX).bind({str(socket_path)!r})\n"
+        )
+        (binaries / "Xvfb").chmod(0o755)
+        cpu_max = tmp_path / "cpu.max"
+        cpu_max.write_text(f"{cpus * 100000} 100000\n")
+        decision = tmp_path / "display.json"
+        decision.write_text(json.dumps({"native_density": allowed}))
+        environment.update(
+            {
+                "DISPLAY": f":{self._display_number}",
+                "LEMMA_CPU_MAX_FILE": str(cpu_max),
+                "LEMMA_DISPLAY_DECISION_FILE": str(decision),
+                "LEMMA_DISPLAY_DENSITY_FILE": str(tmp_path / "display-density"),
+                "LEMMA_BROWSER_DENSITY_STAMP": str(tmp_path / "density.active"),
+            }
+        )
+        return environment
+
+    @pytest.fixture(autouse=True)
+    def _display_number(self, tmp_path: Path):
+        # A display number nothing else uses, so the script's cleanup of a
+        # stale socket cannot touch a real one.
+        self._display_number = 4000 + (os.getpid() % 1000)
+        yield
+        Path(f"/tmp/.X11-unix/X{self._display_number}").unlink(missing_ok=True)
+
+    def _args(self, environment: dict[str, str]) -> str:
+        return json.loads(Path(environment["AGENT_BROWSER_CONFIG"]).read_text())["args"]
+
+    def test_a_running_display_keeps_its_density_when_the_server_allows_more(
+        self, tmp_path: Path, vnc_port: int
+    ) -> None:
+        """The reviewed failure: the agent's display was made at 1, then a
+        viewer's delivery said density 2 was allowed."""
+        environment = self._sandbox(
+            tmp_path, vnc_port, display_up=True, cpus=4, allowed=True
+        )
+        Path(environment["LEMMA_DISPLAY_DENSITY_FILE"]).write_text("1\n")
+
+        assert _run(environment).returncode == 0
+        assert self._DENSE not in self._args(environment)
+
+    def test_a_running_display_keeps_density_two_when_the_server_withdraws_it(
+        self, tmp_path: Path, vnc_port: int
+    ) -> None:
+        environment = self._sandbox(
+            tmp_path, vnc_port, display_up=True, cpus=4, allowed=False
+        )
+        Path(environment["LEMMA_DISPLAY_DENSITY_FILE"]).write_text("2\n")
+
+        assert _run(environment).returncode == 0
+        assert self._DENSE in self._args(environment)
+
+    def test_a_new_display_on_two_vcpus_is_dense_and_says_so(
+        self, tmp_path: Path, vnc_port: int
+    ) -> None:
+        environment = self._sandbox(
+            tmp_path, vnc_port, display_up=False, cpus=2, allowed=True
+        )
+
+        result = _run(environment)
+
+        assert result.returncode == 0, result.stderr
+        assert self._DENSE in self._args(environment)
+        assert Path(environment["LEMMA_DISPLAY_DENSITY_FILE"]).read_text() == "2\n"
+
+    def test_a_new_display_on_one_vcpu_is_not_dense_whatever_the_server_says(
+        self, tmp_path: Path, vnc_port: int
+    ) -> None:
+        environment = self._sandbox(
+            tmp_path, vnc_port, display_up=False, cpus=1, allowed=True
+        )
+
+        result = _run(environment)
+
+        assert result.returncode == 0, result.stderr
+        assert self._DENSE not in self._args(environment)
+        assert Path(environment["LEMMA_DISPLAY_DENSITY_FILE"]).read_text() == "1\n"

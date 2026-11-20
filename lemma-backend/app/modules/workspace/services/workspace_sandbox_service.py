@@ -322,7 +322,14 @@ class WorkspaceSandboxService(
         scope: list[str] | None = None,
         session_id: str | None = None,
         conversation_id: UUID | None = None,
+        with_token: bool = True,
     ) -> dict[str, str]:
+        """The environment a process on a machine runs with.
+
+        ``with_token=False`` leaves ``LEMMA_TOKEN`` out without minting one --
+        for a caller whose process must not carry a Lemma credential (an app's
+        page, which has the SDK) or that brings its own (a function run).
+        """
         from app.modules.identity.contracts.delegated_tokens import (
             mint_delegated_token,
         )
@@ -337,16 +344,18 @@ class WorkspaceSandboxService(
             if conversation_id is not None
             else session_id or str(uuid4())
         )
-        token = await mint_delegated_token(
-            user_id=user_id,
-            workload_type=workload_type,
-            workload_id=workload_id,
-            pod_id=pod_id,
-            session_id=delegation_session_id,
-            workload_name=workload_name,
-            scope=scope,
-            delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
-        )
+        token = None
+        if with_token:
+            token = await mint_delegated_token(
+                user_id=user_id,
+                workload_type=workload_type,
+                workload_id=workload_id,
+                pod_id=pod_id,
+                session_id=delegation_session_id,
+                workload_name=workload_name,
+                scope=scope,
+                delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
+            )
         api_url = self._resolve_workspace_api_url()
         auth_url = (
             workspace_settings.workspace_callback_auth_url
@@ -404,31 +413,40 @@ class WorkspaceSandboxService(
         env_vars: dict[str, str] | None = None,
         ready_timeout_seconds: float | None = None,
         conversation_id: UUID | None = None,
+        machine_id: UUID | None = None,
     ) -> IWorkspaceSession:
+        """A session on ``machine_id``, or on ``user_id``'s default machine.
+
+        ``user_id`` is always who the session acts for -- the token in its
+        environment is theirs -- and the machine is only where it runs. The
+        caller decided they may use it (`MachineResolver`); nothing here
+        re-asks.
+        """
+        key = machine_id or user_id
         resolved_cwd = canonical_workspace_cwd(initial_cwd)
         budget = ReadyBudget(ready_timeout_seconds)
         with _tracer.start_as_current_span("lemma.workspace.ensure_dir"):
             sandbox_info = await self._ensure_workspace_directory(
-                user_id, resolved_cwd, budget=budget
+                key, resolved_cwd, budget=budget
             )
         with _tracer.start_as_current_span("lemma.workspace.runtime_bundle"):
             # The install is a shielded shared task: running out of budget
             # abandons this caller's wait and leaves it running for the next.
             await self._await_shared(
-                self._ensure_runtime_bundle(user_id, sandbox_info),
+                self._ensure_runtime_bundle(key, sandbox_info),
                 budget.remaining(),
             )
             # Before the session exists: a restart must not end work this
             # session is about to start. See `workspace_runtime_restart`.
             if await self._await_shared(
-                ensure_runtime_current(self, user_id, sandbox_info),
+                ensure_runtime_current(self, key, sandbox_info),
                 budget.remaining(),
             ):
                 sandbox_info = await self._ensure_workspace_directory(
-                    user_id, resolved_cwd, budget=budget
+                    key, resolved_cwd, budget=budget
                 )
             await self._ensure_browser_proxy(
-                user_id, sandbox_info, wait_seconds=budget.remaining()
+                key, sandbox_info, wait_seconds=budget.remaining()
             )
 
         if env_vars is None:
@@ -482,7 +500,7 @@ class WorkspaceSandboxService(
 
         return SandboxWorkspaceSession(
             client=self._get_manager_client(),
-            sandbox_id=str(user_id),
+            sandbox_id=str(key),
             session_id=resolved_session_id,
             env_vars=env_vars,
             initial_cwd=resolved_cwd,

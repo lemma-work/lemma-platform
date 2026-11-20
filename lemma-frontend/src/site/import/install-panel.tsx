@@ -18,7 +18,9 @@ import { hasApiUrl, lemma } from "@/session/client";
 import { source as data } from "@/data";
 import { connectLinkLabel, failureOf } from "@/data/pod-connectors";
 import { Mark } from "@/shell/mark";
-import { personalNameFor } from "@/org/arrival";
+import { ArrivalRow, ArrivalShell, LEMMA_IS, LemmaMark, OrgMark } from "@/arrival/shell";
+import { firstWorkspaceWanted } from "@/arrival/first-workspace";
+import { isLocalDeployment } from "@/site/config";
 import { forgetInstall, markInstallArrival, rememberInstall } from "./pending-install";
 import type { Pod } from "@/data/types";
 import { captureEvent } from "@/site/analytics/client";
@@ -48,11 +50,13 @@ import {
     needsAnswer,
     statusLine,
     suggestedValue,
-    teammateName,
 } from "./plan";
+import { importRequest, installTitle } from "./github-source";
 import s from "./import.module.css";
 
-type Props = { owner: string; repo: string; title: string };
+/** `path` is the folder inside the repository that holds the bundle, or
+ *  `null` to install the repository itself. */
+type Props = { owner: string; repo: string; path: string | null; title: string };
 
 const NEW = "new";
 
@@ -117,72 +121,46 @@ function Gate(props: Props) {
     return <Journey {...props} />;
 }
 
-/** A workspace for somebody who has none, made here rather than on a page of
- *  its own. Somebody who came to install a template has no reason to know
- *  what an organization is; they need somewhere for it to go, named after
- *  them, and the install carrying on. */
-function FirstWorkspace({ onMade }: { onMade: () => void }) {
-    const session = useSession();
-    const suggested = personalNameFor(session.user?.name);
-    const [name, setName] = useState(suggested);
+/** An organization for somebody who has none, made here rather than on a
+ *  page of its own, by the same rule and in the same look as every other way
+ *  in: their invitations or their company's organization if there is one,
+ *  else a new one with a Lemma everyone in it shares. Somebody who came to
+ *  install something has no reason to know what an organization is; they
+ *  need somewhere for it to go, and the install carrying on. */
+function FirstWorkspace({ title, onMade }: { title: string; onMade: () => void }) {
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
     async function make() {
         setBusy(true);
         setError("");
         try {
-            const typed = name.trim();
-            await data.createOrg({
-                name: typed || suggested,
-                /* Untouched, the name is ours, and a second Ada gets a
-                   workspace rather than a complaint about a name she never
-                   chose. */
-                derived: !typed || typed === suggested,
-            });
+            await data.ensureFirstWorkspace(firstWorkspaceWanted({ local: isLocalDeployment() }));
             onMade();
         } catch (e) {
             setError(
-                e instanceof Error ? e.message : "Could not make your workspace.",
+                e instanceof Error && e.message ? e.message : "Your organization isn’t set up yet. Try again.",
             );
             setBusy(false);
         }
     }
     return (
-        <form
-            onSubmit={(e) => {
-                e.preventDefault();
-                void make();
-            }}
-        >
-            <p className={s.muted}>
-                First, an organization for your Lemmas. It is private to you;
-                you can invite people later.
-            </p>
-            <label className={s.field}>
-                <span>Workspace name</span>
-                <input
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    maxLength={80}
-                />
-            </label>
-            <button className={s.primary} disabled={busy}>
-                {busy ? (
-                    <>
-                        <CircleNotch size={16} className={s.spin} aria-hidden />
-                        Making it…
-                    </>
-                ) : (
-                    "Continue"
-                )}
-            </button>
+        <ArrivalShell inline steps={["workspace"]} at="workspace" label="Your organization">
+            <p className="ar__model">{LEMMA_IS}</p>
+            <ul className="ar__rows">
+                <ArrivalRow mark={<OrgMark />} name="Your organization" line="Made for you, or your company’s if it’s already here." />
+                <ArrivalRow mark={<LemmaMark id={title} name={title} />} name="Its first Lemma" tag="Everyone" line={`${title} can go in here, or into a new Lemma.`} />
+            </ul>
+            <div className="ar__acts">
+                <button type="button" className="ar__btn ar__btn--primary" disabled={busy} onClick={() => void make()}>
+                    {busy ? "Setting it up…" : "Continue"}
+                </button>
+            </div>
             {error && (
-                <p role="alert" className={s.error}>
-                    <Warning size={16} aria-hidden />
-                    <span>{error}</span>
+                <p role="alert" className="ar__problem">
+                    {error}
                 </p>
             )}
-        </form>
+        </ArrivalShell>
     );
 }
 
@@ -210,7 +188,7 @@ function Steps({ at }: { at: 0 | 1 | 2 | 3 }) {
     );
 }
 
-function Journey({ repo, owner, title }: Props) {
+function Journey({ repo, owner, path, title }: Props) {
     const orgs = useQuery({
         queryKey: ["orgs"],
         queryFn: () => data.listOrgs(),
@@ -229,7 +207,9 @@ function Journey({ repo, owner, title }: Props) {
             "existing";
     const target =
         picked ?? (wantsExisting ? (pods.data?.[0]?.id ?? NEW) : NEW);
-    const [name, setName] = useState(() => title || teammateName(repo));
+    const [name, setName] = useState(
+        () => title || installTitle({ owner, repo, path }, {}),
+    );
     /* The teammate this page made for the install. Kept, so going back to
        the choice and on again reuses it rather than hiring a second one. */
     const [created, setCreated] = useState<Pod | null>(null);
@@ -318,18 +298,13 @@ function Journey({ repo, owner, title }: Props) {
             /* Fetched through the pod's `github` connector as the person
                installing, or anonymously for a public repository: no account
                is named here. A failure for want of one comes back on the job
-               with its `connect_url`. */
+               with its `connect_url`. A folder narrows the repository to the
+               one bundle it holds. */
             setJob(
                 await lemma(id).request<ImportStatusResponse>(
                     "POST",
                     "/pods/" + id + "/bundle/imports",
-                    {
-                        body: {
-                            kind: "GITHUB",
-                            owner,
-                            repo,
-                        },
-                    },
+                    { body: importRequest({ owner, repo, path }) },
                 ),
             );
         } catch (e) {
@@ -439,7 +414,7 @@ function Journey({ repo, owner, title }: Props) {
         return (
             <Panel>
                 <h2 className={s.panelTitle}>Install {title}</h2>
-                <FirstWorkspace onMade={() => void orgs.refetch()} />
+                <FirstWorkspace title={title} onMade={() => void orgs.refetch()} />
             </Panel>
         );
 
@@ -1033,7 +1008,7 @@ function ConnectorField({
                     }
                 >
                     {c.installations.length === 0 && (
-                        <option value="">Choose…</option>
+                        <option value="">{c.status === "SKIPPED" ? "Leave it out" : "Choose…"}</option>
                     )}
                     {c.installations.map((o) => (
                         <option key={o.auth_config_id} value={o.auth_config_id}>

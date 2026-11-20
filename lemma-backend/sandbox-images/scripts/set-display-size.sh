@@ -47,14 +47,6 @@ max_width="${max_screen%%x*}"
 max_rest="${max_screen#*x}"
 max_height="${max_rest%%x*}"
 
-# Clamped, and to something even: odd widths upset some X servers and no
-# viewer cares about one pixel.
-[ "$want_width" -gt "$max_width" ] && want_width="$max_width"
-[ "$want_height" -gt "$max_height" ] && want_height="$max_height"
-[ "$want_width" -lt 320 ] && want_width=320
-[ "$want_height" -lt 240 ] && want_height=240
-want_width=$((want_width - want_width % 2))
-want_height=$((want_height - want_height % 2))
 
 # Wait for the X server to actually answer, rather than for its socket to
 # exist. `lemma-ensure-display` calls this the moment Xvfb's socket appears, and a
@@ -69,6 +61,24 @@ while [ "$waited" -lt 60 ] && ! xrandr --current >/dev/null 2>&1; do
   sleep 0.05
   waited=$((waited + 1))
 done
+
+# The ceiling the server reports, over the one the environment names: a
+# machine with a second vCPU starts Xvfb with room for a doubled preset
+# (`lemma-ensure-display`, native density), and the environment still names
+# the 1x ceiling.
+reported="$(xrandr --current 2>/dev/null | awk '/^Screen 0:/ {print $12 "x" $14}' | tr -d ',')"
+case "$reported" in
+  [0-9]*x[0-9]*) max_width="${reported%%x*}"; max_height="${reported#*x}" ;;
+esac
+
+# Clamped, and to something even: odd widths upset some X servers and no
+# viewer cares about one pixel.
+[ "$want_width" -gt "$max_width" ] && want_width="$max_width"
+[ "$want_height" -gt "$max_height" ] && want_height="$max_height"
+[ "$want_width" -lt 320 ] && want_width=320
+[ "$want_height" -lt 240 ] && want_height=240
+want_width=$((want_width - want_width % 2))
+want_height=$((want_height - want_height % 2))
 
 current="$(xrandr --current 2>/dev/null | awk '/^Screen 0:/ {print $8 "x" $10}' | tr -d ',')"
 if [ "$current" = "${want_width}x${want_height}" ]; then

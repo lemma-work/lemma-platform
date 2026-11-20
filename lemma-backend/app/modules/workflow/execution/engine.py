@@ -517,6 +517,17 @@ class WorkflowEngine(RunPublication):
             )
         return run
 
+    async def reserved_run(
+        self, run_id: UUID, *, flow_id: UUID, user_id: UUID
+    ) -> WorkflowRunEntity | None:
+        """The run a start already made under ``run_id``, as ``start_run``
+        would return it on a retry; refused if it is not this person's run of
+        this workflow."""
+        run = await self.run_repo.get(run_id)
+        if run is not None:
+            self._validate_reserved_run(run, flow_id=flow_id, user_id=user_id)
+        return run
+
     async def get_active_wait(self, run_id: UUID) -> WorkflowRunWaitEntity | None:
         return await self.wait_repo.get_active_for_run(run_id)
 

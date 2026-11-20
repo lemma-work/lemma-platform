@@ -9,6 +9,7 @@ row is billable compute nobody owns.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from uuid import UUID, uuid7
 
@@ -107,8 +108,12 @@ class SandboxRepository:
         display_name: str | None = None,
         profile_name: str = "",
         profile_digest: str = "",
+        machine: Mapping[str, object] | None = None,
     ) -> Sandbox:
         """Get or create the durable identity. Idempotent by (kind, owner, slug).
+
+        ``machine`` is the machine columns a new row starts with (size,
+        template, visibility...); an existing row keeps its own.
 
         The explicit ``sandbox_id`` is what lets a caller pin the id to the
         owner id, which the pre-consolidation volume labels require in order to
@@ -145,6 +150,7 @@ class SandboxRepository:
                 last_used_at=now,
                 created_at=now,
                 updated_at=now,
+                **dict(machine or {}),
             )
             .on_conflict_do_nothing()
         )
@@ -414,7 +420,9 @@ class SandboxRepository:
             .values(last_used_at=utcnow())
         )
 
-    async def mark_in_use(self, sandbox_id: UUID, instance_id: UUID | None) -> None:
+    async def mark_in_use(
+        self, sandbox_id: UUID, instance_id: UUID | None, *, resumed: bool = False
+    ) -> None:
         """Record that this sandbox is serving again, not merely that it was used.
 
         Adopting a sandbox is a state change, and the resume path treated it as
@@ -430,6 +438,12 @@ class SandboxRepository:
         extra, and because doing it as one conditional UPDATE rather than
         read-then-write leaves no window for a concurrent release to be undone
         by a stale value.
+
+        ``resumed``: the instance was stopped and has just been started again.
+        Its running clock restarts whatever the row said. E2B pauses a sandbox
+        on its own timeout while the row stays READY, so "only when it was not
+        READY" kept the old ``ready_at``, and the meter opened the resumed
+        session at the pause -- billing every paused hour.
         """
         await self.session.execute(
             update(SandboxModel)
@@ -455,8 +469,11 @@ class SandboxRepository:
                 state=SandboxInstanceState.READY.value,
                 last_error=None,
                 # A resume starts a new running session: restart its clock,
-                # or the next release would time the paused hours as well.
-                ready_at=case(
+                # or the meter and the next release would time the paused
+                # hours as well.
+                ready_at=utcnow()
+                if resumed
+                else case(
                     (
                         SandboxInstanceModel.state != SandboxInstanceState.READY.value,
                         utcnow(),

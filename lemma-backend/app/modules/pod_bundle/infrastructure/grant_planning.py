@@ -39,10 +39,16 @@ from lemma_pod_bundle import load_resource_payload
 from app.core.authorization.context import Context
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.pod_bundle.domain.errors import BundleGrantsRefusedError
-from app.modules.pod_bundle.domain.state import ImportPlan, PlanStep, StepKind
+from app.modules.pod_bundle.domain.state import (
+    ImportPlan,
+    PlanStep,
+    StepAction,
+    StepKind,
+)
 from app.modules.pod_bundle.infrastructure.grants import (
     GrantInput,
     grants_from_payload,
+    has_grants,
 )
 
 if TYPE_CHECKING:
@@ -222,6 +228,121 @@ async def plan_grant_conferral(
     return warnings
 
 
+class HeldGrants(Protocol):
+    """What a function or agent the pod already has lacks of some grants."""
+
+    async def lacking(
+        self,
+        grants: Sequence[GrantInput],
+        *,
+        grantee_type: str,
+        grantee_name: str,
+    ) -> list[str]: ...
+
+
+class NoHeldGrants:
+    """Finds nothing lacking: the default where there is no pod to ask."""
+
+    async def lacking(
+        self,
+        grants: Sequence[GrantInput],
+        *,
+        grantee_type: str,
+        grantee_name: str,
+    ) -> list[str]:
+        del grants, grantee_type, grantee_name
+        return []
+
+
+class ServiceHeldGrants:
+    """Production :class:`HeldGrants`, over the plan job's short unit of work."""
+
+    def __init__(self, *, uow: SqlAlchemyUnitOfWork, ctx: Context, pod_id: UUID):
+        del ctx  # the plan job's scope, like its neighbours; reading asks nothing of it
+        self._uow = uow
+        self._pod_id = pod_id
+
+    async def lacking(
+        self,
+        grants: Sequence[GrantInput],
+        *,
+        grantee_type: str,
+        grantee_name: str,
+    ) -> list[str]:
+        from app.core.authorization.context import ResourceType
+        from app.core.authorization.grants import list_grantee_resource_grants
+        from app.core.authorization.resource_names import resolve_resource_id_by_name
+
+        session = self._uow.session
+        grantee_id = await resolve_resource_id_by_name(
+            session,
+            pod_id=self._pod_id,
+            resource_type=ResourceType(grantee_type.lower()),
+            resource_name=grantee_name,
+        )
+        if grantee_id is None:
+            return []
+        held = await list_grantee_resource_grants(
+            session,
+            pod_id=self._pod_id,
+            grantee_type=grantee_type,
+            grantee_id=grantee_id,
+        )
+        lacking: list[str] = []
+        for grant in grants:
+            have = set(held.get((grant.resource_type, grant.resource_name)) or [])
+            missing = [p for p in grant.permission_ids if p not in have]
+            if missing:
+                lacking.append(
+                    f"{', '.join(missing)} on "
+                    f"{grant.resource_type.value} '{grant.resource_name}'"
+                )
+        return lacking
+
+
+#: The kept steps whose bundled copy may declare grants, and how to name them.
+_KEPT_HOLDERS = {
+    StepKind.FUNCTION: ("functions", "FUNCTION"),
+    StepKind.AGENT: ("agents", "AGENT"),
+}
+
+
+async def plan_kept_access(
+    bundle_root: Path, steps: Sequence[PlanStep], held: HeldGrants
+) -> list[str]:
+    """Warn of each kept function or agent lacking access its bundle grants.
+
+    The import writes nothing to one it keeps, access included. But a function
+    or agent an earlier import created and never finished -- cancelled, or
+    failed before its grants step, then imported afresh -- is here with none of
+    what the bundle grants it, and nothing else would say so. One a person
+    narrowed on purpose is named too, which tells them what the bundle expects.
+    """
+    warnings: list[str] = []
+    for step in steps:
+        holder = _KEPT_HOLDERS.get(step.kind)
+        if holder is None or step.action is not StepAction.SKIP:
+            continue
+        directory, grantee_type = holder
+        payload = load_resource_payload(
+            bundle_root / directory / step.name, step.name, resource_type=directory
+        )
+        if not has_grants(payload):
+            continue
+        lacking = await held.lacking(
+            grants_from_payload(payload),
+            grantee_type=grantee_type,
+            grantee_name=step.name,
+        )
+        if lacking:
+            warnings.append(
+                f"{grantee_type.capitalize()} '{step.name}' was already here and "
+                "keeps its own access, which lacks what this bundle grants it: "
+                f"{'; '.join(lacking)}. Grant it from its settings if it needs it."
+            )
+    return warnings
+
+
 def refuse_unconferrable_grants(plan: ImportPlan) -> None:
     """Refuse the apply while the plan holds a grant the importer can't make."""
     refused = plan.grant_refusals
@@ -231,8 +352,12 @@ def refuse_unconferrable_grants(plan: ImportPlan) -> None:
 
 __all__ = [
     "GrantConferral",
+    "HeldGrants",
     "NoGrantConferral",
+    "NoHeldGrants",
     "ServiceGrantConferral",
+    "ServiceHeldGrants",
     "plan_grant_conferral",
+    "plan_kept_access",
     "refuse_unconferrable_grants",
 ]

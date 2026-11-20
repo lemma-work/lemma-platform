@@ -14,6 +14,7 @@ from .apply_fields import (
     SURFACE_APPLY_FIELDS,
     BundleConnector,
     read_bundle_connector,
+    MACHINE_APPLY_FIELDS,
 )
 from .archive import extract_bundle, pack_bundle
 from .diff import TableDiff, diff_table_columns
@@ -37,6 +38,10 @@ from .layout import (
     load_resource_payload,
     normalize_resource_dir_name,
 )
+from .workflow_schedules import (
+    schedules_sharing_a_global_workflow,
+    global_workflows_scheduled_twice,
+)
 from .normalize import (
     BundleValidationIssue,
     load_bundle_connectors,
@@ -52,6 +57,7 @@ __all__ = [
     "GRANT_HOLDER_DIRS",
     "JSON_FILE_REF_KEY",
     "POD_CONNECTOR_FIELDS",
+    "MACHINE_APPLY_FIELDS",
     "POD_MANIFEST_FILE",
     "POD_MEMBER_TOKEN",
     "RAW_FILE_REF_KEY",
@@ -66,8 +72,10 @@ __all__ = [
     "TableDiff",
     "bundle_format_version",
     "check_format_version",
+    "schedules_sharing_a_global_workflow",
     "diff_table_columns",
     "extract_bundle",
+    "global_workflows_scheduled_twice",
     "load_bundle_connectors",
     "load_resource_payload",
     "loads_jsonc",

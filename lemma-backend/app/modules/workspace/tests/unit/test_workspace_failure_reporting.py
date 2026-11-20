@@ -147,7 +147,7 @@ async def test_a_refused_credential_is_definitive_not_a_reason_to_wait(
         with pytest.raises(SandboxRejected):
             await provider.create_directory(
                 _instance(sandbox_id),
-                path="/workspace/somewhere",
+                path="/home/user/somewhere",
                 deadline_at=_deadline(),
             )
     finally:
@@ -172,7 +172,7 @@ async def test_a_bridge_that_never_answers_names_itself(
     )
     with pytest.raises(SandboxUnavailable) as caught:
         await provider.create_directory(
-            _instance(uuid4()), path="/workspace/x", deadline_at=_deadline(2)
+            _instance(uuid4()), path="/home/user/x", deadline_at=_deadline(2)
         )
     assert str(caught.value), "the failure must carry a reason, not an empty message"
 
@@ -220,7 +220,7 @@ async def test_a_second_operation_does_not_ask_the_guest_where_the_runtime_is_ag
 
         for _ in range(3):
             await provider.create_directory(
-                instance, path="/workspace/x", deadline_at=_deadline()
+                instance, path="/home/user/x", deadline_at=_deadline()
             )
     finally:
         runtime.close()
@@ -266,7 +266,7 @@ async def test_a_bridge_that_cannot_be_started_is_not_a_missing_sandbox(
     # And a status must not claim the sandbox is gone when we could not ask.
     with pytest.raises(SandboxUnavailable):
         await provider.create_directory(
-            _instance(uuid4()), path="/workspace/x", deadline_at=_deadline()
+            _instance(uuid4()), path="/home/user/x", deadline_at=_deadline()
         )
 
 

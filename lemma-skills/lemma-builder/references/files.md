@@ -96,7 +96,7 @@ lemma files child /knowledge/handbook.pdf/document.md --pages 3-7      # markdow
 **View pod files as images.** The rendered page JPEGs (and uploaded images) are
 exactly what the **view-image** capability reads — fetch a page with `files child`
 (or get a URL with `files url`) and view it to *see* a chart, a signature, a scanned
-form, layout. This also applies to **workspace** files. So for "what does page 3
+form, layout. This also applies to files on the agent's **machine**. So for "what does page 3
 look like?" → `files child …/pages/page_0003.jpg` → view-image; for "what does it
 say?" → `files cat … --pages 3`.
 

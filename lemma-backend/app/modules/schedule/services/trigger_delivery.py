@@ -303,6 +303,7 @@ async def _fire_batch(
                     "batch_first": str(first),
                     "batch_last": planned.last,
                     "count": len(window),
+                    **_outside_marks(window),
                 },
                 source_occurred_at=window[-1].occurred_at if window else None,
             ),
@@ -311,6 +312,19 @@ async def _fire_batch(
         )
         if outcome in (FireOutcome.STARTED, FireOutcome.FILTERING):
             result.batches += 1
+
+
+def _outside_marks(changes: Sequence[TriggerChange]) -> dict[str, JsonValue]:
+    """A batch holding any row from outside the pod is labelled as that row
+    is: one stranger's row among a member's is still a stranger's words."""
+    for change in changes:
+        if change.from_outside:
+            return {
+                key: change.metadata[key]
+                for key in ("row_origin", "untrusted_row", "row_notice")
+                if key in change.metadata
+            }
+    return {}
 
 
 def _at_or_before(position: ChangePosition, last: str) -> bool:

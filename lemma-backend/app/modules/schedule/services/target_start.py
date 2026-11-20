@@ -324,7 +324,7 @@ def conversation_metadata(
     a list of a pod's runs groups them by, since the name can be edited and
     the title is derived from it. A webhook source's repository context, when
     present, becomes the run's checkout, cloned through the pod's `github`
-    connector.
+    connector. A row from outside the pod says so (``OUTSIDE_ROW``).
     """
     started: dict[str, JsonValue] = {
         "schedule_id": str(schedule.id),
@@ -332,6 +332,14 @@ def conversation_metadata(
     }
     if schedule.name:
         started["schedule_name"] = schedule.name
+    if metadata.get("untrusted_row") is True:
+        from app.modules.agent.contracts.automation import OUTSIDE_ROW
+
+        # A stranger wrote what this run reads first, and it runs as the
+        # schedule's owner: the agent module marks it as reading outside
+        # text, so what it does beyond the pod's records waits for the
+        # owner's approval, on their own machine as anywhere.
+        started[OUTSIDE_ROW] = True
     repo = metadata.get("repo")
     if isinstance(repo, dict) and repo:
         # The repository only. Which account clones it is the pod's `github`

@@ -1030,11 +1030,12 @@ async def test_function_runs_a_tenant_connector_operation_for_real(
 async def test_upsert_function_for_import_creates_then_idempotently_updates(
     authenticated_client, test_pod, fixed_test_user, db_manager
 ):
-    """``upsert_function_for_import`` is the bundle/CLI import saga
-    (``app/modules/pod_bundle/infrastructure/function_builder.py::FunctionStepRunner``):
-    create-if-absent, update-if-present, by name, with no request object.
-    It has no HTTP endpoint of its own, so this builds the same
-    ``FunctionUseCases`` the real import path builds."""
+    """``upsert_function_for_import`` is the import saga: create-if-absent,
+    update-if-present, by name, with no request object. A bundle import uses its
+    create-only form, ``create_function_for_import``
+    (``app/modules/pod_bundle/infrastructure/function_builder.py``), which leaves
+    a function of that name exactly as it is. Neither has an HTTP endpoint of
+    its own, so this builds the same ``FunctionUseCases`` the import path builds."""
     from uuid import UUID
 
     from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -1090,6 +1091,13 @@ async def test_upsert_function_for_import_creates_then_idempotently_updates(
     assert updated.id == created.id
     assert updated.description == "imported again"
     assert updated.revision_hash != first_revision
+
+    # A bundle import finds the name taken and writes nothing.
+    third_code = typed_function_code(func_name, expression="data.value + 3")
+    kept = await use_cases.create_function_for_import(
+        entity=_entity(), code=third_code, user_id=user_id
+    )
+    assert kept is None
 
     # Visible + executable through the normal HTTP surface, reflecting the
     # second import's code.

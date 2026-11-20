@@ -19,6 +19,10 @@ export type PodConfig = {
     contacts?: (PodContactSettings | null);
     default_profile_id?: (string | null);
     default_runtime?: (AgentRuntimeConfig | null);
+    /**
+     * The name of the app this pod opens on. null opens on its first app.
+     */
+    home_app?: (string | null);
     join_policy?: PodJoinPolicy;
     outcome?: (PodOutcome | null);
     recipes?: Array<PodRecipe>;

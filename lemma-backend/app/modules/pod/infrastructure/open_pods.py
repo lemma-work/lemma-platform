@@ -96,6 +96,28 @@ def default_pod_ids_sql(
     return query.order_by(Pod.id).limit(limit + 1)
 
 
+def organization_lemma_sql(organization_id: UUID) -> Select[tuple[UUID, str]]:
+    """The organization's own Lemma: its oldest default pod.
+
+    The one made with the organization is the oldest that takes in everyone
+    who joins, unless somebody since closed it. Another default pod made after
+    it is a second room, not the shared one, so age decides rather than name.
+    """
+    return (
+        select(Pod.id, Pod.name)
+        .where(
+            Pod.organization_id == organization_id,
+            Pod.is_deleted.is_(False),
+            Pod.config["join_policy"].astext.in_(
+                sorted(policy.value for policy in OPEN_JOIN_POLICIES)
+            ),
+            Pod.config["auto_join_new_members"].astext == "true",
+        )
+        .order_by(Pod.created_at, Pod.id)
+        .limit(1)
+    )
+
+
 class OpenPods:
     """Satisfies ``OpenPodsPort``."""
 

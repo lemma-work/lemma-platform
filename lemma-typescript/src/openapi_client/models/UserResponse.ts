@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { WorkAnswerResponse } from './WorkAnswerResponse.js';
 /**
  * User response schema.
  */
@@ -23,4 +24,8 @@ export type UserResponse = {
     mobile_verified_at?: (string | null);
     timezone?: (string | null);
     updated_at: string;
+    /**
+     * What they said they do, or null until they have been asked. An answer with no jobs and no `other` means they skipped it. Only on the current user's own record.
+     */
+    work?: (WorkAnswerResponse | null);
 };

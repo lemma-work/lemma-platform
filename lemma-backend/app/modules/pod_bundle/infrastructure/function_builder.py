@@ -2,6 +2,13 @@
 
 Function compilation uses the sandbox runtime and object storage, so it must never run
 inside the apply loop's shared database unit of work.
+
+A function the pod already has is kept as it is: its code, schema and access
+stay the pod's. The plan keeps one it saw (``kept_parts``); here the function
+module creates only (``create_function_for_import``), deciding in the unit of
+work that resolves the create, and one found there is the import's own or kept.
+A function is written in the saga's last unit of work, so one that exists is
+whole.
 """
 
 from __future__ import annotations
@@ -12,12 +19,10 @@ from uuid import UUID
 
 from lemma_pod_bundle import load_resource_payload
 
-from app.modules.function.contracts import (
-    FunctionEntity,
-    FunctionType,
-    FunctionUpdateEntity,
-)
+from app.modules.function.contracts import FunctionEntity, FunctionType
+from app.modules.pod_bundle.domain.state import StepKind
 from app.modules.pod_bundle.infrastructure.applier import _substitute
+from app.modules.pod_bundle.infrastructure.kept_parts import CreatedParts
 
 
 class FunctionStepRunner:
@@ -41,7 +46,10 @@ class FunctionStepRunner:
         user_id: UUID,
         bundle_root: Path,
         replacements: dict[str, str],
+        created: CreatedParts | None = None,
+        resumed: bool = False,
     ) -> None:
+        created = created or CreatedParts()
         resource_dir = bundle_root / "functions" / step.name
         payload = _substitute(
             load_resource_payload(
@@ -64,20 +72,13 @@ class FunctionStepRunner:
             type=function_type,
             visibility=payload.get("visibility") or "POD",
         )
-        update = FunctionUpdateEntity(
-            description=payload.get("description"),
-            icon_url=payload.get("icon_url"),
-            code=code,
-            config=payload.get("config"),
-            type=function_type,
-            visibility=payload.get("visibility"),
+        made = await self._use_cases.create_function_for_import(
+            entity=entity, code=code, user_id=user_id
         )
-        await self._use_cases.upsert_function_for_import(
-            entity=entity,
-            update_entity=update,
-            code=code,
-            user_id=user_id,
-        )
+        if made is None:
+            created.claim(step, resumed=resumed)
+            return
+        created.add(StepKind.FUNCTION, step.name)
 
         # Grants are NOT applied here. They are a deferred FUNCTION_GRANTS plan
         # step (see plan_builder / applier._apply_function_grants) so a function

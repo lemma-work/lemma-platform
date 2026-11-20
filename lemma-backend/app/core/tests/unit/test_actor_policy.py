@@ -51,7 +51,6 @@ def test_every_open_route_exists():
         ("PUT", "/usage/organizations/{organization_id}/contacts-cap"),
         ("POST", "/pods"),
         ("GET", "/web-logins"),
-        ("GET", "/workspace/files"),
     ],
 )
 def test_routes_that_act_as_the_person_stay_closed(method: str, template: str):
@@ -132,3 +131,33 @@ def test_an_app_may_call_its_pod_and_connector_setup():
     )
     assert app_may_call("POST", "/organizations/{organization_id}/invitations")
     assert not app_may_call("POST", "/pods/bundle/download")
+
+
+@pytest.mark.parametrize(
+    ("method", "template"),
+    [
+        ("POST", "/machines/{ref}/processes"),
+        ("GET", "/machines/{ref}/processes/{process_id}/output"),
+        ("POST", "/machines/{ref}/processes/{process_id}:input"),
+        ("POST", "/machines/{ref}/processes/{process_id}:resize"),
+        ("DELETE", "/machines/{ref}/processes/{process_id}"),
+    ],
+)
+def test_an_app_may_not_run_or_drive_a_terminal_on_a_machine(
+    method: str, template: str
+):
+    """A pod machine is one trust domain, and an app's script is its author's:
+    a process it started, or typing into a member's terminal, is that author
+    acting as the viewer beside everybody else on the machine."""
+    from app.core.api.actor_policy import app_may_call, workload_may_call
+
+    assert not app_may_call(method, template)
+    assert workload_may_call(method, template), "agents keep their terminals"
+
+
+def test_an_app_still_reads_a_pod_machine_and_its_files():
+    from app.core.api.actor_policy import app_may_call
+
+    assert app_may_call("GET", "/machines/{ref}/processes")
+    assert app_may_call("GET", "/machines/{ref}/files:content")
+    assert app_may_call("POST", "/machines/{ref}/previews")

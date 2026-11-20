@@ -35,7 +35,12 @@ import {
     type AskWith, type ContactWaiting, type Fill, type Go, type Handoff, type KeptApp, type View,
 } from "./model";
 import { useNeedsYou, usePodActivity, usePodDetails, useRecents } from "./data";
-import { FrameArrival, firstLemma } from "./arrival";
+import { looksNamed, named, slug, unnamed, type Names } from "./named-address";
+import { appName as nameOfApp, appsOf } from "./lemma-apps";
+import { FrameArrival } from "./arrival";
+import { firstLemma } from "./first-lemma";
+import { ArrivalFlow, type ArrivalStart, type Landing } from "@/arrival/flow";
+import { asksWorkOn, stillAsksWork } from "@/arrival/work";
 import { NewLemmaDialog } from "./new-lemma";
 import { Bars, Icon, Empty } from "./parts";
 import { Sidebar } from "./sidebar";
@@ -61,6 +66,9 @@ const ORG_KEY = key("org");
 const NO_PODS: readonly Pod[] = [];
 /** Whether the reader put the sidebar away: theirs, on this browser. */
 const SIDE_KEY = key("outcomes-side-closed");
+/** The Lemma the page arrived at, before the reader has gone anywhere: a
+ *  word no Lemma's id is. */
+const ARRIVAL = "arrival";
 
 function storedSideClosed(): boolean {
     try {
@@ -103,6 +111,10 @@ export interface Me {
     email?: string;
     first_name?: string;
     last_name?: string;
+    /** What they said they do, once asked; absent from a server that does
+     *  not ask. */
+    work?: unknown;
+    created_at?: string;
 }
 
 /** How many steps into the frame this history entry is, kept on the entry
@@ -138,23 +150,71 @@ export function OutcomesShell() {
        embedded thread or chat page writes its links as workspace addresses,
        and following one should stay here. */
     const last = useRef<View>({ name: "today" });
+
+    /* Read ahead of the address: an address may name the organization and
+       the Lemma, and these are what say which they are. */
+    const orgs = useQuery({ queryKey: ["orgs"], queryFn: () => source.listOrgs(), staleTime: 10 * 60_000 });
+    const [chosen, setChosen] = useState<string | null>(() => arrival.get("org") ?? storedOrg());
+    const orgId = orgs.data?.some((one) => one.id === chosen) ? chosen : orgs.data?.[0]?.id ?? null;
+    const org: Org | null = orgs.data?.find((one) => one.id === orgId) ?? null;
+    const pods = useQuery({
+        queryKey: ["pods", orgId],
+        queryFn: () => source.listPods(orgId as string),
+        enabled: Boolean(orgId),
+        staleTime: 5 * 60_000,
+    });
+    const list = useMemo(() => pods.data ?? [], [pods.data]);
+
+    const names = useMemo<Names | null>(
+        () => (org && pods.isSuccess ? { org: org.name, lemmas: list.map((one) => ({ id: one.id, name: one.name })) } : null),
+        [org, pods.isSuccess, list],
+    );
+    const path = pathname ?? HOME;
+    /* An address spelled in names says nothing until the names are read. It
+       waits where it is rather than being taken for an old link and
+       rewritten as one. */
+    const unread = !names && looksNamed(path);
+    const plain = useMemo(() => (names ? unnamed(path, names) ?? path : path), [names, path]);
     /* The app's own address first; then the frame's first one (`/t/outcome/…`)
        and the workspace's (`/l/{pod}/conversation/…`), which links written
        before the app moved still carry. */
     const view = useMemo<View>(() => {
-        const path = pathname ?? HOME;
-        return readView(path) ?? readTrialView(path) ?? viewOfLink(path, arrival) ?? last.current;
-    }, [pathname, arrival]);
+        if (unread) return last.current;
+        return readView(plain) ?? readTrialView(plain) ?? viewOfLink(plain, arrival) ?? last.current;
+    }, [plain, arrival, unread]);
     useEffect(() => { last.current = view; }, [view]);
     useEffect(() => {
-        const path = pathname ?? HOME;
-        if (readView(path)) return;
+        if (unread) return;
+        const search = window.location.search + window.location.hash;
+        if (readView(plain)) {
+            /* The app's own address, written back in names where it has them. */
+            const spelled = names ? named(plain, names) : path;
+            if (spelled !== path) window.history.replaceState(window.history.state, "", spelled + search);
+            return;
+        }
         /* An old address, written back as the app's own for the same place,
            the query kept for whatever on the page still has to read it. One
            that names nowhere it knows opens Home. */
-        const here = readTrialView(path) ?? viewOfLink(path, arrival) ?? { name: "today" };
-        window.history.replaceState(window.history.state, "", writeView(here) + window.location.search + window.location.hash);
-    }, [pathname, arrival]);
+        const here = readTrialView(plain) ?? viewOfLink(plain, arrival) ?? { name: "today" };
+        window.history.replaceState(window.history.state, "", (names ? named(writeView(here), names) : writeView(here)) + search);
+    }, [plain, path, arrival, unread, names]);
+    /* A named address in another of the reader's organizations: the frame
+       moves there, as it does for a link that names a Lemma by its id. */
+    useEffect(() => {
+        if (!org || !orgs.data || !looksNamed(path)) return;
+        const word = path.split("/").filter(Boolean)[1];
+        if (slug(org.name) === word) return;
+        const other = orgs.data.find((one) => slug(one.name) === word);
+        if (other) setChosen(other.id);
+    }, [org, orgs.data, path]);
+    /* `go` is one function for the life of the frame, so it reads the names
+       as they are when it is called. */
+    const spelling = useRef<Names | null>(null);
+    useEffect(() => { spelling.current = names; }, [names]);
+    /* Which Lemma was asked for as itself, to open on its first app: the one
+       the page arrived at, until the reader goes anywhere; then whichever
+       one a list's name was followed to. */
+    const [landing, setLanding] = useState<string | null>(ARRIVAL);
 
     /* Words on their way to a chat: what Home or ⌘K asked, or what an app put
        in the box. Both belong to the navigation that carried them, and any
@@ -178,7 +238,8 @@ export function OutcomesShell() {
         return () => window.removeEventListener("keydown", onKey);
     }, [toggleSide]);
     const go = useCallback<Go>((next, options = {}) => {
-        const url = writeView(next);
+        const url = spelling.current ? named(writeView(next), spelling.current) : writeView(next);
+        setLanding(options.landing && next.name === "outcome" && next.tab === "home" ? next.podId : null);
         if (options.replace) {
             window.history.replaceState({ oxStep: step() }, "", url);
             if (options.handoff) setHandoff(options.handoff);
@@ -210,10 +271,6 @@ export function OutcomesShell() {
     const filled = useCallback(() => setFill(null), []);
     const queryClient = useQueryClient();
 
-    const orgs = useQuery({ queryKey: ["orgs"], queryFn: () => source.listOrgs(), staleTime: 10 * 60_000 });
-    const [chosen, setChosen] = useState<string | null>(() => arrival.get("org") ?? storedOrg());
-    const orgId = orgs.data?.some((one) => one.id === chosen) ? chosen : orgs.data?.[0]?.id ?? null;
-    const org: Org | null = orgs.data?.find((one) => one.id === orgId) ?? null;
     const pickOrg = useCallback((id: string) => {
         setChosen(id);
         try { localStorage.setItem(ORG_KEY, JSON.stringify(id)); } catch { /* a private window keeps the choice for this tab only */ }
@@ -227,14 +284,6 @@ export function OutcomesShell() {
         staleTime: 5 * 60_000,
     });
     useAnalyticsIdentity(source.label === "sample" ? null : { userId: me.data?.id, organizationId: orgId, podId: podOfView(view) });
-
-    const pods = useQuery({
-        queryKey: ["pods", orgId],
-        queryFn: () => source.listPods(orgId as string),
-        enabled: Boolean(orgId),
-        staleTime: 5 * 60_000,
-    });
-    const list = useMemo(() => pods.data ?? [], [pods.data]);
 
     /* What waits on you is the organization's one list (#1045's needs-you):
        pauses, forms, decisions, contacts and the questions a Lemma asked in
@@ -337,6 +386,36 @@ export function OutcomesShell() {
         else go(chatView({ kind: "chat", podId, id: NEW_CHAT }), { fill: words });
     }, [go, view]);
 
+    /* A Lemma asked for as itself opens on an app, where it has one: the one
+       somebody chose for it, else its first. Its apps are how people use
+       it, and Home is a list of them. A Lemma with none stays on Home, which
+       says how to start it. */
+    const landingPod = view.name === "outcome" && view.tab === "home" && (landing === ARRIVAL || landing === view.podId) ? view.podId : null;
+    const landed = useQuery({
+        queryKey: ["outcome-apps", landingPod],
+        queryFn: () => source.listTabs(landingPod as string),
+        enabled: Boolean(landingPod),
+        staleTime: 5 * 60_000,
+    });
+    const landingHome = list.find((one) => one.id === landingPod)?.homeApp;
+    useEffect(() => {
+        /* The list says which app was chosen: landing before it is read
+           would open the first app and then stay there. */
+        if (!landingPod || !landed.data || !pods.data) return;
+        const first = appsOf(landed.data, landingHome)[0];
+        if (first) go({ name: "app", podId: landingPod, app: nameOfApp(first) }, { replace: true });
+        else setLanding(null);
+    }, [landingPod, landed.data, pods.data, landingHome, go]);
+
+    /* Where the app in front says it is, and the app it asks for. Either is a
+       step the address takes, so Back undoes it and the app is told. */
+    const moveApp = useCallback((podId: string, app: string, path: string) => {
+        const now = last.current;
+        const at = path === "/" ? undefined : path;
+        if (now.name === "app" && now.podId === podId && now.app === app && now.at === at) return;
+        go(at ? { name: "app", podId, app, at } : { name: "app", podId, app });
+    }, [go]);
+
     /* Two arrivals that start something rather than open a place, answered
        once: `?hire=1`, from the old create-a-pod door, and `?remixSource=`,
        an app somebody chose to rebuild, which lands on the Lemma they picked
@@ -381,6 +460,32 @@ export function OutcomesShell() {
         return section ? { section, focus: null, request: 1 } : null;
     });
     const [makingOrg, setMakingOrg] = useState(false);
+    /* The way in, held open while it runs: making somebody's organization
+       fills the list of organizations, and the frame must not take over in
+       the middle of a step. `first` is latched the moment the list comes
+       back empty; the others are opened from here. */
+    const firstArrival = orgs.isSuccess && orgs.data.length === 0;
+    const [arriving, setArriving] = useState<ArrivalStart | "first" | null>(null);
+    useEffect(() => {
+        if (firstArrival) setArriving((was) => was ?? "first");
+    }, [firstArrival]);
+    /* Somebody who came in another way -- a chat app, an install page -- and
+       has not been asked what they do, is asked once here, when they come to
+       Home. Never over a link to a chat, an app or a Lemma: they came for
+       that, as a link wins over a place of their own on the first arrival.
+       Ending the step any way at all, a failed save included, stops it for
+       this visit. */
+    const asksWork = source.label === "live" && stillAsksWork(me.data);
+    const asksName = Boolean(me.data) && !(me.data?.first_name ?? "").trim();
+    const [workSettled, setWorkSettled] = useState(false);
+    /* Read off the address itself, not the view: while a named address waits
+       for its names, and while an old link is being rewritten, the view
+       stands at Home without the reader being there. */
+    const workHere = !unread && asksWorkOn(readView(plain)?.name ?? "");
+    useEffect(() => {
+        if (asksWork && workHere && !workSettled && orgs.isSuccess && orgs.data.length > 0) setArriving((was) => was ?? { kind: "work" });
+    }, [asksWork, workHere, workSettled, orgs.isSuccess, orgs.data]);
+    const showingArrival = arriving ?? (firstArrival ? "first" : null);
     /* A new Lemma is made in a dialog over wherever the reader is, as a chat
        app makes a channel; its old address (`/l/new`) opens the same dialog
        over the list of Lemmas. */
@@ -435,6 +540,31 @@ export function OutcomesShell() {
 
     const myName = nameOf(me.data);
     const scoped = podOfView(view);
+    const enterFrom = useCallback(async (landing: Landing) => {
+        const was = arriving;
+        /* The organization list is read again before the way in lets go:
+           closed over a list still empty, it would open again at once. */
+        await Promise.all([
+            queryClient.invalidateQueries({ queryKey: ["orgs"] }),
+            queryClient.invalidateQueries({ queryKey: ["pods"] }),
+        ]).catch(() => undefined);
+        setArriving(null);
+        setWorkSettled(true);
+        if (landing.orgId) {
+            setChosen(landing.orgId);
+            try { localStorage.setItem(ORG_KEY, JSON.stringify(landing.orgId)); } catch { /* a private window keeps the choice for this tab only */ }
+        }
+        if (landing.startNew) {
+            go({ name: "hire" });
+            return;
+        }
+        /* Only the job question: they were somewhere already, and stay. */
+        if (was && was !== "first" && was.kind === "work") return;
+        /* Already at the Lemma they came for: stay on the exact address,
+           section and all, rather than its summary. */
+        if (landing.podId && landing.podId === scoped) return;
+        go(landing.podId ? outcomeView(landing.podId) : { name: landing.orgId ? "today" : "outcomes" });
+    }, [arriving, queryClient, go, scoped]);
     /* Who is in a Lemma costs two reads apiece, so it is asked only for the
        pods something on screen reads it for: every one on People and the
        Lemmas board, which list rosters and owners; otherwise the one in view
@@ -481,26 +611,15 @@ export function OutcomesShell() {
     }, [elsewhere]);
     const stranger = unlisted && linked.isError && isForbidden(linked.error) ? unlisted : null;
 
-    /* Somebody who belongs nowhere yet: in, without a decision they cannot
-       make well yet -- an invitation accepted, or an organization made for
-       them with its own Lemma -- landing on what they were invited to, or in
-       that Lemma. */
-    if (orgs.isSuccess && orgs.data.length === 0) {
-        return (
-            <FrameArrival
-                linkedPodId={scoped}
-                email={me.data?.email ?? null}
-                name={[me.data?.first_name, me.data?.last_name].filter(Boolean).join(" ") || null}
-                onEntered={(podId) => {
-                    void queryClient.invalidateQueries({ queryKey: ["orgs"] });
-                    void queryClient.invalidateQueries({ queryKey: ["pods"] });
-                    /* Already at the Lemma they came for: stay on the exact
-                       address, section and all, rather than its summary. */
-                    if (podId && podId === scoped) return;
-                    go(podId ? outcomeView(podId) : { name: "outcomes" });
-                }}
-            />
-        );
+    /* The way in, one look on every door: somebody who belongs nowhere yet
+       (an invitation accepted, their company's organization joined, or one
+       made with a Lemma everyone in it shares), an invitation just accepted
+       from Home, or the job question somebody has not been asked. */
+    if (showingArrival === "first") {
+        return <FrameArrival linkedPodId={scoped} asksWork={asksWork} asksName={asksName} onEntered={enterFrom} />;
+    }
+    if (showingArrival) {
+        return <ArrivalFlow start={showingArrival} asksWork={asksWork} asksName={asksName} onEntered={enterFrom} />;
     }
 
     let page;
@@ -523,7 +642,7 @@ export function OutcomesShell() {
     } else if (!org || pods.isPending) {
         page = <p className="ox-loading">Loading {org?.name ?? "your organization"}…</p>;
     } else if (view.name === "today") {
-        page = <Today org={org} pods={withPeople} activity={activity} channels={sideChannels} queue={queue} queueFailed={queueFailed} onRetryQueue={retryQueue} me={myName} go={go} onAsk={ask} />;
+        page = <Today org={org} pods={withPeople} activity={activity} channels={sideChannels} queue={queue} queueFailed={queueFailed} onRetryQueue={retryQueue} me={myName} go={go} onAsk={ask} onJoined={(invite) => setArriving({ kind: "joined", orgId: invite.orgId, orgName: invite.orgName, podId: invite.podId })} />;
     } else if (view.name === "apps") {
         page = <AppsPage pods={withPeople} go={go} />;
     } else if (view.name === "connectors") {
@@ -550,6 +669,10 @@ export function OutcomesShell() {
         page = <div className="ox-page"><Empty title="This Lemma isn’t one you can open."><p>It may have been removed, or you were never added to it.</p></Empty></div>;
     } else if (view.name === "outcome" && view.tab === "settings") {
         page = <SettingsView key={pod.id} pod={pod} org={org} section={view.section ?? null} go={go} actions={actions} />;
+    } else if (view.name === "outcome" && landingPod === pod.id && landed.isPending) {
+        /* About to open on its first app, or on Home if it has none: not
+           Home for a moment and then the app. */
+        page = <p className="ox-loading">Opening {pod.name}…</p>;
     } else if (view.name === "outcome") {
         page = <OutcomePage pod={pod} pods={list} orgName={org.name} tab={view.tab} section={view.section ?? null} activity={activity.get(pod.id) ?? []} queue={queue.filter((item) => item.podId === pod.id)} me={myName} go={go} onAsk={ask} actions={actions} />;
     } else if (view.name === "run") {
@@ -591,6 +714,7 @@ export function OutcomesShell() {
                 onPlan={() => openSettings("plan")}
                 onNewOrg={() => setMakingOrg(true)}
                 onNewLemma={() => setMakingLemma(true)}
+                onAddApp={(podId) => prompt(podId, "Build an app that ")}
                 open={navOpen}
                 closed={sideClosed}
                 onToggle={toggleSide}
@@ -612,7 +736,7 @@ export function OutcomesShell() {
                         const shown = Boolean(pod) && view.name === "app" && view.podId === one.podId && view.app === one.app;
                         return (
                             <div key={one.podId + "/" + one.app} className="ox-keep" hidden={!shown}>
-                                <AppView pod={keptPod} app={one.app} go={go} actions={actions} shown={shown} />
+                                <AppView pod={keptPod} app={one.app} at={shown && view.name === "app" ? view.at ?? "/" : "/"} go={go} actions={actions} shown={shown} onMove={moveApp} />
                             </div>
                         );
                     })}

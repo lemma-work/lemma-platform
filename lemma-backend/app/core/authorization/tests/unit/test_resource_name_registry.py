@@ -45,6 +45,7 @@ EXPECTED_TYPES = {
     # and are now the connectors module's own rows.
     ResourceType.CONNECTOR,
     ResourceType.CONNECTOR_ACCOUNT,
+    ResourceType.MACHINE,
 }
 
 
@@ -122,6 +123,7 @@ def test_a_module_may_declare_nothing(assembled: dict) -> None:
         "function",
         "schedule",
         "workflow",
+        "workspace",
     }
     declare_resource_names(())
     assert set(_NAME_REGISTRY) == EXPECTED_TYPES

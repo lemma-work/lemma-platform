@@ -4,6 +4,6 @@
 # Usage: docker compose -f docker-compose.load-test.yml -f docker-compose.workers.yml up -d --force-recreate api
 services:
   api:
-    command: ["uvicorn", "app.app:app", "--host", "0.0.0.0", "--port", "8000", "--ws-max-size", "1048576", "--workers", "2"]
+    command: ["uvicorn", "app.app:app", "--host", "0.0.0.0", "--port", "8000", "--ws-max-size", "1048576", "--ws-per-message-deflate", "false", "--workers", "2"]
     environment:
       DB_POOL_SIZE: "5"

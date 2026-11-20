@@ -1,6 +1,6 @@
 ---
 name: lemma-artifact-author
-description: "Create, revise, and deliver polished, durable artifacts in a Lemma workspace: Markdown, HTML, DOCX, PDF, XLSX, and PPTX. Use for reports, documents, workbooks, presentations, exports, handouts, template-based revisions, or publication-ready files that must preserve source fidelity, be rendered and visually verified, and be uploaded to private /me or a shared pod folder. Route deployed Lemma apps to lemma-app-design and lemma-builder instead."
+description: "Create, revise, and deliver polished, durable artifacts in Lemma: Markdown, HTML, DOCX, PDF, XLSX, and PPTX. Use for reports, documents, workbooks, presentations, exports, handouts, template-based revisions, or publication-ready files that must preserve source fidelity, be rendered and visually verified, and be uploaded to private /me or a shared pod folder. Route deployed Lemma apps to lemma-app-design and lemma-builder instead."
 ---
 
 # Lemma Artifact Author
@@ -12,7 +12,7 @@ editable source, any fixed-layout export, and the pod copy as one delivery chain
 ## Hold the quality line
 
 - Preserve every source and template unchanged. Work on a copy in an isolated
-  temporary directory or a clearly named workspace output directory.
+  temporary directory or a clearly named output directory on your machine.
 - Preserve meaning and data, not merely appearance. Never invent facts, silently
   change numbers, flatten formulas, discard notes, accept tracked changes, or
   remove advanced document features without authorization.
@@ -86,7 +86,7 @@ Prefer, in order:
 
 1. A native format-specific capability that supports creation or revision plus
    rendering and reopening.
-2. A bundled workspace library or installed application confirmed at runtime.
+2. A library bundled on your machine or an installed application confirmed at runtime.
 3. A loss-aware conversion path with the editable source retained.
 4. A clearly labelled fallback in a format the environment can produce.
 

@@ -111,3 +111,42 @@ def test_terminal_statuses():
     assert not publish.is_terminal
     publish.status = PublishStatus.FAILED
     assert publish.is_terminal
+
+
+def test_a_finished_create_is_remembered_and_nothing_else_is():
+    """A CREATE step finishes DONE only on a part it made; one it found someone
+    else's is SKIPPED. A file has no later step to write to it."""
+    state = _import_state()
+    state.plan = ImportPlan(
+        format_version=2,
+        steps=[
+            PlanStep(
+                index=0,
+                kind=StepKind.AGENT,
+                name="bot",
+                action=StepAction.CREATE,
+                status=StepStatus.DONE,
+            ),
+            PlanStep(
+                index=1,
+                kind=StepKind.AGENT,
+                name="theirs",
+                action=StepAction.SKIP,
+                status=StepStatus.SKIPPED,
+            ),
+            PlanStep(index=2, kind=StepKind.TABLE, name="t", action=StepAction.CREATE),
+            PlanStep(
+                index=3,
+                kind=StepKind.FILE,
+                name="docs/a.md",
+                action=StepAction.CREATE,
+                status=StepStatus.DONE,
+            ),
+        ],
+    )
+    state.created = ["APP:board"]
+
+    state.remember_finished_creates()
+    state.remember_finished_creates()
+
+    assert state.created == ["APP:board", "AGENT:bot"]

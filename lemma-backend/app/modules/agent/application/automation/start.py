@@ -24,6 +24,7 @@ from app.modules.agent.domain.automation_prompts import (
     workflow_input_prompt,
 )
 from app.modules.agent.domain.entities import Agent, Conversation
+from app.modules.agent.domain.outsiders import OUTSIDE_ROW_KEY
 from app.modules.agent.domain.project_repo import parse_project_repo
 from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.domain.run_state import RunState
@@ -123,6 +124,7 @@ class StartAutomatedRun:
         kind, trigger, source = _TRIGGERS[origin]
         scheduled = origin is ConversationOrigin.SCHEDULE
         metadata = dict(conversation_metadata or {})
+        outside_row = metadata.pop(OUTSIDE_ROW_KEY, None) is True
         repo = parse_project_repo(metadata.pop("repo", None))
         raw_type = metadata.pop("schedule_type", None)
         schedule_type = raw_type.upper() if isinstance(raw_type, str) else None
@@ -187,7 +189,12 @@ class StartAutomatedRun:
                 if scheduled
                 else workflow_input_prompt(input_data),
                 role=MessageRole.USER,
-                metadata={"source": source, "content_format": "json"},
+                metadata={
+                    "source": source,
+                    "content_format": "json",
+                    # Read back as each turn starts (``services/outside_text``).
+                    **({OUTSIDE_ROW_KEY: True} if outside_row else {}),
+                },
             ),
         )
         await stage_agent_turn(

@@ -72,6 +72,28 @@ handle.close(); // stop the stream and prevent further reconnects
 - **React.** In a component, prefer the hooks (`lemma-sdk/react`): `useLiveRecords({ client, tableName })` for a live record list that merges deltas **in place** (no flicker, no polling), or `useWatchChanges({ client, table, onChange })` to drive your own state/cache/`queryClient.invalidateQueries`. Both wrap this stream and close it on unmount.
 - **Standalone.** Outside a `LemmaClient` instance, import `watchDatastoreChanges(apiUrl, auth, podId, options)` and pass any `ChangeStreamTokenProvider`.
 
+### Machines
+
+`client.machines` reaches the computers commands, files and a browser run on. A machine is named by a ref: `"me"` (the person's own default machine), `"pod:<pod>:<name>"` (one a pod keeps, the pod by id or name), `"mine:<name>"` (one they connected), or its id.
+
+```ts
+const run = await client.machines.exec("me", { command: "npm test", cwd: "~/app" });
+for await (const event of run) {
+  if (event.type === "output") process.stdout.write(event.data);
+  else console.log("exited", event.exit_code);
+}
+
+const result = await client.machines.run("me", { command: "python --version" });
+console.log(result.exitCode, result.output);
+
+const listing = await client.machines.files.list("pod:abc:ci", { path: "/home/user" });
+const preview = await client.machines.previews.create("me", { port: 3000, visibility: "link" });
+```
+
+- **Output** comes over the process's WebSocket where there is one and from polling `/output` where there is not (or the socket drops), resuming from the last sequence either way. `run.input(...)`, `run.resize(...)` and `run.kill()` steer it.
+- **Namespaces.** `processes`, `files` (`list`/`stat`/`read`/`readWhole`/`write`/`delete`/`move`/`sync`), `previews`, `browser`, plus `run`, `startup`, `release`, `restart`, `reset` and `policy`. A pod's machines are managed flat, as in the Python SDK: `create({ name, ... })`, `update(name, changes)`, `delete(name)`, `grants(name)` and `setGrants(name, grants)`, in the client's pod unless `{ podId }` names another.
+- **Apps.** An app's page reaches the machines of its own pod, as its viewer, and never anybody's own `"me"`: that is not the pod's to offer. Creating, changing, deleting and granting machines stay the person's own.
+
 ## Browser bundle (no-build HTML)
 
 For a no-build HTML app or a conversation widget, load the prebuilt bundle from the host instead of npm-importing. The host injects pod context as `window.__LEMMA_CONFIG__` (podId / apiUrl / authUrl), so the client takes no arguments:
@@ -87,6 +109,61 @@ For a no-build HTML app or a conversation widget, load the prebuilt bundle from 
 ```
 
 The bundle exposes the same client and namespaces as the npm package (a legacy `window.Lemma` alias also points at it). `import.meta.env`/`VITE_LEMMA_*` are only for the React/Vite path; the browser bundle resolves config from `window.__LEMMA_CONFIG__`.
+
+### Drawing in the Lemma's theme
+
+Inside the Lemma web app an app is framed on its own origin, so it inherits nothing from the page around it. The web app tells it its look instead: a `postMessage` from the parent window each time the app loads, and again whenever the person's appearance changes (the device flipping between light and dark included):
+
+```js
+{ type: "lemma-app-theme", theme: "light" | "dark", tokens: { "--lemma-app-bg": "…", "--lemma-app-text": "…", … } }
+```
+
+The tokens are semantic and prefixed `--lemma-app-`: `bg`, `surface`, `subtle`, `raised`, `text`, `muted`, `faint`, `border`, `border-strong`, `accent`, `accent-soft`, `success`, `warning`, `danger`, `info`, `radius-sm`, `radius-md`, `radius-lg`, `font`, and a few more.
+
+The browser bundle applies the message itself: it sets each token on `<html>`, sets `data-lemma-theme`, toggles the `dark` class and `color-scheme`, and dispatches a `lemma:theme` event. `window.LemmaClient.subscribeLemmaHostTheme(listener)` calls `listener` with the current theme and every change, and returns the way to stop; `window.LemmaClient.getLemmaHostTheme()` returns the latest message, or `null` before one arrives. Read every token with a fallback, so the app still looks right opened on its own, where no message comes:
+
+```css
+body { background: var(--lemma-app-bg, #fff); color: var(--lemma-app-text, #1c1c1c); font-family: var(--lemma-app-font, system-ui, sans-serif); }
+```
+
+The npm package does not listen for the message. A Vite app that wants the Lemma's look adds the listener itself, accepting only messages from the parent window and only `--lemma-app-` names:
+
+```ts
+window.addEventListener("message", (event) => {
+  const message = event.data;
+  if (event.source !== window.parent || message?.type !== "lemma-app-theme") return;
+  const root = document.documentElement;
+  for (const [name, value] of Object.entries(message.tokens ?? {})) {
+    if (name.startsWith("--lemma-app-") && typeof value === "string") root.style.setProperty(name, value);
+  }
+  root.classList.toggle("dark", message.theme === "dark");
+  root.style.colorScheme = message.theme;
+});
+```
+
+### Where the app is, and opening another app
+
+An app is often a list and a page for each of its records, and the record that is open is part of where the person is: a link they copy should land the next person on it. Framed inside Lemma the app has no address bar and no history of its own, so it says where it moved and Lemma writes the address (`/l/acme/sales/apps/people/1042`). Opened on its own in a tab, the same calls use the page's own address and history, so one routing path serves both.
+
+```ts
+import { currentAppPath, moveAppTo, watchAppPath } from "lemma-sdk";
+
+let path = currentAppPath();          // "/" or "/1042": where the app was opened
+moveAppTo("/1042");                   // the person opened a record; Back steps out of it
+const stop = watchAppPath((next) => { // Back, Forward, or an address followed in Lemma
+  path = next;                        // never called for the app's own moveAppTo
+});
+```
+
+A path is rooted and has one spelling: `/` is the app's one screen, and there is no trailing slash, query, fragment, `.` or `..`. `moveAppTo` returns the path as written, or `null` for something that is not one. Inside a frame, don't call `history.pushState` yourself: Back would undo a step the address above never showed.
+
+To open another app of the same Lemma, such as a deal naming its person, who lives in the People app:
+
+```ts
+const opened = await client.apps.open("people", "/1042"); // true once it is opening
+```
+
+Inside Lemma, Lemma switches to that app at that page, as a step Back undoes. On its own in a tab, the page goes to that app's own address. Inside an AI tool's conversation it does nothing and resolves `false`: the tool's frame hands this app its session, and another app loaded into it would arrive signed out. The browser bundle exposes the same functions on `window.LemmaClient` (`currentAppPath`, `moveAppTo`, `watchAppPath`, `openApp`, `isFramedByHost`).
 
 ### Agent web components (`lemma-ui.js`)
 
@@ -606,6 +683,10 @@ From `0.2.39` onward:
 - Workflow install/trigger APIs moved to `client.schedules`; create schedules with `workflow_name` or `agent_name` plus `schedule_type`.
 - Human form nodes can assign waits to a pod member id. Use `useWorkflowRunWaitAssignments` or `client.workflows.runs.waitingAssignedToMe()` to show work waiting for the signed-in member.
 - Pod member role updates, lookup, and removal use `pod_member_id`. Use `client.podMembers.lookupByUserId(...)` or `lookupByEmail(...)` when starting from user identity.
+
+After `0.9.0`:
+
+- `client.workspace` is removed: use `client.machines` with the ref `"me"` (`machines.startup("me")`, `machines.browser.access("me")`, `machines.files.list("me")`, and so on).
 
 ## Local Development
 

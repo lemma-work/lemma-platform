@@ -30,3 +30,21 @@ def test_the_conversation_carries_the_schedules_id_name_and_type():
         "schedule_name": "daily-invoices",
         "schedule_type": "TIME",
     }
+
+
+def test_a_run_a_strangers_row_started_says_so():
+    """The agent module marks such a run as reading outside text, which holds
+    what it does beyond the pod's records -- the owner's own machine
+    included -- for the owner's approval."""
+    from app.modules.agent.contracts.automation import OUTSIDE_ROW
+
+    schedule = ScheduleEntity(
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        agent_id=uuid4(),
+        name="new-orders",
+        schedule_type=ScheduleType.DATASTORE,
+    )
+
+    assert conversation_metadata(schedule, {"untrusted_row": True})[OUTSIDE_ROW]
+    assert OUTSIDE_ROW not in conversation_metadata(schedule, {})

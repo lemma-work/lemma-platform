@@ -3,7 +3,6 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Request, status
-from sqlalchemy import select
 
 from app.core.api.dependencies import UoWDep
 from app.core.app_pin import refuse_app_invitation_above_member
@@ -30,12 +29,10 @@ from app.modules.identity.domain.organization_entities import (
     OrganizationEntity,
     OrganizationInvitationEntity,
     OrganizationInvitationStatus,
-    OrganizationRole,
 )
 from app.modules.identity.domain.user_entities import UserEntity
-from app.modules.identity.infrastructure.models.organization_models import (
-    OrganizationMember,
-)
+from app.modules.identity.services.organization_roles import sync_organization_role
+from app.modules.pod.contracts.organization_lemma import enter_organization_lemma
 
 router = APIRouter(
     prefix="/organizations",
@@ -72,11 +69,10 @@ async def create_organization(
         owner_user_id=user.id,
         resolve_name_conflicts=data.resolve_name_conflicts,
     )
-    await _sync_org_role_assignment(
-        uow,
+    await sync_organization_role(
+        uow.session,
         organization_id=organization.id,
         user_id=user.id,
-        role=OrganizationRole.ORG_OWNER,
         assigned_by_user_id=user.id,
     )
     return OrganizationResponse.model_validate(organization)
@@ -194,11 +190,10 @@ async def join_auto_join_organization(
         organization_id=organization_id,
         user_id=user.id,
     )
-    await _sync_org_role_assignment(
-        uow,
+    await sync_organization_role(
+        uow.session,
         organization_id=organization_id,
         user_id=user.id,
-        role=OrganizationRole.ORG_MEMBER,
         assigned_by_user_id=user.id,
     )
 
@@ -418,6 +413,19 @@ async def accept_invitation(
 ) -> OrganizationMessageResponse:
     """Accept an organization invitation."""
     user: UserEntity = request.state.user
+    # Read without the viewer check, only to know whether accepting makes them
+    # new to the organization: accepting is what refuses somebody it is not
+    # for, with its own reason.
+    pending = await org_service.organization_repository.get_invitation_by_id(
+        invitation_id
+    )
+    already_member = (
+        pending is not None
+        and await org_service.organization_repository.get_member(
+            user.id, pending.organization_id
+        )
+        is not None
+    )
     await org_service.accept_invitation(
         invitation_id=invitation_id,
         user_id=user.id,
@@ -431,13 +439,22 @@ async def accept_invitation(
     # ORG_OWNER and role assignments saying ORG_MEMBER -- passing every check
     # that reads the row and failing every check that reads the Context,
     # including the org-owner shortcut onto the organization's pods.
-    await _sync_org_role_assignment(
-        uow,
+    await sync_organization_role(
+        uow.session,
         organization_id=invitation.organization_id,
         user_id=user.id,
-        role=invitation.role,
         assigned_by_user_id=user.id,
     )
+    # New to the organization: into its own Lemma now, as a first workspace
+    # does, so the screen that follows lists them in it rather than offering
+    # it. The arrival handler would add them a moment later and finds this.
+    if not already_member:
+        await enter_organization_lemma(
+            uow,
+            organization_id=invitation.organization_id,
+            user_id=user.id,
+            newcomer=True,
+        )
 
     return OrganizationMessageResponse(
         message="Successfully joined the organization",
@@ -521,34 +538,6 @@ async def update_member_role(
         assigned_by_user_id=user.id,
     )
     return OrganizationMemberResponse.model_validate(member)
-
-
-async def _sync_org_role_assignment(
-    uow: UoWDep,
-    *,
-    organization_id: UUID,
-    user_id: UUID,
-    role: OrganizationRole,
-    assigned_by_user_id: UUID | None,
-) -> None:
-    member_id = (
-        await uow.session.execute(
-            select(OrganizationMember.id).where(
-                OrganizationMember.organization_id == organization_id,
-                OrganizationMember.user_id == user_id,
-            )
-        )
-    ).scalar_one_or_none()
-    if member_id is None:
-        return
-    await AuthorizationDataService(uow.session).assign_roles(
-        organization_id=organization_id,
-        pod_id=None,
-        principal_type="ORG_MEMBER",
-        principal_id=member_id,
-        role_names=[role.value],
-        assigned_by_user_id=assigned_by_user_id,
-    )
 
 
 @router.delete(

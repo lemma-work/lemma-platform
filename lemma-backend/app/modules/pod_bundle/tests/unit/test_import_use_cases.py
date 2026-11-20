@@ -232,6 +232,24 @@ async def test_start_import_github_enqueues():
     assert "account_id" not in state.model_dump()
 
 
+async def test_start_import_github_keeps_the_folder_it_installs_from():
+    """The folder rides on the job's source, which is what the worker narrows
+    the archive by and what the pod's recipe records."""
+    uc, _, _, queue = _use_cases()
+    state = await uc.start_import(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        kind=BundleSourceKind.GITHUB,
+        owner="acme",
+        repo="plugins",
+        path="install/mail",
+    )
+    assert state.source.repo_url == "https://github.com/acme/plugins"
+    assert state.source.path == "install/mail"
+    call = next(c for c in queue.calls if c[0] == "pod_bundle.import_github")
+    assert call[1]["owner"] == "acme" and call[1]["repo"] == "plugins"
+
+
 async def test_start_import_github_bad_repo_rejected():
     uc, *_ = _use_cases()
     with pytest.raises(BundleInvalidError):
@@ -304,6 +322,50 @@ def _awaiting_state(pod_id, user_id, *, steps=None, variables=None):
         status=ImportStatus.AWAITING_CONFIRMATION,
         plan=plan,
     )
+
+
+async def test_a_replan_keeps_what_the_discarded_plan_made():
+    """A failed import is replanned from scratch against a pod that already
+    holds what its first plan created. The record of those parts outlives the
+    plan, so the new one finishes them rather than keeping them."""
+    from app.modules.pod_bundle.domain.state import (
+        ImportPlan,
+        PlanStep,
+        StepAction,
+        StepKind,
+        StepStatus,
+    )
+
+    uc, store, _, _ = _use_cases()
+    pod_id, user_id = uuid4(), uuid4()
+    state = _awaiting_state(pod_id, user_id)
+    state.status = ImportStatus.FAILED
+    state.plan = ImportPlan(
+        format_version=2,
+        steps=[
+            PlanStep(
+                index=0,
+                kind=StepKind.AGENT,
+                name="bot",
+                action=StepAction.CREATE,
+                status=StepStatus.DONE,
+            ),
+            PlanStep(
+                index=1,
+                kind=StepKind.AGENT_GRANTS,
+                name="bot",
+                action=StepAction.CREATE,
+                status=StepStatus.FAILED,
+            ),
+        ],
+    )
+    await store.save_import(state)
+
+    await uc.replan_import(pod_id=pod_id, import_id=state.import_id, user_id=user_id)
+
+    replanned = await store.get_import(state.import_id)
+    assert replanned.plan is None
+    assert replanned.created == ["AGENT:bot"]
 
 
 async def test_apply_enqueues_with_dedup_id():

@@ -128,14 +128,14 @@ async def display_resource(
             return DisplayResourceResponse(success=False, error=source_error)
 
     if request.type == DisplayResourceType.BROWSER:
+        from app.modules.agent.infrastructure.tools.workspace_cli import run_machine
+
         workspace_service = WorkspaceSandboxService()
         try:
+            # The browser on the machine this run uses, as the resolver decides.
+            target = await run_machine.resolve_run_machine(ctx, None)
             access = await workspace_service.create_browser_access(
-                ctx.user_id,
-                ttl_seconds=1800,
-                # The browser in this agent's workspace, beside its shell.
-                pod_id=ctx.pod_id,
-                actor_id=ctx.workload_id,
+                target.machine_id, ttl_seconds=1800
             )
         except Exception as exc:
             # Redacted: this becomes the tool return the model reads and the

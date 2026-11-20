@@ -16,10 +16,11 @@ import { key } from "@/session/storage";
 import {
     NEW_CHAT, SIDE_DEFAULTS,
     chatItems, chatView, foldSection, inSidebar, outcomeView, podOfView, readSideSettings, rowOfChat, repeatedTitles, sectionRows, sidebarSections, workRows, writeView,
-    type Go, type SideGrouping, type SideRow, type SideSettings, type SideShowing, type View,
+    type Go, type OutcomeTab, type SideGrouping, type SideRow, type SideSettings, type SideShowing, type View,
 } from "./model";
 import { useChannelsByPod } from "./chats";
 import { useApps } from "./ask";
+import { appName, useLemmaApps, type AppTab } from "./lemma-apps";
 import { appPinKey, toggleAppPin, usePins, type Pin } from "./pins";
 import { prefetchOnIntent } from "@/thread/opened-transcripts";
 import { Bars, Icon, to, type IconName } from "./parts";
@@ -56,6 +57,8 @@ function readChosen(): Map<string, boolean> {
 }
 
 const NOTHING = () => undefined;
+/** No apps: the same empty list every render. */
+const NO_APPS: readonly AppTab[] = [];
 
 /** A pinned chat's line, from the chat as the sidebar last read it, or --
  *  once it has fallen off the recent list -- from the name kept with the
@@ -77,7 +80,7 @@ function pinnedRow(pin: Pin, live: ReadonlyMap<string, SideRow>): SideRow | null
  *  the tables it changed lately; under each Lemma, or all together, newest
  *  first. People outside who wrote in are in Needs you while they wait, and
  *  on the Lemma's Contacts tab. */
-export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs, waitingIn, onChannels, me, onFind, onSettings, onPlan, onNewOrg, onNewLemma, open, closed, onToggle }: {
+export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs, waitingIn, onChannels, me, onFind, onSettings, onPlan, onNewOrg, onNewLemma, onAddApp, open, closed, onToggle }: {
     org: Org | null;
     orgs: readonly Org[];
     onPickOrg: (id: string) => void;
@@ -101,6 +104,8 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
     onNewOrg: () => void;
     /** A new Lemma, made in a dialog over the page. */
     onNewLemma: () => void;
+    /** One more app for a Lemma, asked of it in a chat. */
+    onAddApp: (podId: string) => void;
     /** Shown on a narrow screen, over the page. */
     open: boolean;
     /** Put away by the reader: only a rail of its places shows. */
@@ -173,6 +178,10 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
         /* `tableLists` is read through `tablesAt`, which changes when it does. */
     }, [pods, activity, channels, reader, pins, chosen, here, settings.showing, now, tablesAt]);
     const faces = useMemo(() => new Map(pods.map((pod) => [pod.id, pod])), [pods]);
+    /* An unfolded Lemma lists its apps, so theirs are read; a folded one is
+       still only a name. */
+    const unfolded = useMemo(() => sections.filter((section) => section.open).map((section) => section.pod), [sections]);
+    const lemmaApps = useLemmaApps(unfolded);
     const at = writeView(view);
 
     const places: { view: View; label: string; icon: IconName; count?: number }[] = [
@@ -261,6 +270,8 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
                         view={view}
                         here={here === section.pod.id && view.name !== "chats"}
                         onFold={() => choose(section.pod.id, !section.open)}
+                        apps={lemmaApps.get(section.pod.id) ?? NO_APPS}
+                        onAddApp={() => onAddApp(section.pod.id)}
                         go={go}
                     />
                 ))}
@@ -276,12 +287,25 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
     );
 }
 
+/** Following a Lemma's name asks for the Lemma itself, which opens on its
+ *  first app where it has one. */
+const LANDING = { landing: true } as const;
+
+/** A Lemma's own places, under its apps: every chat with it, what it holds,
+ *  and what it is. `holds` are the tabs each line stays lit over. */
+const LEMMA_PLACES: readonly { tab: OutcomeTab; label: string; icon: IconName; holds: readonly OutcomeTab[] }[] = [
+    { tab: "chats", label: "Chats", icon: "chat", holds: ["chats"] },
+    { tab: "tables", label: "Tables, pages and files", icon: "table", holds: ["tables", "pages", "files"] },
+    { tab: "about", label: "About", icon: "about", holds: ["about", "automations", "people", "contacts", "settings"] },
+];
+
 /** One Lemma: its face and name, which open it, the chevron after the name,
- *  which folds and unfolds it, and -- unless it is folded -- its chats under
- *  it. A + at the row's end, waiting for a pointer, starts a chat with it.
- *  The chats waiting on the reader and the open one always show; the rest
- *  fold past a few. */
-function Section({ pod, items, waiting, unfolded, view, here, onFold, go }: {
+ *  which folds and unfolds it, and -- unless it is folded -- what it holds
+ *  under it. A Lemma with apps lists them, then the way to one more and to
+ *  its own places; one with none lists its chats. A + at the row's end,
+ *  waiting for a pointer, starts a chat with it. The chats waiting on the
+ *  reader and the open one always show; the rest fold past a few. */
+function Section({ pod, items, waiting, unfolded, view, here, onFold, apps, onAddApp, go }: {
     pod: Pod;
     items: readonly SideRow[];
     waiting: number;
@@ -289,25 +313,30 @@ function Section({ pod, items, waiting, unfolded, view, here, onFold, go }: {
     view: View;
     here: boolean;
     onFold: () => void;
+    /** Its apps, which are read only while it is unfolded. */
+    apps: readonly AppTab[];
+    onAddApp: () => void;
     go: Go;
 }) {
     const [all, setAll] = useState(false);
     const { shown, hidden } = all ? { shown: [...items], hidden: 0 } : foldSection(items, view, FOLD);
     const repeated = repeatedTitles(shown);
     const at = writeView(view);
-    /* Only a Lemma that is showing chats stands apart from its neighbours.
-       One with none yet has nothing to unfold, so it reads as a name in the
-       list and offers no chevron. */
-    const showing = unfolded && items.length > 0;
+    /* Only a Lemma that is showing something stands apart from its
+       neighbours. One with nothing yet has nothing to unfold, so it reads as
+       a name in the list and offers no chevron. */
+    const withApps = apps.length > 0;
+    const showing = unfolded && (items.length > 0 || withApps);
     return (
         <section className={"ox-group" + (unfolded ? "" : " ox-group--folded") + (showing ? " ox-group--showing" : "")} aria-label={pod.name}>
             <div className="ox-group__head">
-                <a className="ox-group__name" {...to(outcomeView(pod.id), go)} aria-current={here ? "page" : undefined}>
+                <a className="ox-group__name" {...to(outcomeView(pod.id), go, LANDING)} aria-current={here ? "page" : undefined}>
                     <span className="ox-group__face"><TeammateFace pod={pod} size={26} /></span>
                     <span className="ox-group__t">{pod.name}</span>
+                    {pod.everyone && <span className="ox-everyone" title={`Everyone in the organization is in ${pod.name}`}>Everyone</span>}
                 </a>
-                {items.length > 0 && (
-                    <button type="button" className="ox-group__chev" aria-expanded={unfolded} aria-label={unfolded ? `Fold ${pod.name}` : `Show ${pod.name}’s chats`} onClick={onFold}>
+                {(items.length > 0 || withApps) && (
+                    <button type="button" className="ox-group__chev" aria-expanded={unfolded} aria-label={unfolded ? `Fold ${pod.name}` : withApps ? `Show ${pod.name}’s apps` : `Show ${pod.name}’s chats`} onClick={onFold}>
                         <Icon name="chevron" size={12} />
                     </button>
                 )}
@@ -317,7 +346,32 @@ function Section({ pod, items, waiting, unfolded, view, here, onFold, go }: {
                     <Icon name="plus" size={15} />
                 </a>
             </div>
-            {showing && (
+            {showing && withApps && (
+                <div className="ox-group__rows">
+                    {apps.map((app) => {
+                        const name = appName(app);
+                        return (
+                            <a key={app.id} className="ox-srow" {...to({ name: "app", podId: pod.id, app: name }, go)} aria-current={view.name === "app" && view.podId === pod.id && view.app === name ? "page" : undefined} title={`App: ${app.label}`}>
+                                <span className="ox-glyph"><Icon name="app" size={14} /></span>
+                                <span className="ox-srow__t">{app.label}</span>
+                            </a>
+                        );
+                    })}
+                    <button type="button" className="ox-srow ox-srow--add" onClick={onAddApp}>
+                        <span className="ox-glyph"><Icon name="plus" size={14} /></span>
+                        <span className="ox-srow__t">Add an app</span>
+                    </button>
+                    <span className="ox-group__rule" aria-hidden="true" />
+                    {LEMMA_PLACES.map((place) => (
+                        <a key={place.tab} className="ox-srow" {...to(outcomeView(pod.id, place.tab), go)} aria-current={view.name === "outcome" && view.podId === pod.id && place.holds.includes(view.tab) ? "page" : undefined}>
+                            <span className="ox-glyph"><Icon name={place.icon} size={14} /></span>
+                            <span className="ox-srow__t">{place.label}</span>
+                            {place.tab === "chats" && waiting > 0 && <i className="ox-sign ox-sign--ask" role="img" aria-label={`${waiting} waiting on you`} />}
+                        </a>
+                    ))}
+                </div>
+            )}
+            {showing && !withApps && (
                 <div className="ox-group__rows">
                     {shown.map((row) => <SideLine key={row.key} row={row} here={writeView(row.view) === at} stamped={repeated.has(row.key)} link={to(row.view, go)} />)}
                     {(hidden > 0 || all) && items.length > FOLD && (

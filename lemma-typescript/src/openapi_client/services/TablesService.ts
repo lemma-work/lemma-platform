@@ -9,6 +9,7 @@ import type { OpenTablesResponse } from '../models/OpenTablesResponse.js';
 import type { TableDetailResponse } from '../models/TableDetailResponse.js';
 import type { TableListResponse } from '../models/TableListResponse.js';
 import type { TableOpeningResponse } from '../models/TableOpeningResponse.js';
+import type { UpdateColumnRequest } from '../models/UpdateColumnRequest.js';
 import type { UpdateTableRequest } from '../models/UpdateTableRequest.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
@@ -216,6 +217,38 @@ export class TablesService {
                 'column_name': columnName,
             },
             errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Update Column
+     * Add options to an ENUM column, drop a column's foreign key, or both. `options` must include every option the column has now: removing one is refused (422), because rows may already hold it, and sending `options` for a column that is not ENUM is refused too. `drop_foreign_key` works on any column. Sending what the column already is changes nothing.
+     * @param podId
+     * @param tableName
+     * @param columnName
+     * @param requestBody
+     * @returns TableDetailResponse Successful Response
+     * @throws ApiError
+     */
+    public static tableColumnUpdate(
+        podId: string,
+        tableName: string,
+        columnName: string,
+        requestBody: UpdateColumnRequest,
+    ): CancelablePromise<TableDetailResponse> {
+        return __request(OpenAPI, {
+            method: 'PATCH',
+            url: '/pods/{pod_id}/datastore/tables/{table_name}/columns/{column_name}',
+            path: {
+                'pod_id': podId,
+                'table_name': tableName,
+                'column_name': columnName,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                409: `The table stayed in use for a few seconds, so nothing was changed; try again.`,
                 422: `Validation Error`,
             },
         });

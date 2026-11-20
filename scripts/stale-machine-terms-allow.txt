@@ -1,0 +1,26 @@
+# Legitimate uses of the old workspace-sandbox names, for
+# scripts/check_stale_machine_terms.py. One `path-or-glob[:rule]  # reason`
+# per line; a reason is required. Rules: old-route, workspace-path, old-sdk,
+# old-sdk-alias, agent-sandbox. Keep this short: a new entry needs a reason a
+# reviewer would accept, not "it was already there".
+
+# History describes the release it shipped with.
+docs/release-notes/*  # release notes are a record of what shipped then
+lemma-frontend/content/changelog/*  # the public changelog is a record of what shipped then
+lemma-backend/migrations/versions/*  # migrations are history and never edited after they ship
+
+# Recorded or contract data, not prose.
+desktop/agent-host/tests/fixtures/acp/*  # recorded ACP transcripts: what an adapter actually sent, its paths included
+lemma-skills/browser/references/agent-browser-core.md:agent-sandbox  # vendored verbatim from agent-browser; "the eve sandbox" is upstream prose about a different product
+
+# The legacy /workspace path, named because recognising it is the point.
+desktop/agent-host/src/conversation_directory.rs:workspace-path  # test that a cwd at the legacy /workspace root is refused before anything is created
+lemma-backend/app/modules/agent/tests/e2e/test_agent_host_session_binding_e2e.py:workspace-path  # a conversation stamped with a legacy /workspace cwd keeps it across a rebind
+
+# The retired /workspace routes and port-grant paths, named because answering them is the point.
+lemma-backend/app/modules/workspace/api/controllers/retired_workspace_routes.py:old-route  # answers each removed /workspace route with 410 naming its /machines/me replacement
+lemma-backend/app/modules/workspace/tests/unit/test_retired_workspace_routes.py:old-route  # holds that every removed /workspace route answers 410, and main's port-grant paths still serve
+lemma-backend/app/modules/workspace/tests/e2e/test_machines_api_e2e.py:old-route  # holds, against the running app, that a removed /workspace route answers 410 with its replacement
+lemma-backend/app/modules/workspace/tests/unit/test_retired_workspace_routes.py:workspace-path  # asserts no /workspace route is in the public spec
+lemma-backend/app/modules/workspace/api/controllers/port_proxy_controller.py:old-route  # main's port-grant paths, served until their LEGACY_ALIASES date (2026-11-30)
+lemma-backend/app/core/auth_exemptions.py:old-route  # the retired browser-view socket and main's /workspace-ports alias, each until it is removed

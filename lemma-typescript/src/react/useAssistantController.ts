@@ -724,7 +724,7 @@ function resolveScopedClient(client: LemmaClient, podId?: string | null): LemmaC
  *
  * The conversation's own working directory in pod files — the same
  * `/me/c/{date}/{slug}` the agent's pod tools resolve a relative path against,
- * mirroring its `/workspace/c/{date}/{slug}` scratchpad. So a person attaches
+ * mirroring its `~/lemma/c/{date}/{slug}` scratchpad. So a person attaches
  * `report.pdf` and the agent finds it by that name, with no path to be told.
  *
  * The server computes it (`ConversationResponse.pod_cwd`) rather than this

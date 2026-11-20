@@ -19,6 +19,13 @@ test("a new account with no name is asked, whether or not WhatsApp can verify he
     assert.equal(asksFirstProfile(user(), { whatsApp: true, settled: false, now: NOW }), true);
 });
 
+test("a name the way in already asked for is not asked again; a phone to prove still is", () => {
+    // They left the name blank on the job step and moved on. The dialog over
+    // their Lemma would be the same question twice.
+    assert.equal(asksFirstProfile(user(), { whatsApp: false, settled: false, nameAsked: true, now: NOW }), false);
+    assert.equal(asksFirstProfile(user(), { whatsApp: true, settled: false, nameAsked: true, now: NOW }), true);
+});
+
 test("a named account is asked only for the phone, and only where a phone can be proved", () => {
     // Without WhatsApp verification the step would have to take a typed number
     // on trust, so a named account has nothing left to be asked.
