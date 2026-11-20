@@ -11,8 +11,8 @@ with the CLI through the top-level `lemma-pod-bundle` package.
 
 | Contribution | Behavior |
 | --- | --- |
-| API routers | Import/upload/plan/apply/replan/cancel/events, export/status/download, publish/status/events |
-| Work items | `pod_bundle.{export,plan,import_github,import_url,apply,publish}`: admin class, pod namespace, one per pod at a time, written with the job's state row in the request's transaction; `pod_bundle.set_up_lemma` plans and applies a template for a Lemma just started, then starts its setup chat (see [Starting a Lemma](#starting-a-lemma)) |
+| API routers | Import/upload/plan/apply/replan/cancel/events, plugin install/status/retry, export/status/download, publish/status/events |
+| Work items | `pod_bundle.{export,plan,import_github,import_url,apply,publish}`: admin class, pod namespace, one per pod at a time, written with the job's state row in the request's transaction; `pod_bundle.set_up_lemma` plans and applies a template for a Lemma just started, then starts its setup chat (see [Starting a Lemma](#starting-a-lemma)); `pod_bundle.install_plugin` fetches, plans, approves and applies one bundle of a plugin install (see [Installing several plugins](#installing-several-plugins)) |
 | Periodic work | `pod_bundle.staging_sweep` (30 min): sweep expired staging objects, end jobs nothing will run again, delete job rows past retention |
 | Realtime | Redis pub/sub SSE plus polling snapshots |
 | SQL tables | `pod_bundle_jobs`, `pod_bundle_job_steps` |
@@ -47,6 +47,7 @@ CANCELLED if it was cancelling, in the dead transaction.
 | --- | --- |
 | `/pods/{pod_id}/bundle/uploads` | Stage a local zip and mint a signed Lemma URL |
 | `/.../bundle/imports` | Start URL/GitHub planning, poll, replan, approve apply, cancel, or stream SSE. An import is its starter's: anyone else gets 404 (`POD_BUNDLE_IMPORT_NOT_FOUND`), since its plan was computed with the starter's authority and lists their own accounts |
+| `/.../bundle/installs` | Install several plugins in one request, read where each is, retry the failed ones. Each plugin is an import of its own, under `/bundle/imports` too; the install is its starter's, as its imports are |
 | `/.../bundle/exports` | Start/poll an export; authenticated signed-token download is `/pods/bundle/download` |
 | `/.../bundle/publishes` | Start/poll/stream GitHub publication |
 | `/pods/bundle/templates` | The templates that ship with the server, as cards: what a Lemma made from one owns, how it is counted, and the first lines of its plan |
@@ -294,6 +295,68 @@ person after all is left awaiting them, and the turn starts beside it. If the
 item dies, its `on_dead` hook ends the import and starts the turn in the same
 commit, so no setup chat waits on a job that will not run again.
 
+## Installing several plugins
+
+A plugin is a bundle in a folder of a GitHub repository (`install/mail`). The
+sign-up adds a few to a Lemma at once and promises to keep going if the person
+leaves, so the order, the defaults and the stopping rule live on the server
+(`application/install_use_cases.py`, `events/plugin_install.py`,
+`domain/plugin_install.py`):
+
+```text
+POST /pods/{pod_id}/bundle/installs              {"plugins": [{"repo_url", "path", "ref"?}, ...]}  -> 202
+GET  /pods/{pod_id}/bundle/installs/{install_id}                                                   -> 200
+POST /pods/{pod_id}/bundle/installs/{install_id}/retry                                             -> 202
+```
+
+All three answer the same shape: `install_id`, `finished` (every plugin has
+stopped moving), and `plugins` in the order named, each with its `import_id`,
+`name`, `state` (`WAITING`, `INSTALLING`, `INSTALLED`, `NEEDS_ANSWER`,
+`FAILED`, `CANCELLED`), `progress` (plan steps done of all), `current_step`,
+`reason` (the question, or what failed), `error_code`, `connect_url`, `app`
+(the app it put in, once installed) and `warnings`.
+
+**No table of its own.** Each plugin is an ordinary import whose state carries
+its place in the install (`ImportState.install`: install id, position, and the
+question it stopped on). Starting the install writes every import `QUEUED` and
+one `pod_bundle.install_plugin` item per plugin in one transaction, under the
+import's own plan key, so cancelling an import, the stale-job sweep and a dead
+item treat it as any import. The pod's bundle jobs run one at a time, and each
+item is queued a millisecond behind the one before
+(`install_use_cases.install_delay`), so they run in the order named. Reading
+the install reads those rows back by JSON containment on the snapshot
+(`infrastructure/install_reads.py`), at most `MAX_BUNDLES_PER_INSTALL` (10) of
+them; a request may name no more, each plugin once, and each counts as one
+import against the daily import limit.
+
+**The page's defaults.** Each item fetches, plans, then approves the plan as
+the install page would with nobody choosing (`plugin_install.page_defaults`):
+a required free variable is the Lemma's name as a slug, a `pod_member` one is
+left for the apply to fill with the person installing, and a connector with no
+installation gets Lemma's own app where the person may install it. The choices
+go through `application/approval.approve_plan`, the same checks the page's
+apply runs. Where the page would ask -- something already in the Lemma would
+change, a required name it cannot derive, a connector it cannot map, a grant
+the person cannot make -- the import is withdrawn before anything is applied
+(`CANCELLED`, with the question on its install slot) and the next plugin goes
+ahead. A plugin that fails does not stop the others either.
+
+**Retry** puts each `FAILED` plugin back in the queue. One with a plan is the
+same import applied again: approved as before, and steps already applied stay
+applied, so it carries on from the one that failed. A fresh import would find
+its half-made parts, keep them as they are, and leave an app with no build.
+One that failed before its plan was made starts over from the repository,
+since nothing of it was applied.
+
+**Telling the person.** When the last plugin settles, that item's completion
+posts one note from the Lemma in the person's own chat with it
+(`agent_surfaces.contracts.direct_messages.tell_member`), in the same
+transaction: what is ready, and what stopped and why. A dead item's hook does
+the same after ending its import. The note is keyed by what each plugin came
+to, so a re-run says nothing twice and a retry that changes the outcome is
+told again. It stays in the app: a notice is never pushed to a chat app or
+email.
+
 ## Security and limits
 
 Archive extraction is zip-slip and zip-bomb guarded. Import requires pod update;
@@ -307,4 +370,5 @@ logged-in user in addition to the token.
 
 Unit/e2e tests cover format/diff, staging, limits, plan/apply idempotency,
 keeping what a pod already has, variables, executable imported resources, apps,
-surfaces, GitHub import/publish, SSE, expiry, and cleanup.
+surfaces, GitHub import/publish, SSE, expiry, cleanup, and plugin installs run
+with nobody polling (`tests/e2e/test_plugin_install_e2e.py`).

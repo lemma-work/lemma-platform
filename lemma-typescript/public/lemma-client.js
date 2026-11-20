@@ -16523,6 +16523,70 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Install Plugins
+     * Install several plugins -- bundles in folders of GitHub repositories -- into this pod, in the order named. Returns 202 with an install_id at once; the server fetches, plans and applies each with its install page's defaults, and keeps going when nobody polls. A plugin whose page would ask a question stops before anything is applied (NEEDS_ANSWER) and the next one goes ahead. Each plugin counts as one import against the daily import limit.
+     * @param podId
+     * @param requestBody
+     * @returns PluginInstallResponse Successful Response
+     * @throws ApiError
+     */
+    static podBundleInstallStart(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/bundle/installs",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Plugin Install Status
+     * Where each plugin of an install is: its state, steps done of its plan, the step running, and why it stopped. Only its starter's: anyone else gets 404.
+     * @param podId
+     * @param installId
+     * @returns PluginInstallResponse Successful Response
+     * @throws ApiError
+     */
+    static podBundleInstallGet(podId, installId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/bundle/installs/{install_id}",
+        path: {
+          "pod_id": podId,
+          "install_id": installId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Retry Failed Plugins
+     * Put every FAILED plugin of the install back in the queue. One with a plan carries on from the step that failed; the steps already applied stay. One that failed before its plan was made starts over. The others are left as they are.
+     * @param podId
+     * @param installId
+     * @returns PluginInstallResponse Successful Response
+     * @throws ApiError
+     */
+    static podBundleInstallRetry(podId, installId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/bundle/installs/{install_id}/retry",
+        path: {
+          "pod_id": podId,
+          "install_id": installId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Publish Pod To GitHub
      * Publish the pod as a bundle to a GitHub repository, as the account the pod's `github` connector resolves to for the caller. Refused up front with `CONNECTION_REQUIRED` / `REAUTH_REQUIRED` (with `connect_url`) or `POD_CONNECTOR_NOT_FOUND` when there is none. Returns 202 with a publish_id; poll the status endpoint for the repo URL.
      * @param podId

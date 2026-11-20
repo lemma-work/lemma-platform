@@ -408,6 +408,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/bundle/exports/{export_id}` | `pod.bundle.export.get` | Get Pod Export Status |
 | GET | `/pods/{pod_id}/bundle/imports/{import_id}` | `pod.bundle.import.get` | Get Pod Import Status |
 | GET | `/pods/{pod_id}/bundle/imports/{import_id}/events` | `pod.bundle.import.events` | Stream Pod Import Progress |
+| GET | `/pods/{pod_id}/bundle/installs/{install_id}` | `pod.bundle.install.get` | Get Plugin Install Status |
 | GET | `/pods/{pod_id}/bundle/publishes/{publish_id}` | `pod.bundle.publish.get` | Get Pod Publish Status |
 | GET | `/pods/{pod_id}/bundle/publishes/{publish_id}/events` | `pod.bundle.publish.events` | Stream Pod Publish Progress |
 | POST | `/pods/start` | `pod.start` | Start a Lemma |
@@ -415,6 +416,8 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/bundle/imports` | `pod.bundle.import.start` | Start Pod Import |
 | POST | `/pods/{pod_id}/bundle/imports/{import_id}/apply` | `pod.bundle.import.apply` | Apply Pod Import |
 | POST | `/pods/{pod_id}/bundle/imports/{import_id}/replan` | `pod.bundle.import.replan` | Re-plan Pod Import |
+| POST | `/pods/{pod_id}/bundle/installs` | `pod.bundle.install.start` | Install Plugins |
+| POST | `/pods/{pod_id}/bundle/installs/{install_id}/retry` | `pod.bundle.install.retry` | Retry Failed Plugins |
 | POST | `/pods/{pod_id}/bundle/publishes` | `pod.bundle.publish.start` | Publish Pod To GitHub |
 | POST | `/pods/{pod_id}/bundle/uploads` | `pod.bundle.upload` | Stage A Local Bundle Upload |
 

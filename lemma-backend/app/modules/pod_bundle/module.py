@@ -18,6 +18,9 @@ def _routers():
     from app.modules.pod_bundle.api.controllers.import_controller import (
         router as import_router,
     )
+    from app.modules.pod_bundle.api.controllers.install_controller import (
+        router as install_router,
+    )
     from app.modules.pod_bundle.api.controllers.publish_controller import (
         router as publish_router,
     )
@@ -33,6 +36,7 @@ def _routers():
         template_router,
         start_router,
         import_router,
+        install_router,
         export_router,
         publish_router,
     ]
@@ -45,6 +49,9 @@ def _register_work() -> None:
 
     # Every process too: starting a Lemma from a template (API) writes it.
     import app.modules.pod_bundle.events.template_setup  # noqa: F401
+
+    # And a plugin install (API) writes one item per bundle.
+    import app.modules.pod_bundle.events.plugin_install  # noqa: F401
 
 
 def _register_periodic_work() -> None:

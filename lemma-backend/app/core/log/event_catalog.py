@@ -1101,6 +1101,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'pod_bundle.import_use_cases.clean_staging_idle_cancelled_import.diagnostic': EventSpec('debug', frozenset({'import_id'})),
     'pod_bundle.job.dead': EventSpec('warning', frozenset({'job_id', 'kind', 'reason', 'terminalized'})),
     'pod_bundle.plan_builder.surface_snapshot_unavailable.degraded': EventSpec('warning', frozenset({'pod_id'})),
+    'pod_bundle.plugin_install.clean_staging_withdrawn_import.diagnostic': EventSpec('debug', frozenset({'import_id'})),
+    'pod_bundle.plugin_install.settled': EventSpec('info', frozenset({'bundles', 'install_id', 'pod_id'})),
     'pod_bundle.publish_lock.release.diagnostic': EventSpec('debug', frozenset({'key'})),
     'pod_bundle.publish_task.pod_publish_s_terminal_s.degraded': EventSpec('warning', frozenset({'publish_id'})),
     'pod_bundle.publish_task.publish_failure_report.failed': EventSpec('error', frozenset({'publish_id'})),

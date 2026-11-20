@@ -17731,6 +17731,298 @@
         "title": "PlanStepResponse",
         "type": "object"
       },
+      "PluginInstallItemResponse": {
+        "description": "Where one plugin of an install is.",
+        "properties": {
+          "app": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The app it put in the Lemma, once INSTALLED, if it brings one.",
+            "title": "App"
+          },
+          "connect_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where to connect the account a failure names, if it names one.",
+            "title": "Connect Url"
+          },
+          "current_step": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PluginInstallStepResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The step running now, if one is."
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "import_id": {
+            "description": "Its import: GET /pods/{pod_id}/bundle/imports/{import_id} has its whole plan and every step.",
+            "format": "uuid",
+            "title": "Import Id",
+            "type": "string"
+          },
+          "name": {
+            "description": "The bundle's own name once planned, else its folder's.",
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          },
+          "position": {
+            "description": "Its place in the request, from 0.",
+            "title": "Position",
+            "type": "integer"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/ExportProgressResponse",
+            "description": "Plan steps done (or skipped) of all its steps; 0/0 before its plan."
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it stopped: the question its page asks (NEEDS_ANSWER), or what failed (FAILED).",
+            "title": "Reason"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          },
+          "repo_url": {
+            "title": "Repo Url",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PluginInstallState",
+            "description": "WAITING behind the plugins before it; INSTALLING; INSTALLED; NEEDS_ANSWER -- stopped before anything was applied, because its install page would ask the question in `reason`; FAILED -- stopped, and POST \u2026/retry continues it from the failed step; CANCELLED by somebody."
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "position",
+          "import_id",
+          "repo_url",
+          "name",
+          "state"
+        ],
+        "title": "PluginInstallItemResponse",
+        "type": "object"
+      },
+      "PluginInstallRequest": {
+        "additionalProperties": false,
+        "description": "Body for installing several plugins into one Lemma.",
+        "properties": {
+          "plugins": {
+            "description": "The plugins to install, in the order to install them. Each counts as one import against the daily import limit.",
+            "items": {
+              "$ref": "#/components/schemas/PluginSourceRequest"
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Plugins",
+            "type": "array"
+          }
+        },
+        "required": [
+          "plugins"
+        ],
+        "title": "PluginInstallRequest",
+        "type": "object"
+      },
+      "PluginInstallResponse": {
+        "description": "A plugin install: every plugin it named, in order.",
+        "properties": {
+          "finished": {
+            "description": "Every plugin has stopped moving: INSTALLED, NEEDS_ANSWER, FAILED or CANCELLED. The Lemma tells the person who started it in their chat with it when this turns true.",
+            "title": "Finished",
+            "type": "boolean"
+          },
+          "install_id": {
+            "format": "uuid",
+            "title": "Install Id",
+            "type": "string"
+          },
+          "plugins": {
+            "items": {
+              "$ref": "#/components/schemas/PluginInstallItemResponse"
+            },
+            "title": "Plugins",
+            "type": "array"
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "install_id",
+          "pod_id",
+          "finished",
+          "plugins"
+        ],
+        "title": "PluginInstallResponse",
+        "type": "object"
+      },
+      "PluginInstallState": {
+        "description": "Where one bundle of an install is, as the person would say it.",
+        "enum": [
+          "WAITING",
+          "INSTALLING",
+          "INSTALLED",
+          "NEEDS_ANSWER",
+          "FAILED",
+          "CANCELLED"
+        ],
+        "title": "PluginInstallState",
+        "type": "string"
+      },
+      "PluginInstallStepResponse": {
+        "description": "The step a bundle is on.",
+        "properties": {
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "kind",
+          "name"
+        ],
+        "title": "PluginInstallStepResponse",
+        "type": "object"
+      },
+      "PluginSourceRequest": {
+        "additionalProperties": false,
+        "description": "One plugin: a GitHub repository, and the folder in it its bundle is in.",
+        "properties": {
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Repository owner.",
+            "title": "Owner"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "pattern": "^[A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*(?:/[A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The folder that holds the bundle's `pod.json`, e.g. 'install/mail'. Omit for a repository that is one bundle.",
+            "title": "Path"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Branch, tag or sha.",
+            "title": "Ref"
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Repository name.",
+            "title": "Repo"
+          },
+          "repo_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The repository's URL (alternative to owner+repo).",
+            "title": "Repo Url"
+          }
+        },
+        "title": "PluginSourceRequest",
+        "type": "object"
+      },
       "PodAccountCreateRequest": {
         "properties": {
           "account_id": {
@@ -39312,6 +39604,195 @@
           "resource": "pod.bundle.import",
           "result": "entity",
           "verb": "replan"
+        }
+      }
+    },
+    "/pods/{pod_id}/bundle/installs": {
+      "post": {
+        "description": "Install several plugins -- bundles in folders of GitHub repositories -- into this pod, in the order named. Returns 202 with an install_id at once; the server fetches, plans and applies each with its install page's defaults, and keeps going when nobody polls. A plugin whose page would ask a question stops before anything is applied (NEEDS_ANSWER) and the next one goes ahead. Each plugin counts as one import against the daily import limit.",
+        "operationId": "pod.bundle.install.start",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PluginInstallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginInstallResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Install Plugins",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod.bundle.install"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod.bundle.install",
+          "result": "entity",
+          "verb": "start"
+        }
+      }
+    },
+    "/pods/{pod_id}/bundle/installs/{install_id}": {
+      "get": {
+        "description": "Where each plugin of an install is: its state, steps done of its plan, the step running, and why it stopped. Only its starter's: anyone else gets 404.",
+        "operationId": "pod.bundle.install.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "install_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Install Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginInstallResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Plugin Install Status",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "pod.bundle.install",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
+    "/pods/{pod_id}/bundle/installs/{install_id}/retry": {
+      "post": {
+        "description": "Put every FAILED plugin of the install back in the queue. One with a plan carries on from the step that failed; the steps already applied stay. One that failed before its plan was made starts over. The others are left as they are.",
+        "operationId": "pod.bundle.install.retry",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "install_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Install Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginInstallResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Failed Plugins",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod.bundle.install"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod.bundle.install",
+          "result": "entity",
+          "verb": "retry"
         }
       }
     },
