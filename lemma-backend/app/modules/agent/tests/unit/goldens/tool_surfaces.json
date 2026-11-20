@@ -43,7 +43,7 @@
    "tool:lemma_ask_teammate@25d51e5b7292",
    "tool:lemma_wait_for@06bf9a3e76bc",
    "tool:lemma_write_todos@2011fcbd4983",
-   "tool:lemma_relay_to_voice@a0e0574f123e",
+   "tool:lemma_relay_to_voice@8a6875d9e128",
    "tool:lemma_answer_question@ef3a9a70e33d"
   ],
   "contact_on_a_web_page": [
@@ -319,7 +319,7 @@
     "tool:web_fetch@08d38e754e9a",
     "tool:delegate@d5b6ad602ec0",
     "tool:write_todos@42ac7f15d152",
-    "tool:relay_to_voice@ec5d02c7c1f4",
+    "tool:relay_to_voice@d815015fa4b5",
     "tool:answer_question@0335f8d34166",
     "tool:list_machines@bea665f5bf68",
     "tool:expose_port@7bc5845fad49",
@@ -5789,19 +5789,19 @@
    },
    "name": "lemma_query_subagents"
   },
-  "tool:lemma_relay_to_voice@a0e0574f123e": {
+  "tool:lemma_relay_to_voice@8a6875d9e128": {
    "description": "Give the call's voice something to know or to say.\n\nWrite notes, not a script: the voice says it in its own words. `context`\nis known but not said now; `when_idle` is said at the next pause; `now` is\nsaid as soon as the person stops talking, for failures and questions only.",
    "input_schema": {
     "properties": {
      "text": {
-      "description": "What the voice should know or say, as notes, not a script.",
+      "description": "What the voice should know or say, as notes, not a script: one or two spoken sentences' worth, in English. Detail goes on the canvas.",
       "maxLength": 4000,
       "minLength": 1,
       "type": "string"
      },
      "urgency": {
       "default": "when_idle",
-      "description": "context: known, not said now. when_idle: said at the next pause. now: said as soon as the caller stops talking -- failures and questions only.",
+      "description": "context: known, not said now. when_idle: said at the next pause. now: said once the voice finishes its sentence and the caller is not talking -- failures, questions, and the answer they wait on.",
       "enum": [
        "context",
        "when_idle",
@@ -8192,7 +8192,7 @@
    "unless_tool_kind": null,
    "with_native": "tool_search"
   },
-  "tool:relay_to_voice@ec5d02c7c1f4": {
+  "tool:relay_to_voice@d815015fa4b5": {
    "defer_loading": false,
    "description": "Give the call's voice something to know or to say.\n\nWrite notes, not a script: the voice says it in its own words. `context`\nis known but not said now; `when_idle` is said at the next pause; `now` is\nsaid as soon as the person stops talking, for failures and questions only.",
    "include_return_schema": null,
@@ -8203,14 +8203,14 @@
    "parameters_json_schema": {
     "properties": {
      "text": {
-      "description": "What the voice should know or say, as notes, not a script.",
+      "description": "What the voice should know or say, as notes, not a script: one or two spoken sentences' worth, in English. Detail goes on the canvas.",
       "maxLength": 4000,
       "minLength": 1,
       "type": "string"
      },
      "urgency": {
       "default": "when_idle",
-      "description": "context: known, not said now. when_idle: said at the next pause. now: said as soon as the caller stops talking -- failures and questions only.",
+      "description": "context: known, not said now. when_idle: said at the next pause. now: said once the voice finishes its sentence and the caller is not talking -- failures, questions, and the answer they wait on.",
       "enum": [
        "context",
        "when_idle",
