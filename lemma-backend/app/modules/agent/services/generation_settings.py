@@ -116,6 +116,7 @@ def wire_settings(
     if protocol_value not in (
         RuntimeProfileProtocol.OPENAI_COMPATIBLE,
         RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE,
+        RuntimeProfileProtocol.GOOGLE_GENAI,
     ):
         return {}
     reasoning = RuntimeModelCapability.REASONING.value in {
@@ -143,7 +144,30 @@ def wire_settings(
             "type": "enabled",
             "budget_tokens": generation.thinking_budget_tokens,
         }
+    if protocol_value is RuntimeProfileProtocol.GOOGLE_GENAI:
+        thinking = _google_thinking_config(generation)
+        if thinking:
+            wire["google_thinking_config"] = thinking
     return wire
+
+
+#: Gemini thinks in levels, not OpenAI efforts. It has no "off": `none` is
+#: the least it offers, which is `minimal`.
+_GOOGLE_THINKING_LEVELS: Mapping[ReasoningEffort, str] = {
+    ReasoningEffort.NONE: "MINIMAL",
+    ReasoningEffort.MINIMAL: "MINIMAL",
+    ReasoningEffort.LOW: "LOW",
+    ReasoningEffort.MEDIUM: "MEDIUM",
+    ReasoningEffort.HIGH: "HIGH",
+}
+
+
+def _google_thinking_config(generation: GenerationSettings) -> JsonObject:
+    if generation.reasoning_effort is not None:
+        return {"thinking_level": _GOOGLE_THINKING_LEVELS[generation.reasoning_effort]}
+    if generation.thinking_budget_tokens is not None:
+        return {"thinking_budget": generation.thinking_budget_tokens}
+    return {}
 
 
 def merged_wire_settings(

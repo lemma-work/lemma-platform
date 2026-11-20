@@ -248,9 +248,9 @@ webhook handler, a table change from the change-log delivery once its `when`
 conditions match, carrying the changed row's owner so the fire runs as them.
 No request or delivery waits on a model, and both paths get the outcomes below.
 
-The provider is the deployment's (`DECISION_PROVIDER`); with no Typesafe key
-it is the deployment's own model, so filters need nothing beyond a configured
-model.
+The provider is the deployment's (`DECISION_PROVIDER`); without the chosen
+provider's key it is the deployment's own model, so filters need nothing beyond
+a configured model.
 
 | Outcome | Recorded as |
 | --- | --- |

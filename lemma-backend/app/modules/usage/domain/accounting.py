@@ -70,6 +70,11 @@ class TokenCounts(BaseModel):
     input_audio_tokens: int = Field(default=0, ge=0)
     output_audio_tokens: int = Field(default=0, ge=0)
     cache_audio_read_tokens: int = Field(default=0, ge=0)
+    #: Image tokens a model drew. Included in `output_tokens`, and billed at
+    #: an image rate an order of magnitude above text where a card has one.
+    output_image_tokens: int = Field(default=0, ge=0)
+    #: Images a model returned: what an image request is counted in.
+    output_images: int = Field(default=0, ge=0)
     unpriced_requests: int = Field(default=0, ge=0)
     unconfirmed_requests: int = Field(default=0, ge=0)
     request_count: int = Field(default=0, ge=0)

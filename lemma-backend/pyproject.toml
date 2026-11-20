@@ -5,7 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
 dependencies = [
-    "genai-prices==0.1.13",
+    "genai-prices==0.2.5",
     # The public-suffix list, for deciding which hosts are one site. Used by
     # web_login scoping; see app/modules/web_login/services/scope.py. Already
     # present transitively -- named here because that module imports it.
@@ -54,7 +54,7 @@ dependencies = [
     # Floored at 2.61 for the history round-trip fixes the prompt cache depends
     # on: compact tool-call args (2.58), tool results in call order (2.58),
     # unquoted scalar tool returns (2.60), key order kept by stores (2.61).
-    "pydantic-ai-slim[anthropic,mcp,openai,retries]>=2.61.0,<3",
+    "pydantic-ai-slim[anthropic,google,mcp,openai,retries]>=2.61.0,<3",
     # The HTTP stack the anthropic and openai SDKs are built on. Present
     # transitively -- named here because the model clients are built on it
     # (agent/services/runtime_model_factory.py) and its errors are classified.

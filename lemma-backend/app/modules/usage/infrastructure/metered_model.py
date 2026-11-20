@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 from contextlib import asynccontextmanager
 
 import anyio
-from pydantic_ai.messages import ModelMessage, ModelResponse
+from pydantic_ai.messages import FilePart, ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters, StreamedResponse
 from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.settings import ModelSettings
@@ -56,7 +56,29 @@ def _position(run_context: RunContext[object] | None) -> RequestPosition | None:
     )
 
 
-def _counts(usage: RequestUsage) -> TokenCounts | None:
+#: Where pydantic-ai's Google adapter files image output tokens: the
+#: per-modality count Gemini reports, named `<modality>_candidates_tokens`.
+_OUTPUT_IMAGE_TOKEN_DETAILS = ("image_candidates_tokens",)
+
+
+def _output_image_tokens(usage: RequestUsage) -> int:
+    # pydantic-ai sets it as an attribute when its price extractor reads one
+    # from the provider's payload; the details entry is the adapter's own.
+    extracted = getattr(usage, "output_image_tokens", None)
+    if isinstance(extracted, int) and extracted > 0:
+        return extracted
+    return sum(usage.details.get(key, 0) for key in _OUTPUT_IMAGE_TOKEN_DETAILS)
+
+
+def _images_in(response: ModelResponse) -> int:
+    return sum(
+        1
+        for part in response.parts
+        if isinstance(part, FilePart) and part.content.is_image
+    )
+
+
+def _counts(usage: RequestUsage, *, images: int = 0) -> TokenCounts | None:
     # Adapters normalize an absent provider receipt to all-zero usage. A complete
     # response alone cannot prove that a model request consumed no paid tokens.
     if not any(
@@ -79,6 +101,8 @@ def _counts(usage: RequestUsage) -> TokenCounts | None:
         input_audio_tokens=usage.input_audio_tokens,
         output_audio_tokens=usage.output_audio_tokens,
         cache_audio_read_tokens=usage.cache_audio_read_tokens,
+        output_image_tokens=min(_output_image_tokens(usage), usage.output_tokens),
+        output_images=images,
         request_count=1,
     )
 
@@ -119,6 +143,7 @@ class MeteredModel(WrapperModel):
                     dispatch.responded = True
                     if response.state == "complete":
                         dispatch.usage = response.usage
+                        dispatch.images = _images_in(response)
                     return response
             except provider_errors() as exc:
                 if dispatch is None or dispatch.provider_error is not exc:
@@ -155,6 +180,7 @@ class MeteredModel(WrapperModel):
                     dispatch.responded = True
                     if stream.get().state == "complete":
                         dispatch.usage = stream.usage
+                        dispatch.images = _images_in(stream.get())
                 return
             except provider_errors() as exc:
                 # Once the caller has the stream, only the harness can replace its
@@ -205,6 +231,7 @@ class MeteredModel(WrapperModel):
                 prepared,
                 effective,
                 prices_images_as_text=pricing.prices_images_as_text,
+                prices_image_output=pricing.prices_image_output,
             ) and not _compound_billing(effective)
 
         priceable = priceable_as(parameters)
@@ -265,6 +292,7 @@ class Dispatch:
         #: `_with_local_tool_search`.
         self.parameters = parameters
         self.usage: RequestUsage | None = None
+        self.images = 0
         self.rejected = False
         self.responded = False
         self.provider_error: Exception | None = None
@@ -273,7 +301,7 @@ class Dispatch:
         counts = (
             TokenCounts(request_count=1)
             if self.rejected
-            else _counts(self.usage)
+            else _counts(self.usage, images=self.images)
             if self.usage is not None
             else None
         )

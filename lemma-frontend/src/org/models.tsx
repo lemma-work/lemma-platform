@@ -25,9 +25,11 @@ import { useThisMacAvailability } from "@/desktop/this-mac-settings";
 import {
     asksAboutImages,
     canBeOrganizationDefault,
+    canTestRoute,
     chosenVisionModels,
     discoveryRequest,
     firstProviderOffer,
+    googleSignInProblem,
     isLocalRoute,
     keyToSend,
     localRouteAnswering,
@@ -35,6 +37,8 @@ import {
     readDiscoveredModels,
     testFailureMessage,
     visionCandidates,
+    type GoogleSignIn,
+    type ProviderProtocol,
 } from "./provider-draft";
 import { AgentSettingsFields, EditAgentSettings } from "./agent-settings";
 import {
@@ -67,10 +71,12 @@ import {
 /* Prefilled routes for the providers people actually connect. Everything else
    is the same two protocols with a different URL, which is what "Something
    else" is for. */
-const PRESETS: { id: string; protocol: "openai" | "anthropic"; name: string; baseUrl: string }[] = [
+const PRESETS: { id: string; protocol: ProviderProtocol; name: string; baseUrl: string }[] = [
     { id: "openrouter", protocol: "openai", name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1" },
     { id: "openai", protocol: "openai", name: "OpenAI", baseUrl: "https://api.openai.com/v1" },
     { id: "anthropic", protocol: "anthropic", name: "Anthropic", baseUrl: "https://api.anthropic.com" },
+    /* No URL: Google's two hosts are chosen by how the provider signs in. */
+    { id: "google", protocol: "google", name: "Google Gemini", baseUrl: "" },
     { id: "groq", protocol: "openai", name: "Groq", baseUrl: "https://api.groq.com/openai/v1" },
     { id: "deepseek", protocol: "openai", name: "DeepSeek", baseUrl: "https://api.deepseek.com" },
     { id: "xai", protocol: "openai", name: "xAI", baseUrl: "https://api.x.ai/v1" },
@@ -466,12 +472,19 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
     const [apiKey, setApiKey] = useState("");
     const [models, setModels] = useState("");
     const [vision, setVision] = useState<string[]>([]);
+    const [signIn, setSignIn] = useState<GoogleSignIn>("VERTEX_AI");
+    const [keyFile, setKeyFile] = useState("");
+    const [project, setProject] = useState("");
+    const [location, setLocation] = useState("global");
+    const [imageModels, setImageModels] = useState("");
     const [tested, setTested] = useState<Tested | null>(null);
     const [error, setError] = useState("");
     /* Testing goes through this computer's own model lookup, which only the
        Lemma app has. A browser saves and lets the backend discover. */
-    const canTest = useThisMacAvailability() === "shown";
-    const presets = canTest ? [...PRESETS, OLLAMA_PRESET] : PRESETS;
+    const onThisMac = useThisMacAvailability() === "shown";
+    const google = preset.protocol === "google";
+    const canTest = onThisMac && canTestRoute(preset.protocol);
+    const presets = onThisMac ? [...PRESETS, OLLAMA_PRESET] : PRESETS;
     const sentKey = keyToSend(apiKey, baseUrl, LOCAL_SERVER_KEY);
 
     const pick = (chosen: typeof PRESETS[number]) => {
@@ -486,7 +499,9 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
 
     const test = useMutation({
         mutationFn: async () => readDiscoveredModels(
-            await thisMac.discoverModels(discoveryRequest(preset.protocol, baseUrl, apiKey)),
+            await thisMac.discoverModels(
+                discoveryRequest(preset.protocol === "anthropic" ? "anthropic" : "openai", baseUrl, apiKey),
+            ),
         ),
         onSuccess: (found) => setTested(
             found.length > 0
@@ -501,13 +516,29 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
             protocol: preset.protocol,
             name: name.trim(),
             baseUrl: baseUrl.trim(),
-            apiKey: sentKey,
+            apiKey: google && signIn === "VERTEX_AI" ? "" : sentKey,
             models: typed,
             visionModels: chosenVisionModels(preset.protocol, vision, candidates),
+            ...(google && {
+                google: {
+                    backend: signIn,
+                    serviceAccountJson: signIn === "VERTEX_AI" ? keyFile.trim() : undefined,
+                    vertexProject: project.trim() || undefined,
+                    vertexLocation: location.trim() || undefined,
+                    imageModels: imageModels.trim() ? modelNames(imageModels) : undefined,
+                },
+            }),
         }),
         onSuccess: () => { onAdded(); onClose(); },
         onError: (problem) => setError(problem instanceof Error ? problem.message : "That key could not be saved."),
     });
+
+    const googleProblem = google ? googleSignInProblem(signIn, apiKey, keyFile) : null;
+    const ready = google ? googleProblem === null : Boolean(sentKey);
+    const readKeyFile = async (file: File | undefined) => {
+        if (!file) return;
+        setKeyFile(await file.text());
+    };
 
     const toggleVision = (model: string) =>
         setVision((was) => (was.includes(model) ? was.filter((one) => one !== model) : [...was, model]));
@@ -530,6 +561,46 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
                 <label htmlFor="key-name">Name</label>
                 <input id="key-name" value={name} onChange={(event) => setName(event.target.value)} />
             </div>
+            {google && (
+                <div className="field" role="group" aria-labelledby="google-signin">
+                    <label id="google-signin">Signs in with</label>
+                    <label className="check">
+                        <input type="radio" name="google-signin" checked={signIn === "VERTEX_AI"} onChange={() => setSignIn("VERTEX_AI")} />
+                        <span>A service account, on Vertex AI</span>
+                    </label>
+                    <label className="check">
+                        <input type="radio" name="google-signin" checked={signIn === "GEMINI_API"} onChange={() => setSignIn("GEMINI_API")} />
+                        <span>An API key, on the Gemini API</span>
+                    </label>
+                </div>
+            )}
+            {google && signIn === "VERTEX_AI" && (
+                <>
+                    <div className="field">
+                        <label htmlFor="google-keyfile">Service account key file</label>
+                        <input
+                            id="google-keyfile"
+                            type="file"
+                            accept="application/json,.json"
+                            onChange={(event) => void readKeyFile(event.target.files?.[0])}
+                        />
+                        <span>
+                            {keyFile
+                                ? "Key file loaded. It is stored encrypted and never shown again."
+                                : "The JSON key of a service account with the Vertex AI User role."}
+                        </span>
+                    </div>
+                    <div className="field">
+                        <label htmlFor="google-project">Project <em>optional</em></label>
+                        <input id="google-project" value={project} placeholder="The key file's own" onChange={(event) => setProject(event.target.value)} />
+                    </div>
+                    <div className="field">
+                        <label htmlFor="google-location">Location</label>
+                        <input id="google-location" value={location} onChange={(event) => setLocation(event.target.value)} />
+                    </div>
+                </>
+            )}
+            {!google && (
             <div className="field">
                 <label htmlFor="key-url">API base URL</label>
                 <input
@@ -539,6 +610,8 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
                     onChange={(event) => { setBaseUrl(event.target.value); setTested(null); }}
                 />
             </div>
+            )}
+            {(!google || signIn === "GEMINI_API") && (
             <div className="field">
                 <label htmlFor="key-secret">API key{isLocalRoute(baseUrl) && <em> not needed on this computer</em>}</label>
                 <input
@@ -549,16 +622,33 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
                     onChange={(event) => { setApiKey(event.target.value); setTested(null); }}
                 />
             </div>
+            )}
             <div className="field">
                 <label htmlFor="key-models">Models <em>optional</em></label>
                 <input
                     id="key-models"
                     value={models}
-                    placeholder="gpt-5, o3-mini"
+                    placeholder={google ? "gemini-4-hydrogen, gemini-4-argon" : "gpt-5, o3-mini"}
                     onChange={(event) => setModels(event.target.value)}
                 />
-                <span>Comma separated. Left empty, the provider&rsquo;s own list is used.</span>
+                <span>
+                    {google
+                        ? <>Comma separated. Left empty, Google&rsquo;s current Gemini models are offered.</>
+                        : <>Comma separated. Left empty, the provider&rsquo;s own list is used.</>}
+                </span>
             </div>
+            {google && (
+                <div className="field">
+                    <label htmlFor="google-image-models">Image models <em>optional</em></label>
+                    <input
+                        id="google-image-models"
+                        value={imageModels}
+                        placeholder="gemini-3.1-flash-image"
+                        onChange={(event) => setImageModels(event.target.value)}
+                    />
+                    <span>What agents draw with. Left empty, Google&rsquo;s current image model.</span>
+                </div>
+            )}
             {canTest && (
                 <div className="field">
                     <button
@@ -593,11 +683,12 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
                 </div>
             )}
             {error && <p className="reachrow__error">{error}</p>}
+            {google && googleProblem && (keyFile || apiKey) && <p className="reachrow__error">{googleProblem}</p>}
             <div className="modal__acts">
                 <button className="linkish" onClick={onClose}>Cancel</button>
                 <button
                     className="btn btn--primary"
-                    disabled={add.isPending || !name.trim() || !sentKey}
+                    disabled={add.isPending || !name.trim() || !ready}
                     onClick={() => { setError(""); add.mutate(); }}
                 >
                     {add.isPending ? "Saving…" : "Connect"}

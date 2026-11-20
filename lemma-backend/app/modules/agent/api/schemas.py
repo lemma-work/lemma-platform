@@ -583,10 +583,12 @@ from app.modules.agent.api.runtime_profile_schemas import (  # noqa: E402
     CreateAgentHostRuntimeProfileRequest as CreateAgentHostRuntimeProfileRequest,
     CreateAgentRuntimeProfileRequest as CreateAgentRuntimeProfileRequest,
     CreateAnthropicCompatibleRuntimeProfileRequest as CreateAnthropicCompatibleRuntimeProfileRequest,
+    CreateGoogleGenAIRuntimeProfileRequest as CreateGoogleGenAIRuntimeProfileRequest,
     CreateOpenAICompatibleRuntimeProfileRequest as CreateOpenAICompatibleRuntimeProfileRequest,
     SetOrganizationDefaultRuntimeRequest as SetOrganizationDefaultRuntimeRequest,
     UpdateAgentHostRuntimeProfileRequest as UpdateAgentHostRuntimeProfileRequest,
     UpdateAgentRuntimeProfileRequest as UpdateAgentRuntimeProfileRequest,
     UpdateAnthropicCompatibleRuntimeProfileRequest as UpdateAnthropicCompatibleRuntimeProfileRequest,
+    UpdateGoogleGenAIRuntimeProfileRequest as UpdateGoogleGenAIRuntimeProfileRequest,
     UpdateOpenAICompatibleRuntimeProfileRequest as UpdateOpenAICompatibleRuntimeProfileRequest,
 )

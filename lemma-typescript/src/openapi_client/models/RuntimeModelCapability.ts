@@ -7,4 +7,5 @@ export enum RuntimeModelCapability {
     TOOLS = 'TOOLS',
     VISION = 'VISION',
     REASONING = 'REASONING',
+    IMAGE_OUTPUT = 'IMAGE_OUTPUT',
 }

@@ -70,14 +70,17 @@ from the instruction.
 
 `DECISION_PROVIDER` picks one per deployment. Each provider answers every kind;
 there is no fallback from one to another when a provider fails, so a caller
-retries the same judgement rather than getting a different one. `typesafe`
-chosen without `TYPESAFE_API_KEY` is not a failure but a deployment that cannot
+retries the same judgement rather than getting a different one. `gemini` or
+`typesafe` chosen without its key is not a failure but a deployment that cannot
 use it: the `model` provider answers instead, and
-`decisions.registry.typesafe_unconfigured.degraded` is logged once.
+`decisions.registry.gemini_unconfigured.degraded` (or `.observed`, when
+`gemini` is only the default) or `decisions.registry.typesafe_unconfigured.degraded`
+is logged once.
 
 | Provider | How it answers | Confidence |
 | --- | --- | --- |
-| `model` (default) | The deployment's language model -- `DECISION_MODEL`, else the system profile's default, else the workspace's -- via `agent.contracts.model_runtime`, with structured output checked against the questions and one correction on a background decision | `null` |
+| `gemini` (default) | Google's Decisions API, `gemini-decision-1` (`LEMMA_GOOGLE_API_KEY`), mapped as for `typesafe` with Gemini's keys: a multi-choice option is `<key>-<index>`. Google serves it on the Gemini API only, which refuses service accounts, so it takes a key even where models run on Vertex AI | The probability of the chosen value |
+| `model` | The deployment's language model -- `DECISION_MODEL`, else the system profile's default, else the workspace's -- via `agent.contracts.model_runtime`, with structured output checked against the questions and one correction on a background decision | `null` |
 | `typesafe` | Typesafe System One (`TYPESAFE_API_KEY`): a choice as `choice`, yes or no as `noul`, a scale as `score`, a multi-choice as one `noul` per option | The probability of the chosen value |
 
 Adding a provider is an adapter implementing `DecisionProvider`
@@ -106,11 +109,12 @@ sequenceDiagram
 | --- | --- |
 | `DECISION_INTERACTIVE_TIMEOUT_SECONDS` / `DECISION_BACKGROUND_TIMEOUT_SECONDS` | End-to-end deadline per priority; `interactive` also gets no second model attempt |
 | `DECISION_RATE_LIMIT_PER_MINUTE` | Decisions per organization per clock minute, counted separately for `interactive` and `background`, so a schedule's backlog never leaves a live call unrouted; fails open when Redis does not answer within 0.25 s |
+| `GEMINI_DECISION_PRICE_PER_MILLION_INPUT_TOKENS_USD` | Google's price for decisions (default 0.10; output is free) |
 | `TYPESAFE_PRICE_PER_MILLION_INPUT_TOKENS_USD` | System One's price, so its calls count toward spend limits |
 
-Model decisions are metered like any model call. System One calls are metered
-through `usage.contracts.metering.metered_request` under the model name
-`typesafe:<model>`. Both are recorded with `source_type` `decision` (or the
+Model decisions are metered like any model call. Gemini and System One calls are
+metered through `usage.contracts.metering.metered_request` under the model name
+`gemini:<model>` or `typesafe:<model>`. All are recorded with `source_type` `decision` (or the
 internal caller's own source) and attributed to the person, and to the function
 or agent when one is asking with a delegated token.
 

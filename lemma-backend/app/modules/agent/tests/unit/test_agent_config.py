@@ -69,6 +69,7 @@ EXPECTED = [
     ("function_run_poll_interval_seconds", "FUNCTION_RUN_POLL_INTERVAL_SECONDS", 0.5),
     ("conversation_title_model", "CONVERSATION_TITLE_MODEL", None),
     ("vision_model", "VISION_MODEL", None),
+    ("image_model", "IMAGE_MODEL", None),
     ("history_summarization_model", "HISTORY_SUMMARIZATION_MODEL", None),
     ("agent_model_context_windows", "AGENT_MODEL_CONTEXT_WINDOWS", ""),
     (
@@ -158,6 +159,25 @@ MOVED_FROM_CORE = [
     ("lemma_openai_model_names", "LEMMA_OPENAI_MODEL_NAMES", ""),
     ("lemma_openai_vision_model_names", "LEMMA_OPENAI_VISION_MODEL_NAMES", ""),
     ("lemma_openai_reasoning_model_names", "LEMMA_OPENAI_REASONING_MODEL_NAMES", ""),
+    ("lemma_google_api_key", "LEMMA_GOOGLE_API_KEY", None),
+    ("lemma_google_vertex_project", "LEMMA_GOOGLE_VERTEX_PROJECT", None),
+    ("lemma_google_vertex_location", "LEMMA_GOOGLE_VERTEX_LOCATION", "global"),
+    (
+        "lemma_google_service_account_json",
+        "LEMMA_GOOGLE_SERVICE_ACCOUNT_JSON",
+        None,
+    ),
+    ("lemma_google_default_model", "LEMMA_GOOGLE_DEFAULT_MODEL", "gemini-4-hydrogen"),
+    (
+        "lemma_google_model_names",
+        "LEMMA_GOOGLE_MODEL_NAMES",
+        "gemini-4-hydrogen,gemini-4-argon,gemini-4-carbon,gemini-3.8-flash",
+    ),
+    (
+        "lemma_google_image_model_names",
+        "LEMMA_GOOGLE_IMAGE_MODEL_NAMES",
+        "gemini-3.1-flash-image",
+    ),
 ]
 
 

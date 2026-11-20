@@ -946,6 +946,29 @@ export const liveSource: PodSource = {
            apart by, and a union on a discriminator refuses a body without it
            — each kind defaulting its own does not help. The SDK types it
            optional for that default, so nothing here would say it is gone. */
+        if (key.protocol === "google") {
+            const google = key.google ?? { backend: "GEMINI_API" as const };
+            const vertex = google.backend === "VERTEX_AI";
+            /* `backend` is one of the SDK's unexported enums, so the body is
+               named as the parameter it is going into, as for a local agent. */
+            const payload = {
+                source: "GOOGLE_GENAI",
+                name: key.name,
+                backend: google.backend,
+                default_model_name: key.models[0] ?? null,
+                model_names: key.models,
+                image_model_names: google.imageModels ?? null,
+                ...(vertex
+                    ? {
+                        service_account_json: google.serviceAccountJson ?? null,
+                        vertex_project: google.vertexProject || null,
+                        vertex_location: google.vertexLocation || null,
+                    }
+                    : { api_key: key.apiKey }),
+            } as unknown as Parameters<ReturnType<typeof lemma>["agentRuntime"]["createProfile"]>[1];
+            await lemma().agentRuntime.createProfile(orgId, payload);
+            return;
+        }
         await lemma().agentRuntime.createProfile(
             orgId,
             key.protocol === "anthropic"

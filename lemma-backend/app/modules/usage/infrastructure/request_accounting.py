@@ -21,6 +21,7 @@ from app.modules.usage.domain.accounting import (
     RequestReceipt,
     money,
 )
+from app.modules.usage.domain.entities import UsageKind
 from app.modules.usage.domain.errors import UsageLimitExceededError
 from app.modules.usage.domain.events import ModelUsageEvent
 from app.modules.usage.infrastructure import spend_counters
@@ -165,6 +166,11 @@ def _settle(
     row.cache_write_tokens = receipt.counts.cache_write_tokens
     row.cost_amount = cost
     row.cost_usd = float(cost) if cost is not None else None
+    if receipt.counts.output_images:
+        # Drawn, not written: counted in images, so a report can say how many
+        # rather than only what they cost.
+        row.usage_kind = UsageKind.IMAGE.value
+        row.units = float(receipt.counts.output_images)
     row.record_metadata = {
         **(row.record_metadata or {}),
         "receipt_digest": digest,

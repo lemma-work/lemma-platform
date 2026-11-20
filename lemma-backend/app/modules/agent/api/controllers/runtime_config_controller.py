@@ -18,10 +18,12 @@ from app.modules.agent.api.schemas import (
     AgentRuntimeProfileResponse,
     CreateAgentHostRuntimeProfileRequest,
     CreateAnthropicCompatibleRuntimeProfileRequest,
+    CreateGoogleGenAIRuntimeProfileRequest,
     CreateAgentRuntimeProfileRequest,
     CreateOpenAICompatibleRuntimeProfileRequest,
     UpdateAgentHostRuntimeProfileRequest,
     UpdateAnthropicCompatibleRuntimeProfileRequest,
+    UpdateGoogleGenAIRuntimeProfileRequest,
     UpdateAgentRuntimeProfileRequest,
     UpdateOpenAICompatibleRuntimeProfileRequest,
 )
@@ -40,6 +42,13 @@ from app.modules.agent.services.runtime_resolution import local_default_runtime
 from app.modules.agent.application.agents.manage_runtime_profiles import (
     RuntimeProfileCreation,
 )
+from app.modules.agent.application.agents.edit_google_profile import (
+    GoogleGenAIProfileEditor,
+)
+from app.modules.agent.application.agents.google_genai_profiles import (
+    GoogleProfileEdit,
+)
+from app.modules.agent.domain.sentinels import UNSET, UnsetType
 from app.modules.agent.application.agents.edit_runtime_profile import (
     AgentRuntimeProfileEditor,
 )
@@ -313,6 +322,21 @@ async def create_runtime_profile(
             headers=data.headers,
             model_settings=data.model_settings,
         )
+    elif isinstance(data, CreateGoogleGenAIRuntimeProfileRequest):
+        profile = await creation.create_google_genai_profile(
+            organization_id=organization_id,
+            name=data.name,
+            backend=data.backend,
+            api_key=data.api_key,
+            service_account_json=data.service_account_json,
+            vertex_project=data.vertex_project,
+            vertex_location=data.vertex_location,
+            description=data.description,
+            default_model_name=data.default_model_name,
+            model_names=data.model_names,
+            image_model_names=data.image_model_names,
+            model_settings=data.model_settings,
+        )
     else:
         assert_never(data)
     return AgentRuntimeProfileResponse.model_validate(profile.public_dict())
@@ -427,9 +451,39 @@ async def update_runtime_profile(
         updated = await editor.update_anthropic_compatible_profile(
             **common, refresh_models=data.refresh_models, **changes
         )
+    elif isinstance(data, UpdateGoogleGenAIRuntimeProfileRequest):
+        updated = await GoogleGenAIProfileEditor(service).update_google_genai_profile(
+            profile_id=profile_id,
+            organization_id=organization_id,
+            user_id=user.id,
+            edit=_google_edit(data),
+        )
     else:
         assert_never(data)
     return _profile_response(updated)
+
+
+def _google_edit(data: UpdateGoogleGenAIRuntimeProfileRequest) -> GoogleProfileEdit:
+    """The fields the caller sent. Nothing on a Google provider is cleared by
+    null -- a credential, a project or a model list is replaced, never emptied
+    -- except the description."""
+    sent = data.model_fields_set
+
+    def given[T](field: str, value: T | None) -> T | UnsetType:
+        return value if field in sent and value is not None else UNSET
+
+    return GoogleProfileEdit(
+        name=given("name", data.name),
+        description=data.description if "description" in sent else UNSET,
+        api_key=given("api_key", data.api_key),
+        service_account_json=given("service_account_json", data.service_account_json),
+        vertex_project=given("vertex_project", data.vertex_project),
+        vertex_location=given("vertex_location", data.vertex_location),
+        default_model_name=given("default_model_name", data.default_model_name),
+        model_names=given("model_names", data.model_names),
+        image_model_names=given("image_model_names", data.image_model_names),
+        model_settings=given("model_settings", data.model_settings),
+    )
 
 
 @router.delete(

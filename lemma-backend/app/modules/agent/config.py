@@ -219,6 +219,15 @@ class AgentSettings(BaseSettings):
             "Unset means agents on text-only models cannot see images at all."
         ),
     )
+    image_model: str | None = Field(
+        default=None,
+        description=(
+            "Model the generate_image tool draws with, on the system provider. "
+            "Must be one the deployment lists as an image model "
+            "(LEMMA_GOOGLE_IMAGE_MODEL_NAMES). Unset uses the first such model; "
+            "with no system provider, a workspace provider's image model."
+        ),
+    )
     history_summarization_model: str | None = Field(
         default=None,
         description=(
@@ -412,9 +421,61 @@ class AgentSettings(BaseSettings):
         default="claude-sonnet-4-5,claude-haiku-4-5",
         description="Comma-separated public model names for the server-provided Anthropic-compatible Lemma profile.",
     )
-    lemma_default_model_type: Literal["openai_compat", "anthropic_compat"] = Field(
+    lemma_default_model_type: Literal[
+        "openai_compat", "anthropic_compat", "google_genai"
+    ] = Field(
         default="openai_compat",
         description="Server-provided Lemma system model profile provider type.",
+    )
+    lemma_google_api_key: Optional[SecretStr] = Field(
+        default=None,
+        description=(
+            "Gemini API key for the server-provided Google Gen AI profile "
+            "(LEMMA_DEFAULT_MODEL_TYPE=google_genai). Used when "
+            "LEMMA_GOOGLE_VERTEX_PROJECT is unset; with it set, Vertex AI is "
+            "used and this key is not."
+        ),
+    )
+    lemma_google_vertex_project: str | None = Field(
+        default=None,
+        description=(
+            "Google Cloud project for the server-provided Google Gen AI profile. "
+            "Set, the profile calls Vertex AI as a service account: "
+            "LEMMA_GOOGLE_SERVICE_ACCOUNT_JSON if given, else the identity the "
+            "server runs as (Application Default Credentials -- Workload "
+            "Identity on GKE). The account needs roles/aiplatform.user."
+        ),
+    )
+    lemma_google_vertex_location: str = Field(
+        default="global",
+        description="Vertex AI location for the server-provided Google Gen AI profile.",
+    )
+    lemma_google_service_account_json: Optional[SecretStr] = Field(
+        default=None,
+        description=(
+            "A service account key file's JSON, for Vertex AI where the server "
+            "has no ambient Google identity. Prefer Workload Identity."
+        ),
+    )
+    lemma_google_default_model: str = Field(
+        default="gemini-4-hydrogen",
+        description="Default model for the server-provided Google Gen AI profile.",
+    )
+    lemma_google_model_names: str = Field(
+        default="gemini-4-hydrogen,gemini-4-argon,gemini-4-carbon,gemini-3.8-flash",
+        description=(
+            "Comma-separated chat models for the server-provided Google Gen AI "
+            "profile. Gemini chat models read images and reason, so each is "
+            "declared both."
+        ),
+    )
+    lemma_google_image_model_names: str = Field(
+        default="gemini-3.1-flash-image",
+        description=(
+            "Comma-separated image-generation models for the server-provided "
+            "Google Gen AI profile. Declared IMAGE_OUTPUT: they draw for the "
+            "generate_image tool and are never an agent's chat model."
+        ),
     )
     lemma_llm_caching_enabled: bool = Field(
         default=True,

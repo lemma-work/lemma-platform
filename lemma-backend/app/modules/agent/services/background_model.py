@@ -25,6 +25,7 @@ from app.core.log.log import get_logger
 
 from app.modules.agent.domain.background import BackgroundAnswer, BackgroundCall
 from app.modules.agent.domain.ports import ModelProvider
+from app.modules.agent.domain.tools import ImagePart
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 from app.modules.agent.domain.runtime_choice import RuntimePurpose
 from app.modules.agent.services.runtime_resolution import (
@@ -46,6 +47,7 @@ USAGE_SOURCES: dict[RuntimePurpose, str] = {
     RuntimePurpose.TITLE: "conversation_title",
     RuntimePurpose.MEMORY: "agent_memory",
     RuntimePurpose.VISION: "vision",
+    RuntimePurpose.IMAGE: "image_generation",
 }
 
 
@@ -139,6 +141,23 @@ class BackgroundModel:
             asyncio.timeout(timeout_seconds),
         ):
             return await self.provider.run(model, call)
+
+    async def draw(
+        self,
+        model: object,
+        call: BackgroundCall,
+        *,
+        usage: UsageExecutionContext,
+        timeout_seconds: float | None = None,
+    ) -> ImagePart:
+        """One image from ``model``, metered as image generation against
+        ``usage``, the call cut short inside the metering so it is recorded."""
+        source = USAGE_SOURCES[RuntimePurpose.IMAGE]
+        async with (
+            metering_execution(replace(usage, source_type=source)),
+            asyncio.timeout(timeout_seconds),
+        ):
+            return await self.provider.draw(model, call)
 
     async def run(
         self,

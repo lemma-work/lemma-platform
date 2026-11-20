@@ -57,6 +57,7 @@ class RateCard(BaseModel):
             "input_audio_mtok": counts.input_audio_tokens,
             "output_audio_mtok": counts.output_audio_tokens,
             "cache_audio_read_mtok": counts.cache_audio_read_tokens,
+            "output_image_mtok": counts.output_image_tokens,
         }
         if any(
             count and category not in self.rates
@@ -81,6 +82,7 @@ class RateCard(BaseModel):
                     input_audio_tokens=counts.input_audio_tokens,
                     output_audio_tokens=counts.output_audio_tokens,
                     cache_audio_read_tokens=counts.cache_audio_read_tokens,
+                    output_image_tokens=counts.output_image_tokens,
                 )
             )["total_price"]
         )
@@ -105,6 +107,16 @@ class RateCard(BaseModel):
         request. Both were reported as a usage limit nobody had reached.
         """
         return not (IMAGE_RATE_KEYS & self.rates.keys())
+
+    @property
+    def prices_image_output(self) -> bool:
+        """Whether a drawn image has a rate of its own on this card.
+
+        Image output is the one category no text rate stands in for: an image
+        model bills it at its own rate, an order of magnitude above text, so a
+        card without one cannot price what the request asks for.
+        """
+        return "output_image_mtok" in self.rates
 
     @property
     def priceable(self) -> bool:
@@ -147,9 +159,26 @@ def resolve_rate_card(
                         else override.input_per_million_usd
                     )
                 ),
+                **(
+                    {
+                        "output_image_mtok": Rate(
+                            base=money(override.output_image_per_million_usd)
+                        )
+                    }
+                    if override.output_image_per_million_usd is not None
+                    else {}
+                ),
             },
         )
     return _automatic_rate_card(profile, model, now)
+
+
+def _google_endpoint(config: object) -> str:
+    """The Google host a GOOGLE_GENAI profile reaches, as its price is keyed."""
+    backend = config.get("backend") if isinstance(config, Mapping) else None
+    if backend == "VERTEX_AI":
+        return "https://aiplatform.googleapis.com"
+    return "https://generativelanguage.googleapis.com"
 
 
 def _automatic_rate_card(
@@ -159,6 +188,8 @@ def _automatic_rate_card(
     base_url = config.get("base_url") if isinstance(config, Mapping) else None
     if not base_url and profile.get("protocol") == "ANTHROPIC_COMPATIBLE":
         base_url = "https://api.anthropic.com"
+    if not base_url and profile.get("protocol") == "GOOGLE_GENAI":
+        base_url = _google_endpoint(config)
     snapshot = DataSnapshot(providers=providers, from_auto_update=False)
     for known_provider in (True, False):
         if known_provider and not isinstance(base_url, str):

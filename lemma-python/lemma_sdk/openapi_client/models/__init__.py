@@ -211,6 +211,8 @@ _NAME_TO_MODULE = {
     'CreateConversationRequestMetadataType0': 'create_conversation_request_metadata_type_0',
     'CreateFolderRequest': 'create_folder_request',
     'CreateFunctionRequest': 'create_function_request',
+    'CreateGoogleGenAIRuntimeProfileRequest': 'create_google_gen_ai_runtime_profile_request',
+    'CreateGoogleGenAIRuntimeProfileRequestModelSettings': 'create_google_gen_ai_runtime_profile_request_model_settings',
     'CreateOpenAICompatibleRuntimeProfileRequest': 'create_open_ai_compatible_runtime_profile_request',
     'CreateOpenAICompatibleRuntimeProfileRequestHeaders': 'create_open_ai_compatible_runtime_profile_request_headers',
     'CreateOpenAICompatibleRuntimeProfileRequestModelSettings': 'create_open_ai_compatible_runtime_profile_request_model_settings',
@@ -347,6 +349,7 @@ _NAME_TO_MODULE = {
     'FunctionSummaryResponse': 'function_summary_response',
     'FunctionType': 'function_type',
     'GenerationSettings': 'generation_settings',
+    'GoogleGenAIBackend': 'google_gen_ai_backend',
     'GranteeRef': 'grantee_ref',
     'GranteeRefGranteeType': 'grantee_ref_grantee_type',
     'GroupPublicResponse': 'group_public_response',
@@ -778,6 +781,8 @@ _NAME_TO_MODULE = {
     'UpdateConversationRequest': 'update_conversation_request',
     'UpdateConversationRequestMetadataType0': 'update_conversation_request_metadata_type_0',
     'UpdateFunctionRequest': 'update_function_request',
+    'UpdateGoogleGenAIRuntimeProfileRequest': 'update_google_gen_ai_runtime_profile_request',
+    'UpdateGoogleGenAIRuntimeProfileRequestModelSettingsType0': 'update_google_gen_ai_runtime_profile_request_model_settings_type_0',
     'UpdateMemberRoleRequest': 'update_member_role_request',
     'UpdateOpenAICompatibleRuntimeProfileRequest': 'update_open_ai_compatible_runtime_profile_request',
     'UpdateOpenAICompatibleRuntimeProfileRequestModelSettingsType0': 'update_open_ai_compatible_runtime_profile_request_model_settings_type_0',
@@ -1065,6 +1070,8 @@ if TYPE_CHECKING:
     from .create_conversation_request_metadata_type_0 import CreateConversationRequestMetadataType0
     from .create_folder_request import CreateFolderRequest
     from .create_function_request import CreateFunctionRequest
+    from .create_google_gen_ai_runtime_profile_request import CreateGoogleGenAIRuntimeProfileRequest
+    from .create_google_gen_ai_runtime_profile_request_model_settings import CreateGoogleGenAIRuntimeProfileRequestModelSettings
     from .create_open_ai_compatible_runtime_profile_request import CreateOpenAICompatibleRuntimeProfileRequest
     from .create_open_ai_compatible_runtime_profile_request_headers import CreateOpenAICompatibleRuntimeProfileRequestHeaders
     from .create_open_ai_compatible_runtime_profile_request_model_settings import CreateOpenAICompatibleRuntimeProfileRequestModelSettings
@@ -1201,6 +1208,7 @@ if TYPE_CHECKING:
     from .function_summary_response import FunctionSummaryResponse
     from .function_type import FunctionType
     from .generation_settings import GenerationSettings
+    from .google_gen_ai_backend import GoogleGenAIBackend
     from .grantee_ref import GranteeRef
     from .grantee_ref_grantee_type import GranteeRefGranteeType
     from .group_public_response import GroupPublicResponse
@@ -1632,6 +1640,8 @@ if TYPE_CHECKING:
     from .update_conversation_request import UpdateConversationRequest
     from .update_conversation_request_metadata_type_0 import UpdateConversationRequestMetadataType0
     from .update_function_request import UpdateFunctionRequest
+    from .update_google_gen_ai_runtime_profile_request import UpdateGoogleGenAIRuntimeProfileRequest
+    from .update_google_gen_ai_runtime_profile_request_model_settings_type_0 import UpdateGoogleGenAIRuntimeProfileRequestModelSettingsType0
     from .update_member_role_request import UpdateMemberRoleRequest
     from .update_open_ai_compatible_runtime_profile_request import UpdateOpenAICompatibleRuntimeProfileRequest
     from .update_open_ai_compatible_runtime_profile_request_model_settings_type_0 import UpdateOpenAICompatibleRuntimeProfileRequestModelSettingsType0
@@ -1932,6 +1942,8 @@ __all__ = [
     'CreateConversationRequestMetadataType0',
     'CreateFolderRequest',
     'CreateFunctionRequest',
+    'CreateGoogleGenAIRuntimeProfileRequest',
+    'CreateGoogleGenAIRuntimeProfileRequestModelSettings',
     'CreateOpenAICompatibleRuntimeProfileRequest',
     'CreateOpenAICompatibleRuntimeProfileRequestHeaders',
     'CreateOpenAICompatibleRuntimeProfileRequestModelSettings',
@@ -2068,6 +2080,7 @@ __all__ = [
     'FunctionSummaryResponse',
     'FunctionType',
     'GenerationSettings',
+    'GoogleGenAIBackend',
     'GranteeRef',
     'GranteeRefGranteeType',
     'GroupPublicResponse',
@@ -2499,6 +2512,8 @@ __all__ = [
     'UpdateConversationRequest',
     'UpdateConversationRequestMetadataType0',
     'UpdateFunctionRequest',
+    'UpdateGoogleGenAIRuntimeProfileRequest',
+    'UpdateGoogleGenAIRuntimeProfileRequestModelSettingsType0',
     'UpdateMemberRoleRequest',
     'UpdateOpenAICompatibleRuntimeProfileRequest',
     'UpdateOpenAICompatibleRuntimeProfileRequestModelSettingsType0',

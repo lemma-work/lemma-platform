@@ -166,7 +166,11 @@ class AgentRuntimeProfileService:
         runtime: AgentRuntimeConfig | None,
         organization_id: UUID | None,
         user_id: UUID,
+        allow_drawing: bool = False,
     ) -> ResolvedAgentRuntime:
+        """``allow_drawing`` is for the image generator alone: everything else
+        runs a turn or a background call, which a model that only draws
+        cannot."""
         if runtime is None:
             runtime = self.system_default_runtime_config()
         profile_id = runtime.profile_id
@@ -213,6 +217,11 @@ class AgentRuntimeProfileService:
             raise RuntimeUnavailableError(
                 f"{profile.name} has no model to run. Add one in Settings "
                 "\u2192 Models, or pick another model for this Lemma."
+            )
+        if model is not None and model.draws_only and not allow_drawing:
+            raise RuntimeUnavailableError(
+                f"{model.display_name or model.name} makes images and can't "
+                "run a Lemma. Pick a chat model for this Lemma."
             )
         harness_sees = await self._harness_reads_images(profile)
         model = with_harness_vision(model, harness_sees=harness_sees)
