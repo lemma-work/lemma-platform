@@ -294,13 +294,16 @@ async def test_text_left_when_the_voice_starts_again_keeps_its_deadline() -> Non
     engine._socket = socket  # type: ignore[assignment]
     engine._handle_frame({"serverContent": _audio(b"\x01\x00" * 4)})
     await engine.inject("A", Inject.SPEAK)
+    held_until = engine._hold_deadline
+    assert held_until is not None
     # The turn ends and a release is scheduled; the voice starts again first.
     engine._handle_frame({"serverContent": {"turnComplete": True}})
     engine._handle_frame({"serverContent": _audio(b"\x01\x00" * 4)})
     await _settle(engine)
     assert socket.sent == []
-    # The deadline is armed again for what is left...
+    # The deadline is armed again for what is left -- the original one...
     assert engine._turn_hold is not None
+    assert engine._turn_hold.when() == pytest.approx(held_until)
     engine._turn_hold.cancel()
     # ...and when it comes, the text goes.
     engine._hold_expired()
