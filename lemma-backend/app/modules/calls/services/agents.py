@@ -111,6 +111,9 @@ class _RunState:
     #: It started sub-agents: their reports come back to it, so its own end
     #: is not the end of the work.
     spawned: bool = False
+    #: Child runs heard starting in the call before its first spawning call:
+    #: any after it are taken as its own.
+    children_before: int = 0
 
 
 type ConversationFrames = AbstractAsyncContextManager[
@@ -456,20 +459,19 @@ class CallAgents:
                 if state.spawned:
                     # A spawning tool was called; whether a child started is
                     # known only once discovery has had its look.
-                    self._finish_unless_children(state, self._children_started)
+                    self._finish_unless_children(state)
                 else:
                     offer(self._signals, Finished(answer=state.answer), essential=True)
         # Another run of the same conversation may still be going.
         if conversation_id not in self._live.values():
             self._set_running(conversation_id, False)
 
-    def _finish_unless_children(self, state: _RunState, seen: int) -> None:
+    def _finish_unless_children(self, state: _RunState) -> None:
         async def decide() -> None:
             await asyncio.sleep(_SPAWN_SETTLE_SECONDS)
-            children_running = any(
-                conversation != self.call_id for conversation in self._live.values()
-            )
-            if self._children_started == seen and not children_running:
+            # Its own children only: one an earlier run started, still busy,
+            # is not this run's, and must not swallow this run's answer.
+            if self._children_started == state.children_before:
                 # It called the tool, but no child started: its own words are
                 # all there is, so they reach the person.
                 offer(self._signals, Finished(answer=state.answer), essential=True)
@@ -546,7 +548,10 @@ class CallAgents:
         elif tool in _SPAWN_TOOLS:
             run_id = data.get("agent_run_id")
             if conversation_id == self.call_id and isinstance(run_id, str):
-                self._runs.setdefault(run_id, _RunState()).spawned = True
+                state = self._runs.setdefault(run_id, _RunState())
+                if not state.spawned:
+                    state.spawned = True
+                    state.children_before = self._children_started
             if self._discovering is None or self._discovering.done():
                 self._discovering = create_inherited_task(
                     self._discover_soon(), name="calls.agents.discover"

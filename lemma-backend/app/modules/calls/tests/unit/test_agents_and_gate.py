@@ -511,3 +511,51 @@ async def test_a_stream_back_after_a_drop_reads_back_only_what_was_missed() -> N
     ]
     assert Working(running=True) in signals
     assert len(since_seen) == 1
+
+
+async def test_an_earlier_runs_busy_child_does_not_swallow_a_later_runs_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.modules.calls.services import agents as agents_module
+
+    monkeypatch.setattr(agents_module, "_SPAWN_SETTLE_SECONDS", 0.01)
+    agents, _ = _agents()
+    earlier_child = uuid4()
+
+    def delegate(run_id: str, tool_call_id: str) -> None:
+        agents._read(
+            agents.call_id,
+            _message(
+                "TOOL_CALL",
+                "delegate",
+                tool_call_id,
+                agent_run_id=run_id,
+                tool_args={},
+            ),
+        )
+
+    # Run 1 delegates, and its child is still working.
+    agents._read(agents.call_id, _run_frame("message", "r1", data={}))
+    delegate("r1", "d1")
+    agents._read(earlier_child, _run_frame("message", "c1", data={}))
+    agents._read(agents.call_id, _run_frame("completed", "r1", data={}))
+    # Run 2 delegates too, but starts no child of its own.
+    agents._read(agents.call_id, _run_frame("message", "r2", data={}))
+    delegate("r2", "d2")
+    agents._read(
+        agents.call_id,
+        {
+            "type": "message",
+            "data": {
+                "agent_run_id": "r2",
+                "role": "assistant",
+                "kind": "TEXT",
+                "text": "Already on it.",
+            },
+        },
+    )
+    agents._read(agents.call_id, _run_frame("completed", "r2", data={}))
+    await asyncio.sleep(0.05)
+    finished = [s for s in _signals(agents) if isinstance(s, Finished)]
+    assert finished == [Finished(answer="Already on it.")]
+    await agents.close()
