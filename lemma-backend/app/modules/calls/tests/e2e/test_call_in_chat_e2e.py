@@ -181,3 +181,60 @@ async def test_a_resumed_call_reads_back_its_whole_tree_and_what_it_missed(
         mark = await held_call(uow, UUID(call_id))
     assert mark is not None and mark.live is False
     assert mark.held_seconds == pytest.approx(90.0)
+
+
+async def test_a_catch_up_finds_a_missed_relay_behind_any_number_heard(
+    scenario,
+) -> None:
+    """More relays than the read's bound were heard live; the one missed after
+    them is still found, because heard ones are left out in the query."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.agent.contracts.calls import relays_since
+    from app.modules.agent.infrastructure.db.calls import (
+        MAX_MISSED_RELAYS,
+        MAX_RELAY_PAGES,
+    )
+    from app.modules.agent.infrastructure.models import MessageModel
+
+    await scenario.create_org_with_pod(name_prefix="calls-catchup")
+    call_id = UUID(await _chat(scenario, "The call"))
+    heard_count = MAX_MISSED_RELAYS * MAX_RELAY_PAGES + 30
+    start = datetime.now(UTC)
+    async with async_session_maker() as session:
+        session.add_all(
+            [
+                MessageModel(
+                    conversation_id=call_id,
+                    sequence=index + 1,
+                    role="assistant",
+                    kind="TOOL_CALL",
+                    tool_name="relay_to_voice",
+                    tool_call_id=f"heard-{index}",
+                    tool_args={"text": f"note {index}", "urgency": "context"},
+                    created_at=start + timedelta(milliseconds=index),
+                )
+                for index in range(heard_count)
+            ]
+            + [
+                MessageModel(
+                    conversation_id=call_id,
+                    sequence=heard_count + 1,
+                    role="assistant",
+                    kind="TOOL_CALL",
+                    tool_name="relay_to_voice",
+                    tool_call_id="missed",
+                    tool_args={"text": "India 143 for 1.", "urgency": "now"},
+                    created_at=start + timedelta(seconds=5),
+                )
+            ]
+        )
+        await session.commit()
+
+    heard = frozenset(f"heard-{index}" for index in range(heard_count))
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        found = await relays_since(
+            uow, call_id, start - timedelta(seconds=1), heard=heard
+        )
+    assert found == [("missed", "India 143 for 1.", "now")]

@@ -361,7 +361,9 @@ class CallAgents:
         it is working."""
         async with as_caller(self._party) as scope:
             relays = (
-                await relays_since(scope.uow, self.call_id, since)
+                await relays_since(
+                    scope.uow, self.call_id, since, heard=frozenset(self._heard_relays)
+                )
                 if conversation_id == self.call_id
                 else []
             )

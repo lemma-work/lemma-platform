@@ -224,11 +224,15 @@ async def missed_relays(
 
 
 async def relays_since(
-    uow: SqlAlchemyUnitOfWork, call_id: UUID, since: datetime
+    uow: SqlAlchemyUnitOfWork,
+    call_id: UUID,
+    since: datetime,
+    *,
+    heard: frozenset[str] = frozenset(),
 ) -> list[tuple[str, str, str]]:
-    """The relays sent after ``since``, with their tool call ids, so a listener
-    that heard some of them live can tell which it missed."""
-    return await Calls(uow).relays_since(call_id, since)
+    """The relays sent after ``since`` that were not ``heard`` live, with their
+    tool call ids."""
+    return await Calls(uow).relays_since(call_id, since, heard=heard)
 
 
 async def speak_into_call(

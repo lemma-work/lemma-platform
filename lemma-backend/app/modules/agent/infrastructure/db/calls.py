@@ -204,14 +204,14 @@ class Calls(UnitOfWorkRepository):
         return relays
 
     async def relays_since(
-        self, call_id: UUID, since: datetime
+        self, call_id: UUID, since: datetime, *, heard: frozenset[str] = frozenset()
     ) -> list[tuple[str, str, str]]:
         """``(tool_call_id, text, urgency)`` of each relay sent after ``since``,
         oldest first: what a stream that dropped and came back may have missed.
 
-        Paged through the whole window rather than cut at one page: the caller
-        drops the ones it heard live, and a first page of those must not hide
-        the ones after it. Bounded all the same, newest pages last.
+        The ones the caller ``heard`` live are left out in the query, so no
+        number of them hides one it missed: the bound below counts unheard
+        relays only, and more than that is more than a voice could say.
         """
         relays: list[tuple[str, str, str]] = []
         after: tuple[datetime, UUID] | None = None
@@ -228,6 +228,8 @@ class Calls(UnitOfWorkRepository):
                     MessageModel.kind == MessageKind.TOOL_CALL.value,
                     MessageModel.tool_name == RELAY_TOOL_NAME,
                     MessageModel.created_at > since,
+                    MessageModel.tool_call_id.is_not(None),
+                    *([MessageModel.tool_call_id.not_in(heard)] if heard else []),
                 )
                 .order_by(MessageModel.created_at, MessageModel.id)
                 .limit(MAX_MISSED_RELAYS)
