@@ -2,7 +2,6 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import {
     carriedAccounts,
-    CATALOG_SIZE,
     DAY_SECTIONS,
     dayWriters,
     getBuilt,
@@ -203,7 +202,7 @@ export function BuiltPluginPage({ plugin }: { plugin: BuiltPlugin }) {
                     ) : (
                         <>
                             <span className={s.soon}>Coming soon</span>
-                            <span className={s.soonWhy}>It is built and tested. You can add it from here once it is published.</span>
+                            <span className={s.soonWhy}>You will be able to add it from here soon.</span>
                         </>
                     )
                 }
@@ -291,8 +290,9 @@ export function BuiltPluginPage({ plugin }: { plugin: BuiltPlugin }) {
     );
 }
 
-/** A plugin that is not built yet: one line, where it is in the order, and
- *  what it will build on. No pictures, since there is nothing to show. */
+/** A plugin that is not out yet: one line, the work it is for, and what it
+ *  works with. No pictures, since there is nothing to show, and no place in
+ *  the build order, which is ours, not the reader's. */
 export function PlannedPluginPage({ plugin }: { plugin: PlannedPlugin }) {
     const bases = plugin.buildsOn.map((slug) => getPlugin(slug)).filter((p) => p !== undefined);
     return (
@@ -307,12 +307,11 @@ export function PlannedPluginPage({ plugin }: { plugin: PlannedPlugin }) {
                     <span className={s.job}>{plugin.one}</span>
                 </h1>
                 <p className={s.order}>
-                    Not built yet. It is number <span className={s.figure}>{plugin.position}</span> of{" "}
-                    <span className={s.figure}>{CATALOG_SIZE}</span> in the build order, in the {lineName(plugin.line)} line.
+                    Coming soon, in {lineName(plugin.line)}.
                 </p>
             </header>
             <div className={s.rows}>
-                <Row id="builds-on" title="What it will build on">
+                <Row id="builds-on" title="What it works with">
                     {bases.length ? (
                         <div className={s.minis}>
                             {bases.map((base) => (
@@ -320,12 +319,12 @@ export function PlannedPluginPage({ plugin }: { plugin: PlannedPlugin }) {
                             ))}
                         </div>
                     ) : (
-                        <p className={s.plain}>Nothing else. It will start on its own.</p>
+                        <p className={s.plain}>Nothing else. It works on its own.</p>
                     )}
                 </Row>
                 {plugin.merges.length > 0 && (
                     <Row id="covers" title="It also covers">
-                        <p className={s.plain}>{listed(plugin.merges)}, which were planned as plugins of their own.</p>
+                        <p className={s.plain}>{listed(plugin.merges)}.</p>
                     </Row>
                 )}
             </div>
