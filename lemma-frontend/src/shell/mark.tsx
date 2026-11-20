@@ -54,6 +54,16 @@ export function markTint(seed: string): { background: string; color: string } {
     };
 }
 
+/** The cast character a mark with this seed and icon draws, or null when
+ *  it draws a picture or a glyph instead. For a caller that drives the rig
+ *  itself -- its mood and its greeting -- rather than through `Mark`. */
+export function characterOf(seed: string, icon?: string | null): CharacterName | null {
+    const parsed = parseResourceIcon(icon);
+    if (parsed?.kind === "url") return characterFromUrl(parsed.url) ?? null;
+    if (parsed?.kind === "glyph") return null;
+    return characterForSeed(identityVariantSeed(seed, parsed?.kind === "identity" ? parsed.variant : 0));
+}
+
 export const Mark = memo(function Mark({
     seed,
     name,

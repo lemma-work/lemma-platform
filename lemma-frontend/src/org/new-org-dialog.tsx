@@ -23,7 +23,8 @@ export function NewOrgDialog({ taken, onClose, onCreated }: {
     /** The organizations this person is already in, by name. */
     taken: readonly string[];
     onClose: () => void;
-    onCreated: (org: Org) => void;
+    /** `personal`: they chose a workspace of one. */
+    onCreated: (org: Org, personal: boolean) => void;
 }) {
     const queryClient = useQueryClient();
     const me = useQuery({
@@ -39,7 +40,7 @@ export function NewOrgDialog({ taken, onClose, onCreated }: {
             await queryClient.invalidateQueries({ queryKey: ["orgs"] });
             return org;
         },
-        onSuccess: onCreated,
+        onSuccess: (org, wanted) => onCreated(org, wanted.personal === true),
         onError: (failure) => setProblem(failure instanceof Error ? failure.message : "Couldn’t create the organization. Try again."),
     });
 

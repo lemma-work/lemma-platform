@@ -41,22 +41,29 @@ export function FrameArrival({ linkedPodId, asksWork, asksName, onEntered }: {
     /* Turned down the link's door for a place of their own. */
     const [ownInstead, setOwnInstead] = useState(false);
     const failed = invitations.isError || suggested.isError;
-
-    const step = arrivalStep({
+    const read = {
         invitations: invitations.isSuccess ? invitations.data.length : failed ? 0 : null,
         suggested: suggested.isSuccess ? suggested.data.length : failed ? 0 : null,
-        linkedPodId,
-        ownInstead,
-    });
+    };
 
-    if (step === "knock" && linkedPodId) {
+    /* The link is settled once, when the reads are back: whichever Lemma the
+       address named then is the one they came for. Making their workspace
+       mid-way gives the frame names to read the address by, and a name it
+       does not know reads as some other Lemma -- which must not pull them
+       out of a way in already under way and in front of a stranger's door. */
+    const [settled, setSettled] = useState<{ podId: string | null } | null>(null);
+    if (!settled && arrivalStep({ ...read, linkedPodId, ownInstead }) !== "wait") setSettled({ podId: linkedPodId });
+    const linked = settled ? settled.podId : linkedPodId;
+    const step = arrivalStep({ ...read, linkedPodId: linked, ownInstead });
+
+    if (step === "knock" && linked) {
         return (
             <div className="ox-alone">
                 <NotYours
-                    podId={linkedPodId}
+                    podId={linked}
                     onArrived={() => {
                         captureEvent("onboarding.arrived", { route: "link" });
-                        onEntered({ orgId: null, podId: linkedPodId });
+                        onEntered({ orgId: null, podId: linked });
                     }}
                     aside={
                         <button type="button" className="ox-link" onClick={() => setOwnInstead(true)}>
@@ -82,9 +89,12 @@ export function FrameArrival({ linkedPodId, asksWork, asksName, onEntered }: {
             asksWork={asksWork}
             asksName={asksName}
             /* With invitations accepted, the link they opened is still where
-               they land. Turned down for a place of their own, it is not: that
-               would put the door they just declined back in front of them. */
-            onEntered={(landing) => onEntered(linkedPodId && !ownInstead && !landing.startNew ? { ...landing, podId: linkedPodId } : landing)}
+               they land, and an app the way in added elsewhere waits there.
+               Turned down for a place of their own, it is not: that would put
+               the door they just declined back in front of them. */
+            onEntered={(landing) => onEntered(linked && !ownInstead && !landing.startNew
+                ? { ...landing, podId: linked, app: landing.podId === linked ? landing.app : null }
+                : landing)}
         />
     );
 }

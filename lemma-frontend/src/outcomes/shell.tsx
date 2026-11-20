@@ -558,13 +558,26 @@ export function OutcomesShell() {
             go({ name: "hire" });
             return;
         }
-        /* Only the job question: they were somewhere already, and stay. */
-        if (was && was !== "first" && was.kind === "work") return;
+        /* Only the job question: they were somewhere already, and stay --
+           unless it ended on an app it added or a first thing to ask. */
+        if (was && was !== "first" && was.kind === "work" && !landing.app && !landing.ask) return;
         /* Already at the Lemma they came for: stay on the exact address,
            section and all, rather than its summary. */
+        /* An app the way in just added: open on it, already working, rather
+           than on the Lemma with the app one click further in. */
+        /* One of the first things the way in offered to ask: a chat with
+           the Lemma, asking it. */
+        if (landing.podId && landing.ask) {
+            ask(landing.podId, landing.ask);
+            return;
+        }
+        if (landing.podId && landing.app) {
+            go({ name: "app", podId: landing.podId, app: landing.app });
+            return;
+        }
         if (landing.podId && landing.podId === scoped) return;
         go(landing.podId ? outcomeView(landing.podId) : { name: landing.orgId ? "today" : "outcomes" });
-    }, [arriving, queryClient, go, scoped]);
+    }, [arriving, queryClient, go, scoped, ask]);
     /* Who is in a Lemma costs two reads apiece, so it is asked only for the
        pods something on screen reads it for: every one on People and the
        Lemmas board, which list rosters and owners; otherwise the one in view
@@ -780,13 +793,13 @@ export function OutcomesShell() {
                 <NewOrgDialog
                     taken={(orgs.data ?? []).map((one) => one.name)}
                     onClose={() => setMakingOrg(false)}
-                    onCreated={(made) => {
+                    onCreated={(made, personal) => {
                         setMakingOrg(false);
                         setSettings(null);
                         pickOrg(made.id);
                         /* A new organization opens in its own Lemma, as the
                            first one does, not on an empty list. */
-                        void firstLemma(made.id, made.name).then((podId) => {
+                        void firstLemma(made.id, made.name, { personal }).then((podId) => {
                             if (!podId) return;
                             void queryClient.invalidateQueries({ queryKey: ["pods", made.id] });
                             go(outcomeView(podId));

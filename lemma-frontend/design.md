@@ -144,6 +144,50 @@ Messages expose Copy on hover or keyboard focus (always on touch screens). Code
 blocks, quotes and tables have separate copy controls with success or failure feedback.
 Email links use the configured mail handler in the current browsing context.
 
+## Alive, and honest
+
+The way in (`src/arrival/`) is where these were worked out; every surface
+follows them. It is one living scene: a Lemma being put together while its
+person answers, so each answer shows where it went.
+
+How it looks and moves:
+
+- A Lemma is its character on its own tint: a rounded tile, never inside a
+  ring or halo. Where a page is about one Lemma it draws the live rig
+  (`CharacterPuppet`, which breathes, blinks, follows the pointer and greets);
+  everywhere else the still. One rig per page.
+- What a person adds attaches to the Lemma where they can see it: apps as
+  round spots around its face, the places it can be reached as badges at its
+  foot, its people beside it. A change made on one side of the screen shows
+  on the other.
+- Motion means something happened. A ticked app flies to its spot; progress
+  fills a ring around the thing in progress, not a bar somewhere else; a real
+  moment (made, first message heard, ready) gets one burst of the logo's
+  bars and a wave. Nothing moves for decoration, and with reduced motion
+  everything is still and nothing breaks.
+- App icons sit in circles, so the ring that says how far along wraps them.
+  A pill holds one short phrase on one line.
+- One centred column for the task, its buttons right under it, never pinned
+  to the bottom of the window. One solid button moves on; a pick is a blue
+  tint with a tick; words are ink; structure is lines.
+- The Lemma speaks for itself, in the first person, by name: "I'll add the
+  apps that fit", "Write to me from anywhere".
+
+How it thinks:
+
+- Nobody waits on the machine. Long work runs on the server, says what it is
+  doing in plain words ("Putting its app together"), and lets the person
+  carry on; the Lemma tells them in their chat when it is done.
+- Show what is possible even where it is not available here, and say why in
+  the row, plainly, with who can fix it. Never hide a capability, and never
+  offer a button that can only fail.
+- Every question ends in a change the person can see. Ask once and remember
+  (a name, a time zone).
+- Land on the payoff: the first app open, the first thing worth asking, the
+  first message answered where it was sent.
+- Say only what is true. Examples are labelled; a step that has not happened
+  is not shown as done.
+
 ## Teammates and their spaces
 
 A teammate and its space are one pod seen from two sides: the teammate is who

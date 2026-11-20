@@ -176,27 +176,65 @@ are shown with a retry action rather than an indefinite loading message.
 
 **Contracts:** `users.work.set`, `user.current.get`
 
-### PS-ONB-009 — Every way in looks the same and says what a Lemma is
+### PS-ONB-009 — Every way in looks the same: your Lemma asks, in its own voice
 **Status:** manual
 
 > **Verified by:** on a stack running this build, signing up on the web with a
-> work address, then a colleague from the same domain, then a person invited
-> to a Lemma, then accepting an invitation to an organization from Home, then
-> signing up from a plugin's install page with a personal address: each opens
-> on the same sentence about what a Lemma is, in the same steps and type, and
-> the install page carries on to choosing where the plugin goes. `npm test` in
-> `lemma-frontend` checks the steps each door walks
-> (`tests/arrival-flow.test.ts`) and the words they use
+> work address and adding an app through to opening it; signing up with a
+> personal address, from Home and from a link to a Lemma they are not in; a
+> colleague from the same domain; a person invited to a Lemma; and accepting
+> an invitation to an organization from Home -- at desktop and phone width, in
+> light and dark. `npm test` in `lemma-frontend` checks the steps each door
+> walks, the speaker's status, the setup stages, the apps offered and added,
+> the accounts asked for and the workspace's name
+> (`tests/arrival-flow.test.ts`), and the words they use
 > (`tests/outcomes-copy.test.ts`).
 
-- Whichever way a person arrives — the web app, a plugin's install page, an
-  invitation — the system shall show the same steps in the same look, opening
-  with one sentence about what a Lemma is.
+- Whichever way a person arrives — the web app, an invitation — the system
+  shall show the same screens: on one side whoever is asking, big, with what
+  it is doing in a word and how far along they are; on the other the
+  question, in the asker's own words. Lemma's bars ask until their Lemma
+  exists, listening as they type; from then on their Lemma asks, by its
+  living face and name, and everything they choose attaches to it there:
+  empty spots for apps when it is made, the apps they tick (each flying over
+  from the list), those apps going in and in, and the places it can be
+  reached.
+- The order shall be: their name and time zone; meeting their Lemma; what
+  they do and the apps that fit, on one screen; where to reach it, while the
+  apps go in; ready.
+  Their name and time zone shall be asked once, and not again in a dialog over
+  the Lemma they land in.
+- Meeting their Lemma, the system shall say, by name, that it is making them a
+  Lemma, what a Lemma is, what it is called and who is in it: for a team,
+  everyone in the organization; for one person, that it is theirs alone and
+  that working with someone is another Lemma they start and invite them to.
+  Its creator may rename a team's Lemma there.
 - The system shall decide nothing a person could decide better: where their
   company's organization is open to them, it shall offer it and let them start
-  their own instead; otherwise it shall make or join without asking.
-- A name the account lacks shall be asked on the same screen as what they do,
-  not again in a dialog over the Lemma they land in.
+  their own instead; otherwise it shall make or join without asking, while
+  they type their name. A workspace of one the system could not name shall
+  take that name ("Sam’s workspace").
+- Somebody who came into an organization that has Lemmas already shall be
+  greeted by the one they came in by, and offered the others to join.
+- After what they do, the system shall offer a few apps picked for the
+  answer, each with what it does and what it reads, and shall say which Lemma
+  they go into. An app whose install page would ask a question shall stop
+  before changing anything and link to that page.
+- While the apps go in, the system shall offer the places the Lemma can be
+  written to from: the email address it already has, and WhatsApp, Telegram
+  and Slack where this deployment lets one tap turn them on. It shall leave
+  out a place nobody can use here. When the person writes to it from one of
+  them, the system shall say it heard them, there and on the Lemma's face.
+  With no place to offer, the step shall be the apps going in, in plain
+  stages (places for its information, helpers, the app, what it does on its
+  own).
+- An app that stops shall say so, and Try again shall carry on from where it
+  stopped.
+- Ready, the system shall show the whole Lemma — its apps, where it can be
+  reached, who is in it — the accounts its apps read to connect, a few first
+  things to ask it, and the way into its first app.
+- A way in already under way shall not be taken over by the link it began
+  on: the Lemma an address named is settled when the way in starts.
 - Somebody who came in another way (a chat app, an install page) and was not
   asked what they do shall be asked when they next come to Home, never in place
   of a chat, an app or a Lemma a link opened.
@@ -250,7 +288,7 @@ are shown with a retry action rather than an indefinite loading message.
 
 **Contracts:** `org.update`, `org.get`
 
-### PS-ONB-015 — A new organization opens in a Lemma everyone in it shares
+### PS-ONB-015 — A new organization opens in its first Lemma: shared by a team, its person's own alone
 **Status:** covered
 
 > **Verified by:** the scenario for the organization a first workspace makes.
@@ -261,11 +299,14 @@ are shown with a retry action rather than an indefinite loading message.
 - When the system makes an organization for a person who belongs to none — on
   the web, from a plugin's install page, or in a chat sign-up — or a person
   makes one from the organization menu, the system shall also make a Lemma in
-  it and land them there: called what the organization is called, or Personal
-  for a workspace of one person.
-- That Lemma shall be open to every member of the organization, and everyone
-  who joins the organization afterwards shall be in it (PS-POD-024), from the
-  moment they arrive.
+  it and land them there.
+- A company's organization shall get a Lemma called what the organization is
+  called, open to every member of the organization, and everyone who joins the
+  organization afterwards shall be in it (PS-POD-024), from the moment they
+  arrive.
+- A workspace of one shall get a Lemma called Personal that is its person's
+  alone: nobody invited into the workspace later shall be put in it, and it
+  shall not be marked as one everyone shares.
 - The person who made the organization shall own it and administer its Lemma,
   with everything an owner may do from the first moment.
 - If that Lemma cannot be made, then the system shall still open the
