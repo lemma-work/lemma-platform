@@ -211,6 +211,10 @@ export function LiveConversation({
            driven from here instead, where the sequence is visible. */
         autoLoad: false,
         autoResume: false,
+        /* On a call the runs are started by the call, not by this view, and
+           their messages land between the read and the subscription: read
+           the transcript again as each run ends. */
+        syncOnTurnEnd: Boolean(callRefresh),
     });
     /* The folder on this computer the conversation works in — desktop app,
        local install only; `FolderChip` draws nothing anywhere else. */
@@ -238,14 +242,22 @@ export function LiveConversation({
     const resumeIfRunningRef = useRef(resumeIfRunning);
     useEffect(() => { resumeIfRunningRef.current = resumeIfRunning; }, [resumeIfRunning]);
 
+    /* The conversation whose history is on screen. A call re-reads it many
+       times -- each run, each transcript line -- and those reads happen behind
+       what is shown: the composer, the working line and the transcript stay
+       as they are rather than blinking to a loading state each time. */
+    const shownFor = useRef<string | null>(null);
     useEffect(() => {
         if (!openId || (createdHere.current === openId && !callRefresh)) return;
         let cancelled = false;
         let historyReady = false;
+        const quietly = shownFor.current === openId;
         historyRequestFailed.current = false;
-        setLoadError(null);
-        setHistoryLoading(true);
-        setOlderToken(null);
+        if (!quietly) {
+            setLoadError(null);
+            setHistoryLoading(true);
+            setOlderToken(null);
+        }
         (async () => {
             try {
                 /* Side by side: neither needs the other, and one after the
@@ -258,6 +270,8 @@ export function LiveConversation({
                 if (cancelled) return;
                 if (!record || historyRequestFailed.current) throw new Error("History unavailable");
                 historyReady = true;
+                shownFor.current = openId;
+                setLoadError(null);
                 setOlderToken(page.next_page_token ?? null);
                 setHistoryLoading(false);
                 if (page.items.length === 0) {
@@ -265,9 +279,14 @@ export function LiveConversation({
                 }
                 /* Only after the transcript is on screen: reattaching first
                    means a live run writes into a view that has no history. */
-                await resumeIfRunningRef.current(openId, { knownConversation: record });
+                /* Forced on a call: the call says a run is going, and a key
+                   left from the previous run of the same status must not
+                   read as this one already followed. */
+                await resumeIfRunningRef.current(openId, { knownConversation: record, force: Boolean(callRefresh) });
             } catch {
-                if (!cancelled && !historyReady) {
+                /* A background re-read that failed leaves what is shown: the
+                   next one, or the run's own stream, catches it up. */
+                if (!cancelled && !historyReady && !quietly) {
                     setLoadError("Could not load this conversation. Please try again.");
                 }
             } finally {
@@ -303,6 +322,19 @@ export function LiveConversation({
     }, [openId, olderToken, loadMessages]);
 
     useEffect(() => { streamingIn.current = session.conversationId; }, [session.conversationId]);
+
+    /* On a call, a run can start while this view is still streaming the one
+       before: the reload the call asks for then finds a stream and does
+       nothing, and the old stream ends on its own run. So once a stream ends
+       while a call is on, look again for the run now going. */
+    const wasStreaming = useRef(false);
+    const { isStreaming } = session;
+    useEffect(() => {
+        const ended = wasStreaming.current && !isStreaming;
+        wasStreaming.current = isStreaming;
+        if (!ended || !openId || !callRefresh) return;
+        void resumeIfRunningRef.current(openId, { force: true }).catch(() => undefined);
+    }, [isStreaming, openId, callRefresh]);
 
     /* Gone the moment the run shows any sign of having started, or ends: the
        server says it once, not again when the wait is over. Not on messages

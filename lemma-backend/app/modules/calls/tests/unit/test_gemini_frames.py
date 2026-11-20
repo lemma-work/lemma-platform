@@ -13,6 +13,7 @@ import base64
 import pytest
 
 from app.modules.calls.domain.voice import (
+    Inject,
     AudioOut,
     Heard,
     Interrupted,
@@ -146,3 +147,95 @@ async def test_text_that_is_not_pcm_audio_is_not_played() -> None:
         }
     )
     assert not any(isinstance(event, AudioOut) for event in _drain(engine))
+
+
+class _Socket:
+    """Records what the engine sends."""
+
+    class state:  # noqa: N801 - mirrors websockets' ``State`` attribute shape
+        name = "OPEN"
+
+    def __init__(self) -> None:
+        self.sent: list[dict[str, object]] = []
+
+    async def send(self, raw: str | bytes) -> None:
+        import json
+
+        self.sent.append(json.loads(raw))
+
+
+async def _settle() -> None:
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+
+async def test_text_sent_while_the_voice_talks_waits_for_its_turn_to_end() -> None:
+    """Gemini cuts its own sentence for any input; a team note mid-sentence
+    must not. It is held, and goes once the turn completes, in order."""
+    engine = _engine()
+    socket = _Socket()
+    engine._socket = socket  # type: ignore[assignment]
+    engine._handle_frame({"serverContent": _audio(b"\x01\x00" * 4)})
+
+    await engine.inject("India 143 for 1.", Inject.CONTEXT)
+    await engine.inject("Tell them the score.", Inject.SPEAK)
+    await _settle()
+    assert socket.sent == []
+
+    engine._handle_frame({"serverContent": {"turnComplete": True}})
+    await _settle()
+    assert socket.sent == [
+        {
+            "clientContent": {
+                "turns": [{"role": "user", "parts": [{"text": "India 143 for 1."}]}],
+                "turnComplete": False,
+            }
+        },
+        {"realtimeInput": {"text": "Tell them the score."}},
+    ]
+
+
+async def test_held_text_outlasts_a_barge_in_until_the_voice_answers() -> None:
+    engine = _engine()
+    socket = _Socket()
+    engine._socket = socket  # type: ignore[assignment]
+    engine._handle_frame({"serverContent": _audio(b"\x01\x00" * 4)})
+    await engine.inject("first", Inject.SPEAK)
+    engine._handle_frame({"serverContent": {"interrupted": True}})
+    # The caller has the floor; a later note queues behind the held one.
+    await engine.inject("second", Inject.CONTEXT)
+    await _settle()
+    assert socket.sent == []
+
+    engine._handle_frame({"serverContent": _audio(b"\x01\x00" * 4)})
+    engine._handle_frame({"serverContent": {"turnComplete": True}})
+    await _settle()
+    assert [next(iter(frame)) for frame in socket.sent] == [
+        "realtimeInput",
+        "clientContent",
+    ]
+
+
+async def test_text_goes_at_once_while_the_voice_is_quiet() -> None:
+    engine = _engine()
+    socket = _Socket()
+    engine._socket = socket  # type: ignore[assignment]
+    await engine.inject("now", Inject.SPEAK)
+    assert socket.sent == [{"realtimeInput": {"text": "now"}}]
+
+
+async def test_a_turn_that_never_completes_releases_held_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.modules.calls.infrastructure.engines import gemini_live
+
+    monkeypatch.setattr(gemini_live, "MAX_TURN_HOLD_SECONDS", 0.01)
+    engine = _engine()
+    socket = _Socket()
+    engine._socket = socket  # type: ignore[assignment]
+    engine._handle_frame({"serverContent": _audio(b"\x01\x00" * 4)})
+    await engine.inject("late", Inject.SPEAK)
+    async with asyncio.timeout(1):
+        while not socket.sent:
+            await asyncio.sleep(0.01)
+    assert socket.sent == [{"realtimeInput": {"text": "late"}}]

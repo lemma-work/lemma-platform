@@ -201,6 +201,38 @@ class Calls(UnitOfWorkRepository):
                 relays.append((args["text"], str(args.get("urgency") or "when_idle")))
         return relays
 
+    async def relays_since(
+        self, call_id: UUID, since: datetime
+    ) -> list[tuple[str, str, str]]:
+        """``(tool_call_id, text, urgency)`` of each relay sent after ``since``,
+        oldest first: what a stream that dropped and came back may have missed."""
+        rows = await self.session.execute(
+            select(MessageModel.tool_call_id, MessageModel.tool_args)
+            .where(
+                MessageModel.conversation_id == call_id,
+                MessageModel.kind == MessageKind.TOOL_CALL.value,
+                MessageModel.tool_name == RELAY_TOOL_NAME,
+                MessageModel.created_at > since,
+            )
+            .order_by(MessageModel.created_at)
+            .limit(MAX_MISSED_RELAYS)
+        )
+        relays: list[tuple[str, str, str]] = []
+        for tool_call_id, args in rows.all():
+            if (
+                tool_call_id
+                and isinstance(args, dict)
+                and isinstance(args.get("text"), str)
+            ):
+                relays.append(
+                    (
+                        tool_call_id,
+                        args["text"],
+                        str(args.get("urgency") or "when_idle"),
+                    )
+                )
+        return relays
+
     async def canvas_messages(
         self, conversation_ids: list[UUID], *, since: datetime | None = None
     ) -> list[Message]:

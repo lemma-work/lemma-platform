@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Pod } from "@/data";
 import { useHuddle, type Huddle } from "@/call/use-huddle";
@@ -32,6 +32,13 @@ export function useCalls(go: Go): { huddle: Huddle; calls: Calls; resume: () => 
     /* Back to the call that is on: its own chat first, which is where the
        call is shown beside, then the call itself. */
     const heldPod = target?.pod.id ?? null;
+    /* The sidebar's chats -- the running ring, unread, order, title -- move
+       with the call's work: read them again as runs start and stop and once
+       the call settles, rather than at the next minute's poll. */
+    const settledCount = settled?.count ?? 0;
+    useEffect(() => {
+        if (heldPod) void refreshConversationLists(queryClient, heldPod);
+    }, [heldPod, liveEpoch, settledCount, queryClient]);
     const resume = useCallback(() => {
         if (held && heldPod) go(chatView({ kind: "chat", podId: heldPod, id: held }));
         expand();

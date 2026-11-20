@@ -36,6 +36,8 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.infrastructure.db.calls import CALL_TRANSCRIPT_KEY, Calls
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.live import publish_conversation_event
+from app.modules.agent.domain.live_events import message_payload, message_to_payload
 from app.modules.agent.infrastructure.repositories import AgentRepository
 from app.modules.agent.services.conversation_access import resolve_agent
 from app.modules.agent.services.runtime_availability import (
@@ -221,6 +223,14 @@ async def missed_relays(
     return await Calls(uow).relays_since_last_transcript(call_id)
 
 
+async def relays_since(
+    uow: SqlAlchemyUnitOfWork, call_id: UUID, since: datetime
+) -> list[tuple[str, str, str]]:
+    """The relays sent after ``since``, with their tool call ids, so a listener
+    that heard some of them live can tell which it missed."""
+    return await Calls(uow).relays_since(call_id, since)
+
+
 async def speak_into_call(
     uow: SqlAlchemyUnitOfWork,
     *,
@@ -245,11 +255,19 @@ async def keep_in_call(
 ) -> None:
     """A line kept in the call's conversation, in no run: part of its
     transcript (``call_transcript``) or a note about something that went wrong."""
-    await Messages(uow).append_message(
+    saved = await Messages(uow).append_message(
         conversation_id=call_id,
         agent_run_id=None,
         draft=MessageDraft.of_notification(text, metadata=metadata),
     )
+    frame = message_payload(None, message_to_payload(saved))
+
+    async def _publish() -> None:
+        # After the commit: a client that re-reads on it finds the line. A
+        # live frame, not the outbox -- the next read recovers a lost one.
+        await publish_conversation_event(call_id, frame)
+
+    uow.after_commit(_publish)
 
 
 async def call_canvas(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> list[CanvasItem]:
@@ -300,6 +318,7 @@ __all__ = [
     "held_call",
     "keep_in_call",
     "missed_relays",
+    "relays_since",
     "open_call",
     "owned_call",
     "retire_empty_call",

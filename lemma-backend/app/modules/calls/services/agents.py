@@ -20,6 +20,7 @@ import contextlib
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from pydantic import JsonValue
@@ -32,6 +33,7 @@ from app.modules.calls.domain.frames import (
 )
 from app.core.authorization.scope import context_scope
 from app.core.authorization.service import AuthorizationDataService
+from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -47,7 +49,18 @@ from app.modules.agent.contracts.calls import (
     call_working,
     keep_in_call,
     missed_relays,
+    relays_since,
     speak_into_call,
+)
+
+from app.modules.calls.services.signals import (
+    AgentSignal,
+    Failed,
+    Finished,
+    Relay,
+    RunStarted,
+    Shown,
+    Working,
 )
 
 logger = get_logger(__name__)
@@ -59,6 +72,18 @@ _RELAY_TOOL = "relay_to_voice"
 #: the deprecated `spawn_subagent` returns its one.
 _SPAWN_TOOLS = frozenset({"delegate", "spawn_subagent"})
 _RUN_ENDINGS = frozenset({"completed", "error", "stopped"})
+#: After a spawning tool call, when to look for the conversations it made:
+#: ``delegate`` waiting on its children returns only once they are done, so
+#: the return cannot be what names them while they work.
+_DISCOVER_AFTER_SECONDS = (1.0, 4.0, 10.0)
+#: How long the call waits for its streams to be subscribed before reading
+#: back what it missed. Past it the read goes ahead: a slow subscription costs
+#: a frame or two, a call that never starts costs the call.
+_SUBSCRIBE_WAIT_SECONDS = 5.0
+#: How far before a stream was found dropped a catch-up reads back. A drop is
+#: noticed late -- the failure surfaces after frames already went missing --
+#: and what it reads twice is told apart: relays by id, the canvas by item.
+_CATCH_UP_MARGIN = timedelta(seconds=30)
 #: Attempts at a stream that keeps failing before the call says so.
 _FOLLOW_ATTEMPTS = 5
 _FOLLOW_BACKOFF_SECONDS = 1.0
@@ -77,66 +102,15 @@ def _children_started(result: dict[str, object]) -> list[str]:
     return [child for child in named if isinstance(child, str)]
 
 
-@dataclass(frozen=True, slots=True)
-class Relay:
-    text: str
-    urgency: str
-
-
-@dataclass(frozen=True, slots=True)
-class Shown:
-    """Something put on the canvas: the tool call that showed it."""
-
-    conversation_id: UUID
-    tool_call_id: str
-    tool_name: str
-    args: JsonValue
-    result: JsonValue
-
-    def as_frame(self) -> dict[str, JsonValue]:
-        return {
-            "conversation_id": str(self.conversation_id),
-            "tool_call_id": self.tool_call_id,
-            "tool_name": self.tool_name,
-            "args": self.args,
-            "result": self.result,
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class Working:
-    """Whether anyone in the call -- the coordinator or a sub-agent -- has a
-    run going."""
-
-    running: bool
-
-
-@dataclass(frozen=True, slots=True)
-class Failed:
-    """The coordinator's run failed; ``reason`` is what to tell the person."""
-
-    reason: str
-
-
-@dataclass(frozen=True, slots=True)
-class Finished:
-    """The coordinator's run ended without relaying or showing anything.
-
-    ``answer`` is its last written words, if any: the voice would otherwise
-    keep saying the work is in hand."""
-
-    answer: str | None
-
-
-type AgentSignal = Relay | Shown | Working | Failed | Finished
-
-
 @dataclass(slots=True)
 class _RunState:
     """What one coordinator run has done that the call can hear of."""
 
     updated: bool = False
     answer: str | None = None
+    #: It started sub-agents: their reports come back to it, so its own end
+    #: is not the end of the work.
+    spawned: bool = False
 
 
 type ConversationFrames = AbstractAsyncContextManager[
@@ -198,6 +172,17 @@ class CallAgents:
         #: Conversations in the call with a run going, by their stream.
         self._running: set[UUID] = set()
         self._runs: dict[str, _RunState] = {}
+        #: Runs heard going, each with its conversation, and runs heard end.
+        #: Any frame of a run not yet heard of starts it: the default runtime
+        #: publishes no ``status`` frame, so waiting for one never saw a run.
+        self._live: dict[str, UUID] = {}
+        self._over: set[str] = set()
+        self._discovering: asyncio.Task[None] | None = None
+        #: Set once each conversation's stream is subscribed.
+        self._subscribed: dict[UUID, asyncio.Event] = {}
+        #: Relays heard live, by tool call: a catch-up says only the others.
+        self._heard_relays: set[str] = set()
+        self._catching_up: set[asyncio.Task[None]] = set()
 
     async def send_turn(self, content: str) -> None:
         async with as_caller(self._party) as scope:
@@ -252,6 +237,15 @@ class CallAgents:
             known = await call_conversations(scope.uow, self.call_id)
         for conversation_id in known:
             self._watch(conversation_id)
+        # Subscribed first, really: ``_watch`` only starts the task that
+        # subscribes, and a read made before it lands loses what is published
+        # in between.
+        waits = [self._subscribed[conversation_id].wait() for conversation_id in known]
+        try:
+            async with asyncio.timeout(_SUBSCRIBE_WAIT_SECONDS):
+                await asyncio.gather(*waits)
+        except TimeoutError:
+            logger.warning("calls.agents.subscribe.slow", call_id=str(self.call_id))
         async with as_caller(self._party) as scope:
             missed = await missed_relays(scope.uow, self.call_id)
             working = await call_working(scope.uow, self.call_id)
@@ -267,15 +261,36 @@ class CallAgents:
             )
         offer(self._signals, Working(running=working), essential=True)
 
+    async def discover(self) -> None:
+        """Watch every conversation the store says is in the call: a child
+        made by a tool whose return has not come back is found here."""
+        async with as_caller(self._party) as scope:
+            known = await call_conversations(scope.uow, self.call_id)
+        for conversation_id in known:
+            self._watch(conversation_id)
+
+    async def _discover_soon(self) -> None:
+        waited = 0.0
+        for at in _DISCOVER_AFTER_SECONDS:
+            await asyncio.sleep(at - waited)
+            waited = at
+            try:
+                await self.discover()
+            except DomainError, SQLAlchemyError, OSError:
+                logger.warning("calls.agents.discover.failed", exc_info=True)
+
     async def still_working(self) -> bool:
         """Whether a run is going, read from the store: a stream can lose the
-        frame that ended one."""
+        frame that ended one, or never carry the one that started it."""
+        await self.discover()
         async with as_caller(self._party) as scope:
             running = await call_working(scope.uow, self.call_id)
         if not running:
             # The frames that ended those runs were lost; forgetting them lets
             # the next run start report itself as working again.
             self._running.clear()
+            self._over.update(self._live)
+            self._live.clear()
         return running
 
     async def signals(self) -> AsyncIterator[AgentSignal]:
@@ -283,6 +298,10 @@ class CallAgents:
             yield await self._signals.get()
 
     async def close(self) -> None:
+        if self._discovering is not None:
+            self._discovering.cancel()
+        for task in list(self._catching_up):
+            task.cancel()
         for task in self._watching.values():
             task.cancel()
         # Gathered, not awaited one by one: a watcher that failed must not
@@ -292,6 +311,7 @@ class CallAgents:
     def _watch(self, conversation_id: UUID) -> None:
         if conversation_id in self._watching:
             return
+        self._subscribed[conversation_id] = asyncio.Event()
         self._watching[conversation_id] = create_inherited_task(
             self._follow(conversation_id), name="calls.agents.follow"
         )
@@ -301,9 +321,15 @@ class CallAgents:
         fails is subscribed to again, and only one that keeps failing is given
         up on -- with the voice told, rather than left waiting."""
         failures = 0
+        dropped_at: datetime | None = None
         while failures < _FOLLOW_ATTEMPTS:
             try:
                 async with self._stream(conversation_id) as frames:
+                    self._subscribed[conversation_id].set()
+                    if dropped_at is not None:
+                        # Back after a drop: what was published while the
+                        # stream was down went nowhere, so read it back.
+                        self._catch_up_soon(conversation_id, dropped_at)
                     async for frame in frames:
                         failures = 0
                         self._read(conversation_id, frame)
@@ -314,6 +340,7 @@ class CallAgents:
                     conversation_id=str(conversation_id),
                     exc_info=True,
                 )
+            dropped_at = datetime.now(UTC)
             await asyncio.sleep(self._retry_seconds * max(failures, 1))
         self._running.discard(conversation_id)
         offer(
@@ -326,12 +353,78 @@ class CallAgents:
             essential=True,
         )
 
+    def _catch_up_soon(self, conversation_id: UUID, dropped_at: datetime) -> None:
+        task = create_inherited_task(
+            self._catch_up(conversation_id, dropped_at - _CATCH_UP_MARGIN),
+            name="calls.agents.catch_up",
+        )
+        self._catching_up.add(task)
+        task.add_done_callback(self._catching_up.discard)
+
+    async def _read_back(
+        self, conversation_id: UUID, since: datetime
+    ) -> tuple[list[tuple[str, str, str]], list[CanvasItem], bool]:
+        """What a stream may have missed since ``since``: the call's relays
+        (only its own conversation relays), its canvas, and whether anyone in
+        it is working."""
+        async with as_caller(self._party) as scope:
+            relays = (
+                await relays_since(scope.uow, self.call_id, since)
+                if conversation_id == self.call_id
+                else []
+            )
+            canvas = await call_canvas(scope.uow, self.call_id)
+        return relays, canvas, await self.still_working()
+
+    async def _catch_up(self, conversation_id: UUID, since: datetime) -> None:
+        try:
+            relays, canvas, working = await self._read_back(conversation_id, since)
+        except DomainError, SQLAlchemyError, OSError, RedisError:
+            logger.warning(
+                "calls.agents.catch_up.failed",
+                conversation_id=str(conversation_id),
+                exc_info=True,
+            )
+            return
+        for tool_call_id, text, urgency in relays:
+            if tool_call_id in self._heard_relays:
+                continue
+            self._heard_relays.add(tool_call_id)
+            # Late already: said at the next pause, never cutting in.
+            offer(
+                self._signals,
+                Relay(
+                    text=text,
+                    urgency="context" if urgency == "context" else "when_idle",
+                ),
+                essential=True,
+            )
+        # The session puts each item up once, so the ones already shown are
+        # passed over there.
+        for item in canvas:
+            offer(
+                self._signals,
+                Shown(
+                    conversation_id=item.conversation_id,
+                    tool_call_id=item.tool_call_id,
+                    tool_name=item.tool_name,
+                    args=item.args,
+                    result=item.result,
+                ),
+            )
+        offer(self._signals, Working(running=working), essential=True)
+
     def _read(self, conversation_id: UUID, frame: dict[str, JsonValue]) -> None:
         kind = frame.get("type")
         run_id = frame.get("agent_run_id")
         is_call = conversation_id == self.call_id
+        if kind not in _RUN_ENDINGS:
+            if isinstance(run_id, str):
+                if run_id not in self._live and run_id not in self._over:
+                    self._started(conversation_id, run_id)
+            elif kind == "status":
+                self._set_running(conversation_id, True)
         if kind == "status":
-            self._started(conversation_id, run_id if is_call else None)
             return
         if kind == "error" and is_call:
             reason = frame.get("data")
@@ -343,23 +436,33 @@ class CallAgents:
             if isinstance(run_id, str):
                 self._runs.setdefault(run_id, _RunState()).updated = True
         if kind in _RUN_ENDINGS:
-            self._ended(conversation_id, run_id if is_call else None)
+            self._ended(conversation_id, run_id)
             return
         data = frame.get("data")
         if kind == "message" and isinstance(data, dict):
             self._read_message(conversation_id, data)
 
-    def _started(self, conversation_id: UUID, run_id: JsonValue) -> None:
-        if isinstance(run_id, str):
+    def _started(self, conversation_id: UUID, run_id: str) -> None:
+        self._live[run_id] = conversation_id
+        if conversation_id == self.call_id:
             self._runs.setdefault(run_id, _RunState())
+            offer(self._signals, RunStarted(agent_run_id=run_id), essential=True)
         self._set_running(conversation_id, True)
 
     def _ended(self, conversation_id: UUID, run_id: JsonValue) -> None:
         if isinstance(run_id, str):
-            state = self._runs.pop(run_id, None)
-            if state is not None and not state.updated:
+            self._live.pop(run_id, None)
+            self._over.add(run_id)
+            state = (
+                self._runs.pop(run_id, None)
+                if conversation_id == self.call_id
+                else None
+            )
+            if state is not None and not state.updated and not state.spawned:
                 offer(self._signals, Finished(answer=state.answer), essential=True)
-        self._set_running(conversation_id, False)
+        # Another run of the same conversation may still be going.
+        if conversation_id not in self._live.values():
+            self._set_running(conversation_id, False)
 
     def _set_running(self, conversation_id: UUID, running: bool) -> None:
         before = bool(self._running)
@@ -415,6 +518,7 @@ class CallAgents:
             and isinstance(args, dict)
         ):
             text, urgency = args.get("text"), args.get("urgency") or "when_idle"
+            self._heard_relays.add(call_id)
             if isinstance(text, str) and text.strip():
                 self._updated(data)
                 offer(self._signals, Relay(text=text.strip(), urgency=str(urgency)))
@@ -422,6 +526,14 @@ class CallAgents:
             if conversation_id == self.call_id:
                 self._updated(data)
             self._pending_args[call_id] = args
+        elif tool in _SPAWN_TOOLS:
+            run_id = data.get("agent_run_id")
+            if conversation_id == self.call_id and isinstance(run_id, str):
+                self._runs.setdefault(run_id, _RunState()).spawned = True
+            if self._discovering is None or self._discovering.done():
+                self._discovering = create_inherited_task(
+                    self._discover_soon(), name="calls.agents.discover"
+                )
 
     def _on_return(
         self, conversation_id: UUID, tool: str, call_id: str, result: JsonValue

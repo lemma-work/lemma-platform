@@ -8,12 +8,12 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.calls.services.agents import (
-    CallAgents,
+from app.modules.calls.services.agents import CallAgents, Party
+from app.modules.calls.services.signals import (
     Failed,
     Finished,
-    Party,
     Relay,
+    RunStarted,
     Shown,
     Working,
 )
@@ -310,3 +310,141 @@ def test_a_run_that_relayed_is_not_reported_again_when_it_ends() -> None:
     )
     agents._read(agents.call_id, _run_frame("completed", "r1", data={}))
     assert not [s for s in _signals(agents) if isinstance(s, Finished)]
+
+
+def _default_runtime_turn(run_id: str) -> list[dict[str, object]]:
+    """What the default runtime publishes for a turn: the caller's message as
+    the run's input, then the run's own messages, then its end. No ``status``
+    frame -- only Agent Host sends those."""
+    return [
+        {
+            "type": "message",
+            "agent_run_id": run_id,
+            "data": {
+                "agent_run_id": run_id,
+                "role": "user",
+                "kind": "TEXT",
+                "text": "[caller] score?",
+            },
+        },
+        {
+            "type": "message",
+            "agent_run_id": run_id,
+            "data": {
+                "agent_run_id": run_id,
+                "role": "assistant",
+                "kind": "TOOL_CALL",
+                "tool_name": "exec_command",
+                "tool_call_id": "e1",
+            },
+        },
+    ]
+
+
+def test_a_run_without_a_status_frame_is_still_heard_starting_and_followed() -> None:
+    agents, _ = _agents()
+    for frame in _default_runtime_turn("r1"):
+        agents._read(agents.call_id, frame)
+    signals = _signals(agents)
+    assert RunStarted(agent_run_id="r1") in signals
+    assert Working(running=True) in signals
+    agents._read(agents.call_id, _run_frame("completed", "r1", data={}))
+    assert Working(running=False) in _signals(agents)
+
+
+def test_every_new_coordinator_run_is_announced_even_while_already_working() -> None:
+    agents, _ = _agents()
+    child = uuid4()
+    agents._read(child, _run_frame("message", "c1", data={}))
+    agents._read(agents.call_id, _run_frame("message", "r1", data={}))
+    agents._read(agents.call_id, _run_frame("completed", "r1", data={}))
+    agents._read(agents.call_id, _run_frame("message", "r2", data={}))
+    starts = [s for s in _signals(agents) if isinstance(s, RunStarted)]
+    assert starts == [RunStarted(agent_run_id="r1"), RunStarted(agent_run_id="r2")]
+
+
+def test_a_late_frame_of_an_ended_run_does_not_start_it_again() -> None:
+    agents, _ = _agents()
+    agents._read(agents.call_id, _run_frame("message", "r1", data={}))
+    agents._read(agents.call_id, _run_frame("completed", "r1", data={}))
+    _signals(agents)
+    agents._read(agents.call_id, _run_frame("message", "r1", data={}))
+    assert _signals(agents) == []
+
+
+async def test_a_run_that_handed_work_to_sub_agents_is_not_called_finished() -> None:
+    agents, _ = _agents()
+    agents._read(agents.call_id, _run_frame("message", "r1", data={}))
+    agents._read(
+        agents.call_id,
+        _message("TOOL_CALL", "delegate", "d1", agent_run_id="r1", tool_args={}),
+    )
+    agents._read(agents.call_id, _run_frame("completed", "r1", data={}))
+    assert not [s for s in _signals(agents) if isinstance(s, Finished)]
+    assert agents._discovering is not None
+    agents._discovering.cancel()
+
+
+async def test_a_stream_back_after_a_drop_reads_back_only_what_was_missed() -> None:
+    """A relay heard live is not said twice; one published while the stream
+    was down is; the canvas and the working state are read back too."""
+    subscriptions = 0
+    resumed = asyncio.Event()
+
+    @asynccontextmanager
+    async def stream(conversation_id):
+        nonlocal subscriptions
+        subscriptions += 1
+        first = subscriptions == 1
+
+        async def frames():
+            if first:
+                yield _message(
+                    "TOOL_CALL",
+                    "relay_to_voice",
+                    "heard",
+                    tool_args={"text": "On it.", "urgency": "context"},
+                )
+                raise RedisConnectionError("pubsub dropped")
+            resumed.set()
+            await asyncio.Event().wait()
+            yield {}
+
+        yield frames()
+
+    agents = CallAgents(
+        call_id=uuid4(),
+        party=Party(user_id=uuid4(), pod_id=uuid4()),
+        stream=stream,
+        retry_seconds=0,
+    )
+    since_seen: list[object] = []
+
+    async def read_back(conversation_id, since):
+        since_seen.append(since)
+        return (
+            [
+                ("heard", "On it.", "context"),
+                ("missed", "India 143 for 1.", "when_idle"),
+            ],
+            [],
+            True,
+        )
+
+    agents._read_back = read_back  # type: ignore[method-assign]
+    agents._watch(agents.call_id)
+    async with asyncio.timeout(2):
+        await resumed.wait()
+        while not agents._catching_up and not since_seen:
+            await asyncio.sleep(0)
+        while agents._catching_up:
+            await asyncio.sleep(0)
+    await agents.close()
+    signals = _signals(agents)
+    relays = [s for s in signals if isinstance(s, Relay)]
+    assert relays == [
+        Relay(text="On it.", urgency="context"),
+        Relay(text="India 143 for 1.", urgency="when_idle"),
+    ]
+    assert Working(running=True) in signals
+    assert len(since_seen) == 1

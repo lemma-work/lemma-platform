@@ -12,6 +12,12 @@ Two channels carry text in, and which one decides whether the voice talks:
 - ``realtimeInput.text`` is spoken to: the model responds to it at once, in its
   own words, which is what an update the agents want said needs.
 
+Either one, sent while the voice is talking, stops it: Gemini treats any new
+input as a barge-in and cuts the sentence where it is. So text that arrives
+mid-turn waits for the turn to end -- ``turnComplete``, and after a barge-in
+the end of the voice's answer to the caller -- and goes then, the way a steer reaches an agent between steps. The voice
+finishes its sentence; the note is known, or said, next.
+
 The same protocol is served by the Gemini API, with a key, and by Vertex AI,
 with the workload's service account; ``google_auth`` builds either.
 
@@ -74,6 +80,10 @@ _SETUP_TIMEOUT_SECONDS = 15.0
 _MAX_RECONNECTS = 3
 #: Text frames kept across one reconnect, the newest.
 _MAX_HELD_TEXT = 20
+#: Text held for the end of the voice's turn goes anyway after this long: a
+#: turn whose ``turnComplete`` never came must not keep the team's news back
+#: for the rest of the call.
+MAX_TURN_HOLD_SECONDS = 20.0
 
 type Frame = dict[str, JsonValue]
 
@@ -110,6 +120,11 @@ class GeminiLiveEngine:
         #: rotated, to send once it is back. Audio is never kept: late
         #: microphone audio is worse than none.
         self._held_text: list[Frame] = []
+        #: Text that arrived while the voice was talking, for the end of its
+        #: turn: sent then, it would cut the sentence off.
+        self._after_turn: list[Frame] = []
+        self._turn_hold: asyncio.TimerHandle | None = None
+        self._sending: set[asyncio.Task[None]] = set()
 
     async def open(self) -> None:
         await self._connect()
@@ -180,17 +195,46 @@ class GeminiLiveEngine:
         )
 
     async def inject(self, text: str, mode: Inject) -> None:
-        if mode is Inject.SPEAK:
-            await self._send_text({"realtimeInput": {"text": text}})
-            return
-        await self._send_text(
-            {
+        frame: Frame = (
+            {"realtimeInput": {"text": text}}
+            if mode is Inject.SPEAK
+            else {
                 "clientContent": {
                     "turns": [{"role": "user", "parts": [{"text": text}]}],
                     "turnComplete": False,
                 }
             }
         )
+        # Behind anything already held, too: notes are said in the order sent.
+        if self._voice_turn_open or self._after_turn:
+            self._hold_for_turn_end(frame)
+            return
+        await self._send_text(frame)
+
+    def _hold_for_turn_end(self, frame: Frame) -> None:
+        self._after_turn.append(frame)
+        del self._after_turn[:-_MAX_HELD_TEXT]
+        if self._turn_hold is None:
+            self._turn_hold = asyncio.get_running_loop().call_later(
+                MAX_TURN_HOLD_SECONDS, self._release_after_turn
+            )
+
+    def _release_after_turn(self) -> None:
+        if self._turn_hold is not None:
+            self._turn_hold.cancel()
+            self._turn_hold = None
+        if not self._after_turn:
+            return
+        frames, self._after_turn = self._after_turn, []
+        task = create_inherited_task(
+            self._send_all(frames), name="calls.gemini.after_turn"
+        )
+        self._sending.add(task)
+        task.add_done_callback(self._sending.discard)
+
+    async def _send_all(self, frames: list[Frame]) -> None:
+        for frame in frames:
+            await self._send_text(frame)
 
     async def _send_text(self, frame: Frame) -> None:
         """Text for the voice is kept, not dropped, across a reconnect: a
@@ -223,6 +267,10 @@ class GeminiLiveEngine:
         self._closing = True
         if self._closing_turn is not None:
             self._closing_turn.cancel()
+        if self._turn_hold is not None:
+            self._turn_hold.cancel()
+        for task in list(self._sending):
+            task.cancel()
         if self._reader is not None:
             self._reader.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -308,10 +356,14 @@ class GeminiLiveEngine:
             offer(self._events, Said(said, final=False))
         if content.get("interrupted"):
             offer(self._events, Interrupted())
+            # Held text stays held: the caller has the floor, and a note sent
+            # now would be answered instead of them. It goes when the voice's
+            # answer to them is done.
             self._end_voice_turn()
         if content.get("turnComplete"):
             self._close_caller_turn()
             self._end_voice_turn()
+            self._release_after_turn()
 
     def _voice_starts(self) -> None:
         # The voice answering is the provider's end-of-turn for the caller, but
