@@ -759,3 +759,32 @@ def test_a_grandchild_traces_back_from_the_store_alone() -> None:
         [(call_id, None, None), (child, r1, call_id), (grandchild, c1, child)]
     )
     assert lineage.coordinator_run(grandchild) == str(r1)
+
+
+async def test_a_relay_recovered_while_a_run_waits_to_hear_cancels_its_finish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC, datetime
+
+    from app.modules.calls.services import agents as agents_module
+
+    monkeypatch.setattr(agents_module, "_SPAWN_SETTLE_SECONDS", 0.05)
+    agents, _ = _agents()
+    agents._read(agents.call_id, _run_frame("message", "r1", data={}))
+    agents._read(
+        agents.call_id,
+        _message("TOOL_CALL", "delegate", "d1", agent_run_id="r1", tool_args={}),
+    )
+    # It ends, and waits to hear whether a child of its started...
+    agents._read(agents.call_id, _run_frame("completed", "r1", data={}))
+
+    async def read_back(conversation_id, since):
+        return [("x1", "India 143 for 1.", "now", "r1")], [], False
+
+    agents._read_back = read_back  # type: ignore[method-assign]
+    # ...while a catch-up recovers the relay it sent.
+    await agents._catch_up(agents.call_id, datetime.now(UTC))
+    await _decided(agents)
+    signals = _signals(agents)
+    assert Relay(text="India 143 for 1.", urgency="when_idle") in signals
+    assert not [s for s in signals if isinstance(s, Finished)]

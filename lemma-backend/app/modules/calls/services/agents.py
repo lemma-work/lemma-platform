@@ -382,8 +382,7 @@ class CallAgents:
                 await asyncio.sleep(wait)
         for tool_call_id, text, urgency, run_id in relays:
             # Its run relayed, so its end is not a silent one.
-            if run_id is not None and run_id in self._runs:
-                self._runs[run_id].updated = True
+            self._relayed(run_id)
             if tool_call_id in self._heard_relays:
                 continue
             self._heard_relays.add(tool_call_id)
@@ -480,7 +479,7 @@ class CallAgents:
         async def decide() -> None:
             await asyncio.sleep(_SPAWN_SETTLE_SECONDS)
             self._awaiting_children.pop(run_id, None)
-            if not state.has_child:
+            if not state.has_child and not state.updated:
                 # It called the tool, but no child started: its own words are
                 # all there is, so they reach the person.
                 offer(self._signals, Finished(answer=state.answer), essential=True)
@@ -524,10 +523,11 @@ class CallAgents:
         ):
             self._runs.setdefault(run_id, _RunState()).answer = text.strip()
 
-    def _updated(self, data: dict[str, JsonValue]) -> None:
-        run_id = data.get("agent_run_id")
+    def _relayed(self, run_id: JsonValue) -> None:
+        """The run said something; also when it ended and waits to hear."""
         if isinstance(run_id, str):
-            self._runs.setdefault(run_id, _RunState()).updated = True
+            pending = self._awaiting_children.get(run_id)
+            (pending or self._runs.setdefault(run_id, _RunState())).updated = True
 
     def _on_call(
         self,
@@ -545,13 +545,13 @@ class CallAgents:
             text, urgency = args.get("text"), args.get("urgency") or "when_idle"
             if isinstance(text, str) and text.strip():
                 # The run relayed, said now or by a catch-up already.
-                self._updated(data)
+                self._relayed(data.get("agent_run_id"))
                 if call_id not in self._heard_relays:
                     offer(self._signals, Relay(text=text.strip(), urgency=str(urgency)))
             self._heard_relays.add(call_id)
         elif tool in _CANVAS_TOOLS:
             if conversation_id == self.call_id:
-                self._updated(data)
+                self._relayed(data.get("agent_run_id"))
             self._pending_args[call_id] = args
         elif tool in _SPAWN_TOOLS:
             self._on_spawn(conversation_id, data.get("agent_run_id"))
