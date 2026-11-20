@@ -28,6 +28,9 @@ export interface Member {
     role: string;
     /** What this member is allowed to do, in a person's words. */
     can: string;
+    /** The role behind `can`, as the wire spells it (`POD_ADMIN`), for a
+     *  picker that changes it. Absent where the source cannot say. */
+    podRole?: string | null;
     iconUrl?: string | null;
     /** The account behind the membership — what a run or a schedule names as
      *  its owner (`user_id`), which is not the membership id above. */
@@ -65,7 +68,7 @@ export interface Invitation {
     id: string;
     orgId: string;
     orgName: string;
-    /** The teammate it names, when it names one. */
+    /** The Lemma it names, when it names one. */
     podId: string | null;
     podName: string | null;
     podAbout: string | null;
@@ -87,6 +90,34 @@ export interface NewOrg {
     name: string;
     emailDomain?: string;
     derived?: boolean;
+}
+
+/** What the way in asks of the server's first-workspace rule. */
+export interface FirstWorkspaceWanted {
+    /** Start their own organization even though their company's is open to
+     *  them. It is then theirs alone, named after them. */
+    ownOrganization?: boolean;
+    /** False makes it theirs alone whatever their address says: on a local
+     *  install nobody else can reach the server yet. */
+    team?: boolean;
+}
+
+/** Where somebody's first organization left them. */
+export interface FirstWorkspace {
+    orgId: string;
+    orgName: string;
+    /** How they came in: invited, let in by their email domain, a new
+     *  organization, or one they were already in. */
+    entry: "existing" | "surface_join" | "invitation" | "domain_join" | "new_org";
+    orgCreated: boolean;
+    /** The Lemma to land in: the one they were invited to, else the one
+     *  everyone in the organization shares. */
+    podId: string | null;
+    podName: string | null;
+    /** The Lemma everyone in the organization shares, when it has one. */
+    orgPodId: string | null;
+    /** The email domain whose people may join the organization themselves. */
+    openToDomain: string | null;
 }
 
 /** A channel this pod answers on. `mine` is whether the pod's own
@@ -205,6 +236,12 @@ export interface Pod {
     hiredAt?: string;
     /** Who hired it, as the account id (`user_id` on the pod). */
     hiredBy?: string;
+    /** Everyone in the organization is in it, and everyone who joins later:
+     *  the organization's own Lemma. */
+    everyone?: boolean;
+    /** The app it opens on, by name, when somebody chose one (`config.home_app`).
+     *  Absent: it opens on its first app. */
+    homeApp?: string;
 }
 
 /** Another teammate this one can ask. Through you: you are in both, so it asks
@@ -366,6 +403,10 @@ export interface ConversationRef {
      *  you. Not the same as WAITING: a run can wait on a timer, and an agent
      *  asking permission on your computer is still running. */
     waitingOnYou?: boolean;
+    /** How many times it ran lately, when this stands for an automation's
+     *  newest run and the source counted the rest (the organization's
+     *  overview). Absent where each run is listed on its own. */
+    runs?: number;
 }
 
 /** One page of a teammate's conversations, most recently active first.
@@ -505,6 +546,8 @@ export interface PodSource {
     myInvitations(): Promise<Invitation[]>;
     /** Take one up. The organization appears in `listOrgs` afterwards. */
     acceptInvitation(invitationId: string): Promise<void>;
+    /** Turn one down. Nobody is added, and it stops being offered. */
+    declineInvitation(invitationId: string): Promise<void>;
     /** Organizations this person's email domain is allowed to let itself into.
      *  Empty is the common answer and not an error. */
     suggestedOrgs(): Promise<Org[]>;
@@ -535,6 +578,9 @@ export interface PodSource {
     /** Change the one line that says what a teammate is for. The pod's
      *  `description`, which hiring fills with the job it was given. */
     describePod(podId: string, description: string): Promise<void>;
+    /** Choose the app a Lemma opens on, by its name; `null` hands it back to
+     *  its first app. Needs the right to change the Lemma (`pod.update`). */
+    setHomeApp(podId: string, app: string | null): Promise<void>;
     /** Delete a teammate. A soft delete on the server: the pod stops being
      *  listed or reachable, its schedules are disarmed, it leaves every channel
      *  it answered on, and its email address and pooled number are released.
@@ -669,10 +715,13 @@ export interface PodSource {
      *  platform does with an unset policy. */
     getPodJoin(podId: string): Promise<JoinPolicy>;
     setPodJoin(podId: string, policy: JoinPolicy): Promise<void>;
-    /** Whether the signed-in person has already knocked on this teammate's
+    /** Whether the signed-in person has already knocked on this Lemma's
      *  door, so a second visit says "waiting" instead of offering the ask
-     *  again. Null when they have never asked. */
+     *  again — or "declined", when the last ask was turned down. Null when
+     *  they have never asked, or took it back. */
     myJoinRequest(podId: string): Promise<JoinRequest | null>;
+    /** Take back your own pending ask. */
+    withdrawJoinRequest(podId: string): Promise<JoinRequest>;
     /** Knock. What this becomes is the pod's own policy and not this app's
      *  call: a door already open to the asker admits them on the spot and
      *  answers `approved`, a shut one answers `pending` and emails whoever
@@ -682,16 +731,13 @@ export interface PodSource {
      *  alternative leaves the one route into a pod open only to people already
      *  inside it. */
     askToJoin(podId: string): Promise<JoinRequest>;
-    /** Who is waiting at this teammate's door, for whoever runs it. */
+    /** Who is waiting at this Lemma's door, for whoever runs it. */
     listJoinRequests(podId: string): Promise<JoinRequest[]>;
-    /** Let somebody in.
-     *
-     *  There is no matching refusal, and that is the platform's shape rather
-     *  than an omission here: `REJECTED` exists as a status and no endpoint
-     *  sets it. So the UI offers admitting and says plainly that declining is
-     *  not something it can do, instead of drawing a Decline button that would
-     *  have to fail. */
-    admitToPod(podId: string, requestId: string): Promise<JoinRequest>;
+    /** Let somebody in, as `role` (a pod role, `POD_USER` when not said).
+     *  The asker is emailed either way the answer goes. */
+    admitToPod(podId: string, requestId: string, role?: string): Promise<JoinRequest>;
+    /** Turn somebody down. */
+    declineJoinRequest(podId: string, requestId: string): Promise<JoinRequest>;
     /** And the same question one level up. An organization that has never been
      *  told answers `"invited"` — and so does one set to admit an email domain
      *  without having been given one, because that rule admits nobody. */
@@ -737,10 +783,12 @@ export interface PodSource {
     /** Whether Lemma's own Slack app is set up on this server, so "Add to
      *  Slack" can work. Asked before anybody is given an organization for it. */
     slackInstallAvailable(): Promise<boolean>;
-    /** An organization and first teammate for somebody who has none -- the
-     *  server's own first-workspace provisioning (invitations honoured, a
-     *  company domain joined). Returns the organization. */
-    ensureFirstWorkspace(): Promise<{ orgId: string }>;
+    /** Somebody's first organization and the Lemma they land in, by the
+     *  server's one rule for every way in: invitations accepted, then their
+     *  company's organization if it is open to their email domain, else a new
+     *  one with a Lemma everyone in it shares. Idempotent: asked again, it
+     *  answers with what is already there. */
+    ensureFirstWorkspace(wanted?: FirstWorkspaceWanted): Promise<FirstWorkspace>;
     /** Slack's consent page for Lemma's own app, for "Add to Slack" into
      *  this organization. */
     startSlackInstall(orgId: string): Promise<string>;

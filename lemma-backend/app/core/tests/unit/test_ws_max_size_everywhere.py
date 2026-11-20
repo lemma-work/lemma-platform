@@ -32,6 +32,10 @@ _WINDOW = 2_500
 _CAPPED = re.compile(
     rf"--ws-max-size[\"',\s\-]*\"?{WS_MAX_BYTES}\b|ws_max_size=WS_MAX_BYTES\b"
 )
+_UNDEFLATED = re.compile(
+    r"--ws-per-message-deflate[\"',\s\-]*\"?false\b"
+    r"|ws_per_message_deflate=WS_PER_MESSAGE_DEFLATE\b"
+)
 _SKIP_DIRS = {
     ".git",
     ".venv",
@@ -63,7 +67,7 @@ def _launch_files() -> list[Path]:
     return found
 
 
-def _starts() -> list[tuple[Path, int, bool]]:
+def _starts(flag: re.Pattern[str] = _CAPPED) -> list[tuple[Path, int, bool]]:
     starts: list[tuple[Path, int, bool]] = []
     for path in _launch_files():
         try:
@@ -80,7 +84,7 @@ def _starts() -> list[tuple[Path, int, bool]]:
             if following is not None:
                 window = window[: following.start()]
             line = text.count("\n", 0, match.start()) + 1
-            starts.append((path, line, bool(_CAPPED.search(window))))
+            starts.append((path, line, bool(flag.search(window))))
     return starts
 
 
@@ -94,6 +98,19 @@ def test_every_start_of_the_api_caps_websocket_messages():
     assert not uncapped, (
         f"uvicorn starts the API without --ws-max-size {WS_MAX_BYTES} "
         f"(or ws_max_size=WS_MAX_BYTES): {uncapped}"
+    )
+
+
+def test_every_start_of_the_api_turns_off_permessage_deflate():
+    """See `WS_PER_MESSAGE_DEFLATE`: one launcher left out deflates VNC again."""
+    deflating = [
+        f"{path.relative_to(_ROOT)}:{line}"
+        for path, line, off in _starts(_UNDEFLATED)
+        if not off
+    ]
+    assert not deflating, (
+        "uvicorn starts the API without --ws-per-message-deflate false "
+        f"(or ws_per_message_deflate=WS_PER_MESSAGE_DEFLATE): {deflating}"
     )
 
 

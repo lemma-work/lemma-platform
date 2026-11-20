@@ -261,7 +261,11 @@ def _register_work() -> None:
 def _register_periodic_work() -> None:
     import app.modules.datastore.events.handlers  # noqa: F401
     import app.modules.datastore.events.orphan_schema_tasks  # noqa: F401
-    import app.modules.datastore.events.outcome_week_sweep  # noqa: F401
+
+    # Off by default: nothing shows what a pod owns, so reading every pod's
+    # measure each hour would be work nobody sees.
+    if datastore_settings.datastore_outcome_sweep_enabled:
+        import app.modules.datastore.events.outcome_week_sweep  # noqa: F401
 
     # Work-runtime kinds, registered here so the worker's dispatchers can
     # claim them; the API registers ``file_work`` by importing the repository

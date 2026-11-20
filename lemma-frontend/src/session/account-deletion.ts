@@ -54,8 +54,8 @@ export function takeDeletionNote(search: string, storeOf: NoteStoreOf): boolean 
 /** What deleting an account does, one sentence each. */
 export const DELETION_CONSEQUENCES: readonly string[] = [
     "Your name, email address, phone number and time zone are erased, and you are signed out everywhere: browsers, the phone and desktop apps, and the command line.",
-    `You leave every ${ORG} you are in. What you made or said with other people there — messages, pages, tables, files and ${MATES.toLowerCase()} — stays with them, shown as by “Deleted user”.`,
-    `Any ${ORG} only you are in, such as your own, is deleted with its ${MATES.toLowerCase()} and everything they keep.`,
+    `You leave every ${ORG} you are in. What you made or said with other people there — messages, pages, tables, files and ${MATES} — stays with them, shown as by “Deleted user”.`,
+    `Any ${ORG} only you are in, such as your own, is deleted with its ${MATES} and everything they keep.`,
     "Accounts you connected are disconnected, and computers you paired stop working for you.",
     "This cannot be undone. You can sign up again with the same email address later, as a new, empty account.",
 ];

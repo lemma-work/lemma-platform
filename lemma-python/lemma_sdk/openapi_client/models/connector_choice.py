@@ -24,11 +24,15 @@ class ConnectorChoice:
                 Offered only where the plan says `can_create_installation`. Default: False.
             share_account_id (None | Unset | UUID): SHARED only: one of your own accounts (the plan's `account_options`) to
                 share with the pod for this connector to run as. Left out, the connector imports needing an account.
+            skip (bool | Unset): Leave this connector out: it is not declared, and grants on it are dropped. Only for one
+                the bundle marks optional (`required: false`); one the plan says SKIPPED is left out unless you choose an
+                installation or to create one. Default: False.
     """
 
     auth_config_id: None | Unset | UUID = UNSET
     create_installation: bool | Unset = False
     share_account_id: None | Unset | UUID = UNSET
+    skip: bool | Unset = False
 
     def to_dict(self) -> dict[str, Any]:
         auth_config_id: None | str | Unset
@@ -49,6 +53,8 @@ class ConnectorChoice:
         else:
             share_account_id = self.share_account_id
 
+        skip = self.skip
+
         field_dict: dict[str, Any] = {}
 
         field_dict.update({})
@@ -58,6 +64,8 @@ class ConnectorChoice:
             field_dict["create_installation"] = create_installation
         if share_account_id is not UNSET:
             field_dict["share_account_id"] = share_account_id
+        if skip is not UNSET:
+            field_dict["skip"] = skip
 
         return field_dict
 
@@ -101,10 +109,13 @@ class ConnectorChoice:
 
         share_account_id = _parse_share_account_id(d.pop("share_account_id", UNSET))
 
+        skip = d.pop("skip", UNSET)
+
         connector_choice = cls(
             auth_config_id=auth_config_id,
             create_installation=create_installation,
             share_account_id=share_account_id,
+            skip=skip,
         )
 
         return connector_choice

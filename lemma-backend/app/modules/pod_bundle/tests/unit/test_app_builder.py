@@ -5,18 +5,33 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import shlex
+import subprocess
 import zipfile
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
+import yaml
 
 from app.modules.pod_bundle.domain.errors import AppBuildFailedError
+from app.modules.pod_bundle.domain.state import PlanStep, StepAction, StepKind
+from app.modules.pod_bundle.infrastructure.app_build_output import (
+    BUILD_LOG_DETAIL,
+    build_log_kept_on,
+    build_log_of,
+    failure_line,
+    output_tail,
+)
 from app.modules.pod_bundle.infrastructure.app_builder import (
+    DEFAULT_PNPM_WORKSPACE,
     AppSandboxBuilder,
     AppStepRunner,
     _clean_slug,
+    build_script,
     classify_source_dir,
+    workspace_for,
     slug_candidates,
     zip_dir,
 )
@@ -76,11 +91,18 @@ def test_clean_slug_drops_placeholder_and_empty():
 
 
 class _FakeSession:
-    def __init__(self, *, build_ok: bool = True, dist: bytes = b"DIST"):
+    def __init__(
+        self,
+        *,
+        build_ok: bool = True,
+        dist: bytes = b"DIST",
+        build_result: dict[str, object] | None = None,
+    ):
         self.commands: list[str] = []
         self.files: dict[str, bytes] = {}
         self._build_ok = build_ok
         self._dist = dist
+        self._build_result = build_result
 
     async def __aenter__(self):
         return self
@@ -91,6 +113,8 @@ class _FakeSession:
     async def exec_command(self, *, cmd: str, timeout=None):
         self.commands.append(cmd)
         if "run build" in cmd:
+            if self._build_result is not None:
+                return self._build_result
             return {"success": self._build_ok, "stdout": "", "stderr": "boom"}
         if cmd.startswith("test -f"):
             return {"success": self._build_ok}
@@ -135,6 +159,341 @@ async def test_build_tool_failure_is_terminal():
         await AppSandboxBuilder(_FakeWorkspace(session)).build(
             user_id=uuid4(), pod_id=_POD, app_slug="a", source_zip=b"source"
         )
+
+
+# --- what a failed build tells the person -------------------------------------
+
+# What pnpm 11 printed for a Vite app that uses the Lemma SDK and brought no
+# pnpm-workspace.yaml: the error on stdout, nothing on stderr.
+_PNPM_IGNORED_BUILDS = {
+    "success": False,
+    "completed": True,
+    "stdout": (
+        "Packages: +31\n"
+        "+ vite 6.4.6\n\n"
+        "[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: browser-tabs-lock@1.3.0, "
+        "esbuild@0.25.12\n\n"
+        'Run "pnpm approve-builds" to pick which dependencies should be allowed '
+        "to run scripts.\n"
+    ),
+    "stderr": "",
+    "error": "The command exited 1.",
+}
+
+# What a Vite build that could not parse its entry printed: the cause on
+# stderr above a stack whose frames are named `error`, and pnpm's own
+# one-line verdict on stdout.
+_VITE_PARSE_FAILURE = {
+    "success": False,
+    "completed": True,
+    "stdout": (
+        "vite v6.4.6 building for production...\n"
+        "\x1b[32m✓\x1b[39m 0 modules transformed.\n"
+        "[ELIFECYCLE] Command failed with exit code 1.\n"
+    ),
+    "stderr": (
+        "$ vite build\n"
+        "✗ Build failed in 20ms\n"
+        "error during build:\n"
+        "[vite:build-html] main.js (1:60): Failed to parse source for import "
+        "analysis because the content contains invalid JS syntax.\n"
+        "file: /src/main.js:1:60\n"
+        "    at getRollupError (file:///src/node_modules/rollup/parseAst.js:355:41)\n"
+        "    at error (file:///src/node_modules/rollup/parseAst.js:351:42)\n"
+    ),
+    "error": "The command exited 1.",
+}
+
+
+def test_a_failure_line_is_found_on_stdout_when_stderr_has_none():
+    assert failure_line(_PNPM_IGNORED_BUILDS) == (
+        "[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: browser-tabs-lock@1.3.0, "
+        "esbuild@0.25.12"
+    )
+
+
+def test_a_failure_line_skips_stack_frames_and_pnpms_exit_verdict():
+    assert failure_line(_VITE_PARSE_FAILURE) == (
+        "[vite:build-html] main.js (1:60): Failed to parse source for import "
+        "analysis because the content contains invalid JS syntax."
+    )
+
+
+def test_a_failure_with_no_output_falls_back_to_how_the_command_ended():
+    result = {"success": False, "stdout": "", "stderr": "", "error": "Timed out."}
+    assert failure_line(result) == "Timed out."
+    assert failure_line({"success": False}) is None
+
+
+def test_the_log_keeps_the_end_of_both_streams_within_its_limit():
+    result = {
+        "stdout": "progress\n" * 2000 + "ERR_PNPM_FETCH_404 GET /left-pad: Not Found",
+        "stderr": "WARN deprecated inflight@1.0.6",
+        "error": "The command exited 1.",
+    }
+
+    log = output_tail(result)
+
+    assert len(log) <= 4000
+    assert "[stdout]" in log and "[stderr]" in log and "[error]" in log
+    # The short streams are whole; the long one gets the room they left.
+    assert "WARN deprecated inflight@1.0.6" in log
+    assert log.split("[stderr]")[0].rstrip().endswith("Not Found")
+    assert len(log) > 3900
+
+
+def test_the_log_splits_its_room_between_two_long_streams():
+    log = output_tail({"stdout": "o" * 5000, "stderr": "e" * 5000})
+    assert len(log) <= 4000
+    assert log.count("o") > 1900 and log.count("e") > 1900
+
+
+async def test_a_failed_build_names_its_cause_and_carries_both_streams():
+    session = _FakeSession(build_result=_PNPM_IGNORED_BUILDS)
+
+    with pytest.raises(AppBuildFailedError) as caught:
+        await AppSandboxBuilder(_FakeWorkspace(session)).build(
+            user_id=uuid4(), pod_id=_POD, app_slug="a", source_zip=b"source"
+        )
+
+    assert str(caught.value) == (
+        "App build failed: [ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: "
+        "browser-tabs-lock@1.3.0, esbuild@0.25.12"
+    )
+    log = build_log_of(caught.value)
+    assert log is not None
+    assert "[stdout]" in log and "pnpm approve-builds" in log
+    assert "The command exited 1." in log
+
+
+async def test_a_build_still_running_when_the_wait_ends_is_a_failure():
+    """The session answers a command it stopped waiting on as successful and
+    not completed; read as success it surfaced as a missing dist/index.html."""
+    session = _FakeSession(
+        build_result={"success": True, "completed": False, "stdout": "transforming"}
+    )
+
+    with pytest.raises(AppBuildFailedError, match="did not finish within"):
+        await AppSandboxBuilder(_FakeWorkspace(session)).build(
+            user_id=uuid4(), pod_id=_POD, app_slug="a", source_zip=b"source"
+        )
+
+
+def _step(**detail: object) -> PlanStep:
+    return PlanStep(
+        index=0,
+        kind=StepKind.APP,
+        name="dashboard",
+        action=StepAction.CREATE,
+        detail=dict(detail),
+    )
+
+
+def test_a_failed_build_leaves_its_log_on_the_step():
+    step = _step(visibility="POD")
+
+    with pytest.raises(AppBuildFailedError):
+        with build_log_kept_on(step):
+            raise AppBuildFailedError("App build failed.", details={"log": "the log"})
+
+    assert step.detail == {"visibility": "POD", BUILD_LOG_DETAIL: "the log"}
+
+
+def test_a_retry_that_builds_drops_the_last_attempts_log():
+    """A re-apply resets the step to PENDING but not its detail."""
+    step = _step(visibility="POD", **{BUILD_LOG_DETAIL: "the last attempt"})
+
+    with build_log_kept_on(step):
+        pass
+
+    assert step.detail == {"visibility": "POD"}
+
+
+def test_a_failure_with_no_build_output_adds_nothing_to_the_step():
+    step = _step()
+
+    with pytest.raises(AppBuildFailedError):
+        with build_log_kept_on(step):
+            raise AppBuildFailedError("Could not allocate a unique public slug.")
+
+    assert step.detail == {}
+
+
+# --- the build script, run by a shell -----------------------------------------
+
+
+def _run_build_script(
+    src: Path, tmp_path: Path, *, workspace: str = DEFAULT_PNPM_WORKSPACE
+) -> list[str]:
+    """Run the real script with a ``pnpm`` that records what it was asked."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "pnpm-calls"
+    pnpm = bin_dir / "pnpm"
+    pnpm.write_text(f'#!/bin/sh\necho "$*" >> {shlex.quote(str(calls))}\n')
+    pnpm.chmod(0o755)
+    subprocess.run(
+        ["bash", "-c", build_script(str(src), workspace=workspace)],
+        check=True,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+    )
+    return calls.read_text().splitlines()
+
+
+def test_an_app_without_a_workspace_file_is_built_with_esbuild_allowed(tmp_path):
+    src = tmp_path / "src dir"  # a space, so the quoting is exercised too
+    src.mkdir()
+
+    calls = _run_build_script(src, tmp_path)
+
+    written = (src / "pnpm-workspace.yaml").read_text()
+    assert written == DEFAULT_PNPM_WORKSPACE
+    settings = yaml.safe_load(written)
+    assert settings["onlyBuiltDependencies"] == ["esbuild"]
+    assert settings["allowBuilds"] == {"esbuild": True}
+    assert settings["strictDepBuilds"] is False
+    assert calls == ["install --no-frozen-lockfile", "run build"]
+
+
+def test_an_apps_own_workspace_file_is_left_as_it_is(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    own = "allowBuilds:\n  esbuild: true\n  sharp: true\n"
+    (src / "pnpm-workspace.yaml").write_text(own)
+    (src / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n")
+
+    calls = _run_build_script(src, tmp_path)
+
+    assert (src / "pnpm-workspace.yaml").read_text() == own
+    assert calls == ["install --frozen-lockfile", "run build"]
+
+
+def _zipped(package_json: str | None, files: dict[str, str] | None = None) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("index.html", "<html></html>")
+        if package_json is not None:
+            archive.writestr("package.json", package_json)
+        for name, text in (files or {}).items():
+            archive.writestr(name, text)
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize(
+    "package_json",
+    [
+        # The same names outside `pnpm` say nothing about install scripts.
+        '{"config": {"allowBuilds": false}}',
+        '{"name": "onlyBuiltDependencies"}',
+        '{"pnpm": "onlyBuiltDependencies"}',
+        '{"pnpm": {"overrides": {"a": "1"}}}',
+        "not json",
+        None,
+    ],
+)
+def test_an_app_with_no_policy_of_its_own_gets_the_default(package_json):
+    assert workspace_for(_zipped(package_json)) == DEFAULT_PNPM_WORKSPACE
+
+
+def test_an_apps_pnpm_policy_is_carried_where_pnpm_11_reads_it():
+    """pnpm 11 ignores `package.json -> pnpm`; the policy it gave there is
+    written to the workspace file, over the default's esbuild."""
+    written = yaml.safe_load(
+        workspace_for(
+            _zipped(
+                json.dumps(
+                    {
+                        "pnpm": {
+                            "onlyBuiltDependencies": ["sharp"],
+                            "neverBuiltDependencies": ["core-js"],
+                            "allowBuilds": {"@swc/core": True, "odd": "yes"},
+                        }
+                    }
+                )
+            )
+        )
+    )
+
+    assert written == {
+        "onlyBuiltDependencies": ["@swc/core", "esbuild", "sharp"],
+        "allowBuilds": {
+            "@swc/core": True,
+            "core-js": False,
+            "esbuild": True,
+            "sharp": True,
+        },
+        "strictDepBuilds": False,
+    }
+
+
+def test_an_only_built_dependencies_file_is_read_from_the_app():
+    """pnpm 11 has no `onlyBuiltDependenciesFile`: the names it lists are
+    carried; a path outside the app is not read."""
+    written = yaml.safe_load(
+        workspace_for(
+            _zipped(
+                '{"pnpm": {"onlyBuiltDependenciesFile": "./config/builds.json"}}',
+                {"config/builds.json": '["sharp", "@prisma/engines"]'},
+            )
+        )
+    )
+    assert written["allowBuilds"] == {
+        "@prisma/engines": True,
+        "esbuild": True,
+        "sharp": True,
+    }
+
+
+def test_an_app_with_its_own_workspace_file_is_not_checked_for_one():
+    """It is built with its own file; a builds file pnpm 11 would ignore
+    anyway does not fail it."""
+    source = _zipped(
+        '{"pnpm": {"onlyBuiltDependenciesFile": "missing.json"}}',
+        {"pnpm-workspace.yaml": "allowBuilds:\n  esbuild: true\n"},
+    )
+
+    assert workspace_for(source) == DEFAULT_PNPM_WORKSPACE  # never written
+
+
+@pytest.mark.parametrize(
+    ("named", "files", "why"),
+    [
+        ("builds.json", {}, "which the app does not have"),
+        ("builds.json", {"builds.json": "[sharp"}, "which is not JSON"),
+        ("builds.json", {"builds.json": '{"sharp": true}'}, "not a JSON list"),
+        ("../builds.json", {}, "not a file in the app"),
+    ],
+)
+def test_a_builds_file_that_cannot_be_read_fails_the_build_before_it_starts(
+    named, files, why
+):
+    """Built without it, the scripts it allows would be skipped unseen."""
+    with pytest.raises(AppBuildFailedError, match=why):
+        workspace_for(
+            _zipped(json.dumps({"pnpm": {"onlyBuiltDependenciesFile": named}}), files)
+        )
+
+
+def test_an_app_may_still_refuse_esbuild_by_name():
+    written = yaml.safe_load(
+        workspace_for(_zipped('{"pnpm": {"allowBuilds": {"esbuild": false}}}'))
+    )
+    assert written["allowBuilds"] == {"esbuild": False}
+    assert written["onlyBuiltDependencies"] == []
+
+
+def test_the_carried_policy_is_written_when_the_app_brings_no_file(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    carried = workspace_for(
+        _zipped('{"pnpm": {"onlyBuiltDependencies": ["sharp", "esbuild"]}}')
+    )
+
+    calls = _run_build_script(src, tmp_path, workspace=carried)
+
+    assert (src / "pnpm-workspace.yaml").read_text() == carried
+    assert yaml.safe_load(carried)["allowBuilds"] == {"esbuild": True, "sharp": True}
+    assert calls == ["install --no-frozen-lockfile", "run build"]
 
 
 # --- runner artifact selection by tier ---------------------------------------
@@ -311,3 +670,66 @@ async def test_a_static_app_ignores_the_bundled_dist_and_serves_its_source(tmp_p
 
     assert dist_bytes == source_bytes
     assert dist_bytes != b"EXPORTED-DIST"
+
+
+# --- an app the pod already has -------------------------------------------------
+
+
+def _ready_app_runner(tmp_path, monkeypatch) -> tuple[AppStepRunner, Path, list[str]]:
+    """A runner over a pod that has a deployed `board`, and every deploy it does."""
+    root = tmp_path / "bundle"
+    (root / "apps" / "board").mkdir(parents=True)
+    (root / "apps" / "board" / "board.json").write_text(json.dumps({"name": "board"}))
+    runner = _runner(_ExplodingSandbox())
+    deployed: list[str] = []
+
+    async def _ensure_app(name, manifest, *, pod_id, user_id):
+        return True, "board"
+
+    async def _deploy(name, *args, **kwargs):
+        deployed.append(name)
+
+    monkeypatch.setattr(runner, "_ensure_app", _ensure_app)
+    monkeypatch.setattr(runner, "_deploy", _deploy)
+    return runner, root, deployed
+
+
+async def test_an_app_this_import_made_is_left_done(tmp_path, monkeypatch):
+    """Called as the apply loop calls it, with what the import made. A runner
+    that lost those arguments failed every APP step as a transient error."""
+    from app.modules.pod_bundle.infrastructure.kept_parts import CreatedParts
+
+    runner, root, deployed = _ready_app_runner(tmp_path, monkeypatch)
+
+    await runner.run(
+        PlanStep(index=0, kind=StepKind.APP, name="board", action=StepAction.CREATE),
+        pod_id=_POD,
+        user_id=uuid4(),
+        bundle_root=root,
+        replacements={},
+        created=CreatedParts(["APP:board"]),
+        resumed=False,
+    )
+
+    assert deployed == []
+
+
+async def test_an_app_someone_else_made_is_kept_and_said_so(tmp_path, monkeypatch):
+    from app.modules.pod_bundle.domain.errors import PartKeptError
+    from app.modules.pod_bundle.infrastructure.kept_parts import CreatedParts
+
+    runner, root, deployed = _ready_app_runner(tmp_path, monkeypatch)
+
+    with pytest.raises(PartKeptError):
+        await runner.run(
+            PlanStep(
+                index=0, kind=StepKind.APP, name="board", action=StepAction.CREATE
+            ),
+            pod_id=_POD,
+            user_id=uuid4(),
+            bundle_root=root,
+            replacements={},
+            created=CreatedParts(),
+        )
+
+    assert deployed == []

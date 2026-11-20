@@ -77,7 +77,7 @@ services:
   api:
     image: ${LEMMA_IMAGE:-lemma-backend:load-test}
     container_name: lemma-load-api
-    command: ["uvicorn", "app.app:app", "--host", "0.0.0.0", "--port", "8000", "--ws-max-size", "1048576"]
+    command: ["uvicorn", "app.app:app", "--host", "0.0.0.0", "--port", "8000", "--ws-max-size", "1048576", "--ws-per-message-deflate", "false"]
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/lemma
       DATASTORE_DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/lemma_datastore

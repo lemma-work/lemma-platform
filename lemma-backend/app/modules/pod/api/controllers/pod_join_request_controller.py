@@ -54,7 +54,10 @@ async def create_join_request(
     status_code=status.HTTP_200_OK,
     operation_id="pod.join_request.me",
     summary="Get My Pod Join Request",
-    description="Get the current user's pending join request for this pod",
+    description=(
+        "Get the current user's pending join request for this pod, or the "
+        "last one if it was rejected"
+    ),
     response_model=PodJoinRequestCreateResponse | None,
 )
 async def get_my_join_request(
@@ -68,6 +71,25 @@ async def get_my_join_request(
         if join_request
         else None
     )
+
+
+@router.delete(
+    "/me",
+    status_code=status.HTTP_200_OK,
+    operation_id="pod.join_request.withdraw",
+    summary="Withdraw My Pod Join Request",
+    description="Take back the current user's pending join request for this pod",
+    response_model=PodJoinRequestCreateResponse,
+)
+async def withdraw_my_join_request(
+    pod_id: UUID,
+    pod_join_request_service: PodJoinRequestServiceDep,
+    user: CurrentUser,
+) -> PodJoinRequestCreateResponse:
+    join_request = await pod_join_request_service.withdraw_my_join_request(
+        pod_id, user.id
+    )
+    return PodJoinRequestCreateResponse.model_validate(join_request)
 
 
 @router.get(
@@ -119,12 +141,48 @@ async def approve_join_request(
     data: PodJoinRequestApproveRequest,
     pod_join_request_service: PodJoinRequestServiceDep,
     user: CurrentUser,
+    uow: UoWDep,
 ) -> PodJoinRequestCreateResponse:
-    join_request = await pod_join_request_service.approve_join_request(
+    (
+        join_request,
+        created_org_member,
+    ) = await pod_join_request_service.approve_join_request(
         pod_id,
         join_request_id,
         user.id,
         org_role=data.org_role,
         pod_role=data.pod_role,
+    )
+    if created_org_member is not None:
+        # The role the new membership was written with, which the approver
+        # chose; without the assignment it grants no organization permission.
+        await AuthorizationDataService(uow.session).assign_roles(
+            organization_id=created_org_member.organization_id,
+            pod_id=None,
+            principal_type="ORG_MEMBER",
+            principal_id=created_org_member.id,
+            role_names=[OrganizationRole(created_org_member.role).value],
+            assigned_by_user_id=user.id,
+        )
+    return PodJoinRequestCreateResponse.model_validate(join_request)
+
+
+@router.post(
+    "/{join_request_id}/reject",
+    status_code=status.HTTP_200_OK,
+    operation_id="pod.join_request.reject",
+    summary="Reject Pod Join Request",
+    description="Turn down a pending pod join request; the asker is told by email",
+    response_model=PodJoinRequestCreateResponse,
+    dependencies=[require_person("decline join requests")],
+)
+async def reject_join_request(
+    pod_id: UUID,
+    join_request_id: UUID,
+    pod_join_request_service: PodJoinRequestServiceDep,
+    user: CurrentUser,
+) -> PodJoinRequestCreateResponse:
+    join_request = await pod_join_request_service.reject_join_request(
+        pod_id, join_request_id, user.id
     )
     return PodJoinRequestCreateResponse.model_validate(join_request)

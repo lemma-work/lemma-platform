@@ -1,6 +1,6 @@
 ---
 name: lemma-user
-description: "Operate an existing Lemma (a pod in the CLI) as a person or agent: read what it owns and where its number stands, answer the questions and approvals waiting on you, query tables, search and read files, run functions and workflows, chat with its agents, write in chats and groups, and run connector operations. Do not use for designing or building pods; use lemma-builder instead."
+description: "Operate an existing Lemma (a pod in the CLI) as a person or agent: answer the questions and approvals waiting on you, query tables, search and read files, run functions and workflows, chat with its agents, write in chats and groups, and run connector operations. Do not use for designing or building pods; use lemma-builder instead."
 ---
 
 # Lemma User
@@ -46,7 +46,7 @@ lemma pods describe        # tables, agents, functions, workflows, schedules, ap
                            # (two folder levels; --depth N or --full for more)
 ```
 
-A workspace injects `LEMMA_TOKEN`, `LEMMA_BASE_URL`, `LEMMA_ORG_ID`,
+A Lemma machine's shell injects `LEMMA_TOKEN`, `LEMMA_BASE_URL`, `LEMMA_ORG_ID`,
 `LEMMA_POD_ID` and `LEMMA_CONVERSATION_ID`; use them. On a laptop,
 `.lemma.<server>.env` files at the project root supply the same values; real
 env wins.
@@ -66,47 +66,15 @@ env wins.
 For multi-step scripts prefer the Python SDK: `from lemma_sdk import Pod;
 pod = Pod.from_env()`.
 
-## What this Lemma owns
+## What this Lemma has been taught
 
-A Lemma owns one result: a bar held every week (`kind: week`, "every customer
-hears back within a day") or a finish line by a date (`kind: date`, with
-`due`). It is stored on the pod's config as `config.outcome`:
-
-- `sentence`: what it owns, one line a person can check
-- `kind`, `target`, `unit` (`%` means the number reads 0 to 100), `due`
-- `measure`: one read-only SQL query over its tables that answers one number,
-  counted over every row for everyone alike
-- `since`: when it took this on
-
-The agent sets it with its `set_what_you_own` tool; a person with editor rights
-can `PUT /pods/{pod_id}/outcome`. The plan's prose (what must be true, how the
-work is done, who holds what, what never happens) lives in `/plan.md`, and
-lines people teach end with who said it and when. Read the plan before
-changing how the work is done.
-
-Reading it:
+How the work is done, who holds what and what never happens are notes in the
+Lemma's shared memory (`/memory`, indexed by `/memory/AGENTS.md`) and its
+skills. Read them before changing how the work is done.
 
 ```bash
-lemma pods get --output json        # config.outcome: the sentence, target and measure
-lemma files cat /plan.md
+lemma files cat /memory/AGENTS.md
 ```
-
-The number, and changing what it owns:
-
-```bash
-lemma pods owns                          # what it owns, and value, measured_at, problem
-lemma pods owns get --history 8          # plus the last 8 weeks, oldest first
-lemma pods owns set "Every customer hears back within a day" --kind week \
-  --target 90 --unit % --measure-file measure.sql   # replaces all of it
-lemma pods owns clear --yes              # let it go; its weeks are kept
-```
-
-From a script, the SDK: `Lemma.from_env().pods.outcome_standing(pod_id)` and
-`.outcome_history(pod_id, weeks=8)`; the API: `GET /pods/{pod_id}/outcome/standing`
-and `GET /pods/{pod_id}/outcome/history?weeks=N`. `value` is null when there is no
-measure or it could not be read; `problem` says why in plain words. Changing the
-measure starts a new history. A measure that counts a per-person table is read
-only after someone who administers that table has set it.
 
 ## What needs you
 
@@ -380,12 +348,38 @@ The connector decides whose account runs it, so there is no account to pass.
 the person as is and run again when they are done. A write matched from text
 rather than named is refused without `--yes`.
 
-## Workspace notes
+## Machines
+
+Every person has a default machine (`me`); a pod can have shared machines
+(`pod:<name>`, or `pod:<pod>:<name>` from outside it, the pod by id or
+name), some with Docker. An
+agent runs on the machine its definition names, else on the default machine of
+whoever the run acts for.
+
+```bash
+lemma machine list                              # yours and your pods', with size and status
+lemma machine exec me 'ls ~/lemma'              # options go before the ref
+lemma machine shell me                          # an interactive terminal
+lemma machine ps me                             # processes; `kill <ref> <id>` stops one
+lemma machine cp ./data.csv me:/home/user/lemma/data.csv
+lemma machine preview create me --port 5173     # a URL for a server on the machine
+lemma machine reset me -s caches -s runs        # free disk; home needs --confirm
+lemma machine logins list me                    # sites the browser is signed in to
+lemma machine create pod:ci --template workspace --size 2x4   # pod editors
+lemma machine update pod:ci --size 4x8          # takes effect when it next starts
+lemma machine grants set pod:ci --agent builder -y   # agents/functions that may use it
+lemma machine grants list pod:ci
+lemma machine delete pod:ci -y                  # deletes its disk too
+```
 
 - Keep one interactive session for long-running processes; one-shot commands
   for everything else.
-- A workspace port has no public URL. To show someone an app, deploy it
-  (`lemma apps deploy`).
+- To let someone open a server on the machine, make a preview (`expose_port`
+  as an agent, `lemma machine preview create` from the CLI): `private` asks
+  them to sign in, `link` works for anyone for at most 24 hours. To ship an
+  app, deploy it (`lemma apps deploy`).
+- The browser profile (`~/.lemma/browser/profile`) holds the person's logins.
+  Never delete or move it.
 - To keep a web page, use the `browser` skill's `save-webpage <url> --formats
   markdown,pdf`, then upload it.
 - On network errors (`Could not resolve host`, TLS timeouts), check
@@ -429,7 +423,7 @@ lemma feedback --category cli --subject "…" \
 ## See also
 
 - The model → `lemma-builder/references/pod-model.md`
-- Build or restructure → `lemma-builder`; set up what a Lemma owns → `lemma-setup`
+- Build or restructure → `lemma-builder`; set a Lemma up on its work → `lemma-setup`
 - Inline views over data → `lemma-widget`
 - A browser → `browser`; test an app → `lemma-app-qa`
 - Research → `lemma-research`; analysis → `lemma-data-analysis`

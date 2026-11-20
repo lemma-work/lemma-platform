@@ -170,6 +170,7 @@ EXTRA_FIELDS = [
         "DATASTORE_CHANGE_HANDOFF_POLL_SECONDS",
         1.0,
     ),
+    ("datastore_outcome_sweep_enabled", "DATASTORE_OUTCOME_SWEEP_ENABLED", False),
     ("document_processing_ocr_enabled", "DOCUMENT_PROCESSING_OCR_ENABLED", False),
     ("document_processing_layout_enabled", "DOCUMENT_PROCESSING_LAYOUT_ENABLED", True),
     ("document_processor", "DOCUMENT_PROCESSOR", "auto"),

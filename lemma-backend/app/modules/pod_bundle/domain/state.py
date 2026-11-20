@@ -101,6 +101,7 @@ class StepKind(str, Enum):
     APP = "APP"
     SURFACE = "SURFACE"
     FILE = "FILE"
+    MACHINE = "MACHINE"
 
 
 class PlanStep(BaseModel):
@@ -117,6 +118,27 @@ class PlanStep(BaseModel):
     detail: dict[str, Any] = Field(default_factory=dict)
     status: StepStatus = StepStatus.PENDING
     error: str | None = None
+
+
+def part_key(kind: StepKind, name: str) -> str:
+    """How :attr:`ImportState.created` names one part: ``AGENT:triage``."""
+    return f"{kind.value}:{name}"
+
+
+#: The steps that create one named part. A FILE step is left out: a file has
+#: no later step that writes to it, and a bundle may carry thousands.
+CREATING_KINDS = frozenset(
+    {
+        StepKind.TABLE,
+        StepKind.TABLE_DATA,
+        StepKind.FUNCTION,
+        StepKind.AGENT,
+        StepKind.WORKFLOW,
+        StepKind.SCHEDULE,
+        StepKind.APP,
+        StepKind.SURFACE,
+    }
+)
 
 
 class VariableSpec(BaseModel):
@@ -220,14 +242,24 @@ class BundleSourceKind(str, Enum):
 #: separators, so a name cannot address anything outside that directory.
 TEMPLATE_NAME_PATTERN = r"^[a-z0-9][a-z0-9-]{0,62}$"
 
+#: A folder inside a repository, e.g. ``install/mail``: relative, ordinary
+#: characters only, and no segment made of dots alone, so neither ``.`` nor
+#: ``..`` can address anything outside the repository. Written without
+#: look-around, which pydantic's regex engine does not support.
+_PATH_SEGMENT = r"[A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*"
+BUNDLE_PATH_PATTERN = rf"^{_PATH_SEGMENT}(?:/{_PATH_SEGMENT})*$"
+BUNDLE_PATH_MAX_LENGTH = 255
+
 
 class BundleSource(BaseModel):
     kind: BundleSourceKind
     # For kind=URL: the signed lemma download URL the bundle was imported from
-    # (kept for the recipe/provenance). For kind=GITHUB: repo_url is set instead.
+    # (kept for the recipe/provenance). For kind=GITHUB: repo_url is set instead,
+    # and `path` when the bundle is a folder inside the repository.
     # For kind=TEMPLATE: `template:<name>`, which is what the recipe records.
     url: str | None = None
     repo_url: str | None = None
+    path: str | None = None
     template: str | None = None
     ref: str | None = None
     bundle_filename: str | None = None
@@ -289,10 +321,70 @@ class ImportState(_BundleJobState):
     current_step: int | None = None
     committed_steps: list[int] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    #: The parts this import created (:func:`part_key`), and the tables whose
+    #: rows it loaded (``TABLE_DATA:``). Everything else the pod has is kept as
+    #: it is, so this is what tells a grants step or a seed step that the part
+    #: it writes to is the import's own -- across a crash, a failed step, and a
+    #: replan, which plans afresh against a pod already holding them.
+    created: list[str] = Field(default_factory=list)
 
     @property
     def is_terminal(self) -> bool:
         return self.status in IMPORT_TERMINAL_STATUSES
+
+    def apply_failure_message(self, step: PlanStep, exc: Exception) -> str:
+        """Say what the pod now holds, not just which step broke.
+
+        Apply commits each step in its own unit of work and there is no
+        rollback, so a failure part-way through an approved plan leaves the pod
+        changed. Telling the person only "Step X failed" leaves them with half a
+        pod, no idea that it is half a pod, and no stated way forward -- while
+        re-applying does in fact resume from the failed step rather than
+        duplicating the work already done.
+        """
+        applied = len(self.committed_steps)
+        total = len(self.plan.steps) if self.plan else 0
+        head = f"Step '{step.name}' failed: {exc}"
+        if not applied:
+            return f"{head} Nothing was applied to the pod."
+        return (
+            f"{head} {applied} of {total} steps were already applied to this pod "
+            f"and were not undone; apply this import again to continue from step "
+            f"'{step.name}'."
+        )
+
+    def cancelled_part_way_message(self) -> str:
+        """What a person who cancelled mid-apply is told: the steps that
+        landed were not undone, and importing again will not finish them.
+
+        A new import keeps everything already there, this one's half-made
+        parts included, and plans its grants and rows only for what it creates.
+        """
+        applied = len(self.committed_steps)
+        total = len(self.plan.steps) if self.plan else 0
+        return (
+            f"Cancelled after {applied} of {total} steps had been applied to this "
+            "pod. Those changes were not undone, and importing the bundle again "
+            "adds only what is still missing: to start clean, remove what this "
+            "import created first."
+        )
+
+    def remember_finished_creates(self) -> None:
+        """Add each part a finished CREATE step made to :attr:`created`.
+
+        An applier records a part as it creates it; this covers a step that
+        finished before the record existed, and keeps what a plan made before
+        a replan discards it. A CREATE step only finishes DONE on a part it
+        made: one it finds someone else's is marked SKIPPED."""
+        for step in self.plan.steps if self.plan else ():
+            key = part_key(step.kind, step.name)
+            if (
+                step.kind in CREATING_KINDS
+                and step.action is StepAction.CREATE
+                and step.status is StepStatus.DONE
+                and key not in self.created
+            ):
+                self.created.append(key)
 
 
 class ExportState(_BundleJobState):

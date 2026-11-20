@@ -143,7 +143,20 @@ adapter is consolidated.
 | `/organizations/{org}/agent-runtime/profiles` | Discover/create model runtime profiles |
 | `/me/runtime/agent-hosts...`, `/agent-host/link`, `/agent-host/transfers/{id}`, `/agent-host/runs/{run_id}/blobs/{sha256}` | Agent Host pairing and management; the host's link WebSocket (commands, events, harnesses, Lemma MCP), and the host-authenticated HTTP routes its bulk bytes take instead (file chunks, event images) |
 | `/tools/*` | Server-side web search and feedback endpoints used by runtimes |
-| `/public/widgets/serve...`, `/pods/{pod}/widgets...` | Render/submit a tool widget and mint an authenticated embed URL (`/widgets/serve...` is a legacy alias until 2026-11-08) |
+| `/public/widgets/serve...`, `/pods/{pod}/widgets...` | Render/submit a tool widget and mint an authenticated embed URL (`/widgets/serve...` is a legacy alias until 2026-12-15) |
+
+Starting the pod's own assistant (a conversation with no `agent_name`, or
+`pod_default`) is authorized against the pod, not its row
+(`services/conversation_access.py`): the row's id is the pod's, and an
+AGENT-typed check would hand the resource-owner shortcut to whoever made the
+pod. A named function or agent starts it with the pod's `agent.execute`
+granted to it (`{"resource_type": "pod", "resource_name": "/"}` -- the grant a
+pod link holds), still bounded by the person it runs as. A grant written as
+`agent:pod_default:execute` is stored as that same grant
+(`core/authorization/assistant_grants.py`). A conversation an automation
+starts is titled by the schedule's name when a schedule started it, else by
+the agent's display name, so the assistant's reads "Workflow run: Lem", not its
+stored id.
 
 ## Run lifecycle
 
@@ -199,18 +212,25 @@ own code; GitHub not answering is a 503, never a pass, and a selection too long
 to walk is `GITHUB_REPOSITORY_UNCHECKED`, not "not installed". The listing
 shows at most a picker's worth and says `complete: false` past it.
 The repository is stored as GitHub spells it, and the conversation's directory
-is a worktree of it of its own, `/workspace/worktrees/{owner}/{repo}/{slug}` on
+is a worktree of it of its own, `~/lemma/worktrees/{owner}/{repo}/{slug}` on
 branch `lemma/{slug}` (`domain/workspace_location`, `domain/project_repo`). A
 sub-agent inherits its parent's worktree; a run a webhook started, which is not
 stamped at creation, gets one keyed by its conversation id.
 
 Before the agent's first shell or Python call, the sandbox clones the
-repository once per person, at `/workspace/repos/{owner}/{repo}`, with the
+repository once per person, at `~/lemma/repos/{owner}/{repo}`, with the
 person's token -- or fetches it if it is already there -- and then adds this
 conversation's worktree from `origin/<ref>` or `origin/HEAD`
 (`tools/workspace_cli/github_project`). A worktree whose directory was lost is
 made again on its surviving branch. A failed clone, a failed worktree and a
 failed fetch each tell the agent once.
+
+A pull request (`pull/123/head`) is fetched by name into
+`origin/pull/123/head`, since a clone does not fetch `refs/pull`, and checked
+out from there. A run on a shared pod machine already starts in a directory of
+its own (`~/lemma/runs/{agent}/{run}`), and the project goes there instead: a
+detached worktree of the same clone, cleared with the run directory by the
+machine rather than by the sweep below.
 
 So the clone's objects and `origin/*` are shared, and nothing else is: no
 conversation works in another's tree or on another's branch. Conversations from

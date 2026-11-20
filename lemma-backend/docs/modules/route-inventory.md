@@ -89,6 +89,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/channels/telegram-links` | `channel.telegram_link.create` | Telegram Link |
 | POST | `/pods/{pod_id}/channels/whatsapp-groups` | `channel.whatsapp_group.start` | Start Whatsapp Group |
 | POST | `/pods/{pod_id}/contacts/{contact_id}/outreach` | `contact.outreach.send` | Send Outreach |
+| POST | `/pods/{pod_id}/members/me/notices` | `agent.notice.send_self` | Send Self Notice |
 | POST | `/pods/{pod_id}/members/{member}/notices` | `agent.notice.send` | Send Notice |
 | POST | `/pods/{pod_id}/surface-setup/slack/apps` | `agent.surface.slack_app.create` | Create Slack App |
 | POST | `/pods/{pod_id}/surfaces` | `agent.surface.create` | Create Surface |
@@ -261,6 +262,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/outcome/standing` | `outcome.standing` | Where the pod stands |
 | PATCH | `/pods/{pod_id}/datastore/files/by-path` | `file.update` | Update File |
 | PATCH | `/pods/{pod_id}/datastore/tables/{table_name}` | `table.update` | Update Table |
+| PATCH | `/pods/{pod_id}/datastore/tables/{table_name}/columns/{column_name}` | `table.column.update` | Update Column |
 | PATCH | `/pods/{pod_id}/datastore/tables/{table_name}/records/{record_id}` | `record.update` | Update Record |
 | POST | `/pods/{pod_id}/datastore/files` | `file.upload` | Upload File |
 | POST | `/pods/{pod_id}/datastore/files/by-path/retry-processing` | `file.retry_processing` | Retry File Processing |
@@ -345,6 +347,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/users/me/first-workspace` | `users.ensure_first_workspace` | Ensure The Current User Has A Workspace |
 | POST | `/users/me/profile` | `user.profile.upsert` | Create or Update Profile |
 | PUT | `/organizations/{organization_id}/home/seen` | `org.home.seen.set` | Mark Home Seen |
+| PUT | `/users/me/work` | `users.work.set` | Say What The Current User Does |
 
 ## mcp_access
 
@@ -361,11 +364,13 @@ run `uv run python scripts/generate_route_inventory.py`.
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}` | `pod.delete` | Delete Pod |
+| DELETE | `/pods/{pod_id}/join-requests/me` | `pod.join_request.withdraw` | Withdraw My Pod Join Request |
 | DELETE | `/pods/{pod_id}/members/{pod_member_id}` | `pod.member.remove` | Remove Pod Member |
 | DELETE | `/pods/{pod_id}/outcome` | `outcome.clear` | Clear what the pod owns |
 | DELETE | `/pods/{pod_id}/resources/{resource_type}/{resource_name}/access/grantees/{grantee_type}/{grantee_id}` | `pod.resource_access.grant.delete` | Delete Resource Access Grant |
 | DELETE | `/pods/{pod_id}/roles/{role_name}` | `pod.roles.delete` | Delete Pod Role |
 | GET | `/organizations/{organization_id}/pods` | `pod.list` | List Pods by Organization |
+| GET | `/organizations/{organization_id}/pods/joinable` | `pod.list_joinable` | List Pods the Caller Can Join |
 | GET | `/pods/{pod_id}` | `pod.get` | Get Pod |
 | GET | `/pods/{pod_id}/join-requests` | `pod.join_request.list` | List Pod Join Requests |
 | GET | `/pods/{pod_id}/join-requests/me` | `pod.join_request.me` | Get My Pod Join Request |
@@ -385,6 +390,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/join` | `pod.join` | Join Pod |
 | POST | `/pods/{pod_id}/join-requests` | `pod.join_request.create` | Create Pod Join Request |
 | POST | `/pods/{pod_id}/join-requests/{join_request_id}/approve` | `pod.join_request.approve` | Approve Pod Join Request |
+| POST | `/pods/{pod_id}/join-requests/{join_request_id}/reject` | `pod.join_request.reject` | Reject Pod Join Request |
 | POST | `/pods/{pod_id}/members` | `pod.member.add` | Add Pod Member |
 | POST | `/pods/{pod_id}/roles` | `pod.roles.create` | Create Pod Role |
 | PUT | `/pods/{pod_id}` | `pod.update` | Update Pod |
@@ -447,7 +453,9 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
+| DELETE | `/machines/{ref}/browser/logins/{site}` | `machine.browser.logins.forget` | Sign a machine's browser out of a site |
 | DELETE | `/web-logins` | `web_login.delete` | Sign your browser out of a site |
+| GET | `/machines/{ref}/browser/logins` | `machine.browser.logins.list` | The sites a machine's browser is signed in to |
 | GET | `/web-logins` | `web_login.list` | List the sites your browser is signed in to |
 | GET | `/web-logins/sign-ins/{conversation_id}/{tool_call_id}` | `web_login.sign_in.pending` | What a sign-in link is asking for |
 | POST | `/web-logins/sign-ins/{conversation_id}/{tool_call_id}/answer` | `web_login.sign_in.answer` | Say whether you signed in |
@@ -478,11 +486,40 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
-| GET | `/workspace/browser/current-page-url` | `workspace.browser.current_page_url` | What page a sign-in's browser is actually showing |
-| GET | `/workspace/browser/status` | `workspace.browser.status` | Whether the workspace browser can be watched |
-| GET | `/workspace/files` | `workspace.files.list` | List workspace files |
-| GET | `/workspace/files:content` | `workspace.files.content` | Read workspace file content |
-| GET | `/workspace/files:stat` | `workspace.files.stat` | Stat one workspace file |
-| GET | `/workspace/status` | `workspace.status` | Whether your computer is ready |
-| POST | `/workspace/apps/browser/access` | `workspace.browser.access` | Create workspace browser access URL |
-| POST | `/workspace/browser/display-size` | `workspace.browser.resize_display` | Fit the workspace display to the pane showing it |
+| DELETE | `/machines/{ref}/files` | `machine.files.delete` | Delete a file or directory on a machine |
+| DELETE | `/machines/{ref}/previews/{preview_id}` | `machine.preview.revoke` | Revoke a preview; its URL stops answering |
+| DELETE | `/machines/{ref}/processes/{process_id}` | `machine.process.kill` | Stop a process |
+| DELETE | `/pods/{pod_id}/machines/{name}` | `machine.pod.delete` | Delete a pod machine and its disk |
+| GET | `/machine-previews/{label}:open` | `machine.preview.open` | Open a private preview as the signed-in person |
+| GET | `/machines` | `machine.list` | List the machines you can see |
+| GET | `/machines/{ref}` | `machine.get` | Get one machine |
+| GET | `/machines/{ref}/browser` | `machine.browser.status` | Whether a machine's browser can be watched |
+| GET | `/machines/{ref}/browser/current-page-url` | `machine.browser.current_page_url` | What page a sign-in's browser is actually showing |
+| GET | `/machines/{ref}/files` | `machine.files.list` | List a directory on a machine |
+| GET | `/machines/{ref}/files:content` | `machine.files.content` | Read a file on a machine |
+| GET | `/machines/{ref}/files:stat` | `machine.files.stat` | Stat one path on a machine |
+| GET | `/machines/{ref}/previews` | `machine.preview.list` | A machine's live previews |
+| GET | `/machines/{ref}/processes` | `machine.process.list` | What is running on a machine |
+| GET | `/machines/{ref}/processes/{process_id}` | `machine.process.get` | One process |
+| GET | `/machines/{ref}/processes/{process_id}/output` | `machine.process.output` | A page of a process's output |
+| GET | `/machines/{ref}/startup` | `machine.startup` | Whether a machine is ready, without waking it |
+| GET | `/machines:policy` | `machine.policy` | Which machines you or a pod may create |
+| GET | `/pods/{pod_id}/machines/{name}/grants` | `machine.pod.grants.get` | Which agents and functions are granted a pod machine |
+| PATCH | `/pods/{pod_id}/machines/{name}` | `machine.pod.update` | Rename or resize a pod machine |
+| POST | `/machines/{ref}/browser:access` | `machine.browser.access` | A signed link to a machine's browser |
+| POST | `/machines/{ref}/browser:beacon` | `machine.browser.beacon` | Report how a live screen session went |
+| POST | `/machines/{ref}/browser:command` | `machine.browser.command` | Steer a machine's browser from the screen's toolbar |
+| POST | `/machines/{ref}/browser:display` | `machine.browser.display` | Set the size of a machine's browser display |
+| POST | `/machines/{ref}/browser:navigate` | `machine.browser.navigate` | Open a page in a machine's browser |
+| POST | `/machines/{ref}/files:move` | `machine.files.move` | Move or rename a path on a machine |
+| POST | `/machines/{ref}/files:sync` | `machine.files.sync` | Copy files between a machine and pod files |
+| POST | `/machines/{ref}/previews` | `machine.preview.create` | Open a port on a machine as a preview URL |
+| POST | `/machines/{ref}/processes` | `machine.process.start` | Start a process on a machine |
+| POST | `/machines/{ref}/processes/{process_id}:input` | `machine.process.input` | Type into a process |
+| POST | `/machines/{ref}/processes/{process_id}:resize` | `machine.process.resize` | Resize a process's terminal |
+| POST | `/machines/{ref}:release` | `machine.release` | Stop a machine's compute, keeping its disk |
+| POST | `/machines/{ref}:reset` | `machine.reset` | Clean a machine by scope |
+| POST | `/machines/{ref}:restart` | `machine.restart` | Stop a machine and start it again |
+| POST | `/pods/{pod_id}/machines` | `machine.pod.create` | Create a machine the pod's agents share |
+| PUT | `/machines/{ref}/files:content` | `machine.files.write` | Write a file on a machine |
+| PUT | `/pods/{pod_id}/machines/{name}/grants` | `machine.pod.grants.set` | Replace which agents and functions are granted a pod machine |

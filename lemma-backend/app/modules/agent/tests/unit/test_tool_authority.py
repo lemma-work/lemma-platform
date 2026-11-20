@@ -100,6 +100,17 @@ def test_an_unapproved_sandbox_command_runs_as_the_agent() -> None:
     assert (principal.workload_type, principal.workload_id) == ("agent", agent_id)
 
 
+def test_the_pods_assistant_with_no_id_of_its_own_is_minted_by_its_pod() -> None:
+    """A run from before the assistant had a row: minted with no workload, its
+    token was the person's unscoped session, readable by every co-tenant on a
+    pod machine."""
+    ctx = _context().model_copy(update={"workload_type": "agent"})
+
+    principal = workspace_principal(ctx)
+
+    assert (principal.workload_type, principal.workload_id) == ("agent", ctx.pod_id)
+
+
 def test_session_approvals_are_keyed_by_the_agent_s_own_id() -> None:
     agent_id = uuid4()
     ctx = _context().model_copy(update={"workload_id": agent_id})

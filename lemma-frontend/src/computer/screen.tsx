@@ -3,9 +3,15 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { usePictureInPicture } from "./use-picture-in-picture";
 import { CloseIcon, ExternalIcon } from "@/ui/icons";
-import { LiveScreen } from "./live-screen";
-import { type LiveState } from "./live";
+import { LiveView } from "./live-view";
+import { loadLastFrame } from "./last-frame";
+import { watchHidden, type LiveState } from "./live";
+import { drivesAtFirst } from "./stream";
+import { copyText } from "@/desktop/clipboard";
 import { screenSay, type BrowserState, type MachineState } from "./machine";
+import { storePreset, storedPreset, type PresetName } from "./presets";
+import { useBrowserDetails } from "./queries";
+import { ScreenToolbar } from "./screen-toolbar";
 
 /** What a live connection's state means, said in a sentence.
  *
@@ -49,12 +55,18 @@ function liveNote(state: LiveState): string {
  *  they cannot dismiss on a machine that is theirs. A watch/drive toggle would
  *  only move that cost onto somebody who forgot to press it.
  *
+ *  On a pod machine the screen opens watching instead: somebody else — a
+ *  teammate, the agent — may be at its keyboard, and opening the screen must
+ *  not take it from them. Either way the choice survives a reconnect.
+ *
  *  Connecting is always a click. Attaching starts a browser if none is running
  *  and holds the sandbox awake for as long as the socket is open, so a screen
  *  that connected on render would run a machine for anybody who left the tab
- *  open. It disconnects the moment this pane stops being the one on screen.
+ *  open. It disconnects the moment this pane stops being the one on screen,
+ *  or once the whole page has been in the background for a minute, and
+ *  reconnects — watching or driving as before — when it is back.
  */
-export function Screen({ state, browser, conversationId, visible, busy, onWake, onOpenTab, fill = false }: {
+export function Screen({ state, browser, conversationId, visible, busy, onWake, onOpenTab, fill = false, machine = "mine" }: {
     state: MachineState;
     browser: BrowserState | undefined;
     /** The screen is the whole view, not a card beside some text.
@@ -70,6 +82,8 @@ export function Screen({ state, browser, conversationId, visible, busy, onWake, 
      *  a top-level page is not a framed one, so the proxy's `frame-ancestors`
      *  has nothing to say about it and it works where the socket does not. */
     onOpenTab: () => void;
+    /** Whose machine this is: your own, or one the pod shares. */
+    machine?: "mine" | "pod";
 }) {
     const say = screenSay(state, browser);
     const [watching, setWatching] = useState(false);
@@ -83,6 +97,15 @@ export function Screen({ state, browser, conversationId, visible, busy, onWake, 
         if (!visible || state === "asleep" || state === "checking") setWatching(false);
     }, [visible, state]);
 
+    /* From the click on "Wake it" until the machine answers: a resume takes
+       seconds, and a button that does nothing visible for that long gets
+       pressed again. */
+    const [waking, setWaking] = useState(false);
+    const wake = () => { setWaking(true); onWake(); };
+    useEffect(() => {
+        if (state === "browsing" || state === "awake" || state === "unreachable") setWaking(false);
+    }, [state]);
+
     const [stopped, setStopped] = useState(false);
     useEffect(() => {
         if (!fill || stopped || !visible || say.action !== "show" || watching) return;
@@ -90,17 +113,84 @@ export function Screen({ state, browser, conversationId, visible, busy, onWake, 
         setWatching(true);
     }, [fill, stopped, visible, say.action, watching]);
 
-    const showing = watching && visible;
+    /* The page itself in the background for a while: the socket goes, and
+       comes back with the page. */
+    const [away, setAway] = useState(false);
+    useEffect(() => {
+        if (typeof document === "undefined") return;
+        return watchHidden(document, setAway);
+    }, []);
+
+    const showing = watching && visible && !away;
     const pip = usePictureInPicture(showing);
+    const details = useBrowserDetails(showing);
+    const [preset, setPreset] = useState<PresetName>(storedPreset);
+    /* Driving is the default on your own machine — nothing to arm first, as
+       above — and giving it back is one click when the agent should work
+       undisturbed. Watching is the default on a pod's. */
+    const [wantControl, setWantControl] = useState(() => drivesAtFirst(machine));
+    const [machineClipboard, setMachineClipboard] = useState<string | null>(null);
+    const [driving, setDriving] = useState(false);
+    const [mayDrive, setMayDrive] = useState(true);
+    const [agentFromStream, setAgentFromStream] = useState<boolean | null>(null);
+    const [sizeNote, setSizeNote] = useState<string | null>(null);
+    const agentDriving = agentFromStream ?? details.data?.agent_driving ?? false;
+    const [lastFrame] = useState(loadLastFrame);
+    const choosePreset = (next: PresetName) => {
+        setSizeNote(null);
+        setPreset(next);
+        storePreset(next);
+    };
+    const view = (inPip: boolean) => (
+        <LiveView
+            mode="control"
+            conversationId={conversationId}
+            setting={details.isPending ? undefined : (details.data?.transport ?? null)}
+            density={details.data?.density ?? 1}
+            /* The floating window keeps the screen at the preset it has: it
+               rescales the picture, and never asks for another size. */
+            preset={inPip ? null : preset}
+            wantControl={wantControl}
+            onState={setLive}
+            onControl={(isDriving, may) => { setDriving(isDriving); setMayDrive(may); }}
+            onAgentDriving={setAgentFromStream}
+            onResizeRefused={setSizeNote}
+            /* Somebody took the keyboard: watch from here on, so a reconnect
+               does not quietly take it back from them. */
+            onRevoked={() => setWantControl(false)}
+            onMachineClipboard={setMachineClipboard}
+        />
+    );
 
     return (
         <div className={"screen-panel screen-panel--" + (showing && live === "live" ? "live" : state) + (fill ? " screen-panel--fill" : "")}>
+            {showing && fill && !pip.pipWindow && (
+                <ScreenToolbar
+                    live={live === "live"}
+                    driving={driving}
+                    mayDrive={mayDrive}
+                    agentDriving={agentDriving}
+                    watching={details.data?.watching?.length ?? 1}
+                    preset={preset}
+                    sizeNote={sizeNote}
+                    onPreset={choosePreset}
+                    onTake={() => { setSizeNote(null); setWantControl(true); }}
+                    onGiveBack={() => setWantControl(false)}
+                    onCopyFromMachine={machineClipboard === null ? undefined : () => void copyText(machineClipboard).catch(() => undefined)}
+                />
+            )}
             <div className="screen-glass">
+                {/* The page as it was when this machine was last watched,
+                    while it wakes: a screen that opens on the page you left
+                    reads as starting, one that opens black reads as broken. */}
+                {fill && !showing && lastFrame && (state === "asleep" || state === "checking" || state === "awake") && (
+                    <img className="screen-last" src={lastFrame} alt="" />
+                )}
                 {showing ? (
                     <>
                         {pip.pipWindow ? (
                             <button className="screen-action" onClick={pip.close}>Bring it back</button>
-                        ) : <LiveScreen mode="control" conversationId={conversationId} onState={setLive} />}
+                        ) : view(false)}
                         {/* Full size, the panel's own close is the one close:
                             a second × on the picture was a control for the
                             same thing drawn twice. */}
@@ -118,10 +208,11 @@ export function Screen({ state, browser, conversationId, visible, busy, onWake, 
                 ) : say.action === "wake" ? (
                     fill ? (
                         <div className="screen-asleep">
-                            <button className="screen-action" onClick={onWake}>Wake it</button>
-                            <p>{say.note}</p>
+                            {waking
+                                ? <p role="status">Waking your machine…</p>
+                                : <><button className="screen-action" onClick={wake}>Wake it</button><p>{say.note}</p></>}
                         </div>
-                    ) : <button className="screen-action" onClick={onWake}>Wake it</button>
+                    ) : <button className="screen-action" disabled={waking} onClick={wake}>{waking ? "Waking…" : "Wake it"}</button>
                 ) : say.action === "show" ? (
                     <button className="screen-action" onClick={() => { setLive("connecting"); setWatching(true); setStopped(false); }}>
                         Show the screen
@@ -130,7 +221,7 @@ export function Screen({ state, browser, conversationId, visible, busy, onWake, 
                     /* Nothing to show and nothing to press: say so in the middle
                        of the stage rather than leave a black rectangle. */
                     <div className="screen-asleep">
-                        <p>{say.note}</p>
+                        <p role="status">{waking ? "Waking your machine…" : say.note}</p>
                     </div>
                 ) : null}
             </div>
@@ -140,10 +231,7 @@ export function Screen({ state, browser, conversationId, visible, busy, onWake, 
                 </button>
             )}
             {showing && pip.failed && <p className="computer-note" role="alert">Couldn’t open the floating window. You can keep using the browser here.</p>}
-            {showing && pip.pipWindow && createPortal(
-                <LiveScreen mode="control" conversationId={conversationId} autoResize={false} onState={setLive} />,
-                pip.pipWindow.document.body,
-            )}
+            {showing && pip.pipWindow && createPortal(view(true), pip.pipWindow.document.body)}
             {/* Full size, the bar above already says the state; the caption is
                 only for what the live connection is doing. */}
             {(!fill || (showing && live !== "live")) && <p className="screen-caption" role="status">

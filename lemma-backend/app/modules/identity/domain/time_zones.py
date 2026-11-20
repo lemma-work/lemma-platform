@@ -14,6 +14,8 @@ from datetime import date, datetime, time, timedelta
 from functools import lru_cache
 from zoneinfo import ZoneInfo, available_timezones
 
+from app.core.helpers.time_zones import current_zone_name
+
 #: What a read that names no zone counts in.
 DEFAULT_ZONE = "UTC"
 
@@ -26,8 +28,14 @@ def _known_zones() -> frozenset[str]:
 
 
 def known_zone(name: str | None) -> ZoneInfo:
-    """The zone ``name`` names, or raise ``ValueError``. Blank is UTC."""
-    text = (name or "").strip() or DEFAULT_ZONE
+    """The zone ``name`` names, or raise ``ValueError``. Blank is UTC.
+
+    A renamed zone is answered by its current name (``RENAMED_ZONES`` in
+    ``app.core.helpers.time_zones``): the day count hands the name on to the
+    database, and a database built on a distribution that ships only the
+    current names fails on ``Asia/Calcutta`` with "time zone not recognized".
+    """
+    text = current_zone_name((name or "").strip() or DEFAULT_ZONE, _known_zones())
     if text not in _known_zones():
         raise ValueError(
             f"Unknown time zone: {name!r}. Use an IANA zone name such as "

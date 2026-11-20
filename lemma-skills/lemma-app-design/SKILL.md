@@ -29,19 +29,13 @@ specific to its subject; do not ship a generic dashboard wearing the pod's name.
 
 ## Build The Apps A Lemma Needs
 
-A Lemma owns one result, said as one sentence: a bar held every week or a finish
-line by a date. Its agent works on shared tables; its apps are where people see,
+A Lemma's agent works on shared tables; its apps are where people see,
 review, approve, and correct that work. Three apps carry most of it:
 
-- **The number it owns.** The sentence, this week's value against the target,
-  and recent weeks. Read `GET /pods/{pod_id}/outcome/standing` (`outcome` with
-  `sentence`, `target`, `unit`, `due`; `value`; `problem`) and
-  `GET /pods/{pod_id}/outcome/history?weeks=` (oldest first, null for a week
-  never read) through `client.request` — the SDK has no method for either.
-  Every number opens to its rows: the measure answers one number, so write the
-  matching row query with `datastore.query` or a `records.list` filter. The
-  number counts every row; the list shows only what the viewer can read, so say
-  so. Show `problem` in words, never as a zero.
+- **Where the work stands.** Counts read from the work table itself -- what
+  came in, what is done, what is waiting -- with `datastore.query`, each one
+  opening to its rows with the matching `records.list` filter. A count over a
+  table with row security counts only what the viewer can read, so say so.
 - **A review queue.** Rows waiting on a person — drafts to approve, items to
   correct — from `records.list` filtered on the work table's status, oldest
   first, with the action on the row through `records.update`. Build it to

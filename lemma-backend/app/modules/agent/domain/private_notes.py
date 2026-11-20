@@ -59,9 +59,9 @@ PRIVATE_NOTE_IN_DM_LABEL = (
 )
 
 #: What a turn started by a line written in one of Lemma's own channels says
-#: it came from, on the message. A run it starts is ``asked_in_lemma``: one
-#: conversation serves a person across every place of a channel -- Lemma and
-#: the platforms alike -- so the conversation cannot say where a turn was
+#: it came from, on the message. A run it starts is ``asked_in_lemma``: a
+#: conversation kept in Lemma itself is at no platform place, and a group's
+#: is shared by its threads, so the conversation cannot say where a turn was
 #: asked; only the run can. A run asked in Lemma is answered in Lemma: no
 #: platform's guidance, tools, files or progress.
 LEMMA_CHANNEL = "lemma_channel"

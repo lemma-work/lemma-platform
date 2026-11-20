@@ -88,7 +88,7 @@ always "the person". Where a connector is backed by an **app installation** — 
 today — a call can present either as the person or as the **app**, and the caller
 decides: an **agent's** connector operations ask to act as the app, so a schedule
 keeps working after the person who set it up leaves the team, while pod publish, pod
-import, and the sandbox's own `git` / `gh` act as the **person**, so commits carry
+import, and the machine's own `git` / `gh` act as the **person**, so commits carry
 their name. The app's token is used only when the caller asked for it, the route
 allows it (GitHub's own metadata says which do; `/user/...` routes never can), and
 the account knows its installation — anything else falls back to the person's token.
@@ -353,9 +353,9 @@ three ways:
   and a wrong one would route another organization's events at your pod.
 - **An agent's calls act as the App.** See *Delegated identity* above: an agent's
   connector operations present as the App where GitHub permits it, so a schedule
-  outlives the person who set it up, while pod publish/import and the sandbox's
+  outlives the person who set it up, while pod publish/import and the machine's
   `git`/`gh` stay the person so their name is on the commits.
-- **The sandbox's `git`/`gh` get a token only from your own account** — or from a
+- **A machine's `git`/`gh` get a token only from your own account** — or from a
   SHARED `github` connector's account whose **owner** ticked "allow use inside
   sandboxes" (`PATCH /pods/{pod}/connector-accounts/{id}` with
   `{"allow_sandbox_use": true}`, owner only, on an account already shared with the
@@ -546,7 +546,7 @@ Then one of two branches:
 **API key** — send them to the UI. **Never ask for the key in the conversation.**
 A key pasted into a message is in the transcript for good, and passing it on a
 command line puts it in shell history and in `/proc/<pid>/cmdline`, where
-anything else in the sandbox can read it. There is no version of this worth the
+anything else on the machine can read it. There is no version of this worth the
 convenience:
 
 > "I've added Acme. It needs an API key — open **Connectors** in the workspace,

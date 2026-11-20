@@ -20,6 +20,7 @@ import type { Org } from "@/data";
 import { displayAgentName } from "@/data/agent-names";
 import { readableName } from "@/library/reading";
 import { registerFrame } from "@/thread/compose-bridge";
+import { acknowledgeOpen, appUrlAt, readLocation, readOpen, tellLocation } from "@/thread/location-bridge";
 import { docTitle } from "@/library/doc-title";
 import { ViewActions } from "@/shell/view-actions";
 import { CommentsButton } from "@/docpages/comments/button";
@@ -45,7 +46,7 @@ export type Back = (fallback: View) => void;
  *  an app, a file or page, a table and its rows, an agent. The bar says
  *  which Lemma it is in and is the way back; the workspace's own view of it
  *  fills the rest. */
-export function Stage({ pod, title, here, go, fill, ownBar = false, actions, children }: {
+export function Stage({ pod, title, here, head, go, fill, ownBar = false, actions, children }: {
     pod: Pod;
     /** Where in the Lemma this is. Left out, the Lemma itself is: its
      *  summary, where the crumb ends at its name. */
@@ -53,6 +54,9 @@ export function Stage({ pod, title, here, go, fill, ownBar = false, actions, chi
     /** In place of `title`, a step that does more than name the place: a
      *  section's page names itself with a menu of the other sections. */
     here?: ReactNode;
+    /** In place of the bar, the Lemma's own header: who it is, its tabs.
+     *  A Lemma's own pages wear it; what it holds wears the bar. */
+    head?: ReactNode;
     go: Go;
     fill?: boolean;
     /** The page draws the one bar itself, with `StageCrumbs` at its start:
@@ -63,7 +67,8 @@ export function Stage({ pod, title, here, go, fill, ownBar = false, actions, chi
 }) {
     return (
         <div className={"ox-stagepage" + (fill ? " ox-stagepage--fill" : "")}>
-            {!ownBar && (
+            {head}
+            {!head && !ownBar && (
                 <div className="ox-stagebar">
                     <StageCrumbs pod={pod} title={title} here={here} go={go} />
                     {actions && <div className="ox-stagebar__acts">{actions}</div>}
@@ -177,15 +182,21 @@ export function WorkflowView({ pod, workflow, go }: { pod: Pod; workflow: string
 
 /** An app, framed here the way the workspace frames it, and registered so
  *  a button in it that asks Lemma something reaches a chat in this frame. */
-export function AppView({ pod, app, go, actions, shown }: {
+export function AppView({ pod, app, at, go, actions, shown, onMove }: {
     pod: Pod;
     app: string;
+    /** Where the address says the app is inside itself: `/` for its one
+     *  screen, or the page for one of its records. Read while it is in front. */
+    at: string;
     go: Go;
     actions: FrameActions;
     /** Whether it is the app in front. A kept app behind something else
      *  stays mounted but is not trusted to ask for a chat: only the app on
      *  screen may put words in a box. */
     shown: boolean;
+    /** The app in front moved inside itself, or asked for another app of
+     *  this Lemma: the app named, and where in it. The address follows. */
+    onMove: (podId: string, app: string, path: string) => void;
 }) {
     const tabs = useQuery({ queryKey: ["outcome-apps", pod.id], queryFn: () => source.listTabs(pod.id), staleTime: 5 * 60_000 });
     const found = (tabs.data ?? []).flatMap((tab) => (tab.kind === "app" && tab.id === "app:" + app ? [tab] : []))[0] ?? null;
@@ -194,6 +205,41 @@ export function AppView({ pod, app, go, actions, shown }: {
     const [loaded, setLoaded] = useState<Window | null>(null);
     useEffect(() => (shown ? registerFrame(loaded) : undefined), [shown, loaded]);
     const frame = useRef<HTMLIFrameElement | null>(null);
+    /* The frame starts on the path the address named when it was first
+       drawn. After that the address is told to it, never loaded into it: a
+       frame given a new `src` starts the app over. */
+    const [start] = useState(at);
+    const address = found?.url ?? null;
+    const url = useMemo(() => (address ? appUrlAt(address, start) : null), [address, start]);
+    /* Where the frame is, as far as this side knows: where it started, what
+       it last said, or what it was last told. A move it made is not told
+       back to it, and one it was told is not heard as its own. */
+    const frameAt = useRef(start);
+    const podId = pod.id;
+    useEffect(() => {
+        if (!shown || !loaded) return;
+        const listen = (event: MessageEvent) => {
+            const moved = readLocation(event, loaded);
+            if (moved !== null) {
+                frameAt.current = moved;
+                onMove(podId, app, moved);
+                return;
+            }
+            const asked = readOpen(event, loaded);
+            if (!asked) return;
+            onMove(podId, asked.app, asked.path);
+            acknowledgeOpen(event, asked);
+        };
+        window.addEventListener("message", listen);
+        return () => window.removeEventListener("message", listen);
+    }, [shown, loaded, podId, app, onMove]);
+    useEffect(() => {
+        if (!shown || !loaded || frameAt.current === at) return;
+        const src = frame.current?.getAttribute("src");
+        if (!src) return;
+        frameAt.current = at;
+        tellLocation(loaded, new URL(src, window.location.href).origin, at);
+    }, [shown, loaded, at]);
     const chat = useFloatingChat();
     const label = found?.label ?? readableName(app);
     return (
@@ -216,12 +262,14 @@ export function AppView({ pod, app, go, actions, shown }: {
         >
             {tabs.isPending
                 ? <p className="ox-loading">Opening the app…</p>
-                : !found
+                : !found || !url
                     ? <div className="ox-stage__none"><Empty title="This app isn’t here."><p>It may have been removed or renamed.</p></Empty></div>
                     : <AppFrameView
-                        url={found.url}
+                        url={url}
                         frameRef={(element) => { frame.current = element; }}
-                        onFrameLoad={setLoaded}
+                        /* A load is the app starting over, on the path its
+                           frame was given. */
+                        onFrameLoad={(view) => { frameAt.current = start; setLoaded(view); }}
                     />}
             {found && <ResourceChat pod={pod} resource={{ kind: "app", name: app, label }} state={chat} go={go} />}
         </Stage>

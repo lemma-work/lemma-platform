@@ -143,3 +143,32 @@ def test_order_table_dirs_unreadable_manifest_treated_as_no_deps(tmp_path: Path)
     ok = _write_table_dir(tmp_path, "ok", ["broken"])
     ordered = _order_table_dirs_by_dependency([ok, broken_dir])
     assert [path.name for path in ordered] == ["broken", "ok"]
+
+
+def test_a_choice_column_gains_the_bundles_new_options_and_keeps_its_own():
+    existing = {
+        "columns": [
+            {"name": "id", "type": "UUID"},
+            {"name": "stage", "type": "ENUM", "options": ["lead", "won", "paused"]},
+        ]
+    }
+    desired = {
+        "columns": [
+            {"name": "id", "type": "UUID"},
+            {"name": "stage", "type": "ENUM", "options": ["lead", "qualified", "won"]},
+        ]
+    }
+
+    diff = diff_table_columns(existing, desired)
+
+    assert diff.incompatible == []
+    # The table's own order first, then what the bundle adds.
+    assert diff.options_to_add == {"stage": ["lead", "won", "paused", "qualified"]}
+    # A row may hold `paused`: it stays.
+    assert diff.options_kept == {"stage": ["paused"]}
+
+
+def test_the_same_options_change_nothing():
+    column = {"name": "stage", "type": "ENUM", "options": ["lead", "won"]}
+    diff = diff_table_columns({"columns": [column]}, {"columns": [dict(column)]})
+    assert diff.options_to_add == {} and diff.options_kept == {}

@@ -8,16 +8,22 @@ The reason it exists at all: E2B's file SDK reports a type that is only ever
 "file" or "dir" and echoes back the path it was handed. A containment check
 written against those two fields is therefore structurally inert here, and the
 files API relies on exactly that check. It was correct on Docker and a comment
-on E2B, so a symlink out of `/workspace` was served. `realpath` is what this
+on E2B, so a symlink out of the home was served. `realpath` is what this
 fabric does give us, so the boundary is enforced with that.
 """
 
 from __future__ import annotations
 
+import posixpath
 import shlex
 
 from app.core.log.log import get_logger
-from sandbox_runtime.errors import SandboxPathNotFound, SandboxUnavailable
+from sandbox_runtime.errors import (
+    SandboxPathNotFound,
+    SandboxPathProtected,
+    SandboxUnavailable,
+)
+from sandbox_runtime.paths import PROTECTED_PATHS, is_protected
 from app.modules.workspace.providers.base import (
     ProviderFailed,
     ProviderGone,
@@ -79,4 +85,45 @@ async def resolve_real_path(sandbox, path: str) -> tuple[str, bool]:
     return (resolved.strip() or path), marker.strip() == "link"
 
 
-__all__ = ["resolve_real_path"]
+async def refuse_protected(sandbox, path: str, *, follow_last: bool) -> None:
+    """Refuse a change that lands in the browser's profile, by where the path
+    *resolves*.
+
+    The files API checks the path as spelled, and E2B's file SDK follows links
+    on its own, so ``~/lemma/p -> ~/.lemma/browser/profile`` walked a write
+    into the profile on this fabric. The runtime-backed fabrics check the
+    resolved path in the machine (``FilesystemManager``); this is the same
+    rule for the one fabric that does not run that code.
+
+    ``follow_last`` says whether the operation follows the final link (a
+    write, a mkdir, a move's destination) or acts on the link itself (a
+    delete, a move's source). The first kind is refused when it lands in the
+    profile: making ``/home/user``, which holds it, changes nothing, and a
+    session makes exactly that. The second is refused when it is, is inside,
+    or *contains* the profile -- deleting ``~/.lemma`` deletes it -- and
+    removing the link itself leaves the profile alone.
+    """
+    if follow_last:
+        resolved, _ = await resolve_real_path(sandbox, path)
+        refused = _lands_in_profile(path) or _lands_in_profile(resolved)
+    else:
+        parent, name = posixpath.split(path.rstrip("/") or "/")
+        real_parent, _ = await resolve_real_path(sandbox, parent or "/")
+        resolved = posixpath.join(real_parent, name)
+        refused = is_protected(path) or is_protected(resolved)
+    if refused:
+        raise SandboxPathProtected(
+            "That path is the browser's profile, which holds the machine's "
+            "logins; it is not changed through the file API."
+        )
+
+
+def _lands_in_profile(path: str) -> bool:
+    normalized = posixpath.normpath(path)
+    return any(
+        normalized == protected or normalized.startswith(f"{protected}/")
+        for protected in PROTECTED_PATHS
+    )
+
+
+__all__ = ["refuse_protected", "resolve_real_path"]

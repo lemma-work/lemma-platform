@@ -22,14 +22,14 @@ re-reading a payload shape.
 
 Config lives in `~/.lemma/config.json` (active server, token, default org/pod). Resolution precedence for org/pod: CLI flags (`--org`, `--pod`) → env vars → project `.lemma.<server>.env` → project `.lemma.env` → stored defaults → interactive selection.
 
-Environment variables (pre-set inside Lemma workspaces/sandboxes — use them, don't bootstrap):
+Environment variables (pre-set on Lemma machines — use them, don't bootstrap):
 `LEMMA_TOKEN`, `LEMMA_BASE_URL`, `LEMMA_ORG_ID`, `LEMMA_POD_ID`, `LEMMA_SERVER`.
 
 **Develop once, deploy to any server/pod.** A project's server and pod change together (local stack vs. cloud), so the CLI reads committed `.lemma.<server>.env` files keyed by the active server (Vite's `.env.<mode>` model). `lemma app init` and `lemma pods create --with-starter` write them; you can also hand-edit:
 - `.lemma.env` — base; may set the folder's default `LEMMA_SERVER`.
 - `.lemma.<server>.env` — per-server binding (`LEMMA_POD_ID`, optional `LEMMA_ORG_ID`).
 
-Then `lemma pods describe` uses the folder's default server while `lemma --server lemma-cloud apps deploy` targets cloud — same repo, no global switching. The CLI loads the nearest anchor walking up (ceiling: git root / `$HOME`); active server resolves as `--server` → `LEMMA_SERVER` → base file → config `active_server`. Gitignored `.lemma.<server>.env.local` overrides per-machine; real env always wins (a real `LEMMA_TOKEN`, e.g. inside a workspace sandbox, skips the files). A command that needs a pod on an unbound server fails with `No pod bound for server '<server>'`. `lemma config show` reports the resolved server + applied files. No secrets in these files.
+Then `lemma pods describe` uses the folder's default server while `lemma --server lemma-cloud apps deploy` targets cloud — same repo, no global switching. The CLI loads the nearest anchor walking up (ceiling: git root / `$HOME`); active server resolves as `--server` → `LEMMA_SERVER` → base file → config `active_server`. Gitignored `.lemma.<server>.env.local` overrides per-machine; real env always wins (a real `LEMMA_TOKEN`, e.g. on a Lemma machine, skips the files). A command that needs a pod on an unbound server fails with `No pod bound for server '<server>'`. `lemma config show` reports the resolved server + applied files. No secrets in these files.
 
 Scripting conventions:
 
@@ -55,6 +55,7 @@ my-pod/
   workflows/<name>/<name>.json
   schedules/<name>/<name>.json
   surfaces/<name>/<name>.json     # name defaults to the lowercased platform: surfaces/slack/slack.json
+  machines/<name>/<name>.json     # a shared pod machine
   apps/<name>/<name>.json
   apps/<name>/source/            # Vite app project (built on import/deploy), OR a
                                  #   no-build site (index.html, no package.json)
@@ -75,6 +76,8 @@ Rules:
   - `"config": {"$json_file": "config.json"}` — parsed as JSON
 - `visibility` (`PERSONAL|POD|RESTRICTED|PUBLIC`, default `POD`) is a first-class field on tables/functions/agents/workflows/schedules and round-trips through export/import.
 - `pod.json` is metadata plus the portability variables: `{"name": ..., "description": ..., "icon_url": ..., "format_version": 3, "variables": {...}}`; `format_version` is `4` when the bundle declares a pod connector under `connectors/`, which readers of 3 would skip. A bundle of a newer format than your CLI reads is refused up front: update the CLI.
+- **One schedule per GLOBAL workflow.** A GLOBAL workflow takes one schedule per person. A bundle whose new schedules would put two on one new GLOBAL workflow is refused before anything is written: `lemma pods import` creates a workflow with no `mode` as GLOBAL, the server's import as USER. Give each schedule its own small workflow.
+- `"home_app": "<app name>"` in `pod.json` is the app the Lemma opens on (otherwise its oldest app). An import sets it only on a Lemma that has no choice and had no other apps; a Lemma that already opens somewhere keeps it, and people change it from the Lemma's Apps tab ("Make it first").
 - `payloads/` and `README.md` are ignored by pod import, but they are part of a high-quality handoff: keep sample function/workflow inputs, seed records, and the end-to-end smoke test there.
 
 ### Per-resource JSON shapes
@@ -126,6 +129,14 @@ Rules:
   "required": false,                                // PER_MEMBER: members are asked to connect
   "purpose": "The team mailbox the triage agent answers from." }
 // optional: "visibility": "RESTRICTED" (default POD)
+// machines/builder/builder.json — a machine the pod's agents share. Billed to the
+// org, and it outlives whoever created it. Only `name` and `template` are required.
+// Who may use it: editors by role, an agent by naming it as its `machine` (which
+// grants it), or by a `machine.use` grant in an agent's or function's permissions.
+{ "name": "builder", "display_name": "Builder",
+  "template": "workspace-docker",   // workspace | workspace-docker (has Docker)
+  "size": "4x8",                    // vCPU x GB; omit for the plan's default
+  "run_slots": 2 }                  // runs at once; later runs queue
 
 // apps/ops-app/ops-app.json
 { "name": "ops-app", "description": "...", "public_slug": "ops-app" }
@@ -233,8 +244,13 @@ lemma pods import . --values ./vars.json                  # or a file
 lemma pods import . --pod-member <member-id>              # fills pod-member vars
 ```
 
-Pod-member variables default to the importing user's own membership, so a
-single-user import usually needs nothing.
+Pod-member variables default to the importing user's own membership, and any
+other variable with a `default` (an app slug) to that default, so a
+single-user import usually needs nothing. Importing one part on its own
+(`lemma pods import functions/<name>`, or `apps/`) reads the variables declared
+in the bundle root's `pod.json` and brings along the connectors that part
+names; nothing that acts on the whole Lemma (its name, outcome, home app)
+comes with it.
 
 ## Pod connectors in a bundle
 
@@ -256,6 +272,11 @@ Import declares them **first**, then everything that names their slug. For each:
   imports needing an account — a warning, not a failure: somebody shares one
   later from the pod's Connections page.
 - **PER_MEMBER + required**: members who have no account are asked to connect.
+- **Optional (`required: false`) with no installation, and only grants name
+  it** (no schedule or surface runs through it): it is **left out** rather than
+  stopping the import, and grants on it are dropped with a warning. Pass
+  `--create-installations` (or choose an installation) to bring it in. A
+  schedule or surface running through it makes it needed after all.
 - A slug the pod already declares for the same connector in the same mode is
   kept as the pod has it; one declared for a different connector, or in the
   other mode, stops the import.
@@ -274,6 +295,34 @@ choices: the plan's `connectors` lists each one's installations,
 `connectors: {slug: {auth_config_id | create_installation, share_account_id}}`
 answers them. `NEEDS_INSTALLATION` and `CONFLICT` refuse the apply (422) until
 resolved.
+
+## Installing from a GitHub repository
+
+A bundle pushed to a public repository installs from Lemma's site at
+`/import/github/<owner>/<repo>`: the person picks a Lemma, sees the plan, then
+installs. The API is the same import: `POST /pods/{pod}/bundle/imports` with
+`{"kind": "GITHUB", "owner": "<owner>", "repo": "<repo>"}` (or `"url"`), then
+apply.
+
+A repository can hold **several bundles, one per folder**. Each folder holds its
+own `pod.json`, and one of them installs by naming it:
+
+```text
+/import/github/<owner>/<repo>?path=install/<slug>
+POST /pods/{pod}/bundle/imports  {"kind": "GITHUB", "owner": "<owner>", "repo": "<repo>", "path": "install/<slug>"}
+```
+
+- The folder is the bundle: only what is inside it is planned and applied, and
+  the site names the new Lemma from its `pod.json` `name`, else from the folder.
+- `path` is relative to the repository's root, with no leading `/` and no `.` or
+  `..`; anything else is refused (422).
+- A folder that is not there fails the import with `GITHUB_PATH_NOT_FOUND`, and
+  one without its own `pod.json` with `GITHUB_PATH_NOT_A_BUNDLE`, before
+  anything is planned.
+- Without `path` the repository's root is the bundle (the shallowest `pod.json`
+  in it), so a repository of several bundles always needs one.
+- `lemma pods import` installs a local folder, not a repository: clone it and
+  import the folder, `lemma pods import ./<repo>/install/<slug>`.
 
 ## Limits And Gotchas
 

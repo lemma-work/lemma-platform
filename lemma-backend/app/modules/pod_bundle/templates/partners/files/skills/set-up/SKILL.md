@@ -5,7 +5,7 @@ description: Set Partners up from where the conversations with companies are kep
 
 # Set Partners up
 
-Partners owns a number of design partners signed by a date, counted from `partners`. That table starts empty, so the first job is to fill it from where the team keeps its conversations with companies, keep it filling, and show the person where they stand. Do the steps in order and say what you did after each one, in a line. `lemma-setup` holds the rules behind each step; this skill is what is particular to Partners.
+Partners keeps its work in `partners`. That table starts empty, so the first job is to fill it from where the team keeps its conversations with companies and keep it filling. Do the steps in order and say what you did after each one, in a line. `lemma-setup` holds the rules behind each step; this skill is what is particular to Partners.
 
 1. **Ask where the conversations are kept.** One `ask_user` with two questions: where the conversations are kept (HubSpot, Salesforce, a shared Gmail or Outlook inbox), and which city's time the team works in. Check `lemma connectors list` first and put anything already connected at the top. Then set each schedule in `lemma schedules list` to that timezone, keeping its cron: `lemma schedules update <name> -d '{"config":{"cron":"<its cron>","timezone":"<zone>"}}'`.
 2. **Connect it.** Find the read with `lemma connectors run <connector> "list deals" --dry-run`, then run one page of it for real: that proves the connection. If it is not connected yet, the answer carries a `connect_url`: give the person that link as it is, end your turn, and run the same call again when they say it is done. If the service is not in the catalog, say so and ask how the work can reach you instead (`lemma-setup`, step 2); an export they upload is history only.
@@ -18,10 +18,8 @@ Partners owns a number of design partners signed by a date, counted from `partne
 6. **Keep it true from now on.** List the service's triggers with `lemma connectors triggers list <connector>`. If one fires when a deal or thread changes, create an automation on it:
    `lemma schedules create --name partner-changes --agent POD_DEFAULT --webhook-source composio --connector <connector> --connector-trigger <trigger> --instruction "Keep partners true, following the keep-partners skill: update the company's row when its link is already there, and add one only for a company we are asking to become a design partner."`
    Then read the service once more for anything since the step 3 read started. `link` is unique: a write refused for a duplicate link means the row is already there, so update it instead. When there is no such trigger, create a daily automation instead (`--agent POD_DEFAULT --cron "0 8 * * 1-5"`, same instruction) that reads only what changed since its last run, and tell the person the count can be up to a day behind.
-7. **Show where they stand.** Count signed partners and the ones in signing with `lemma query run`, and show it as a small widget with `display_resource` against the target and the date.
-8. **Check the target.** Use `ask_user`: "N signed, M close. Keep the target at 20 by the date?" Each option is a concrete value: keep 20 by the date (recommended), N plus M by the date, and 20 by a date a month later. Set a change with `set_what_you_own`, keeping the measure it has and rewriting the sentence to match.
-9. **Name the people.** Say who owns the most conversations, from `owner`, and that adding them to Partners (⋯ › Add people) sends the chases to them. You cannot add people yourself.
+7. **Name the people.** Say who owns the most conversations, from `owner`, and that adding them to Partners (⋯ › Add people) sends the chases to them. You cannot add people yourself.
 
-Then fill in `/plan.md` and finish as `lemma-setup` says (steps 8 and Finish).
+Then keep what you were taught in memory and finish as `lemma-setup` says (step 6 and Finish).
 
 Never write to a company while setting up.

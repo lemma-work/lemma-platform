@@ -1,0 +1,326 @@
+/* The way in: one look for every door -- the web's first visit, a plugin's
+   install page, an invitation accepted from Home. The mark top left, the
+   steps along the top, one narrow column of rows under a heading and one
+   sentence. Text on Albert Sans, figures on Inter, weight at 500. */
+
+.ar {
+    min-height: 100dvh;
+    display: grid;
+    grid-template-rows: auto 1fr;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-outcomes), var(--ui);
+    font-size: 14px;
+    line-height: 1.45;
+}
+
+/* Inside a page that already has its own frame (the install panel): no bar
+   and no height of its own, the same column and rows. */
+.ar--inline {
+    min-height: 0;
+    display: block;
+    background: transparent;
+}
+
+.ar__bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 22px max(16px, 3vw);
+    color: var(--ink-3);
+}
+
+.ar__steps {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px 16px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 12.5px;
+}
+
+.ar__steps li {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.ar__steps li::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--line-2);
+}
+
+.ar__steps li[data-state="done"]::before {
+    background: var(--ink-3);
+}
+
+.ar__steps li[data-state="now"] {
+    color: var(--ink);
+}
+
+.ar__steps li[data-state="now"]::before {
+    background: var(--accent);
+}
+
+.ar__col {
+    width: min(460px, 100%);
+    margin: 0 auto;
+    padding: 4vh max(16px, 3vw) 96px;
+    display: grid;
+    align-content: start;
+    gap: 14px;
+}
+
+.ar--inline .ar__col {
+    width: 100%;
+    padding: 0;
+}
+
+.ar__form {
+    display: grid;
+    gap: 14px;
+}
+
+.ar__t {
+    margin: 0;
+    font-size: 26px;
+    font-weight: 500;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+}
+
+.ar--inline .ar__t {
+    font-size: 19px;
+}
+
+.ar__model {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 15px;
+    line-height: 1.55;
+}
+
+.ar--inline .ar__model {
+    font-size: 14px;
+}
+
+.ar__rows {
+    display: grid;
+    margin: 4px 0 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--line-2);
+}
+
+.ar__row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--line-2);
+}
+
+.ar__tile {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: var(--wash-b);
+    color: var(--ink-2);
+}
+
+.ar__said {
+    flex: 1;
+    display: grid;
+    gap: 1px;
+    min-width: 0;
+}
+
+.ar__name {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 7px;
+    font-size: 14.5px;
+    font-weight: 500;
+}
+
+.ar__line {
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.ar__mark {
+    padding: 0 7px;
+    border-radius: 999px;
+    background: var(--wash-b);
+    color: var(--ink-3);
+    font-size: 11.5px;
+    font-weight: 400;
+    line-height: 1.6;
+}
+
+.ar__in {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--ink-3);
+    font-size: 13px;
+}
+
+.ar__sub {
+    margin: 10px 0 -6px;
+    color: var(--ink-3);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.ar__acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin-top: 6px;
+}
+
+.ar__btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 34px;
+    padding: 0 14px;
+    border: 1px solid var(--line-2);
+    border-radius: 9px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+}
+
+.ar__btn:hover {
+    background: var(--wash-b);
+}
+
+.ar__btn--primary {
+    border-color: transparent;
+    background: var(--accent);
+    color: var(--on-accent);
+}
+
+.ar__btn--primary:hover {
+    background: var(--accent);
+    opacity: 0.92;
+}
+
+.ar__btn--small {
+    height: 28px;
+    padding: 0 11px;
+    font-size: 13px;
+}
+
+.ar__btn:disabled {
+    cursor: default;
+    opacity: 0.55;
+}
+
+.ar__quiet {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink-3);
+    font: inherit;
+    font-size: 13.5px;
+    text-decoration: underline;
+    text-decoration-color: var(--line-2);
+    text-underline-offset: 3px;
+    cursor: pointer;
+}
+
+.ar__quiet:hover {
+    color: var(--ink);
+}
+
+.ar__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+}
+
+.ar__chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 34px;
+    padding: 0 13px;
+    border: 1px solid var(--line-2);
+    border-radius: 999px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.ar__chip:hover {
+    background: var(--wash-b);
+}
+
+/* Picked: filled, so a row of nine reads at a glance as which are on. */
+.ar__chip[aria-pressed="true"],
+.ar__chip[aria-pressed="true"]:hover {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--on-accent);
+}
+
+.ar__field {
+    display: grid;
+    gap: 5px;
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.ar__field input {
+    height: 36px;
+    padding: 0 11px;
+    border: 1px solid var(--line-2);
+    border-radius: 9px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+}
+
+.ar__note {
+    margin: 0;
+    color: var(--ink-3);
+    font-size: 13px;
+}
+
+.ar__problem {
+    margin: 0;
+    color: var(--ink);
+    font-size: 13.5px;
+}
+
+.ar button:focus-visible,
+.ar a:focus-visible,
+.ar input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}

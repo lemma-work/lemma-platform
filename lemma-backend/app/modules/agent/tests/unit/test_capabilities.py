@@ -168,7 +168,8 @@ async def test_the_pod_tools_are_visible_rather_than_deferred():
     ]
     visible, deferred = await _offered(_capabilities(deps, specs), deps)
     assert {"pod_tables", "exec_command", "web_search"} <= visible
-    assert not deferred
+    # Only the machine tools, which ride with the shell, wait behind search.
+    assert deferred == {"list_machines", "expose_port", "sync_files", "reset_machine"}
 
 
 @pytest.mark.anyio
@@ -302,7 +303,11 @@ def test_every_visible_toolset_is_a_capability_with_its_guidance():
     deps = _deps()
     specs = [
         *STATIC_SPECS[AgentToolset.WEB_SEARCH],
-        *STATIC_SPECS[AgentToolset.WORKSPACE_CLI],
+        *(
+            spec
+            for spec in STATIC_SPECS[AgentToolset.WORKSPACE_CLI]
+            if spec.toolset is not ToolGroup.MACHINES
+        ),
     ]
     capabilities = _capabilities(deps, specs, caching=True)
 
@@ -815,7 +820,6 @@ _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS = {
     "pod_search_files",
     "pod_get_file_url",
     "pod_view_document_pages",
-    "set_what_you_own",
 }
 
 
@@ -845,9 +849,6 @@ async def test_pod_default_visible_toolset_is_slim():
     assert {"say", "listen", "list_voices"} <= deferred
     assert "Speaking and transcribing" in hint
     assert "pod_tables" not in hint
-    # The whole pod toolset is in view, setting what the pod owns included.
-    assert "set_what_you_own" not in deferred
-    assert "`set_what_you_own`" not in hint
 
 
 @pytest.mark.anyio

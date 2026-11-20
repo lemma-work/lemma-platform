@@ -14,7 +14,7 @@ import { useConversationFolder } from "@/desktop/folders";
 import { FolderChip } from "@/desktop/folder-chip";
 import { RepositoryChip } from "@/thread/repository-chip";
 import { TeammateFace } from "@/space/teammate-face";
-import type { Ask, Go } from "./model";
+import { homeFirst, type Ask, type Go } from "./model";
 import { Icon, to } from "./parts";
 
 /** The Lemma the reader last asked from Home, to ask again. */
@@ -185,22 +185,25 @@ export interface PodApp {
 }
 
 /** The apps of the Lemmas given, newest first, read under the key every
- *  view of them shares. */
+ *  view of them shares. One Lemma's own leads with the app it opens on,
+ *  when somebody chose one: its home shows first what opening it shows. */
 export function useApps(pods: readonly Pod[]): { apps: PodApp[]; pending: boolean } {
     const results = useQueries({
         queries: pods.map((pod) => ({ queryKey: ["outcome-apps", pod.id], queryFn: () => source.listTabs(pod.id), staleTime: 5 * 60_000 })),
     });
-    const apps = pods
+    const newest = pods
         .flatMap((pod, index) => (results[index]?.data ?? []).flatMap((tab) => (tab.kind === "app" ? [{ pod, app: tab }] : [])))
         .sort((a, b) => (Date.parse(b.app.updated ?? "") || 0) - (Date.parse(a.app.updated ?? "") || 0));
+    const apps = pods.length === 1 ? homeFirst(newest, pods[0].homeApp, ({ app }) => app.id) : newest;
     return { apps, pending: results.some((result) => result.isPending) };
 }
 
 /** Apps as tiles: a cover, a name and -- across Lemmas -- whose it is. Each
- *  opens here, framed, in the Lemma that runs it. */
-export function AppTiles({ apps, go, showWhose = true }: { apps: readonly PodApp[]; go: Go; showWhose?: boolean }) {
+ *  opens here, framed, in the Lemma that runs it. `large` on a Lemma's own
+ *  home, where its apps lead the page. */
+export function AppTiles({ apps, go, showWhose = true, large = false }: { apps: readonly PodApp[]; go: Go; showWhose?: boolean; large?: boolean }) {
     return (
-        <div className="ox-apps ox-apps--home">
+        <div className={"ox-apps " + (large ? "ox-apps--lead" : "ox-apps--home")}>
             {apps.map(({ pod, app }) => (
                 <a key={pod.id + app.id} className="ox-apptile" {...to({ name: "app", podId: pod.id, app: app.id.replace(/^app:/, "") }, go)}>
                     <span className="ox-app__cover"><AppCover url={app.url} fallback={<span className="ox-app__blank"><Icon name="app" size={20} /></span>} /></span>

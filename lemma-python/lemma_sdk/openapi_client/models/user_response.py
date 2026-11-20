@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
@@ -10,6 +10,10 @@ from attrs import field as _attrs_field
 from dateutil.parser import isoparse
 
 from ..types import UNSET, Unset
+
+if TYPE_CHECKING:
+    from ..models.work_answer_response import WorkAnswerResponse
+
 
 T = TypeVar("T", bound="UserResponse")
 
@@ -36,6 +40,8 @@ class UserResponse:
         mobile_number (None | str | Unset):
         mobile_verified_at (datetime.datetime | None | Unset):
         timezone (None | str | Unset):
+        work (None | Unset | WorkAnswerResponse): What they said they do, or null until they have been asked. An answer
+            with no jobs and no `other` means they skipped it. Only on the current user's own record.
     """
 
     created_at: datetime.datetime
@@ -55,9 +61,12 @@ class UserResponse:
     mobile_number: None | str | Unset = UNSET
     mobile_verified_at: datetime.datetime | None | Unset = UNSET
     timezone: None | str | Unset = UNSET
+    work: None | Unset | WorkAnswerResponse = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.work_answer_response import WorkAnswerResponse
+
         created_at = self.created_at.isoformat()
 
         email = self.email
@@ -140,6 +149,14 @@ class UserResponse:
         else:
             timezone = self.timezone
 
+        work: dict[str, Any] | None | Unset
+        if isinstance(self.work, Unset):
+            work = UNSET
+        elif isinstance(self.work, WorkAnswerResponse):
+            work = self.work.to_dict()
+        else:
+            work = self.work
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -173,11 +190,15 @@ class UserResponse:
             field_dict["mobile_verified_at"] = mobile_verified_at
         if timezone is not UNSET:
             field_dict["timezone"] = timezone
+        if work is not UNSET:
+            field_dict["work"] = work
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.work_answer_response import WorkAnswerResponse
+
         d = dict(src_dict)
         created_at = isoparse(d.pop("created_at"))
 
@@ -319,6 +340,23 @@ class UserResponse:
 
         timezone = _parse_timezone(d.pop("timezone", UNSET))
 
+        def _parse_work(data: object) -> None | Unset | WorkAnswerResponse:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                work_type_0 = WorkAnswerResponse.from_dict(data)
+
+                return work_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | WorkAnswerResponse, data)
+
+        work = _parse_work(d.pop("work", UNSET))
+
         user_response = cls(
             created_at=created_at,
             email=email,
@@ -337,6 +375,7 @@ class UserResponse:
             mobile_number=mobile_number,
             mobile_verified_at=mobile_verified_at,
             timezone=timezone,
+            work=work,
         )
 
         user_response.additional_properties = d

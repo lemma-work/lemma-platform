@@ -344,8 +344,10 @@ ends; see [what a resumed turn carries](#delivery).
 The session binding also records `host_id` and `host_cwd`, reported by the
 leased host at session establishment. `host_cwd` is the exact directory passed
 to ACP for native tools; it is an observation, not a permission grant. The
-existing top-level conversation `cwd` still selects the sandbox directory for
-Lemma MCP execution tools. These filesystems have no implicit mount or sync.
+existing top-level conversation `cwd` still selects the directory on the run's
+Lemma [machine](machines.md) for Lemma MCP execution tools — under
+`/home/user/lemma`, which Agent Host maps onto `~/lemma` for the native side.
+These filesystems have no implicit mount or sync.
 Agent Host supplies the native cwd in the prompt, and follow-up checkpoints
 without that field preserve it for the same provider session. Conversation
 directories are retained across turns and idle periods; starting another run

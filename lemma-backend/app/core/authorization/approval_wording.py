@@ -45,9 +45,9 @@ _SCOPE: dict[str, str] = {
     Permissions.WORKFLOW_DELETE: "delete any workflow",
     Permissions.SCHEDULE_UPDATE: "change any schedule",
     Permissions.SCHEDULE_DELETE: "delete any schedule",
-    Permissions.CONNECTOR_USE: "use any of the pod's connectors",
-    Permissions.CONNECTOR_ACCOUNT_USE: "use any account shared with the pod",
-    Permissions.POD_DELETE: "delete the pod",
+    Permissions.CONNECTOR_USE: "use any of this Lemma's connectors",
+    Permissions.CONNECTOR_ACCOUNT_USE: "use any account shared with this Lemma",
+    Permissions.POD_DELETE: "delete this Lemma",
 }
 
 #: How long it lasts, said the same way everywhere.

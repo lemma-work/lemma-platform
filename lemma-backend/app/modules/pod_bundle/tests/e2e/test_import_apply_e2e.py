@@ -158,11 +158,13 @@ async def test_apply_idempotent_on_reapply(
     pod_id = test_pod["id"]
     zip_bytes = _make_bundle(tmp_path, table=("clients", _COLS), agents=["helper"])
 
+    actions = []
     for _ in range(2):
         import_id = await _upload(authenticated_client, pod_id, zip_bytes)
-        await _wait(
+        planned = await _wait(
             authenticated_client, pod_id, import_id, until={"AWAITING_CONFIRMATION"}
         )
+        actions.append({s["kind"]: s["action"] for s in planned["plan"]["steps"]})
         await authenticated_client.post(
             f"/pods/{pod_id}/bundle/imports/{import_id}/apply", json={}
         )
@@ -171,7 +173,11 @@ async def test_apply_idempotent_on_reapply(
         )
         assert final["status"] == "COMPLETED", final
 
-    # Second import saw the resources as UPDATE, not CREATE — no duplication.
+    # The second import found everything there and kept it — no duplication.
+    assert actions == [
+        {"TABLE": "CREATE", "AGENT": "CREATE"},
+        {"TABLE": "SKIP", "AGENT": "SKIP"},
+    ]
     tables = await authenticated_client.get(f"/pods/{pod_id}/datastore/tables")
     names = [t["name"] for t in tables.json()["items"]]
     assert names.count("clients") == 1
@@ -232,11 +238,14 @@ async def test_folder_exists_before_agent_grants_are_applied(
     assert completed["status"] == "COMPLETED", completed
 
 
-async def test_apply_destructive_requires_confirmation(
+async def test_an_import_keeps_what_the_pod_already_has(
     authenticated_client, fixed_test_org, worker, tmp_path
 ):
+    """A person added a `score` column and a row to `leads`, and rewrote the
+    assistant's instructions. Installing a bundle that carries both adds only
+    what is missing -- the `stage` column -- with no confirmation to give, and
+    leaves their column, their row and their words exactly as they were."""
     pod_id = await _new_pod(authenticated_client, fixed_test_org["id"])
-    # Seed a table with a `score` column the bundle drops.
     create = await authenticated_client.post(
         f"/pods/{pod_id}/datastore/tables",
         json={
@@ -251,24 +260,31 @@ async def test_apply_destructive_requires_confirmation(
         },
     )
     assert create.status_code == status.HTTP_201_CREATED, create.text
+    row = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/tables/leads/records",
+        json={"data": {"title": "Theirs", "score": 7}},
+    )
+    assert row.status_code == status.HTTP_201_CREATED, row.text
+    agent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={"name": "assistant", "instruction": "My own words."},
+    )
+    assert agent.status_code == status.HTTP_201_CREATED, agent.text
 
-    zip_bytes = _make_bundle(tmp_path, table=("leads", _COLS))
+    zip_bytes = _make_bundle(
+        tmp_path,
+        table=("leads", [*_COLS, {"name": "stage", "type": "TEXT"}]),
+        rows_csv="title\nAcme\nGlobex\n",
+        agents=["assistant"],
+    )
     import_id = await _upload(authenticated_client, pod_id, zip_bytes)
-    await _wait(
+    planned = await _wait(
         authenticated_client, pod_id, import_id, until={"AWAITING_CONFIRMATION"}
     )
+    assert planned["plan"]["has_destructive_steps"] is False
 
-    # Unconfirmed destructive apply is rejected.
-    rej = await authenticated_client.post(
-        f"/pods/{pod_id}/bundle/imports/{import_id}/apply", json={}
-    )
-    assert rej.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY, rej.text
-    assert rej.json()["code"] == "POD_BUNDLE_CONFIRMATION_REQUIRED"
-
-    # Confirmed apply proceeds and drops the column.
     ok = await authenticated_client.post(
-        f"/pods/{pod_id}/bundle/imports/{import_id}/apply",
-        json={"confirm_destructive": True},
+        f"/pods/{pod_id}/bundle/imports/{import_id}/apply", json={}
     )
     assert ok.status_code == status.HTTP_202_ACCEPTED, ok.text
     final = await _wait(
@@ -278,7 +294,90 @@ async def test_apply_destructive_requires_confirmation(
 
     tbl = await authenticated_client.get(f"/pods/{pod_id}/datastore/tables/leads")
     col_names = {c["name"] for c in tbl.json()["columns"]}
-    assert "score" not in col_names
+    assert {"score", "stage"} <= col_names
+    recs = await authenticated_client.get(
+        f"/pods/{pod_id}/datastore/tables/leads/records"
+    )
+    assert [r["title"] for r in recs.json()["items"]] == ["Theirs"]
+    kept = await authenticated_client.get(f"/pods/{pod_id}/agents/assistant")
+    assert kept.json()["instruction"] == "My own words."
+
+
+async def test_a_replan_after_a_failed_import_still_grants_its_agent(
+    authenticated_client, fixed_test_org, worker, tmp_path
+):
+    """The import creates its agent, then fails before the agent's grants step.
+    The person clears what was in the way and replans: the new plan treats the
+    agent as the import's own, not the pod's, so its grants are still written
+    rather than kept as none."""
+    pod_id = await _new_pod(authenticated_client, fixed_test_org["id"])
+    # A file where the bundle has a folder: its file inside cannot be written.
+    blocker = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/files",
+        data={"directory_path": "/", "search_enabled": "false"},
+        files={"data": ("docs", b"in the way", "text/plain")},
+    )
+    assert blocker.status_code == status.HTTP_201_CREATED, blocker.text
+    grant = {
+        "resource_type": "datastore_table",
+        "resource_name": "leads",
+        "permission_ids": ["datastore.record.read"],
+    }
+    root = tmp_path / "bundle-replan"
+    _write(root / "pod.json", {"name": "CRM", "format_version": 2, "variables": {}})
+    _write(
+        root / "tables" / "leads" / "leads.json",
+        {"name": "leads", "primary_key_column": "id", "columns": _COLS},
+    )
+    _write(
+        root / "agents" / "assistant" / "assistant.json",
+        {"name": "assistant", "instruction": "Hi.", "permissions": {"grants": [grant]}},
+    )
+    _write(root / "files" / "docs" / ".folder.json", {"visibility": "POD"})
+    _write(root / "files" / "docs" / "guide.md", "Read me.")
+
+    import_id = await _upload(authenticated_client, pod_id, pack_bundle(root))
+    await _wait(
+        authenticated_client, pod_id, import_id, until={"AWAITING_CONFIRMATION"}
+    )
+    base = f"/pods/{pod_id}/bundle/imports/{import_id}"
+    applied = await authenticated_client.post(f"{base}/apply", json={})
+    assert applied.status_code == status.HTTP_202_ACCEPTED, applied.text
+    failed = await _wait(
+        authenticated_client, pod_id, import_id, until={"COMPLETED", "FAILED"}
+    )
+    assert failed["status"] == "FAILED", failed
+    steps = {(s["kind"], s["name"]): s["status"] for s in failed["plan"]["steps"]}
+    assert steps[("AGENT", "assistant")] == "DONE"
+    assert steps[("AGENT_GRANTS", "assistant")] == "PENDING"
+
+    cleared = await authenticated_client.delete(
+        f"/pods/{pod_id}/datastore/files/by-path", params={"path": "/docs"}
+    )
+    assert cleared.status_code == status.HTTP_204_NO_CONTENT, cleared.text
+    replanned = await authenticated_client.post(f"{base}/replan")
+    assert replanned.status_code == status.HTTP_202_ACCEPTED, replanned.text
+    planned = await _wait(
+        authenticated_client, pod_id, import_id, until={"AWAITING_CONFIRMATION"}
+    )
+    actions = {(s["kind"], s["name"]): s["action"] for s in planned["plan"]["steps"]}
+    assert actions[("AGENT", "assistant")] == "CREATE"
+    assert actions[("AGENT_GRANTS", "assistant")] == "CREATE"
+
+    again = await authenticated_client.post(f"{base}/apply", json={})
+    assert again.status_code == status.HTTP_202_ACCEPTED, again.text
+    final = await _wait(
+        authenticated_client, pod_id, import_id, until={"COMPLETED", "FAILED"}
+    )
+    assert final["status"] == "COMPLETED", final
+    held = await authenticated_client.get(
+        f"/pods/{pod_id}/agents/assistant/permissions"
+    )
+    assert held.status_code == status.HTTP_200_OK, held.text
+    assert any(
+        g["resource_name"] == "leads" and "datastore.record.read" in g["permission_ids"]
+        for g in held.json()["grants"]
+    ), held.json()
 
 
 async def test_cancel_persists_terminal_tombstone(

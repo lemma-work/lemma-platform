@@ -296,7 +296,34 @@ class FunctionUseCases(FunctionRevisionUseCasesMixin):
         importing user's authorization context in each short UoW. Schema
         extraction and artifact construction happen between those UoWs.
         """
+        result = await self._import_function(
+            entity=entity, update_entity=update_entity, code=code, user_id=user_id
+        )
+        assert result is not None, "an upsert always writes"
+        return result
 
+    async def create_function_for_import(
+        self, *, entity: FunctionEntity, code: str | None, user_id: UUID
+    ) -> FunctionEntity | None:
+        """Create one bundle function, or return ``None`` when the pod already
+        has one of this name, which is left exactly as it is.
+
+        A bundle import keeps what a pod has. Deciding that here, in the unit
+        of work that resolves the create, leaves no gap between finding the
+        name free and writing to it, as a lookup made beforehand would."""
+        return await self._import_function(
+            entity=entity, update_entity=None, code=code, user_id=user_id
+        )
+
+    async def _import_function(
+        self,
+        *,
+        entity: FunctionEntity,
+        update_entity: FunctionUpdateEntity | None,
+        code: str | None,
+        user_id: UUID,
+    ) -> FunctionEntity | None:
+        """The import saga; with no ``update_entity`` it only ever creates."""
         pod_id = entity.pod_id
         async with uow_scope(self._uow_factory) as uow:
             auth_ctx = await AuthorizationDataService(uow.session).build_user_context(
@@ -318,6 +345,8 @@ class FunctionUseCases(FunctionRevisionUseCasesMixin):
                     )
                     operation = "create"
                     plan = None
+                elif update_entity is None:
+                    return None
                 else:
                     plan = await service.resolve_update(
                         pod_id,

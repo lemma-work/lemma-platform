@@ -16,14 +16,16 @@ const NEVER_A_CHAT = /\b(your|own|my|private) line\b|\bline on\b/i;
 const NOT_SAID = new Set(["className", "key", "href", "id", "role", "type", "name", "htmlFor", "rel", "target", "method", "inputMode", "autoComplete"]);
 
 const ts = createRequire(import.meta.url)("typescript") as typeof TS;
-const DIR = new URL("../src/outcomes/", import.meta.url);
+/* The frame, and the way into it, which every door shares. */
+const DIRS = [new URL("../src/outcomes/", import.meta.url), new URL("../src/arrival/", import.meta.url)];
 
 /** Everything a component in the frame can put in front of a person: text
  *  between tags, and every string or template that reads like words (two
  *  words or more) outside an attribute that holds code. Strings written to a
  *  Lemma rather than shown to a person live in `data.ts`, which is left out. */
-function saidIn(file: string): string[] {
-    const source = ts.createSourceFile(file, readFileSync(new URL(file, DIR), "utf8"), ts.ScriptTarget.Latest, true, file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+function saidIn(file: URL): string[] {
+    const name = file.pathname;
+    const source = ts.createSourceFile(name, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, name.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
     const said: string[] = [];
     const inCode = (node: TS.Node): boolean => {
         for (let at: TS.Node | undefined = node.parent; at; at = at.parent) {
@@ -51,10 +53,10 @@ function saidIn(file: string): string[] {
     return said;
 }
 
-const FILES = readdirSync(DIR).filter((file) => /\.tsx?$/.test(file) && file !== "data.ts");
+const FILES = DIRS.flatMap((dir) => readdirSync(dir).filter((file) => /\.tsx?$/.test(file) && file !== "data.ts").map((file) => new URL(file, dir)));
 
 test("the frame never calls a Lemma a pod, a teammate or a bot, or a chat a channel or a line", () => {
-    const wrong = FILES.flatMap((file) => saidIn(file).filter((text) => NEVER.test(text) || NEVER_A_CHAT.test(text)).map((text) => `${file}: ${text}`));
+    const wrong = FILES.flatMap((file) => saidIn(file).filter((text) => NEVER.test(text) || NEVER_A_CHAT.test(text)).map((text) => `${file.pathname.split("/src/")[1]}: ${text}`));
     assert.deepEqual(wrong, []);
 });
 
@@ -62,5 +64,5 @@ test("the scan reads words where they are said", () => {
     /* A check that finds nothing should be finding something to look at. */
     const said = FILES.flatMap(saidIn);
     assert.ok(said.length > 200, `only ${said.length} strings read`);
-    assert.ok(said.some((text) => text.includes("Nothing it owns yet")));
+    assert.ok(said.some((text) => text.includes("Where’s your team’s stuff today?")));
 });

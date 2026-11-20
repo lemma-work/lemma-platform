@@ -121,6 +121,8 @@ class FunctionSchemaDispatcher:
                 await self._invalidate(pod_id, endpoint)
                 if attempt == 0:
                     continue
+            if attempt == 0 and _failed_in_transit(response):
+                continue
             break
         return self._validated_schemas(
             response,
@@ -192,3 +194,38 @@ class FunctionSchemaDispatcher:
     @staticmethod
     def _now() -> datetime:
         return datetime.now(timezone.utc)
+
+
+#: What the runtime reports when fetching the function's code from the
+#: gateway failed in transit, not when the code itself failed to load: httpx's
+#: transport errors, by the class name the runtime answers with.
+_IN_TRANSIT = frozenset(
+    {
+        "ReadError",
+        "WriteError",
+        "ConnectError",
+        "RemoteProtocolError",
+        "ReadTimeout",
+        "WriteTimeout",
+        "ConnectTimeout",
+        "PoolTimeout",
+    }
+)
+
+
+def _failed_in_transit(response: httpx.Response) -> bool:
+    """Whether an inspection the runtime refused failed on the network.
+
+    The runtime answers every failure inside an inspection as 422 with the
+    exception's name, so a dropped read while it fetched the code read like a
+    function that does not load, and an import failed where asking again
+    worked. Such a failure is asked once more; a real load error is not.
+    """
+    if response.status_code != 422:
+        return False
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    error = body.get("error") if isinstance(body, dict) else None
+    return isinstance(error, dict) and error.get("name") in _IN_TRANSIT

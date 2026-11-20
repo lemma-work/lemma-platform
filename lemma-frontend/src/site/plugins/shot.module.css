@@ -1,0 +1,34 @@
+/* A picture in light and dark: the theme decides which one shows. A visitor's
+   own choice (`data-theme`) wins over their system's. */
+.shot {
+    display: block;
+    position: relative;
+    width: 100%;
+    overflow: hidden;
+    background: var(--paper);
+}
+.shot .light,
+.shot .dark {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: top left;
+}
+.shot .dark {
+    display: none;
+}
+:global(:root[data-theme="dark"]) .shot .light {
+    display: none;
+}
+:global(:root[data-theme="dark"]) .shot .dark {
+    display: block;
+}
+@media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme="light"])) .shot .light {
+        display: none;
+    }
+    :global(:root:not([data-theme="light"])) .shot .dark {
+        display: block;
+    }
+}

@@ -15,13 +15,21 @@ T = TypeVar("T", bound="DisplaySizeResponse")
 class DisplaySizeResponse:
     """
     Attributes:
+        reason (None | str | Unset):
         size (None | str | Unset):
     """
 
+    reason: None | str | Unset = UNSET
     size: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        reason: None | str | Unset
+        if isinstance(self.reason, Unset):
+            reason = UNSET
+        else:
+            reason = self.reason
+
         size: None | str | Unset
         if isinstance(self.size, Unset):
             size = UNSET
@@ -31,6 +39,8 @@ class DisplaySizeResponse:
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
+        if reason is not UNSET:
+            field_dict["reason"] = reason
         if size is not UNSET:
             field_dict["size"] = size
 
@@ -39,6 +49,15 @@ class DisplaySizeResponse:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
+
+        def _parse_reason(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        reason = _parse_reason(d.pop("reason", UNSET))
 
         def _parse_size(data: object) -> None | str | Unset:
             if data is None:
@@ -50,6 +69,7 @@ class DisplaySizeResponse:
         size = _parse_size(d.pop("size", UNSET))
 
         display_size_response = cls(
+            reason=reason,
             size=size,
         )
 

@@ -166,7 +166,7 @@ def test_no_notice_where_update_cannot_help(config_path, monkeypatch, capsys):
     """PIP_PREFIX means the image owns this install, so `lemma update` would
     shadow it rather than replace it — advertising the command would be
     advertising a no-op."""
-    monkeypatch.setenv("PIP_PREFIX", "/workspace/.python")
+    monkeypatch.setenv("PIP_PREFIX", "/home/user/.python")
     _installed_version(monkeypatch, "0.7.2")
     update_mod._write_block({"latest_version": "0.7.3"})
 
@@ -287,7 +287,7 @@ def test_background_check_runs_once_the_interval_has_passed(config_path, monkeyp
 
 
 def test_install_kind_refuses_under_pip_prefix(monkeypatch):
-    monkeypatch.setenv("PIP_PREFIX", "/workspace/.python")
+    monkeypatch.setenv("PIP_PREFIX", "/home/user/.python")
     kind = update_mod.install_kind()
     assert kind.kind == "overlay"
     assert not kind.can_update
@@ -332,7 +332,7 @@ def _invoke(args: list[str], tmp_path: Path):
 
 
 def test_update_refuses_in_an_overlaid_image(monkeypatch, tmp_path):
-    monkeypatch.setenv("PIP_PREFIX", "/workspace/.python")
+    monkeypatch.setenv("PIP_PREFIX", "/home/user/.python")
 
     result = _invoke(["update"], tmp_path)
 

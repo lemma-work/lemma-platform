@@ -12,7 +12,10 @@ from sqlalchemy.orm import joinedload
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import facts
-from app.modules.identity.contracts.organization_facts import OrganizationMemberRemoved
+from app.modules.identity.contracts.organization_facts import (
+    OrganizationMemberAdded,
+    OrganizationMemberRemoved,
+)
 from app.modules.identity.events.identity_work import stage_identity_work
 from app.modules.identity.domain.errors import (
     OrganizationConflictError,
@@ -236,6 +239,15 @@ class OrganizationRepository(OrganizationRepositoryPort):
             )
         )
         await self._collect_events(entity)
+        # Announced in the same transaction, as a departure is: what arriving
+        # brings with it -- the pods set to take in everyone who joins -- is
+        # work that commits with the membership or not at all.
+        await facts.emit(
+            self.uow,
+            OrganizationMemberAdded(
+                organization_id=member.organization_id, user_id=member.user_id
+            ),
+        )
         return member.to_entity()
 
     async def get_member(

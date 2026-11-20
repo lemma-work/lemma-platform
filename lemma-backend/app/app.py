@@ -47,6 +47,9 @@ from app.sandbox_health import record_sandbox_probe
 from app.core.infrastructure.channels.channel_service import channel_service
 
 from app.modules.apps.api.host_routing import AppHostRoutingMiddleware
+from app.modules.workspace.api.controllers.machine_preview_proxy import (
+    MachinePreviewHostMiddleware,
+)
 from app.modules.agent_surfaces.api.public_cors import PublicWebCORSMiddleware
 from app.core.registry import assembly
 from app.core.registry.installed import OSS_MODULES
@@ -464,6 +467,11 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     # routing/auth (the rewritten /public/* path is unauthenticated).
     app.add_middleware(AppHostRoutingMiddleware)
 
+    # Machine previews: `p-<id>.<MACHINE_PREVIEW_DOMAIN>` onto the preview
+    # proxy, HTTP and WebSocket both (a dev server's hot reload is a socket).
+    # Outside the app-host router so a preview host is never read as an app.
+    app.add_middleware(MachinePreviewHostMiddleware)
+
     # Outside the app-host router so it sees the path the browser used
     # (`/_lemma/...` on an app origin): a stray session cookie's path is a
     # prefix of that one. Inert unless a request carries a duplicate session
@@ -538,7 +546,7 @@ app = create_app()
 if __name__ == "__main__":
     import uvicorn
 
-    from app.core.server_limits import WS_MAX_BYTES
+    from app.core.server_limits import WS_MAX_BYTES, WS_PER_MESSAGE_DEFLATE
 
     uvicorn.run(
         "app.app:app",
@@ -546,5 +554,6 @@ if __name__ == "__main__":
         port=8000,
         reload=True,
         ws_max_size=WS_MAX_BYTES,
+        ws_per_message_deflate=WS_PER_MESSAGE_DEFLATE,
         access_log=False,
     )

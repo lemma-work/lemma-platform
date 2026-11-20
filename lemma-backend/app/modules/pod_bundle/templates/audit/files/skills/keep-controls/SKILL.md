@@ -5,7 +5,7 @@ description: Keep the controls table true. Use when evidence is added, goes stal
 
 # Keep the controls table true
 
-The number Audit owns is the share of `controls` that are `ready`. Keep that column, and the table's name, as they are.
+Audit's count is the share of `controls` that are `ready`. Keep that column, and the table's name, as they are.
 
 - Every control has an `owner` and a `due_on`.
 - A control is `ready` only while `evidence_link` points at evidence dated in `evidence_on` within the last 90 days. Set `evidence_on` to the evidence's own date whenever you set `evidence_link`. When it passes 90 days, set `ready` back to false and ask its owner for new evidence.

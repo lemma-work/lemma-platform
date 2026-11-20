@@ -5,7 +5,7 @@ import { NEW_CONVERSATION } from "./types";
 import { displayAgentName, initialsOf, isPodDefaultAgent } from "./agent-names";
 import { listStamp } from "./stamp";
 import { readableName } from "@/library/reading";
-import { readPodRoles } from "./pod-roles";
+import { heldPodRole, readPodRoles } from "./pod-roles";
 import { everyPage, readCap, readContact, readContacts, readOrigins, readWidget, type OutreachSent } from "./contacts";
 import { readOpening } from "./public-rows";
 import type { OpenTableRequest, UpdateTableRequest, WebWidgetCreateRequest, WebWidgetUpdateRequest } from "lemma-sdk";
@@ -88,6 +88,8 @@ import type {
     Member,
     Message,
     NewOrg,
+    FirstWorkspace,
+    FirstWorkspaceWanted,
     Org,
     Persona,
     Pod,
@@ -136,6 +138,7 @@ async function membersOf(podId: string): Promise<Member[]> {
                 initials: initialsOf(name),
                 kind: "person" as const,
                 ...readPodRoles(m.roles),
+                podRole: heldPodRole(m.roles),
             };
         });
     } catch {
@@ -280,17 +283,29 @@ function humanizeName(raw: string): string {
 }
 
 
-function podSummary(pod: { id: string; name: string; organization_id: string; icon_url?: string | null; description?: string | null; created_at?: string | null; user_id?: string | null }): Pod {
+function podSummary(pod: { id: string; name: string; organization_id: string; icon_url?: string | null; description?: string | null; created_at?: string | null; user_id?: string | null; config?: unknown }): Pod {
     const name = humanizeName(pod.name);
     const description = pod.description?.trim();
+    const home = (pod.config as { home_app?: unknown } | null | undefined)?.home_app;
     return { id: pod.id, orgId: pod.organization_id, name, iconUrl: pod.icon_url ?? null,
         ...(description ? { description } : {}),
+        ...(sharedByEveryone(pod.config) ? { everyone: true } : {}),
         ...(pod.created_at ? { hiredAt: pod.created_at } : {}),
         ...(pod.user_id ? { hiredBy: pod.user_id } : {}),
+        ...(typeof home === "string" && home ? { homeApp: home } : {}),
         teammate: { name, initials: initialsOf(name), iconUrl: pod.icon_url ?? null },
         subtitle: "", members: [], waiting: "" };
 }
 
+/** Whether a Lemma is the one everyone in its organization is in: open to
+ *  them, and joined by everyone who comes later. Both halves, because the
+ *  server refuses the second without the first and a config read halfway
+ *  through a change could carry either alone. */
+function sharedByEveryone(config: unknown): boolean {
+    if (!config || typeof config !== "object") return false;
+    const said = config as { join_policy?: unknown; auto_join_new_members?: unknown };
+    return said.auto_join_new_members === true && (said.join_policy === "ORG_MEMBERS" || said.join_policy === "PUBLIC");
+}
 
 const INLINE_TEXT_LIMIT = 512 * 1024;
 /** Html gets its own, and a much larger one. The other two are read as prose
@@ -364,7 +379,7 @@ async function shareOwnAccount(podId: string, accountId: string): Promise<string
     if (running) return (await shareAs(podId, account.id, running.slug, running.purpose)).slug;
     const named = account.connectorId || "account";
     return (await shareAs(podId, account.id, freshSlug(named, connectors.map((one) => one.slug)),
-        "A teammate's own " + named + (account.label ? ", " + account.label : ""))).slug;
+        "A Lemma's own " + named + (account.label ? ", " + account.label : ""))).slug;
 }
 
 /** Use one of my pod accounts for everyone as <slug>: one request, which the
@@ -456,6 +471,12 @@ export const liveSource: PodSource = {
         await lemma().organizations.invitations.accept(invitationId);
     },
 
+    async declineInvitation(invitationId: string): Promise<void> {
+        /* The revoke route, which lets the invitee through as well as the
+           people who manage invitations. */
+        await lemma().organizations.invitations.revoke(invitationId);
+    },
+
     /** Organizations this person's email domain may walk into.
      *
      *  Not on `OrganizationsNamespace` — see `askApi`. Empty is the ordinary
@@ -504,8 +525,8 @@ export const liveSource: PodSource = {
     async listPods(orgId: string): Promise<Pod[]> {
         const listed = (await lemma().pods.listByOrganization(orgId)) as Listish;
         return itemsOf(listed)
-            .map((raw) => raw as { id?: string; name?: string; organization_id?: string; icon_url?: string | null; description?: string | null; created_at?: string | null; user_id?: string | null })
-            .filter((pod): pod is { id: string; name: string; organization_id?: string; icon_url?: string | null; description?: string | null; created_at?: string | null; user_id?: string | null } =>
+            .map((raw) => raw as { id?: string; name?: string; organization_id?: string; icon_url?: string | null; description?: string | null; created_at?: string | null; user_id?: string | null; config?: unknown })
+            .filter((pod): pod is { id: string; name: string; organization_id?: string; icon_url?: string | null; description?: string | null; created_at?: string | null; user_id?: string | null; config?: unknown } =>
                 Boolean(pod.id && pod.name),
             )
             .map((pod) => podSummary({ ...pod, organization_id: pod.organization_id ?? orgId }));
@@ -1068,8 +1089,12 @@ export const liveSource: PodSource = {
     async setPodJoin(podId: string, policy: JoinPolicy): Promise<void> {
         /* Only this field goes up. The config is merged field-wise, so the
            runtime stored beside it survives — see `setPodRuntime`, which
-           relies on the same merge. */
-        await lemma(podId).pods.update(podId, { config: { join_policy: joinWire(policy) as JoinWire } });
+           relies on the same merge. Closing a pod also stops it taking in
+           everyone who joins the organization: a closed pod can't, and the
+           server refuses a closed one that still says it does. */
+        await lemma(podId).pods.update(podId, {
+            config: { join_policy: joinWire(policy) as JoinWire, ...(policy === "invited" ? { auto_join_new_members: false } : {}) },
+        });
         forgetPod(podId);
     },
 
@@ -1100,14 +1125,23 @@ export const liveSource: PodSource = {
             .filter((entry): entry is JoinRequest => entry !== null);
     },
 
-    async admitToPod(podId: string, requestId: string): Promise<JoinRequest> {
-        /* No roles named. The platform picks its own defaults for somebody
-           admitted this way, and choosing here would mean this screen deciding
-           what a new member may do — which is the roster's question, asked
-           where the roster is, after they are in. */
-        const said = await lemma(podId).podJoinRequests.approve(podId, requestId);
+    async admitToPod(podId: string, requestId: string, role?: string): Promise<JoinRequest> {
+        const said = await lemma(podId).podJoinRequests.approve(podId, requestId, role ? { pod_role: role as never } : {});
         const request = readJoinRequest(said);
         if (!request) throw new Error("They may be in; the answer could not be read. Reload the roster to check.");
+        return request;
+    },
+
+    async declineJoinRequest(podId: string, requestId: string): Promise<JoinRequest> {
+        const request = readJoinRequest(await lemma(podId).podJoinRequests.reject(podId, requestId));
+        if (!request) throw new Error("It may have been declined; the answer could not be read. Reload to check.");
+        return request;
+    },
+
+    async withdrawJoinRequest(podId: string): Promise<JoinRequest> {
+        /* Unscoped, like asking: the asker is outside the pod. */
+        const request = readJoinRequest(await lemma().podJoinRequests.withdraw(podId));
+        if (!request) throw new Error("It may have been withdrawn; the answer could not be read. Reload to check.");
         return request;
     },
 
@@ -1191,9 +1225,24 @@ export const liveSource: PodSource = {
         return (await lemma().podSurfaces.slackInstallAvailability()).available;
     },
 
-    async ensureFirstWorkspace(): Promise<{ orgId: string }> {
-        const workspace = await lemma().users.ensureFirstWorkspace({ with_pod: true });
-        return { orgId: String(workspace.organization_id) };
+    async ensureFirstWorkspace(wanted?: FirstWorkspaceWanted): Promise<FirstWorkspace> {
+        const made = await lemma().users.ensureFirstWorkspace({
+            /* No private Lemma beside the shared one: somebody who lands in an
+               organization without one lands on its list of Lemmas. */
+            with_pod: false,
+            ...(wanted?.ownOrganization ? { own_organization: true } : {}),
+            ...(wanted?.team === false ? { team: false } : {}),
+        });
+        return {
+            orgId: String(made.organization_id),
+            orgName: shortOrgName(made.organization_name ?? ""),
+            entry: made.entry,
+            orgCreated: made.organization_created === true,
+            podId: made.pod_id ? String(made.pod_id) : null,
+            podName: made.pod_name ? humanizeName(made.pod_name) : null,
+            orgPodId: made.organization_pod_id ? String(made.organization_pod_id) : null,
+            openToDomain: made.organization_open_to_domain ?? null,
+        };
     },
 
     async startSlackInstall(orgId: string): Promise<string> {
@@ -1682,6 +1731,13 @@ export const liveSource: PodSource = {
            that says nothing, and every place that reads one would have to
            tell the two apart. */
         await lemma(podId).pods.update(podId, { description: description.trim() || null });
+        forgetPod(podId);
+    },
+
+    async setHomeApp(podId: string, app: string | null): Promise<void> {
+        /* Only this field goes up: the config is merged field-wise, as
+           `setPodJoin` relies on, and `null` is how it is handed back. */
+        await lemma(podId).pods.update(podId, { config: { home_app: app } });
         forgetPod(podId);
     },
 

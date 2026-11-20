@@ -122,8 +122,8 @@ Rules:
 
 The function sandbox is **deliberately minimal**: `httpx`, `lemma-sdk`, `pydantic`,
 `starlette`, `uvicorn`, and OpenTelemetry. `pandas`, `numpy`, `matplotlib` and
-friends are **not** there — that list belongs to the *workspace* (agent code
-execution) image, which is a different environment. `import pandas` in a function
+friends are **not** there — that list belongs to the agent's *machine* image,
+which is a different environment. `import pandas` in a function
 with no `#python_packages` fails at run time.
 
 To use any other PyPI package, declare it in a `#python_packages:` header line:
@@ -149,12 +149,12 @@ from pydantic import BaseModel, ...
   package name therefore fails your **import**, not your first call.
 - Wheels only (`--no-build`), targeting Python 3.14 / `x86_64-manylinux_2_28`. A
   package that ships only a source distribution cannot be installed.
-- This environment is **not** shared with `execute_python`, which lives in the
-  workspace container. Two separate environments.
+- This environment is **not** shared with `execute_python`, which runs on the
+  agent's machine. Two separate environments.
 
 ## The in-function SDK — `ctx.pod`
 
-The sandbox binds a client to the invocation, so the shortest path is the context
+The function sandbox binds a client to the invocation, so the shortest path is the context
 you were handed:
 
 ```python
@@ -187,8 +187,8 @@ and `pod.query(sql)`. Single-record helpers return plain dicts; list/query helpe
 return typed response objects — call `.to_dict()` on those to get plain data. Errors
 raise `LemmaAPIError` with `.status_code`, `.message`, `.code`.
 
-> **Read the SDK source when unsure.** The Python SDK is installed **in the agent
-> workspace**, and its source is readable where the interpreter found it — that
+> **Read the SDK source when unsure.** The Python SDK is installed **on the agent's
+> machine**, and its source is readable where the interpreter found it — that
 > is where you author and inspect it. (Don't shell out to these paths from
 > function code; the function sandbox is a different machine.) When you need an
 > exact method signature, argument name, or response shape, read it directly
@@ -369,9 +369,30 @@ granted to the function (`resource_type: "connector"` — see Permissions below)
 run = pod.workflows.create_run("ticket-intake")
 if run.active_wait and run.active_wait.wait_type == "HUMAN":
     run = pod.workflows.submit_form(str(run.id), node_id=run.active_wait.node_id, inputs={"ticket_id": rid})
+# A run about one record: read as you, it becomes start.payload, as a table
+# trigger's change would. An app does the same with
+# client.workflows.runs.create(name, { about: { table, recordId } }).
+run = pod.workflows.create_run("prepare-meeting", about=("meetings_work", rid))
 conv = pod.conversations.create_for_agent("triage-agent", title="Triage")
 pod.conversations.send(str(conv.id), "Classify ticket " + rid)
+# Tell the person this function runs as (needs pod:/:channel.notify_self):
+pod.channels.notify_me("Three meetings tomorrow; briefs are ready.")
 ```
+
+### Machines (`ctx.machines`)
+
+A function that needs a real computer — a build, a long script, Docker — runs it
+on a pod machine rather than in its own minimal sandbox. `ctx.machines` acts as
+the run, so it reaches only pod machines the function holds a `machine.use`
+grant on, never a person's own `me`:
+
+```python
+result = ctx.machines.run("pod:builder", "npm ci && npm test")
+if result.exit_code != 0:
+    raise RuntimeError(result.output[-2000:])
+```
+
+Paths on a machine are under `/home/user` (projects in `/home/user/lemma`).
 
 ### Decisions (classify, route, triage)
 
@@ -398,16 +419,21 @@ result = pod.decisions.make(
     schema=QUESTIONS,
     examples=[{"evidence": "Refund my last invoice", "answers": {"category": "billing"}}],
 )
-category = result.answers["category"].value   # "billing", or None when unsure
+answer = result.answers["category"]
+unsure = answer.value is None or (answer.confidence is not None and answer.confidence < 0.7)
+category = None if unsure else answer.value     # "billing", or None for a person to look at
 ```
 
 - Each property's `description` is the question. Allowed shapes only: a string
   `enum` (or `oneOf` of `{const, description}`), an array of one with
   `uniqueItems: true`, `boolean`, or `integer` with `minimum`/`maximum` (2-11
   levels). Free text and open-ended numbers are refused (422).
-- `value` is `None` when the evidence did not support an answer — route that to
-  a person rather than guessing. `confidence` is set only by providers that
-  measure it.
+- Unsure is `value is None` **or** `confidence` set and below your threshold —
+  route that to a person rather than guessing. Check both: the default model
+  provider answers `None` when the evidence did not support an answer and never
+  sets `confidence`; the `typesafe` provider always answers its most probable
+  value and sets `confidence` to that value's probability. Pick the threshold
+  per question, by what a wrong answer costs.
 - Evidence over 64 KiB is refused, not cut: send the part that matters.
 - Examples are how answers improve: keep corrected cases in a table and pass the
   recent ones in `examples`.

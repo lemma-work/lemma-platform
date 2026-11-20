@@ -191,7 +191,7 @@ test("everything that is not a record is still headed by its kind", () => {
         candidate("Atlas notes", { kind: "doc", id: "d", subtitle: "/me/atlas.md" }),
     ], "atlas");
 
-    assert.deepEqual(groupByKind(hits).map((g) => g.label), ["Teammate", "Document"]);
+    assert.deepEqual(groupByKind(hits).map((g) => g.label), ["Lemma", "Document"]);
 });
 
 test("a record with no table named falls back to its kind", () => {

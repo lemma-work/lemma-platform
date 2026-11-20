@@ -8,43 +8,97 @@ import { SiteFooter, SiteHeader } from "@/site/chrome";
 import { InstallHost } from "@/site/import/install-host";
 import {
     extractReadmePresentation,
+    fetchPublicBundleManifest,
     fetchPublicGitHubReadme,
     resolveReadmeAssetUrl,
     resolveReadmeLinkUrl,
 } from "@/site/github/public-repository";
 import { findPublicTemplateBySource } from "@/site/templates/catalog";
 import { pageMetadata } from "@/site/metadata";
-import { teammateName } from "@/site/import/plan";
+import {
+    folderFromQuery,
+    folderName,
+    installPath,
+    installTitle,
+    sourceHref,
+    sourceLabel,
+    type GitHubBundleSource,
+} from "@/site/import/github-source";
 import s from "@/site/import/import.module.css";
 
-type Props = { params: Promise<{ owner: string; repo: string }> };
+type Props = {
+    params: Promise<{ owner: string; repo: string }>;
+    searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
 
-export async function generateMetadata({ params }: Props) {
+/** The repository, and the folder in it when `?path=` names one. A folder
+ *  the server would not take is no page. */
+async function sourceOf({
+    params,
+    searchParams,
+}: Props): Promise<GitHubBundleSource> {
     const { owner, repo } = await params;
-    const template = findPublicTemplateBySource(owner, repo);
+    const path = folderFromQuery((await searchParams).path);
+    if (
+        !/^[a-zA-Z0-9_.-]+$/.test(owner) ||
+        !/^[a-zA-Z0-9_.-]+$/.test(repo) ||
+        path === undefined
+    )
+        notFound();
+    return { owner, repo, path };
+}
+
+/** A curated template is a whole repository; one folder of it is not. */
+function templateOf(source: GitHubBundleSource) {
+    return source.path
+        ? null
+        : findPublicTemplateBySource(source.owner, source.repo);
+}
+
+export async function generateMetadata(props: Props) {
+    const source = await sourceOf(props);
+    const template = templateOf(source);
+    const manifest = source.path
+        ? await fetchPublicBundleManifest(source.owner, source.repo, source.path)
+        : null;
     return {
         ...pageMetadata(
-            "Install " + (template?.name ?? teammateName(repo)),
+            "Install " +
+                installTitle(source, {
+                    template: template?.name,
+                    manifest: manifest?.name,
+                }),
             template?.description ??
-                "Install " + owner + "/" + repo + " on a Lemma teammate.",
-            "/import/github/" + owner + "/" + repo,
+                manifest?.description ??
+                "Install " + sourceLabel(source) + " on a Lemma.",
+            installPath(source),
         ),
         robots: { index: !!template, follow: true },
     };
 }
 
-export default async function Page({ params }: Props) {
-    const { owner, repo } = await params;
-    if (!/^[a-zA-Z0-9_.-]+$/.test(owner) || !/^[a-zA-Z0-9_.-]+$/.test(repo))
-        notFound();
-    const template = findPublicTemplateBySource(owner, repo);
-    const readme = await fetchPublicGitHubReadme(owner, repo);
+export default async function Page(props: Props) {
+    const source = await sourceOf(props);
+    const { owner, repo, path } = source;
+    const template = templateOf(source);
+    const [readme, manifest] = await Promise.all([
+        fetchPublicGitHubReadme(owner, repo, path ?? ""),
+        path ? fetchPublicBundleManifest(owner, repo, path) : null,
+    ]);
     const shown = readme
-        ? extractReadmePresentation(readme.markdown, repo)
+        ? extractReadmePresentation(
+              readme.markdown,
+              path ? folderName(path) : repo,
+          )
         : null;
-    const title = template?.name ?? shown?.title ?? teammateName(repo);
-    const lede = template?.description ?? shown?.intro ?? "";
-    const githubHref = "https://github.com/" + owner + "/" + repo;
+    const title = installTitle(source, {
+        template: template?.name,
+        manifest: manifest?.name,
+        readme: shown?.title,
+    });
+    const lede =
+        template?.description ?? manifest?.description ?? shown?.intro ?? "";
+    const githubHref = sourceHref(source);
     /* The hero already carries the README's opening line; printing it again
        as the first paragraph below reads as a mistake. */
     const at = shown && lede ? shown.body.indexOf(lede) : -1;
@@ -67,7 +121,7 @@ export default async function Page({ params }: Props) {
                         <header className={s.hero}>
                             <a className={s.source} href={githubHref}>
                                 <GithubLogo size={16} aria-hidden />
-                                {owner}/{repo}
+                                {sourceLabel(source)}
                                 <ArrowUpRight size={12} aria-hidden />
                             </a>
                             <h1>{title}</h1>
@@ -118,6 +172,7 @@ export default async function Page({ params }: Props) {
                                                         owner,
                                                         repo,
                                                         readme.branch,
+                                                        readme.dir,
                                                     )}
                                                     alt={alt || ""}
                                                 />
@@ -129,6 +184,7 @@ export default async function Page({ params }: Props) {
                                                         owner,
                                                         repo,
                                                         readme.branch,
+                                                        readme.dir,
                                                     )}
                                                 >
                                                     {children}
@@ -154,7 +210,12 @@ export default async function Page({ params }: Props) {
                         className={s.aside}
                         aria-label="Install"
                     >
-                        <InstallHost owner={owner} repo={repo} title={title} />
+                        <InstallHost
+                            owner={owner}
+                            repo={repo}
+                            path={path}
+                            title={title}
+                        />
                     </aside>
                 </div>
             </main>

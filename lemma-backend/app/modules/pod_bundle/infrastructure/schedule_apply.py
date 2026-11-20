@@ -16,7 +16,8 @@ from lemma_pod_bundle.apply_fields import (
     without_time_schedule_filter,
 )
 
-from app.modules.pod_bundle.domain.state import PlanStep
+from app.modules.pod_bundle.domain.state import PlanStep, StepKind
+from app.modules.pod_bundle.infrastructure.kept_parts import CreatedParts
 
 
 async def apply_schedule(
@@ -28,6 +29,8 @@ async def apply_schedule(
     user_id: UUID,
     load: Callable[[str, str], Mapping[str, object]],
     warnings: list[str],
+    created: CreatedParts,
+    resumed: bool = False,
 ) -> None:
     """Create a bundled schedule once, by name.
 
@@ -83,8 +86,8 @@ async def apply_schedule(
         )
     existing = await get_schedule_by_name(uow, pod_id=pod_id, name=step.name, ctx=ctx)
     if existing is not None:
-        # Create-once by name. The plan says SKIP for this case, so reaching
-        # here means the pod grew the schedule between plan and apply.
+        # Create-once by name: the import's own is done, anyone else's kept.
+        created.claim(step, resumed=resumed)
         return
     # Build from the shared allow-list (also used by lemma-cli's direct
     # import) so the two importers can't silently drift on which exported
@@ -102,6 +105,7 @@ async def apply_schedule(
     fields["pod_connector_slug"] = fields.pop("pod_connector", None)
     entity = ScheduleCreateEntity(user_id=user_id, pod_id=pod_id, **fields)
     await create_schedule(uow, entity, ctx=ctx)
+    created.add(StepKind.SCHEDULE, step.name)
 
 
 def _as_uuid(value: object) -> UUID | None:

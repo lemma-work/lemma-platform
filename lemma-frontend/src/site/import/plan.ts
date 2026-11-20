@@ -1,7 +1,6 @@
 import type {
     ConnectorChoice,
     ConnectorPlan,
-    ImportPlanOutcome,
     ImportStatus,
     PlanStep,
     StepAction,
@@ -180,25 +179,6 @@ export function contentsLine(groups: StepGroup[]): string {
     return parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1];
 }
 
-/** One line on what the install does with what the bundle's Lemma owned, or
- *  null when there is nothing to say: it owned nothing, or this Lemma already
- *  owns the same thing. */
-export function ownsLine(outcome: ImportPlanOutcome | null | undefined): string | null {
-    if (!outcome) return null;
-    switch (outcome.action) {
-        case "SET":
-            return "It will own: “" + outcome.sentence + "”";
-        case "KEEP":
-            return (
-                "Keeps what this Lemma already owns; the bundle's “" +
-                outcome.sentence +
-                "” is not set"
-            );
-        default:
-            return null;
-    }
-}
-
 /** What the installer has picked for one bundled connector.
  *
  *  `installation` is an installation id, `CREATE` to install Lemma's own app
@@ -228,13 +208,15 @@ export function declares(c: ConnectorPlan): boolean {
  *
  *  A connector with nowhere to map to cannot be declared, and whatever names
  *  its slug would be bound to nothing; a shared one with no account only
- *  waits for one, which is a warning, not a stop. */
+ *  waits for one, which is a warning, not a stop. An optional one with
+ *  nowhere to map to (SKIPPED) is left out unless one is created for it. */
 export function blockedBy(c: ConnectorPlan, pick: ConnectorPick): string | null {
-    if (c.status === "CONFLICT") return c.message ?? "Its name is taken in this teammate.";
+    if (c.status === "CONFLICT") return c.message ?? "Its name is taken in this Lemma.";
     if (!declares(c)) return null;
     if (pick.installation === CREATE_INSTALLATION)
         return c.can_create_installation ? null : c.message;
     if (pick.installation) return null;
+    if (c.status === "SKIPPED") return null;
     return c.message ?? "Your organization has no " + c.connector + " installation.";
 }
 

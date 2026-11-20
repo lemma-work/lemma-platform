@@ -61,6 +61,7 @@ class AgentDetailResponse:
             pinned by check constraints to exactly one row per pod, whose id is the
             pod's own — so "is this the default assistant?" stays a comparison rather
             than a query, which matters on paths that answer it per request.
+        machine (None | str | Unset):
         metadata (AgentDetailResponseMetadataType0 | None | Unset):
         output_schema (AgentDetailResponseOutputSchemaType0 | None | Unset):
         toolsets (list[AgentToolset] | Unset):
@@ -81,6 +82,7 @@ class AgentDetailResponse:
     icon_url: None | str | Unset = UNSET
     input_schema: AgentDetailResponseInputSchemaType0 | None | Unset = UNSET
     kind: AgentKind | Unset = UNSET
+    machine: None | str | Unset = UNSET
     metadata: AgentDetailResponseMetadataType0 | None | Unset = UNSET
     output_schema: AgentDetailResponseOutputSchemaType0 | None | Unset = UNSET
     toolsets: list[AgentToolset] | Unset = UNSET
@@ -151,6 +153,12 @@ class AgentDetailResponse:
         if not isinstance(self.kind, Unset):
             kind = self.kind.value
 
+        machine: None | str | Unset
+        if isinstance(self.machine, Unset):
+            machine = UNSET
+        else:
+            machine = self.machine
+
         metadata: dict[str, Any] | None | Unset
         if isinstance(self.metadata, Unset):
             metadata = UNSET
@@ -204,6 +212,8 @@ class AgentDetailResponse:
             field_dict["input_schema"] = input_schema
         if kind is not UNSET:
             field_dict["kind"] = kind
+        if machine is not UNSET:
+            field_dict["machine"] = machine
         if metadata is not UNSET:
             field_dict["metadata"] = metadata
         if output_schema is not UNSET:
@@ -311,6 +321,15 @@ class AgentDetailResponse:
         else:
             kind = AgentKind(_kind)
 
+        def _parse_machine(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        machine = _parse_machine(d.pop("machine", UNSET))
+
         def _parse_metadata(
             data: object,
         ) -> AgentDetailResponseMetadataType0 | None | Unset:
@@ -382,6 +401,7 @@ class AgentDetailResponse:
             icon_url=icon_url,
             input_schema=input_schema,
             kind=kind,
+            machine=machine,
             metadata=metadata,
             output_schema=output_schema,
             toolsets=toolsets,

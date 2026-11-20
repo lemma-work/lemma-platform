@@ -548,12 +548,15 @@ async def test_what_the_bundle_applier_does_with_an_email_surface(
     machinery are needed: build it the way `pod_bundle/events/handlers.py` does
     and hand it a bundle root on disk.
 
-    The two halves:
+    The halves:
 
     * A bundle carrying the name the exporter wrote -- `resend-{slug}`, derived
       from the agent name and nothing random -- matches the mailbox the agent was
       given at creation, so a round trip lands on it. This is the case the
-      register first called broken, and it is not.
+      register first called broken, and it is not. In a round trip the import
+      created the agent, so the mailbox it was born with is the import's own.
+    * The same mailbox on an agent the pod had before the import is the pod's,
+      and an import keeps it as it is (`PartKeptError`, a skipped step).
     * A bundle carrying any other name finds nothing, takes the create path, and
       `ensure_one_surface_per_agent` refuses it. That is the real scope: a
       hand-written bundle, or one whose agent was renamed between export and
@@ -567,8 +570,10 @@ async def test_what_the_bundle_applier_does_with_an_email_surface(
         surface_name_for,
     )
     from app.modules.agent_surfaces.tests.e2e.helpers import _create_agent
+    from app.modules.pod_bundle.domain.errors import PartKeptError
     from app.modules.pod_bundle.domain.state import PlanStep, StepAction, StepKind
     from app.modules.pod_bundle.infrastructure.applier import BundleApplier
+    from app.modules.pod_bundle.infrastructure.kept_parts import CreatedParts
 
     pod_id = pod_with_a_mailbox["id"]
     agent = await _create_agent(authenticated_client, pod_id)
@@ -605,7 +610,7 @@ async def test_what_the_bundle_applier_does_with_an_email_surface(
         )
         return root
 
-    async def _apply(name: str):
+    async def _apply(name: str, *, agent_made_here: bool = True):
         uow = SqlAlchemyUnitOfWork(db_session)
         ctx = await AuthorizationDataService(db_session).build_user_context(
             user_id=UUID(fixed_test_user["id"]), pod_id=UUID(pod_id)
@@ -616,6 +621,7 @@ async def test_what_the_bundle_applier_does_with_an_email_surface(
             pod_id=UUID(pod_id),
             user_id=UUID(fixed_test_user["id"]),
             bundle_root=_bundle(name),
+            created=CreatedParts([f"AGENT:{agent['name']}"] if agent_made_here else []),
         )
         await applier.apply_step(
             PlanStep(
@@ -635,6 +641,10 @@ async def test_what_the_bundle_applier_does_with_an_email_surface(
     )
     assert len(after) == 1, f"a round trip must not mint a second mailbox: {after}"
     assert after[0].id == held[0].id
+
+    # An agent the pod had before: its mailbox is the pod's, and is kept.
+    with pytest.raises(PartKeptError):
+        await _apply(exported_name, agent_made_here=False)
 
     # Any other name is the case DEV-SURF-003 is actually about.
     with pytest.raises(AgentSurfaceAgentPlatformConflictError):

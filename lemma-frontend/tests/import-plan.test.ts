@@ -14,7 +14,6 @@ import {
     installedApp,
     landingPath,
     needsAnswer,
-    ownsLine,
     suggestedValue,
     teammateName,
 } from "../src/site/import/plan.ts";
@@ -229,29 +228,30 @@ test("a connector with no installation blocks until one is chosen to be made", (
     );
 });
 
+test("an optional connector with nowhere to map to is left out, unless one is made", () => {
+    const optional = connector({
+        installations: [],
+        auth_config_id: null,
+        required: false,
+        status: "SKIPPED",
+        message: "Optional, and left out",
+        can_create_installation: true,
+    });
+    assert.equal(blockedBy(optional, defaultPick(optional)), null);
+    // Nothing sent: the server leaves out what the plan said it would.
+    assert.deepEqual(connectorChoices([optional], {}), {});
+    assert.deepEqual(
+        connectorChoices([optional], {
+            crm: { installation: CREATE_INSTALLATION, share: "" },
+        }),
+        { crm: { create_installation: true } },
+    );
+});
+
 test("a connector the pod already has is kept; a clashing slug blocks", () => {
     const kept = connector({ status: "EXISTS" });
     const clash = connector({ slug: "x", status: "CONFLICT", message: "taken" });
     assert.equal(blockedBy(kept, defaultPick(kept)), null);
     assert.equal(blockedBy(clash, defaultPick(clash)), "taken");
     assert.deepEqual(connectorChoices([kept], {}), {});
-});
-
-test("the review says what the install will own, and stays quiet when nothing changes", () => {
-    const outcome = {
-        sentence: "Every lead hears back within two days.",
-        kind: "week" as const,
-        has_measure: true,
-    };
-    assert.equal(
-        ownsLine({ ...outcome, action: "SET" }),
-        "It will own: “Every lead hears back within two days.”",
-    );
-    assert.equal(
-        ownsLine({ ...outcome, action: "KEEP" }),
-        "Keeps what this Lemma already owns; the bundle's “Every lead hears back within two days.” is not set",
-    );
-    assert.equal(ownsLine({ ...outcome, action: "SAME" }), null);
-    assert.equal(ownsLine(null), null);
-    assert.equal(ownsLine(undefined), null);
 });

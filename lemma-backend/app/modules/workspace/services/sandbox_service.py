@@ -63,7 +63,7 @@ from app.modules.workspace.services.sandbox_addressing import (
 )
 from app.modules.workspace.services.host_loopback_policy import no_host_loopback
 from app.modules.workspace.services.sandbox_create_spec import provider_create_spec
-from app.modules.workspace.services.sandbox_sizing import plan_size_for
+from app.modules.workspace.services.sandbox_sizing import machine_size_for
 from app.modules.workspace.services.sandbox_volumes import SandboxVolumeMixin
 
 logger = get_logger(__name__)
@@ -269,9 +269,12 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
         # all -- the in-image credential path and the runtime's own headers
         # travel with the image -- so adopting it produces a workspace that
         # provisions successfully and then fails every operation.
+        # Not one destroyed: its sandbox is gone by our own hand, and a provider
+        # whose listing trails the kill would otherwise hand it straight back.
         if (
             instance is not None
             and instance.provider_id
+            and instance.state is not SandboxInstanceState.DESTROYED
             and not profile_is_stale(
                 kind=sandbox.kind, recorded_digest=sandbox.profile_digest
             )
@@ -300,7 +303,7 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
                         await self._start(sandbox, existing, deadline_at=deadline_at)
                 else:
                     span.set_attribute("lemma.ensure", "reuse")
-                await self._mark_in_use(sandbox, instance)
+                await self._mark_in_use(sandbox, instance, resumed=not existing.running)
                 return self._handle(sandbox, existing)
 
             # No container, but a row claiming one. `begin_instance` writes the
@@ -375,7 +378,7 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
                 else sandbox.epoch
             )
             profile = profile_for(sandbox.kind)
-            size = await plan_size_for(uow, sandbox)
+            size = machine_size_for(sandbox)
             # Record what this sandbox is actually being built from, every
             # time. Writing it only once would freeze the row at whatever was
             # configured on first provision, and the staleness check above
@@ -406,6 +409,7 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
             volume_name=volume_name,
             size=size,
             host_loopback=await self._host_loopback(sandbox),
+            storage_generation=storage_generation,
         )
         try:
             # Two spans, so a slow first use says whether the provider was slow
@@ -568,7 +572,9 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
             await SandboxRepository(uow).touch(sandbox_id)
             await uow.commit()
 
-    async def _mark_in_use(self, sandbox: Sandbox, instance) -> None:
+    async def _mark_in_use(
+        self, sandbox: Sandbox, instance, *, resumed: bool = False
+    ) -> None:
         """Adopting a sandbox is a state change; record it as one.
 
         The reasoning, and the failure it comes from, is on
@@ -576,7 +582,9 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
         """
         async with self._uow_factory() as uow:
             await SandboxRepository(uow).mark_in_use(
-                sandbox.id, instance.id if instance is not None else None
+                sandbox.id,
+                instance.id if instance is not None else None,
+                resumed=resumed,
             )
             await uow.commit()
 

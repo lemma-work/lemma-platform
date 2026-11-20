@@ -20,6 +20,7 @@ from app.modules.datastore.domain.datastore_entities import (
     ensure_table_name_available,
     materialize_table_columns,
 )
+from app.modules.datastore.domain.column_changes import column_change
 from app.modules.datastore.domain.errors import (
     DatastoreConflictError,
     DatastoreDomainError,
@@ -428,20 +429,7 @@ class TableService:
         ensure_identifier_fits(column.name, kind="Column name")
         _ensure_queryable_column_name(column.name)
         requester_user_id = ctx.user_id
-        table = await self.table_repository.get_by_datastore_and_name(
-            pod_id,
-            table_name,
-        )
-        if not table:
-            raise DatastoreTableNotFoundError("Table not found")
-
-        await self.authz.require_table_update(
-            user_id=requester_user_id,
-            pod_id=pod_id,
-            table_id=table.id,
-            table_name=table.table_name,
-            ctx=ctx,
-        )
+        table = await self._table_to_change(pod_id, table_name, ctx)
 
         declared_columns = list(table.columns)
         table.add_column(column, actor_id=requester_user_id)
@@ -507,6 +495,59 @@ class TableService:
                 f"Failed to remove column '{column_name}' from table '{table_name}'"
             ) from exc
         return await self.table_repository.update(table)
+
+    async def update_column(
+        self,
+        pod_id: UUID,
+        table_name: str,
+        column_name: str,
+        options: list[str] | None,
+        ctx: Context,
+        drop_foreign_key: bool = False,
+    ) -> DatastoreTableEntity:
+        """More options for an ENUM column, no foreign key; see ``column_change``."""
+        table = await self._table_to_change(pod_id, table_name, ctx)
+        change = column_change(table, column_name, options, drop_foreign_key)
+        if change is None:
+            return table
+
+        # The database first, the reverse of ``add_column``, by the same rule:
+        # leave the residue the caller can clear. Interrupted here, the database
+        # allows what the declared schema still refuses, and asking again
+        # finishes it; the other way round, a retry sees it done and does nothing.
+        manager = self.schema_manager
+        try:
+            await manager.change_column_constraints(pod_id, table_name, change)
+        except DatastoreDomainError:
+            raise
+        except Exception as exc:
+            raise DatastoreInfrastructureError(
+                f"Failed to change column '{column_name}' on table '{table_name}'"
+            ) from exc
+        table.update_column(change.column, actor_id=ctx.user_id)
+        return await self.table_repository.update(table)
+
+    async def _table_to_change(
+        self, pod_id: UUID, table_name: str, ctx: Context
+    ) -> DatastoreTableEntity:
+        """The table a column is added to or changed on, once the caller may.
+
+        One place, so adding a column and changing one cannot come to need
+        different permissions.
+        """
+        table = await self.table_repository.get_by_datastore_and_name(
+            pod_id, table_name
+        )
+        if not table:
+            raise DatastoreTableNotFoundError("Table not found")
+        await self.authz.require_table_update(
+            user_id=ctx.user_id,
+            pod_id=pod_id,
+            table_id=table.id,
+            table_name=table.table_name,
+            ctx=ctx,
+        )
+        return table
 
     async def _undo_metadata(
         self,

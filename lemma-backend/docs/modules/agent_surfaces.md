@@ -83,6 +83,7 @@ impossible to leave stale.
 | `/surfaces/me` | List reachable user surfaces and choose a default |
 | `/surfaces/webhooks/{platform}`, `/surfaces/{surface_id}/webhook` | Platform-wide or direct webhook ingest/verification |
 | `/surfaces/teams/admin-consent/callback` | Teams tenant consent completion |
+| `/pods/{pod_id}/members/me/notices` | `POST {text}`: tell the person the request acts for something, in their own channel -- a function's or agent's note to the person it runs as, or a member's note to themselves. It names no recipient: the line goes to `ctx.user_id`, refused (403) for a run acting for nobody and 404 for a person outside the pod. Takes `channel.notify_self`, which a named function or agent can be granted on the pod (`resource_type` `pod`, `resource_name` `/`) and a member holds through `channel.write`; `channel.write` itself cannot be granted to a workload. An agent says it as itself, a function as the pod's agent. Registered before `{member}`, so `me` never reaches the route below. Same idempotency and per-minute cap |
 | `/pods/{pod_id}/members/{member}/notices` | `POST {text}`: tell another member something, as a line in their own channel, pushed to them like any line of theirs (`services/direct_messages.py`). `member` is a pod member id, user id or email; takes `channel.write`; the same `Idempotency-Key` from the same caller is the same notice |
 | `/pods/{pod_id}/surface-setup/slack/manager` | `GET` the workspaces Lemma's own Slack app manages for the pod's organization; `PUT {account_id}` binds one from a grant of Lemma's app this browser finished |
 | `/surface-setup/slack/install` | "Add to Slack" from outside the app: `GET` whether Lemma's own Slack app is set up on this server (asked before a person with no organization is given one), `POST {organization_id}` Slack's consent page for it, bot scopes only, refused before anything is made when Slack isn't set up (`SLACK_NOT_SET_UP`) or the caller may not add the organization's installs |
@@ -299,15 +300,23 @@ observer renders them on the surface and a submission resumes the run.
   `SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH=true`: a number claimed by exactly one
   profile then routes to it, each such match is logged
   (`unverified_phone_match_used`). A verified owner always wins; a number claimed by several *unverified* profiles never matches.
-- **One conversation per person, agent and channel.** Every thread sits on a
+- **One conversation per person, agent and platform.** Every thread sits on a
   channel source (`services/channel_places.py`): a private chat on the member's
   `DIRECT` channel or the contact's `CONTACT` channel, keyed by the person
   rather than the address it arrived on; a group, a shared Slack channel or an
   email thread with others on it on a `GROUP` channel of its own. The binder
   (`services/conversation_binder.py`) continues the person's conversation with
-  the answering agent in that channel -- across another pool number, another of
-  the pod's bots, another platform, or a quiet week -- and opens one only for a
-  different agent or person. There is no inactivity reset; the per-surface
+  the answering agent on that source's platform in the channel
+  (`agent_conversations.platform`) -- across a new thread, another pool number,
+  another of the pod's bots on the platform, or a quiet week -- and opens one
+  for a different agent, person or platform. A member's WhatsApp chat, their
+  email with the pod's inbox and their chat in Lemma are three places of one
+  `DIRECT` channel and three conversations: what is asked on one is neither
+  read nor answered on another, and none waits behind another's run. A
+  notification lands in the recipient's conversation on the platform it is
+  sent on -- for email, their place on the inbox is made first -- which is
+  where their reply arrives. A web widget's chat (`WEB`) continues across a
+  visitor's sessions. There is no inactivity reset; the per-surface
   `dm_conversation_reset_after_hours` field is accepted and ignored. This is
   the only place a surface decides which conversation a message joins.
 - **Every line lands on the channel's timeline** (`services/channel_lines.py`),

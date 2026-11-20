@@ -63,7 +63,10 @@ export type ConnectorPlanStatus =
     | "NEEDS_ACCOUNT"
     | "NEEDS_INSTALLATION"
     | "EXISTS"
-    | "CONFLICT";
+    | "CONFLICT"
+    /** Optional, nothing in the organization to map it to, and only grants
+     *  name it: left out unless the installer creates an installation. */
+    | "SKIPPED";
 
 export interface InstallationOption {
     auth_config_id: string;

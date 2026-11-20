@@ -227,6 +227,7 @@ class ImportUseCases:
         owner: str | None = None,
         repo: str | None = None,
         ref: str | None = None,
+        path: str | None = None,
         template: str | None = None,
     ) -> ImportState:
         """Single URL-based import entry point.
@@ -234,7 +235,7 @@ class ImportUseCases:
         ``URL``: verify the lemma signed download token (410 on bad/expired) and
         queue ``pod_bundle.import_url`` with the resolved source object — the
         worker reads it straight from object storage (no server-side fetch, no
-        SSRF). ``GITHUB``: parse the repo reference and queue
+        SSRF). ``GITHUB``: parse the repo reference, keep ``path``, and queue
         ``pod_bundle.import_github``. ``TEMPLATE``: pack the named template that
         ships with the backend (404 for an unknown name), stage it, and queue
         the plan straight away. The request carries no bytes in any case.
@@ -303,6 +304,7 @@ class ImportUseCases:
                 source=BundleSource(
                     kind=BundleSourceKind.GITHUB,
                     repo_url=url or f"https://github.com/{owner}/{repo}",
+                    path=path,
                     ref=ref,
                 ),
             )
@@ -430,6 +432,8 @@ class ImportUseCases:
             )
         retrying_failed_job = state.status is ImportStatus.FAILED
         state.status = ImportStatus.QUEUED
+        # What the discarded plan made: the new one finishes it, not keeps it.
+        state.remember_finished_creates()
         state.plan = None
         state.error = None
         state.error_type = None
@@ -501,14 +505,7 @@ class ImportUseCases:
                 if state.status is ImportStatus.PARTIALLY_CANCELLED:
                     # As the job says when it stops itself mid-apply: the
                     # steps that landed were not undone.
-                    applied = len(state.committed_steps)
-                    total = len(state.plan.steps) if state.plan else 0
-                    state.error = (
-                        f"Cancelled after {applied} of {total} steps had been "
-                        "applied to this pod. Those changes were not undone; "
-                        "import the bundle again to finish, or remove what it "
-                        "created."
-                    )
+                    state.error = state.cancelled_part_way_message()
                 state.current_step = None
                 state.completed_at = datetime.now(timezone.utc)
                 await self._state_store.stage_import(uow, state)

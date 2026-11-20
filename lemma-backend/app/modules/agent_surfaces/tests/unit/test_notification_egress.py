@@ -270,6 +270,7 @@ async def test_the_conversation_is_opened_under_the_surface_agents_name(
         DeliveryChannel(surface=surface, email_address="bob@example.com"),
         outbound=outbound,
         channel_id=channel_id,
+        platform="RESEND",
     )
 
     assert opened == conversation_id

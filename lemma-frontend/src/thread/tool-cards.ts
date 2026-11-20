@@ -314,7 +314,7 @@ export function askCardView(ask: TeammateAsk): {
     linkable: boolean;
 } {
     const linkable = ask.askedAs === "AS_PERSON" && Boolean(ask.podId && ask.conversationId);
-    const name = ask.teammate || "The other teammate";
+    const name = ask.teammate || "The other Lemma";
     if (ask.pending) return { status: "asking", tone: "wait", line: "", linkable: false };
     if (ask.needsApproval) return { status: "needs your OK", tone: "wait", line: "", linkable: false };
     if (ask.failed) return { status: "not asked", tone: "bad", line: "", linkable: false };
@@ -334,7 +334,7 @@ export function askCardView(ask: TeammateAsk): {
         case "UNFINISHED":
             return { status: "couldn’t finish", tone: "bad", line: name + " couldn’t finish this request.", linkable };
         case "DISCONNECTED":
-            return { status: "disconnected", tone: "bad", line: name + " was disconnected before it answered. Someone needs to connect the two teammates again.", linkable: false };
+            return { status: "disconnected", tone: "bad", line: name + " was disconnected before it answered. Someone needs to connect the two Lemmas again.", linkable: false };
         default:
             return { status: "", line: "", linkable };
     }
@@ -428,8 +428,8 @@ export interface ImageLook {
      *  A relative `workspace_file_path` resolves against the *conversation's*
      *  directory — `WorkspaceFileManager._workspace_path` joins it onto its own
      *  `cwd`, which `test_workspace_path_resolution.py` pins — while this app's
-     *  route joins the same string onto `/workspace`
-     *  (`files_controller._workspace_path`). One string, two different files.
+     *  route joins the same string onto the machine's workspace root
+     *  (`machine_files_controller._machine_path`). One string, two different files.
      *  The card carries the fact; resolving it needs a query, so the view does
      *  it. */
     relative: boolean;
