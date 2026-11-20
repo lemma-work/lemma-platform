@@ -587,8 +587,21 @@ revalidate every use and shared caches keep nothing.
 This needs only what serving apps already needs: the wildcard app host routed to
 the API, credentialed CORS for the app origins, and a sign-in page that honours
 `redirect_uri`. `AUTH_WEBSITE_BASE_PATH` is appended to an `AUTH_FRONTEND_URL`
-with no path of its own. Private apps are not served this way on plain HTTP
-(the desktop), where only public apps open at the app address.
+with no path of its own.
+
+On plain HTTP only public apps open at the app address -- the desktop and the
+Docker install among them -- unless the stack sets `PRIVATE_APPS_OVER_HTTP=true`.
+That is for a local development stack only: it is refused outside
+`ENVIRONMENT=local`/`testing`, and applies only to app hosts under `.localhost`,
+which never leave the machine. There a private app opens by the same ticket and
+checks, and the cookie is a host-only `lemmaAppAccess` without `Secure`, which
+the `__Host-` name requires. `make dev` sets it.
+
+An app framed in the web app is signed in only if the web app, the API and the
+app are one site to the browser. `localhost` and `<slug>.apps.lemma.localhost`
+are not, so with `make dev`'s default addresses the access page asks you to
+sign in. `make dev DEV_ONE_SITE=1` serves the web app at `lemma.localhost`, the
+API at `api.lemma.localhost` and the session cookie on `.lemma.localhost`.
 
 ## Outside MCP clients
 
