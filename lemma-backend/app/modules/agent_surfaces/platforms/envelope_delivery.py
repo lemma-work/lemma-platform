@@ -461,8 +461,11 @@ class EnvelopeDeliveryMixin:
             ):
                 return PartDelivery.NATIVE
         except platform_transport_errors():
-            logger.debug(
-                "agent_surfaces.delivery.native_voice_unavailable.diagnostic",
+            # At warning: a person who blocks voice messages (Telegram's
+            # VOICE_MESSAGES_FORBIDDEN) or a refused voice note is worth seeing
+            # in production, where debug is dropped. The file below still goes.
+            logger.warning(
+                "agent_surfaces.delivery.native_voice_unavailable.degraded",
                 platform=self.platform,
                 exc_info=True,
             )

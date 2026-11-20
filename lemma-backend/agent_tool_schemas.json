@@ -3868,10 +3868,10 @@
     "toolset": "SPEECH",
     "description": "Speak a reply: synthesize audio and deliver it as a voice note.\n\nText is the default modality, so call this only when voice is genuinely\nwanted. Delivery is automatic \u2014 a native voice note on chat surfaces, an\naudio player on web.\n\nSpeaking anything other than English: pass `language` (the BCP-47 code the\ntext is in) so the voice speaks that language instead of reading it aloud\nin English.\n\nThe audio IS your reply. Do not call `display_resource` afterward, and do not\nrestate the same words as text; add a text line only if it says something\ndifferent.",
     "input_schema": {
-      "description": "Generate spoken audio (MP3) from text.",
+      "description": "Generate spoken audio from text. On WhatsApp and Telegram it is sent as\na voice note (OGG/Opus, whatever the path says); elsewhere it is an MP3.",
       "properties": {
         "text": {
-          "description": "The text to speak.",
+          "description": "The text to speak: at most 2000 characters. Say the gist and send detail as text.",
           "type": "string"
         },
         "output_file_path": {
@@ -3884,7 +3884,7 @@
             }
           ],
           "default": null,
-          "description": "Optional pod datastore path for the generated .mp3 (e.g. /me/speech/reply.mp3). Defaults to a generated /me/speech/<id>.mp3."
+          "description": "Optional pod datastore path for the audio. Usually omit it: the format is chosen for where it is going. Defaults to /me/speech/<id>.<ogg|mp3>."
         },
         "language": {
           "anyOf": [
@@ -3896,7 +3896,7 @@
             }
           ],
           "default": null,
-          "description": "BCP-47 code for the language `text` is written in (e.g. 'es', 'ja'). Pass it whenever you are not speaking English so the voice speaks that language rather than reading it with an English accent. None = the default voice."
+          "description": "BCP-47 code for the language `text` is written in (e.g. 'hi', 'es'). Pass it whenever you are not speaking English so the voice speaks that language rather than reading it with an English accent; Hindi is spoken by a Flux voice. A language no voice speaks fails, so reply in text then. None = the default voice."
         },
         "voice": {
           "anyOf": [

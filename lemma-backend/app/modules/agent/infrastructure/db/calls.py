@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import exists, or_, select, update
+from sqlalchemy import exists, or_, select, tuple_, update
 from sqlalchemy.orm import aliased
 
 from app.modules.agent.domain.calls import (
@@ -40,6 +40,8 @@ MAX_RESUMED_TRANSCRIPTS = 10
 
 #: Relays a resumed call reads back, at most.
 MAX_MISSED_RELAYS = 20
+#: Pages of relays a catch-up reads at most.
+MAX_RELAY_PAGES = 10
 
 #: The message metadata key a connection's transcript is recorded under.
 CALL_TRANSCRIPT_KEY = "call_transcript"
@@ -205,32 +207,52 @@ class Calls(UnitOfWorkRepository):
         self, call_id: UUID, since: datetime
     ) -> list[tuple[str, str, str]]:
         """``(tool_call_id, text, urgency)`` of each relay sent after ``since``,
-        oldest first: what a stream that dropped and came back may have missed."""
-        rows = await self.session.execute(
-            select(MessageModel.tool_call_id, MessageModel.tool_args)
-            .where(
-                MessageModel.conversation_id == call_id,
-                MessageModel.kind == MessageKind.TOOL_CALL.value,
-                MessageModel.tool_name == RELAY_TOOL_NAME,
-                MessageModel.created_at > since,
-            )
-            .order_by(MessageModel.created_at)
-            .limit(MAX_MISSED_RELAYS)
-        )
+        oldest first: what a stream that dropped and came back may have missed.
+
+        Paged through the whole window rather than cut at one page: the caller
+        drops the ones it heard live, and a first page of those must not hide
+        the ones after it. Bounded all the same, newest pages last.
+        """
         relays: list[tuple[str, str, str]] = []
-        for tool_call_id, args in rows.all():
-            if (
-                tool_call_id
-                and isinstance(args, dict)
-                and isinstance(args.get("text"), str)
-            ):
-                relays.append(
-                    (
-                        tool_call_id,
-                        args["text"],
-                        str(args.get("urgency") or "when_idle"),
-                    )
+        after: tuple[datetime, UUID] | None = None
+        for _page in range(MAX_RELAY_PAGES):
+            query = (
+                select(
+                    MessageModel.created_at,
+                    MessageModel.id,
+                    MessageModel.tool_call_id,
+                    MessageModel.tool_args,
                 )
+                .where(
+                    MessageModel.conversation_id == call_id,
+                    MessageModel.kind == MessageKind.TOOL_CALL.value,
+                    MessageModel.tool_name == RELAY_TOOL_NAME,
+                    MessageModel.created_at > since,
+                )
+                .order_by(MessageModel.created_at, MessageModel.id)
+                .limit(MAX_MISSED_RELAYS)
+            )
+            if after is not None:
+                query = query.where(
+                    tuple_(MessageModel.created_at, MessageModel.id) > after
+                )
+            rows = (await self.session.execute(query)).all()
+            for created_at, message_id, tool_call_id, args in rows:
+                after = (created_at, message_id)
+                if (
+                    tool_call_id
+                    and isinstance(args, dict)
+                    and isinstance(args.get("text"), str)
+                ):
+                    relays.append(
+                        (
+                            tool_call_id,
+                            args["text"],
+                            str(args.get("urgency") or "when_idle"),
+                        )
+                    )
+            if len(rows) < MAX_MISSED_RELAYS:
+                break
         return relays
 
     async def canvas_messages(

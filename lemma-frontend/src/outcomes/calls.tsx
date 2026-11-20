@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Pod } from "@/data";
 import { useHuddle, type Huddle } from "@/call/use-huddle";
@@ -35,10 +35,20 @@ export function useCalls(go: Go): { huddle: Huddle; calls: Calls; resume: () => 
     /* The sidebar's chats -- the running ring, unread, order, title -- move
        with the call's work: read them again as runs start and stop and once
        the call settles, rather than at the next minute's poll. */
-    const settledCount = settled?.count ?? 0;
     useEffect(() => {
         if (heldPod) void refreshConversationLists(queryClient, heldPod);
-    }, [heldPod, liveEpoch, settledCount, queryClient]);
+    }, [heldPod, liveEpoch, queryClient]);
+    /* A call settles after it has ended, when the huddle no longer holds its
+       Lemma -- or holds the next call's. Each call's Lemma is kept by its id,
+       so the one that settled is the one read again. */
+    const podOfCall = useRef(new Map<string, string>());
+    useEffect(() => {
+        if (held && heldPod) podOfCall.current.set(held, heldPod);
+    }, [held, heldPod]);
+    useEffect(() => {
+        const pod = settled ? podOfCall.current.get(settled.callId) : undefined;
+        if (pod) void refreshConversationLists(queryClient, pod);
+    }, [settled, queryClient]);
     const resume = useCallback(() => {
         if (held && heldPod) go(chatView({ kind: "chat", podId: heldPod, id: held }));
         expand();

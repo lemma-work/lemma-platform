@@ -46,12 +46,18 @@ class ScriptedListener:
 
 class RecordingSpeaker:
     def __init__(self) -> None:
+        self.voice = "aura-2-thalia-en"
+        self.voices_used: list[str] = []
         self.spoken: list[str] = []
         self.cleared = 0
         self.flushed = asyncio.Condition()
         self.flush_count = 0
 
     async def open(self) -> None: ...
+
+    async def use_voice(self, voice: str) -> None:
+        self.voice = voice
+        self.voices_used.append(voice)
 
     async def speak(self, text: str) -> None:
         self.spoken.append(text)
@@ -319,3 +325,28 @@ async def test_a_draft_that_fails_is_not_apologised_for_and_the_turn_still_answe
     assert talker.prompts == ["find a flight", "find a flight"]
     assert speaker.spoken == ["Here you go."]
     await engine.close()
+
+
+async def test_a_reply_is_spoken_in_the_voice_of_the_language_the_caller_spoke() -> (
+    None
+):
+    talker = ScriptedTalker(
+        {"score batao": ["Bharat 143 par ek. "], "thanks": ["Sure."]}
+    )
+    listener, speaker = ScriptedListener(), RecordingSpeaker()
+    engine = CascadeEngine(
+        listener=listener,  # type: ignore[arg-type]
+        speaker=speaker,  # type: ignore[arg-type]
+        talker=talker,
+        voices={"hi": "flux-anjali-hi"},
+    )
+    await engine.open()
+    seen: list[VoiceEvent] = []
+    listener.turns_in.put_nowait(TurnInfo("StartOfTurn", ""))
+    listener.turns_in.put_nowait(TurnInfo("EndOfTurn", "score batao", ("hi", "en")))
+    await _until(engine, TurnDone, seen)
+    listener.turns_in.put_nowait(TurnInfo("StartOfTurn", ""))
+    listener.turns_in.put_nowait(TurnInfo("EndOfTurn", "thanks", ("en",)))
+    await _until(engine, TurnDone, seen)
+    await engine.close()
+    assert speaker.voices_used == ["flux-anjali-hi", "aura-2-thalia-en"]

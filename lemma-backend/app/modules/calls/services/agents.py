@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
@@ -31,12 +31,7 @@ from app.modules.calls.domain.frames import (
     EVENT_BACKLOG,
     offer,
 )
-from app.core.authorization.scope import context_scope
-from app.core.authorization.service import AuthorizationDataService
 from app.core.domain.errors import DomainError
-from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.live.topics import live_registry
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
@@ -63,6 +58,8 @@ from app.modules.calls.services.signals import (
     Working,
 )
 
+from app.modules.calls.services.caller import Party, as_caller
+
 logger = get_logger(__name__)
 
 _CONVERSATION_STREAM = "agent.conversation"
@@ -76,6 +73,9 @@ _RUN_ENDINGS = frozenset({"completed", "error", "stopped"})
 #: ``delegate`` waiting on its children returns only once they are done, so
 #: the return cannot be what names them while they work.
 _DISCOVER_AFTER_SECONDS = (1.0, 4.0, 10.0)
+#: How long a coordinator run that called a spawning tool is given, after it
+#: ends, for a child run to be heard starting: past the second discovery look.
+_SPAWN_SETTLE_SECONDS = 5.0
 #: How long the call waits for its streams to be subscribed before reading
 #: back what it missed. Past it the read goes ahead: a slow subscription costs
 #: a frame or two, a call that never starts costs the call.
@@ -116,29 +116,6 @@ class _RunState:
 type ConversationFrames = AbstractAsyncContextManager[
     AsyncIterator[dict[str, JsonValue]]
 ]
-
-
-@dataclass(frozen=True, slots=True)
-class Party:
-    user_id: UUID
-    pod_id: UUID
-
-
-@dataclass(frozen=True, slots=True)
-class CallerScope:
-    uow: SqlAlchemyUnitOfWork
-    organization_id: UUID | None
-
-
-@asynccontextmanager
-async def as_caller(party: Party) -> AsyncIterator[CallerScope]:
-    """One short unit of work, authorized as the person on the call."""
-    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        ctx = await AuthorizationDataService(uow.session).build_user_context(
-            user_id=party.user_id, pod_id=party.pod_id
-        )
-        async with context_scope(ctx):
-            yield CallerScope(uow=uow, organization_id=ctx.organization_id)
 
 
 def _conversation_stream(conversation_id: UUID) -> ConversationFrames:
@@ -183,6 +160,11 @@ class CallAgents:
         #: Relays heard live, by tool call: a catch-up says only the others.
         self._heard_relays: set[str] = set()
         self._catching_up: set[asyncio.Task[None]] = set()
+        #: Moves with every run heard starting or ending.
+        self._observed = 0
+        #: Child runs heard starting, counted: a coordinator run that called
+        #: a spawning tool is "finished" only if no child started after it.
+        self._children_started = 0
 
     async def send_turn(self, content: str) -> None:
         async with as_caller(self._party) as scope:
@@ -283,8 +265,13 @@ class CallAgents:
         """Whether a run is going, read from the store: a stream can lose the
         frame that ended one, or never carry the one that started it."""
         await self.discover()
+        seen = self._observed
         async with as_caller(self._party) as scope:
             running = await call_working(scope.uow, self.call_id)
+        if seen != self._observed:
+            # A run started or ended while the store was read: the frames are
+            # newer than the read, so they stand.
+            return running or bool(self._live)
         if not running:
             # The frames that ended those runs were lost; forgetting them lets
             # the next run start report itself as working again.
@@ -328,8 +315,10 @@ class CallAgents:
                     self._subscribed[conversation_id].set()
                     if dropped_at is not None:
                         # Back after a drop: what was published while the
-                        # stream was down went nowhere, so read it back.
+                        # stream was down went nowhere, so read it back --
+                        # from the first drop, however many retries failed.
                         self._catch_up_soon(conversation_id, dropped_at)
+                        dropped_at = None
                     async for frame in frames:
                         failures = 0
                         self._read(conversation_id, frame)
@@ -340,7 +329,8 @@ class CallAgents:
                     conversation_id=str(conversation_id),
                     exc_info=True,
                 )
-            dropped_at = datetime.now(UTC)
+            if dropped_at is None:
+                dropped_at = datetime.now(UTC)
             await asyncio.sleep(self._retry_seconds * max(failures, 1))
         self._running.discard(conversation_id)
         offer(
@@ -443,7 +433,10 @@ class CallAgents:
             self._read_message(conversation_id, data)
 
     def _started(self, conversation_id: UUID, run_id: str) -> None:
+        self._observed += 1
         self._live[run_id] = conversation_id
+        if conversation_id != self.call_id:
+            self._children_started += 1
         if conversation_id == self.call_id:
             self._runs.setdefault(run_id, _RunState())
             offer(self._signals, RunStarted(agent_run_id=run_id), essential=True)
@@ -451,6 +444,7 @@ class CallAgents:
 
     def _ended(self, conversation_id: UUID, run_id: JsonValue) -> None:
         if isinstance(run_id, str):
+            self._observed += 1
             self._live.pop(run_id, None)
             self._over.add(run_id)
             state = (
@@ -458,11 +452,31 @@ class CallAgents:
                 if conversation_id == self.call_id
                 else None
             )
-            if state is not None and not state.updated and not state.spawned:
-                offer(self._signals, Finished(answer=state.answer), essential=True)
+            if state is not None and not state.updated:
+                if state.spawned:
+                    # A spawning tool was called; whether a child started is
+                    # known only once discovery has had its look.
+                    self._finish_unless_children(state, self._children_started)
+                else:
+                    offer(self._signals, Finished(answer=state.answer), essential=True)
         # Another run of the same conversation may still be going.
         if conversation_id not in self._live.values():
             self._set_running(conversation_id, False)
+
+    def _finish_unless_children(self, state: _RunState, seen: int) -> None:
+        async def decide() -> None:
+            await asyncio.sleep(_SPAWN_SETTLE_SECONDS)
+            children_running = any(
+                conversation != self.call_id for conversation in self._live.values()
+            )
+            if self._children_started == seen and not children_running:
+                # It called the tool, but no child started: its own words are
+                # all there is, so they reach the person.
+                offer(self._signals, Finished(answer=state.answer), essential=True)
+
+        task = create_inherited_task(decide(), name="calls.agents.finish_unless")
+        self._catching_up.add(task)
+        task.add_done_callback(self._catching_up.discard)
 
     def _set_running(self, conversation_id: UUID, running: bool) -> None:
         before = bool(self._running)
@@ -518,6 +532,9 @@ class CallAgents:
             and isinstance(args, dict)
         ):
             text, urgency = args.get("text"), args.get("urgency") or "when_idle"
+            if call_id in self._heard_relays:
+                # A catch-up after a drop already said it.
+                return
             self._heard_relays.add(call_id)
             if isinstance(text, str) and text.strip():
                 self._updated(data)

@@ -165,3 +165,47 @@ async def test_no_metadata_server_is_an_unavailable_voice_not_a_crash() -> None:
     headers = service_account_headers(transport=httpx.MockTransport(refuse))
     with pytest.raises(EngineUnavailable):
         await headers()
+
+
+def test_the_multilingual_listener_takes_language_hints_and_others_do_not() -> None:
+    from app.modules.calls.infrastructure.engines.deepgram import FluxListener
+
+    multi = FluxListener(
+        api_key="k",
+        model="flux-general-multi",
+        eager_eot_threshold=0.5,
+        language_hints=("hi", "en"),
+    )
+    english = FluxListener(
+        api_key="k",
+        model="flux-general-en",
+        eager_eot_threshold=None,
+        language_hints=("hi",),
+    )
+    assert "language_hint=hi&language_hint=en" in multi._url
+    assert "language_hint" not in english._url
+
+
+async def test_a_flux_voice_speaks_on_v2_and_is_interrupted_not_cleared() -> None:
+    from app.modules.calls.infrastructure.engines.deepgram import DeepgramSpeaker
+
+    sent: list[dict[str, str]] = []
+    speaker = DeepgramSpeaker(api_key="k", voice="aura-2-thalia-en")
+    assert "/v1/speak" in speaker._url
+    await speaker.use_voice("flux-anjali-hi")
+    assert "/v2/speak" in speaker._url and "model=flux-anjali-hi" in speaker._url
+
+    async def record(frame: dict[str, str]) -> None:
+        sent.append(frame)
+
+    speaker._send = record  # type: ignore[method-assign]
+    await speaker.clear()
+    assert sent == [{"type": "Interrupt"}]
+
+
+def test_flux_turn_info_carries_the_languages_heard() -> None:
+    from app.modules.calls.infrastructure.engines.deepgram import _languages
+
+    assert _languages(["hi", "en"]) == ("hi", "en")
+    assert _languages([{"language": "hi"}]) == ("hi",)
+    assert _languages(None) == ()

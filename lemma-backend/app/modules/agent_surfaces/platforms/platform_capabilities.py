@@ -159,7 +159,8 @@ class PlatformCapabilities:
     # is legitimately not on system credentials.
     has_shared_system_bot: bool = False
     # Does ``say`` land as a real voice-note bubble? Only where the adapter
-    # implements ``_render_voice`` (Telegram's sendVoice). Everywhere else the
+    # implements ``_render_voice`` (Telegram's sendVoice, WhatsApp's audio with
+    # ``voice: true``). Everywhere else the
     # same audio is delivered as an ordinary attachment, or as a link where the
     # platform cannot receive one -- see ``PlatformEnvelopeDelivery._deliver_voice``.
     supports_native_voice: bool = False
@@ -326,6 +327,8 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
     ),
     "WHATSAPP": PlatformCapabilities(
         platform="WHATSAPP",
+        # Meta's `voice: true` on OGG/Opus audio: a play bubble, not a file.
+        supports_native_voice=True,
         typing_refresh_seconds=20.0,
         display_name="WhatsApp",
         # Native interactive replies: ≤3 options as buttons, 4–10 as a list.

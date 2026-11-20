@@ -33,23 +33,31 @@ class ListenResponse(BaseModel):
 
 
 class SayRequest(BaseModel):
-    """Generate spoken audio (MP3) from text."""
+    """Generate spoken audio from text. On WhatsApp and Telegram it is sent as
+    a voice note (OGG/Opus, whatever the path says); elsewhere it is an MP3."""
 
-    text: str = Field(description="The text to speak.")
+    text: str = Field(
+        description=(
+            "The text to speak: at most 2000 characters. Say the gist and send "
+            "detail as text."
+        ),
+    )
     output_file_path: str | None = Field(
         default=None,
         description=(
-            "Optional pod datastore path for the generated .mp3 (e.g. "
-            "/me/speech/reply.mp3). Defaults to a generated /me/speech/<id>.mp3."
+            "Optional pod datastore path for the audio. Usually omit it: the "
+            "format is chosen for where it is going. Defaults to "
+            "/me/speech/<id>.<ogg|mp3>."
         ),
     )
     language: str | None = Field(
         default=None,
         description=(
-            "BCP-47 code for the language `text` is written in (e.g. 'es', "
-            "'ja'). Pass it whenever you are not speaking English so the voice "
+            "BCP-47 code for the language `text` is written in (e.g. 'hi', "
+            "'es'). Pass it whenever you are not speaking English so the voice "
             "speaks that language rather than reading it with an English "
-            "accent. None = the default voice."
+            "accent; Hindi is spoken by a Flux voice. A language no voice "
+            "speaks fails, so reply in text then. None = the default voice."
         ),
     )
     voice: str | None = Field(

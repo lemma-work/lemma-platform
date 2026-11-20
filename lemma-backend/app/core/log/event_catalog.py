@@ -341,7 +341,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.delivery.native_choices_unavailable.degraded': EventSpec('warning', frozenset({'platform'})),
     'agent_surfaces.delivery.native_decision_unavailable.degraded': EventSpec('warning', frozenset({'platform'})),
     'agent_surfaces.delivery.native_resource_unavailable.degraded': EventSpec('warning', frozenset({'platform'})),
-    'agent_surfaces.delivery.native_voice_unavailable.diagnostic': EventSpec('debug', frozenset({'platform'})),
+    'agent_surfaces.delivery.native_voice_unavailable.degraded': EventSpec('warning', frozenset({'platform'})),
     'agent_surfaces.delivery.one_reply_reached_nobody.degraded': EventSpec('warning', frozenset({'platform'})),
     'agent_surfaces.delivery.part_reached_nobody.degraded': EventSpec('warning', frozenset({'part', 'platform'})),
     'agent_surfaces.delivery_sender.send_failed.degraded': EventSpec('warning', frozenset({'conversation_id', 'delivery_id'})),

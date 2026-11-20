@@ -125,6 +125,14 @@ class GeminiLiveEngine:
         self._after_turn: list[Frame] = []
         self._turn_hold: asyncio.TimerHandle | None = None
         self._sending: set[asyncio.Task[None]] = set()
+        #: One sender for team text, so a note never overtakes an older one --
+        #: neither a released batch nor one injected while it goes out.
+        self._text_lock = asyncio.Lock()
+        #: The caller cut in: text waits for the voice's answer to them.
+        self._awaiting_answer = False
+        #: Gemini closes an interrupted turn with ``interrupted`` and then
+        #: ``turnComplete``; that one ends the cut-off turn, not the answer.
+        self._closing_interrupted = False
 
     async def open(self) -> None:
         await self._connect()
@@ -205,36 +213,48 @@ class GeminiLiveEngine:
                 }
             }
         )
-        # Behind anything already held, too: notes are said in the order sent.
-        if self._voice_turn_open or self._after_turn:
-            self._hold_for_turn_end(frame)
-            return
-        await self._send_text(frame)
-
-    def _hold_for_turn_end(self, frame: Frame) -> None:
+        # Always into the one queue, behind anything held: notes are said in
+        # the order sent.
         self._after_turn.append(frame)
         del self._after_turn[:-_MAX_HELD_TEXT]
+        if self._holding():
+            self._start_hold_timer()
+            return
+        await self._send_queued()
+
+    def _holding(self) -> bool:
+        return self._voice_turn_open or self._awaiting_answer
+
+    def _start_hold_timer(self) -> None:
         if self._turn_hold is None:
             self._turn_hold = asyncio.get_running_loop().call_later(
-                MAX_TURN_HOLD_SECONDS, self._release_after_turn
+                MAX_TURN_HOLD_SECONDS, self._hold_expired
             )
 
-    def _release_after_turn(self) -> None:
+    def _hold_expired(self) -> None:
+        # A turn whose end never came: the team's news goes anyway.
+        self._turn_hold = None
+        self._awaiting_answer = False
+        self._release_after_turn(force=True)
+
+    def _release_after_turn(self, *, force: bool = False) -> None:
         if self._turn_hold is not None:
             self._turn_hold.cancel()
             self._turn_hold = None
         if not self._after_turn:
             return
-        frames, self._after_turn = self._after_turn, []
         task = create_inherited_task(
-            self._send_all(frames), name="calls.gemini.after_turn"
+            self._send_queued(force=force), name="calls.gemini.after_turn"
         )
         self._sending.add(task)
         task.add_done_callback(self._sending.discard)
 
-    async def _send_all(self, frames: list[Frame]) -> None:
-        for frame in frames:
-            await self._send_text(frame)
+    async def _send_queued(self, *, force: bool = False) -> None:
+        """Send what is queued, oldest first, one sender at a time; stops when
+        the voice starts a turn again, unless the hold ran out."""
+        async with self._text_lock:
+            while self._after_turn and (force or not self._holding()):
+                await self._send_text(self._after_turn.pop(0))
 
     async def _send_text(self, frame: Frame) -> None:
         """Text for the voice is kept, not dropped, across a reconnect: a
@@ -356,14 +376,21 @@ class GeminiLiveEngine:
             offer(self._events, Said(said, final=False))
         if content.get("interrupted"):
             offer(self._events, Interrupted())
-            # Held text stays held: the caller has the floor, and a note sent
-            # now would be answered instead of them. It goes when the voice's
-            # answer to them is done.
+            # The caller has the floor: a note sent now would be answered
+            # instead of them, so text -- held or yet to come -- waits for the
+            # voice's answer to them.
+            self._awaiting_answer = True
+            self._closing_interrupted = True
             self._end_voice_turn()
         if content.get("turnComplete"):
             self._close_caller_turn()
             self._end_voice_turn()
-            self._release_after_turn()
+            if self._closing_interrupted:
+                # The cut-off turn's own end, not the answer's.
+                self._closing_interrupted = False
+            else:
+                self._awaiting_answer = False
+                self._release_after_turn()
 
     def _voice_starts(self) -> None:
         # The voice answering is the provider's end-of-turn for the caller, but

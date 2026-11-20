@@ -2,10 +2,9 @@
 
 ``deliver`` walks native voice note -> native file -> link card, and the
 platforms differ only in how far it has to walk. That is the whole subject, so
-it is a table rather than four near-identical tests: only Telegram has a native
-voice send (``sendVoice``, see ``TelegramPlatformService._render_voice``);
-Slack and WhatsApp have native files; Teams has neither and falls all the way
-to a link. Every rung is exercised, once each, which is what the previous shape
+it is a table rather than four near-identical tests: Telegram and WhatsApp have
+a native voice send (``sendVoice``; WhatsApp audio with ``voice: true``);
+Slack has native files; Teams has neither and falls all the way to a link. Every rung is exercised, once each, which is what the previous shape
 did at four times the length.
 
 These script ``say`` as a genuine LLM tool call, through ``fake_speech_provider``
@@ -79,7 +78,7 @@ SPOKEN = "Hello back to you."
 LADDER = {
     SurfacePlatform.TELEGRAM: ("a native voice note", "TELEGRAM_VOICE"),
     SurfacePlatform.SLACK: ("a native file", "SLACK_FILE_UPLOAD_URL"),
-    SurfacePlatform.WHATSAPP: ("a native file", "WHATSAPP_MEDIA_UPLOAD"),
+    SurfacePlatform.WHATSAPP: ("a native voice note", "WHATSAPP"),
     SurfacePlatform.TEAMS: ("a link card", "TEAMS"),
 }
 
@@ -125,11 +124,15 @@ async def test_say_reaches_the_person_on_every_platform(
     assert landed, f"{platform.value}: nothing arrived as {rung}"
 
     if platform is SurfacePlatform.TELEGRAM:
-        # The only platform with a native voice-note send (`sendVoice`, see
-        # `TelegramPlatformService._render_voice`); everyone else returns False
-        # and falls to the next rung.
+        # A native voice-note send (`sendVoice`, see
+        # `TelegramPlatformService._render_voice`).
         assert landed[-1]["has_voice"] is True
         assert landed[-1]["chat_id"] == stage.sender_id
+    elif platform is SurfacePlatform.WHATSAPP:
+        # Audio with `voice: true`: a play bubble, not a file to open.
+        audio = [m for m in landed if m.get("type") == "audio"]
+        assert audio, landed
+        assert audio[-1]["audio"]["voice"] is True
     elif platform is SurfacePlatform.TEAMS:
         # Neither native voice nor native file: it falls all the way to a link.
         assert "app.example.test" in json.dumps(landed, default=str)

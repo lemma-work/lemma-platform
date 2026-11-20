@@ -448,13 +448,18 @@ class CallSession:
             # the screen have already said it.
             logger.warning("calls.session.note.failed", exc_info=True)
             return
-        await self._chat_changed()
+        self._tell_chat()
 
     async def _record(self, transcript: str) -> None:
-        """A transcript chunk kept in the conversation, and the chat beside the
-        call told to read it."""
+        """A transcript chunk kept, and the chat beside the call told."""
         await self._agents.record(transcript)
-        await self._chat_changed()
+        self._tell_chat()
+
+    def _tell_chat(self) -> None:
+        """Off the write's path: the chunk is kept once its write returns, and
+        a notice stuck behind a closing socket must not make it look unkept --
+        the transcript would write it again."""
+        self._spawn(self._chat_changed(), name="calls.session.chat_changed")
 
     async def _chat_changed(self) -> None:
         """The call wrote into its conversation outside any run, which the chat

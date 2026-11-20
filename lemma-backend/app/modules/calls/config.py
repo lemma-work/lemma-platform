@@ -71,10 +71,19 @@ class CallsSettings(BaseSettings):
         description="Deepgram API key for the `cascade` engine's speech.",
     )
     cascade_stt_model: str = Field(
-        default="flux-general-en",
+        default="flux-general-multi",
         description=(
             "Deepgram Flux model that transcribes the caller and decides when "
-            "their turn ended. `flux-general-multi` for other languages."
+            "their turn ended. `flux-general-multi` hears ten languages, Hindi "
+            "among them, and switches mid-sentence; `flux-general-en` for "
+            "English only."
+        ),
+    )
+    cascade_stt_language_hints: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Languages `flux-general-multi` should expect (`hi`, `en`, ...). "
+            "Empty detects freely; a hint biases it toward that language."
         ),
     )
     cascade_eager_eot_threshold: float | None = Field(
@@ -88,7 +97,17 @@ class CallsSettings(BaseSettings):
         ),
     )
     cascade_tts_voice: str = Field(
-        default="aura-2-thalia-en", description="Deepgram Aura voice for `cascade`."
+        default="aura-2-thalia-en",
+        description="The Deepgram voice a `cascade` call speaks in by default.",
+    )
+    cascade_tts_voices: dict[str, str] = Field(
+        default_factory=lambda: {"hi": "flux-anjali-hi"},
+        description=(
+            "A voice per language the caller may speak, by base code: the reply "
+            "follows the language of their last turn. Aura voices (`aura-2-*`) "
+            "or Flux voices (`flux-{voice}-{lang}`, which cover Hindi); any "
+            "other language is spoken in `cascade_tts_voice`."
+        ),
     )
     cascade_talker_model: str | None = Field(
         default=None,

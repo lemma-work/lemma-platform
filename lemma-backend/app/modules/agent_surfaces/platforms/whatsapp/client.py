@@ -293,9 +293,15 @@ class WhatsAppClient:
         file_name: str,
         caption: str | None = None,
         recipient_type: str = "individual",
+        voice: bool = False,
     ) -> str | None:
-        """Send a previously uploaded media object to a recipient."""
+        """Send a previously uploaded media object to a recipient.
+
+        ``voice`` sends OGG/Opus audio as a voice note -- the play bubble, with
+        WhatsApp's own transcript -- rather than an audio file."""
         media_payload: dict[str, Any] = {"id": media_id}
+        if voice and send_type == "audio":
+            media_payload["voice"] = True
         if send_type == "document":
             media_payload["filename"] = file_name
         if caption and send_type in {"document", "image", "video"}:

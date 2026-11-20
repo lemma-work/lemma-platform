@@ -202,6 +202,8 @@ async def test_held_text_outlasts_a_barge_in_until_the_voice_answers() -> None:
     engine._handle_frame({"serverContent": _audio(b"\x01\x00" * 4)})
     await engine.inject("first", Inject.SPEAK)
     engine._handle_frame({"serverContent": {"interrupted": True}})
+    # Gemini closes the cut-off turn too; that is not the answer's end.
+    engine._handle_frame({"serverContent": {"turnComplete": True}})
     # The caller has the floor; a later note queues behind the held one.
     await engine.inject("second", Inject.CONTEXT)
     await _settle()
@@ -239,3 +241,37 @@ async def test_a_turn_that_never_completes_releases_held_text(
         while not socket.sent:
             await asyncio.sleep(0.01)
     assert socket.sent == [{"realtimeInput": {"text": "late"}}]
+
+
+async def test_a_note_after_a_barge_in_waits_for_the_answer_even_with_nothing_held() -> (
+    None
+):
+    engine = _engine()
+    socket = _Socket()
+    engine._socket = socket  # type: ignore[assignment]
+    engine._handle_frame({"serverContent": _audio(b"\x01\x00" * 4)})
+    engine._handle_frame({"serverContent": {"interrupted": True}})
+    engine._handle_frame({"serverContent": {"turnComplete": True}})
+    await engine.inject("news", Inject.SPEAK)
+    await _settle()
+    assert socket.sent == []
+    engine._handle_frame({"serverContent": _audio(b"\x01\x00" * 4)})
+    engine._handle_frame({"serverContent": {"turnComplete": True}})
+    await _settle()
+    assert socket.sent == [{"realtimeInput": {"text": "news"}}]
+
+
+async def test_a_note_injected_as_held_ones_are_released_goes_after_them() -> None:
+    engine = _engine()
+    socket = _Socket()
+    engine._socket = socket  # type: ignore[assignment]
+    engine._handle_frame({"serverContent": _audio(b"\x01\x00" * 4)})
+    await engine.inject("A", Inject.SPEAK)
+    engine._handle_frame({"serverContent": {"turnComplete": True}})
+    # Before the release task has run.
+    await engine.inject("B", Inject.SPEAK)
+    await _settle()
+    assert socket.sent == [
+        {"realtimeInput": {"text": "A"}},
+        {"realtimeInput": {"text": "B"}},
+    ]

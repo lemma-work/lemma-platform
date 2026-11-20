@@ -8,7 +8,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.calls.services.agents import CallAgents, Party
+from app.modules.calls.services.agents import CallAgents
+from app.modules.calls.services.caller import Party
 from app.modules.calls.services.signals import (
     Failed,
     Finished,
@@ -17,6 +18,7 @@ from app.modules.calls.services.signals import (
     Shown,
     Working,
 )
+from app.modules.test_support.e2e.waiters import eventually
 from app.modules.calls.services.gate import Caller, Route, route_turn
 from app.modules.decisions.contracts import DecisionResult, DecisionUnavailableError
 from app.modules.decisions.domain.answers import Answer
@@ -372,17 +374,71 @@ def test_a_late_frame_of_an_ended_run_does_not_start_it_again() -> None:
     assert _signals(agents) == []
 
 
-async def test_a_run_that_handed_work_to_sub_agents_is_not_called_finished() -> None:
+async def test_a_run_that_handed_work_to_sub_agents_is_not_called_finished(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.modules.calls.services import agents as agents_module
+
+    monkeypatch.setattr(agents_module, "_SPAWN_SETTLE_SECONDS", 0.01)
+    agents, _ = _agents()
+    child = uuid4()
+    agents._read(agents.call_id, _run_frame("message", "r1", data={}))
+    agents._read(
+        agents.call_id,
+        _message("TOOL_CALL", "delegate", "d1", agent_run_id="r1", tool_args={}),
+    )
+    agents._read(child, _run_frame("message", "c1", data={}))
+    agents._read(agents.call_id, _run_frame("completed", "r1", data={}))
+    await asyncio.sleep(0.05)
+    assert not [s for s in _signals(agents) if isinstance(s, Finished)]
+    await agents.close()
+
+
+async def test_a_delegate_that_started_no_child_still_reaches_the_person(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.modules.calls.services import agents as agents_module
+
+    monkeypatch.setattr(agents_module, "_SPAWN_SETTLE_SECONDS", 0.01)
     agents, _ = _agents()
     agents._read(agents.call_id, _run_frame("message", "r1", data={}))
     agents._read(
         agents.call_id,
         _message("TOOL_CALL", "delegate", "d1", agent_run_id="r1", tool_args={}),
     )
+    agents._read(
+        agents.call_id,
+        {
+            "type": "message",
+            "data": {
+                "agent_run_id": "r1",
+                "role": "assistant",
+                "kind": "TEXT",
+                "text": "Nothing to hand off.",
+            },
+        },
+    )
     agents._read(agents.call_id, _run_frame("completed", "r1", data={}))
-    assert not [s for s in _signals(agents) if isinstance(s, Finished)]
-    assert agents._discovering is not None
-    agents._discovering.cancel()
+    await asyncio.sleep(0.05)
+    assert Finished(answer="Nothing to hand off.") in _signals(agents)
+    await agents.close()
+
+
+def test_a_relay_a_catch_up_already_said_is_not_said_again_when_its_frame_lands() -> (
+    None
+):
+    agents, _ = _agents()
+    agents._heard_relays.add("x1")
+    agents._read(
+        agents.call_id,
+        _message(
+            "TOOL_CALL",
+            "relay_to_voice",
+            "x1",
+            tool_args={"text": "India 143 for 1.", "urgency": "now"},
+        ),
+    )
+    assert not [s for s in _signals(agents) if isinstance(s, Relay)]
 
 
 async def test_a_stream_back_after_a_drop_reads_back_only_what_was_missed() -> None:
@@ -435,10 +491,17 @@ async def test_a_stream_back_after_a_drop_reads_back_only_what_was_missed() -> N
     agents._watch(agents.call_id)
     async with asyncio.timeout(2):
         await resumed.wait()
-        while not agents._catching_up and not since_seen:
-            await asyncio.sleep(0)
-        while agents._catching_up:
-            await asyncio.sleep(0)
+
+    async def caught_up() -> bool:
+        return bool(since_seen) and not agents._catching_up
+
+    await eventually(
+        label="the catch-up read back and finished",
+        probe=caught_up,
+        done=bool,
+        timeout_seconds=2,
+        interval_seconds=0.01,
+    )
     await agents.close()
     signals = _signals(agents)
     relays = [s for s in signals if isinstance(s, Relay)]
