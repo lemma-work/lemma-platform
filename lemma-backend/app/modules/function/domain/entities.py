@@ -167,6 +167,9 @@ class FunctionRunRuntimeContext(BaseModel):
     config: JsonObject | None
     user_id: UUID | None
     user_email: str | None
+    #: The person's name as Lemma shows it, read when the run starts. ``None``
+    #: for a run with no member behind it, or a member who gave no name.
+    user_name: str | None = None
     contact_id: UUID | None = None
     pod_id: UUID
     function_id: UUID
@@ -196,6 +199,7 @@ class FunctionEntity(BaseModel):
     status: FunctionStatus = FunctionStatus.DRAFT
     visibility: str = "POD"
     contacts_invoke: bool = False
+    assistant_invoke: bool = True
     pending_artifact: FunctionArtifact | None = Field(
         default=None, exclude=True, repr=False
     )
@@ -250,6 +254,7 @@ class FunctionUpdateEntity(BaseModel):
     config: JsonObject | None = None
     type: FunctionType | None = None
     visibility: str | None = None
+    assistant_invoke: bool | None = None
     model_config = {"from_attributes": True}
 
 

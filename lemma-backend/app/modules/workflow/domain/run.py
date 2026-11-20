@@ -4,6 +4,7 @@ The stepping loop lives in execution/stepper.py — this entity owns state
 transitions, step history, and the typed run context.
 """
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List
@@ -262,6 +263,29 @@ class WorkflowRunEntity(AggregateRoot):
         self.error = summarize_error(error)
         self.failed_node_id = failed_node
         self.completed_at = datetime.now(timezone.utc)
+
+    def fail_step_and_carry_on(
+        self,
+        node_id: str,
+        error: str,
+        output: Mapping[str, object] | None = None,
+    ) -> None:
+        """node_id failed, and the graph says where its failures go.
+
+        The step is FAILED with its reason, as `fail` would leave it, but the
+        run stays live: the reason becomes the node's output, beside whatever
+        it had produced, so the branch that handles it reads `<node_id>.error`.
+        The caller positions the run on that branch.
+        """
+        reason = summarize_error(error)
+        step = self._last_suspended_step(node_id)
+        if step is not None:
+            step.status = StepStatus.FAILED
+            step.completed_at = datetime.now(timezone.utc)
+            step.error = reason
+        self.record_node_output(node_id, {**(output or {}), "error": reason})
+        # A form that expired left the run WAITING on a person.
+        self.status = WorkflowRunStatus.RUNNING
 
     def reopen_at_failed_node(self, *, by_user_id: UUID | None = None) -> str:
         """Back to RUNNING at the node that failed, keeping all that came before.

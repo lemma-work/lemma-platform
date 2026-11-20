@@ -61,6 +61,10 @@ class FunctionContext(BaseModel):
     #: the pod's contacts, as its own workload with no member behind it.
     user_id: UUID | None = None
     user_email: str | None = None
+    #: The member's name as Lemma shows it ("Ada Lovelace"). ``None`` when the
+    #: run has no member behind it or the member gave no name -- greet by
+    #: ``user_email`` then.
+    user_name: str | None = None
     #: The contact the run serves, when a contact's conversation called it.
     contact_id: UUID | None = None
     config: Any = None

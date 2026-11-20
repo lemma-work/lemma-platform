@@ -156,7 +156,7 @@ class PodWriteFileRequest(BaseModel):
     path: str = Field(
         ...,
         description=(
-            "Pod file path. A relative path resolves against `/me/c/{date}/{slug}` "
+            "File path. A relative path resolves against `/me/c/{date}/{slug}` "
             "— write there unless a specific shared location is needed."
         ),
     )
@@ -189,7 +189,7 @@ class PodEditFileRequest(BaseModel):
     path: str = Field(
         ...,
         description=(
-            "Pod file path of an existing text file. A relative path resolves "
+            "Path of an existing text file. A relative path resolves "
             "against `/me/c/{date}/{slug}`."
         ),
     )
@@ -205,7 +205,7 @@ class PodReadFileRequest(BaseModel):
     path: str = Field(
         ...,
         description=(
-            "Pod file path. Absolute paths (e.g. `/knowledge/notes.txt`) are used "
+            "File path. Absolute paths (e.g. `/knowledge/notes.txt`) are used "
             "as-is; a relative path resolves against `/me/c/{date}/{slug}`."
         ),
     )
@@ -226,7 +226,7 @@ class PodReadFileRequest(BaseModel):
 
 
 class ViewDocumentPagesRequest(BaseModel):
-    path: str = Field(..., description="Path of a PDF document in the pod.")
+    path: str = Field(..., description="Path of a PDF document.")
     page_start: int = Field(
         ..., ge=1, description="First page (1-based) to render as an image."
     )
@@ -247,12 +247,12 @@ class ViewDocumentPagesRequest(BaseModel):
 
 
 class GetFileUrlRequest(BaseModel):
-    path: str = Field(..., description="Absolute pod file path.")
+    path: str = Field(..., description="Absolute file path.")
     url_type: Literal["app", "public"] = Field(
         default="app",
         description=(
-            "'app' = in-app link for a signed-in pod member. 'public' = hit-capped "
-            "signed link anyone can open — use to send a file outside the pod."
+            "'app' = in-app link for a signed-in member. 'public' = hit-capped "
+            "signed link anyone can open — use to send a file outside this Lemma."
         ),
     )
     expires_seconds: int | None = Field(

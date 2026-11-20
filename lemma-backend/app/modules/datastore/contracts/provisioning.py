@@ -74,8 +74,10 @@ async def create_table(
     enable_rls: bool,
     visibility: str | None,
     ctx: Context,
+    contact_owned: bool = False,
+    contact_columns: list[str] | None = None,
 ) -> DatastoreTableEntity:
-    """Create a table with its columns."""
+    """Create a table with its columns, contact-owned when asked."""
     return await build_table_service(uow).create_table(
         pod_id,
         name,
@@ -85,6 +87,8 @@ async def create_table(
         enable_rls,
         visibility=visibility,
         ctx=ctx,
+        contact_owned=contact_owned,
+        contact_columns=contact_columns,
     )
 
 

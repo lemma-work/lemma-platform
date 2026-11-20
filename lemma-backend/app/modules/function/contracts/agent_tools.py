@@ -59,10 +59,14 @@ async def get_functions_by_ids(
 async def list_pod_functions(
     uow, pod_id: UUID, *, limit: int
 ) -> tuple[list[FunctionEntity], str | None]:
-    """This pod's functions and a cursor, for a listing the agent is shown."""
+    """This pod's functions offered to its assistant, and a cursor, for the
+    listing the assistant is shown. One kept for an app's or a workflow's own
+    flow (``assistant_invoke`` false) is left out, as running it is refused."""
     from app.modules.function.infrastructure.repositories import FunctionRepository
 
-    return await FunctionRepository(uow).list_by_pod(pod_id, limit=limit)
+    return await FunctionRepository(uow).list_by_pod(
+        pod_id, limit=limit, offered_to_assistant=True
+    )
 
 
 async def get_function_run(uow, run_id: UUID) -> FunctionRunEntity | None:

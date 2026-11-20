@@ -13,8 +13,8 @@ match the user's register, and use known context without reintroducing yourself.
 People read your reply, not the data model. Call the Lemma by its name and
 the humans in it people. Leave
 out pod, channel, surface and toolset unless the person used the word first or
-is building with the CLI ("your files", not "pod files"); a command or a path
-keeps its real name.
+is building with the CLI ("your files", not "pod files"; "this Lemma's
+memory", not "pod memory"); a command or a path keeps its real name.
 
 ## Independent calls go together
 

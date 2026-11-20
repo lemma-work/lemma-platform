@@ -8,10 +8,12 @@ provider does not answer.
 
 from __future__ import annotations
 
+import io
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi import status
+from PIL import Image
 from pydantic import SecretStr
 from sqlalchemy import select
 
@@ -23,6 +25,7 @@ from app.modules.pod.tests.e2e.workload_permissions.harness import (
     mint_workload_client,
 )
 from app.modules.test_support.e2e_authz import (
+    add_pod_member,
     auth_headers,
     invite_org_member,
     signup_user,
@@ -205,3 +208,108 @@ async def test_over_the_organization_rate_a_429_says_when_to_retry(
     assert second.status_code == status.HTTP_429_TOO_MANY_REQUESTS, second.text
     assert 1 <= int(second.headers["retry-after"]) <= 60
     assert second.json()["code"] == "DECISION_RATE_LIMITED"
+
+
+# Images ------------------------------------------------------------------------
+
+IMAGE_BODY = {
+    "instruction": "Check an expense claim's attachment.",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "is_receipt": {"type": "boolean", "description": "Is it a receipt?"}
+        },
+    },
+}
+
+
+def _photo() -> bytes:
+    """Wider than a model reads, so the route has to shrink it."""
+    buffer = io.BytesIO()
+    Image.new("RGB", (2400, 1200), "white").save(buffer, format="JPEG")
+    return buffer.getvalue()
+
+
+async def _upload(client, pod_id: str, directory: str, name: str, content: bytes):
+    uploaded = await client.post(
+        f"/pods/{pod_id}/datastore/files",
+        data={"directory_path": directory, "search_enabled": "false"},
+        files={"data": (name, content, "application/octet-stream")},
+    )
+    assert uploaded.status_code == status.HTTP_201_CREATED, uploaded.text
+    return uploaded.json()["path"]
+
+
+async def test_a_member_decides_on_a_photo_in_the_lemma(
+    authenticated_client, fixed_test_org, monkeypatch
+):
+    """The model reads images only when the deployment says it does."""
+    monkeypatch.setenv("LEMMA_OPENAI_VISION_MODEL_NAMES", "e2e-mock-model")
+    pod_id = await create_pod(authenticated_client, fixed_test_org)
+    await _upload(authenticated_client, pod_id, "/receipts", "0042.jpg", _photo())
+
+    response = await authenticated_client.post(
+        f"/pods/{pod_id}/decisions",
+        json={**IMAGE_BODY, "images": [{"path": "/receipts/0042.jpg"}]},
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    assert response.json()["answers"]["is_receipt"]["value"] in {True, False}
+    assert response.json()["provider"] == "model"
+
+
+async def test_a_model_that_cannot_read_images_is_a_422_not_a_retry(
+    authenticated_client, fixed_test_org, monkeypatch
+):
+    monkeypatch.delenv("LEMMA_OPENAI_VISION_MODEL_NAMES", raising=False)
+    pod_id = await create_pod(authenticated_client, fixed_test_org)
+    await _upload(authenticated_client, pod_id, "/receipts", "0042.jpg", _photo())
+
+    response = await authenticated_client.post(
+        f"/pods/{pod_id}/decisions",
+        json={**IMAGE_BODY, "images": [{"path": "/receipts/0042.jpg"}]},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT, response.text
+    assert response.json()["code"] == "DECISION_IMAGES_UNSUPPORTED"
+
+
+async def test_images_are_read_as_the_caller_and_every_bad_one_named(
+    authenticated_client, fixed_test_org, async_client, monkeypatch
+):
+    """Another member's private file is not the caller's to show a model, and
+    a file that is not an image is refused by its bytes, not its name."""
+    monkeypatch.setenv("LEMMA_OPENAI_VISION_MODEL_NAMES", "e2e-mock-model")
+    pod_id = await create_pod(authenticated_client, fixed_test_org)
+    private = await _upload(authenticated_client, pod_id, "/me", "mine.jpg", _photo())
+    await _upload(authenticated_client, pod_id, "/receipts", "fake.jpg", b"not a jpeg")
+    colleague = await signup_user(async_client, "decisions-images")
+    org_member = await invite_org_member(
+        authenticated_client, async_client, org_id=fixed_test_org["id"], user=colleague
+    )
+    await add_pod_member(
+        authenticated_client,
+        pod_id=pod_id,
+        organization_member_id=org_member["id"],
+        role="POD_USER",
+    )
+
+    response = await async_client.post(
+        f"/pods/{pod_id}/decisions",
+        json={
+            **IMAGE_BODY,
+            "images": [
+                {"path": private},
+                {"path": "/receipts/missing.jpg"},
+                {"path": "/receipts/fake.jpg"},
+            ],
+        },
+        headers=auth_headers(colleague),
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT, response.text
+    assert {p["path"]: p["message"] for p in response.json()["details"]} == {
+        "images[0].path": "Not a file of this Lemma you can read.",
+        "images[1].path": "Not a file of this Lemma you can read.",
+        "images[2]": "Could not be read as an image.",
+    }

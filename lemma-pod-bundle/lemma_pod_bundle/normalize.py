@@ -136,6 +136,12 @@ def _normalize_table_payload(table: dict[str, Any]) -> dict[str, Any]:
         "primary_key_column": table.get("primary_key_column", "id"),
         "visibility": table.get("visibility"),
     }
+    # Written only when set, so a bundle of ordinary tables reads as before.
+    # Without them a contact-owned table came back from export as a plain one,
+    # and its `contact_id` looked like a column the bundle had dropped.
+    if table.get("contact_owned"):
+        payload["contact_owned"] = True
+        payload["contact_columns"] = list(table.get("contact_columns") or [])
     return {key: value for key, value in payload.items() if value is not None}
 
 
@@ -198,7 +204,12 @@ _FUNCTION_SERVER_FIELDS = frozenset(
 
 
 def _normalize_function_payload(function: dict[str, Any]) -> dict[str, Any]:
-    return _strip_keys(function, set(_FUNCTION_SERVER_FIELDS))
+    payload = _strip_keys(function, set(_FUNCTION_SERVER_FIELDS))
+    # Written only when a function is kept from the assistant, so a bundle of
+    # ordinary functions reads as before.
+    if payload.get("assistant_invoke", True) is not False:
+        payload.pop("assistant_invoke", None)
+    return payload
 
 
 def _sanitize_function_payload_for_import(payload: dict[str, Any]) -> dict[str, Any]:

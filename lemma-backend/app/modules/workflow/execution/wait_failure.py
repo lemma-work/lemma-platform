@@ -19,12 +19,16 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
+from app.core.authorization.context import Context
+from app.core.authorization.current import reset_current_context, set_current_context
+from app.core.authorization.factory import create_authorization_data_service
 from app.modules.workflow.domain.context import normalize_node_output
 from app.modules.workflow.domain.run import WorkflowRunEntity, WorkflowRunStatus
 from app.modules.workflow.domain.wait import (
     WorkflowRunWaitEntity,
     WorkflowRunWaitType,
 )
+from app.modules.workflow.domain.workflow import WorkflowEntity
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle at runtime
     from app.modules.workflow.execution.engine import WorkflowEngine
@@ -38,6 +42,10 @@ async def fail_run_for_wait(
     output: Mapping[str, object] | None = None,
 ) -> WorkflowRunEntity | None:
     """Fail the run this wait belongs to, and stop asking anyone about it.
+
+    When the graph gives the waiting node (or a loop around it) a FAILURE
+    edge, the step fails and the run carries on down that edge instead, in
+    this transaction, and the live run is returned.
 
     Returns ``None`` when the run is already terminal, which is the ordinary
     outcome of a late completion event racing a cancellation.
@@ -60,6 +68,11 @@ async def fail_run_for_wait(
     normalized = normalize_node_output(output)
     wait.fail(normalized or {"error": error})
     await engine.wait_repo.update(wait)
+    flow = await engine.flow_repo.get(run.flow_id)
+    if flow is not None and engine._stepper(None).divert_failure(
+        run, flow, wait.node_id, error, output=normalized
+    ):
+        return await _carry_on(engine, run, flow, wait)
     if normalized:
         run.record_node_output(wait.node_id, {**normalized, "error": error})
     run.fail(error, node_id=wait.node_id)
@@ -72,3 +85,36 @@ async def fail_run_for_wait(
     await engine._record_transition(run)
     await engine._settle(run)
     return run
+
+
+async def _carry_on(
+    engine: "WorkflowEngine",
+    run: WorkflowRunEntity,
+    flow: WorkflowEntity,
+    wait: WorkflowRunWaitEntity,
+) -> WorkflowRunEntity:
+    """Run the failure branch the stepper put the run on, as a resume would.
+
+    The branch acts for the run's owner as of now, like any resumed step. An
+    expired form's question is closed before the branch runs, so a form on the
+    branch is the only one left asking.
+    """
+    if wait.wait_type == WorkflowRunWaitType.HUMAN:
+        await engine.form_questions.run_ended(pod_id=run.pod_id, run_id=run.id)
+    ctx = await owner_context(engine, run)
+    token = set_current_context(ctx)
+    try:
+        result = await engine._stepper(ctx).advance(run, flow)
+    finally:
+        reset_current_context(token)
+    run = await engine.run_repo.update(run)
+    await engine._persist_wait(run, result)
+    await engine._record_transition(run)
+    await engine._settle(run)
+    return run
+
+
+async def owner_context(engine: "WorkflowEngine", run: WorkflowRunEntity) -> Context:
+    return await create_authorization_data_service(engine.uow).build_user_context(
+        user_id=run.user_id, pod_id=run.pod_id
+    )

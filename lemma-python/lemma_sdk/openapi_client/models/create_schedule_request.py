@@ -38,7 +38,9 @@ class CreateScheduleRequest:
             finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and
             `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default
             to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default`
-            changes the default for `bulk_writes`.
+            changes the default for `bulk_writes`. DATASTORE `rows: OWNER_READABLE` hands the trigger only rows its owner
+            can read (their own on a per-person table, every row on a shared one), each run as the owner; making it needs
+            only to read the table's rows, where the default `rows: ALL` needs `datastore.table.update`.
         connector_trigger_id (None | str | Unset): Connector trigger id for agent WEBHOOK schedules. Do not provide this
             for workflow schedules; workflow WEBHOOK schedules derive it from the workflow start configuration.
         filter_instruction (None | str | Unset): Optional schedule-level LLM filter instruction. Filters belong to the

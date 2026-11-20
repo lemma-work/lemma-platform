@@ -102,7 +102,9 @@ async def test_scoped_folders_are_stated_before_anything_is_written(agents_md):
     assert "## Your Memory" in section
     assert f"/memory/agents/{agent.name}/" in section
     assert f"/me/agents/{agent.name}/" in section
-    assert "Pod (shared) —" not in section  # nothing written -> no content blocks
+    assert (
+        "This Lemma (shared) —" not in section
+    )  # nothing written -> no content blocks
 
 
 async def test_which_index_holds_what_is_said_once(agents_md):
@@ -114,8 +116,8 @@ async def test_which_index_holds_what_is_said_once(agents_md):
     section = " ".join((await _build(_agent())).split())
     contract = " ".join(load_memory_prompt().split())
 
-    assert "A fact about the pod itself" in contract
-    assert "A fact about the pod itself" not in section
+    assert "A fact about this Lemma itself" in contract
+    assert "A fact about this Lemma itself" not in section
 
 
 async def test_each_scope_is_rendered_under_its_own_label(agents_md):
@@ -124,7 +126,7 @@ async def test_each_scope_is_rendered_under_its_own_label(agents_md):
 
     section = await _build()
 
-    assert "### Pod (shared) — `/memory/AGENTS.md`" in section
+    assert "### This Lemma (shared) — `/memory/AGENTS.md`" in section
     assert "- pricing: see memory/pricing.md" in section
     assert "### This user (private) — `/me/AGENTS.md`" in section
     assert "- prefers async updates over calls" in section
@@ -207,7 +209,7 @@ async def test_an_unreadable_scope_never_takes_the_others_down(monkeypatch):
     # the grounding is for), so `/memory/AGENTS.md` legitimately appears there
     # even though it's unreadable here -- what must not appear is a content
     # block claiming it has something to say.
-    assert "### Pod (shared)" not in section
+    assert "### This Lemma (shared)" not in section
 
 
 async def test_an_oversized_index_is_cut_at_a_line_boundary_and_says_so(
@@ -222,7 +224,7 @@ async def test_an_oversized_index_is_cut_at_a_line_boundary_and_says_so(
     agents_md["/memory/AGENTS.md"] = "\n".join(f"- topic {n}" for n in range(60))
 
     section = await _build()
-    rendered = section[section.index("### Pod (shared)") :]
+    rendered = section[section.index("### This Lemma (shared)") :]
 
     assert "- topic 0" in rendered
     assert "- topic 59" not in rendered

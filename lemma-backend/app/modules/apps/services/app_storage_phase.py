@@ -21,7 +21,11 @@ from uuid import UUID, uuid7
 import structlog
 
 from app.core.api.uploads import upload_source_sha256
-from app.core.runtime_config import app_api_url, inject_runtime_config
+from app.core.runtime_config import (
+    PageWebWidget,
+    app_api_url,
+    inject_runtime_config,
+)
 from app.modules.apps.domain.entities import AppReleaseEntity
 from app.modules.apps.domain.entities import AppAssetDocument
 from app.modules.apps.domain.errors import AppAssetNotFoundError, AppNotFoundError
@@ -60,6 +64,7 @@ class _AssetReadInputs:
     private: bool = False
     # Set only for the cover path: what to draw when the build ships no cover.
     cover: AppCoverSpec | None = None
+    web_widgets: tuple[PageWebWidget, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +152,7 @@ class AppStoragePhase:
                 # An app talks to the API through its own origin, so the
                 # session cookie is first-party. See APP_ORIGIN_API_URL.
                 api_url=app_api_url(),
+                web_widgets=inputs.web_widgets,
             )
         return AppAssetDocument(
             content=content,

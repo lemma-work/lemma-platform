@@ -31,7 +31,7 @@ permission bundles use the shared authorization repositories.
 
 | Routes | What they do |
 | --- | --- |
-| `/pods` and `/pods/{pod_id}` | Create/read/update/soft-delete pods and list by organization |
+| `/pods` and `/pods/{pod_id}` | Create/read/update/soft-delete pods and list by organization. `PATCH /pods/{pod_id}` (`pod.update`) changes only the fields sent -- a rename is `{"name": ...}`; `PUT` still answers the same way for clients built against it, outside the schema |
 | `/organizations/{organization_id}/pods/joinable` | The organization's pods the caller may join and is not in |
 | `/pods/{pod_id}/members` | Add, find, list, re-role, and remove members |
 | `/pods/{pod_id}/roles` | CRUD custom roles and replace their permission bundles |

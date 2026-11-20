@@ -5,10 +5,11 @@ can always be executed without graph-shape surprises at run time.
 """
 
 from collections.abc import Collection
+from enum import Enum
 from itertools import chain
 from typing import List
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from app.modules.workflow.domain.decision_questions import question_issues
 from app.modules.workflow.domain.errors import (
@@ -28,6 +29,13 @@ from app.modules.workflow.domain.nodes import (
 from app.modules.workflow.domain.schema_template import iter_schema_expressions
 
 
+class WorkflowEdgeKind(str, Enum):
+    """What an edge is followed on."""
+
+    NEXT = "NEXT"
+    FAILURE = "FAILURE"
+
+
 class WorkflowEdge(BaseModel):
     """An edge in the workflow graph."""
 
@@ -35,6 +43,16 @@ class WorkflowEdge(BaseModel):
     source: str
     target: str
     label: str | None = None
+    kind: WorkflowEdgeKind = Field(
+        default=WorkflowEdgeKind.NEXT,
+        description=(
+            "`NEXT` is followed when the source finishes. `FAILURE` is followed "
+            "instead of failing the run when the source fails: its output is then "
+            "`{error}` (with any partial output), read as `<source>.error`. At "
+            "most one FAILURE edge per node, never from an END. A LOOP's also "
+            "catches failures in its body that no body node routes itself."
+        ),
+    )
 
 
 class WorkflowGraphValidator:
@@ -59,7 +77,15 @@ class WorkflowGraphValidator:
 
         issues = [*cls._id_issues(nodes), *cls._edge_issues(edges, node_by_id)]
         for node in nodes:
-            issues.extend(cls._node_issues(node, node_by_id, outgoing.get(node.id, [])))
+            node_edges = outgoing.get(node.id, [])
+            next_edges = [e for e in node_edges if e.kind is WorkflowEdgeKind.NEXT]
+            failure_edges = [
+                e for e in node_edges if e.kind is WorkflowEdgeKind.FAILURE
+            ]
+            # Branching and a decision's default edge are about what happens
+            # when a node finishes; a failure edge is not one of its ways on.
+            issues.extend(cls._node_issues(node, node_by_id, next_edges))
+            issues.extend(cls._failure_edge_issues(node, failure_edges))
 
         entry_candidates = cls._entry_candidates(nodes, edges)
         if len(entry_candidates) == 0:
@@ -144,6 +170,26 @@ class WorkflowGraphValidator:
                 )
         return issues
 
+    @staticmethod
+    def _failure_edge_issues(
+        node: WorkflowNode, failure_edges: list[WorkflowEdge]
+    ) -> list[str]:
+        """Where a node's failure goes: one place, not itself, not from an END."""
+        if not failure_edges:
+            return []
+        if node.type == NodeType.END:
+            return [f"end node '{node.id}' must not have a failure edge"]
+        issues: list[str] = []
+        if len(failure_edges) > 1:
+            issues.append(
+                f"node '{node.id}' has {len(failure_edges)} failure edges; at most 1"
+            )
+        # Back to itself is a retry with no limit: a failing function would be
+        # dispatched again on every failure, for as long as it keeps failing.
+        if any(edge.target == node.id for edge in failure_edges):
+            issues.append(f"node '{node.id}' failure edge cannot target itself")
+        return issues
+
     @classmethod
     def _decision_issues(
         cls,
@@ -202,7 +248,9 @@ class WorkflowGraphValidator:
         )
         if len(node_edges) > 1:
             issues.append(
-                f"loop '{node.id}' has {len(node_edges)} outgoing edges; at most 1"
+                f"loop '{node.id}' has {len(node_edges)} outgoing edges; at most 1, "
+                "to the node after the loop -- the body starts at "
+                f"config.child_node_id ('{node.config.child_node_id}'), not at an edge"
             )
         return issues
 

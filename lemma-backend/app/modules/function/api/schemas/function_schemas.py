@@ -51,6 +51,15 @@ class CreateFunctionRequest(BaseModel):
     )
     type: FunctionType = FunctionType.API
     visibility: ResourceVisibility = ResourceVisibility.POD
+    assistant_invoke: bool = Field(
+        default=True,
+        description=(
+            "Offer this function to the Lemma's assistant. False keeps it for "
+            "the flows that call it -- apps, workflows, schedules and other "
+            "functions: the assistant is not shown it and is refused if it "
+            "runs it by name."
+        ),
+    )
     permissions: FunctionPermissionsReplaceRequest | None = Field(
         default=None,
         description=(
@@ -81,6 +90,13 @@ class UpdateFunctionRequest(BaseModel):
     )
     type: FunctionType | None = None
     visibility: ResourceVisibility | None = None
+    assistant_invoke: bool | None = Field(
+        default=None,
+        description=(
+            "Offer this function to the Lemma's assistant, or stop. Omit to "
+            "leave it as it is."
+        ),
+    )
     permissions: FunctionPermissionsReplaceRequest | None = Field(
         default=None,
         description=(
@@ -147,6 +163,10 @@ class FunctionResponse(BaseModel):
     contacts_invoke: bool = Field(
         default=False, description="Callable from a contact's conversation."
     )
+    assistant_invoke: bool = Field(
+        default=True,
+        description="Offered to the Lemma's assistant and runnable by it.",
+    )
     code_path: str | None = None
     revision_hash: str | None = None
     code: str | None = (
@@ -188,6 +208,10 @@ class FunctionSummaryResponse(BaseModel):
     visibility: str = "POD"
     contacts_invoke: bool = Field(
         default=False, description="Callable from a contact's conversation."
+    )
+    assistant_invoke: bool = Field(
+        default=True,
+        description="Offered to the Lemma's assistant and runnable by it.",
     )
     code_path: str | None = None
     revision_hash: str | None = None

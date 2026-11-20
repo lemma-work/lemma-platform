@@ -8,13 +8,17 @@ from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request, status
 
+from app.core.api.dependencies import get_uow_factory
 from app.core.authorization.context import Context
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.modules.decisions.api.images import PodImageReader
 from app.modules.decisions.domain.request import DecisionCaller
 from app.modules.decisions.services.decision_service import DecisionService
 
 #: Comfortably above the largest valid body -- 64 KiB of evidence, 32 KiB of
 #: examples, a 16 KiB schema and an 8,000-character instruction, all escaped --
-#: and far below the server-wide ceiling. A body that *declares* more is refused
+#: and far below the server-wide ceiling. Images are named by path, never sent
+#: in the body, so they do not count toward it. A body that *declares* more is refused
 #: before it is read. A chunked body declares nothing, so it is read under the
 #: server-wide ceiling and then refused by the per-field caps (a 422) instead.
 MAX_BODY_BYTES = 512 * 1024
@@ -29,6 +33,15 @@ def get_decision_service() -> DecisionService:
 
 
 DecisionServiceDep = Annotated[DecisionService, Depends(get_decision_service)]
+
+
+def get_image_reader(
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+) -> PodImageReader:
+    return PodImageReader(uow_factory)
+
+
+ImageReaderDep = Annotated[PodImageReader, Depends(get_image_reader)]
 
 
 async def bounded_body(request: Request) -> None:

@@ -40,6 +40,9 @@ from app.modules.agent.domain.pauses import (
     Pause,
 )
 from app.modules.agent.domain.state_kinds import PauseKind
+from app.modules.agent.domain.errors import AgentRunNotFoundError
+from app.modules.agent.services.background_model import AFTER_THE_RUN_SOURCES
+from app.modules.usage.contracts.run_usage import RunTokenUsage, run_token_usage
 from app.modules.agent.domain.pending_interactions import (
     PendingInteraction,
     PendingInteractionCursor,
@@ -187,6 +190,8 @@ class ConversationReads:
         conversation.last_run_retryable = await self._latest_run_is_retryable(
             conversation
         )
+        if conversation.agent_runs:
+            conversation.last_run_id = conversation.agent_runs[-1].id
         conversation.has_pending_interaction = conversation.id in (
             await self.pauses.conversations_waiting_on_person([conversation.id])
         )
@@ -195,6 +200,31 @@ class ConversationReads:
                 await self.pauses.pending(conversation.id, kinds=(PauseKind.WAIT,))
             )
         return conversation
+
+    async def get_run(
+        self,
+        *,
+        conversation_id: UUID,
+        agent_run_id: UUID,
+        user_id: UUID,
+        pod_id: UUID,
+    ) -> tuple[AgentRun, RunTokenUsage | None]:
+        """One run of a conversation the caller may read, and the model tokens
+        it used. A run of another conversation is not found here, whoever may
+        read that one."""
+        await self._authorized(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_name=None,
+        )
+        run = await self.runs.get_agent_run(agent_run_id)
+        if run is None or run.conversation_id != conversation_id:
+            raise AgentRunNotFoundError()
+        usage = await run_token_usage(
+            self.uow.session, agent_run_id, exclude_sources=AFTER_THE_RUN_SOURCES
+        )
+        return run, usage
 
     async def _authorized(
         self,

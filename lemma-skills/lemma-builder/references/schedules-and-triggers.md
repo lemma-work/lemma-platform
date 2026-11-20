@@ -34,6 +34,7 @@ and it is not always the schedule's creator:
 | `WEBHOOK` | the schedule's configured user |
 | `DATASTORE` on an **RLS** table | the **owner of the row that changed** (default `run_as: "ROW_OWNER"`) |
 | `DATASTORE` with `config.run_as: "SCHEDULE_OWNER"` | the schedule's configured user, for every change |
+| `DATASTORE` with `config.rows: "OWNER_READABLE"` | the schedule's configured user, for the rows they can read (below) |
 | `DATASTORE` on a **shared** table, a batched fire, or a row nobody in the pod owns | the schedule's configured user |
 
 The RLS row-owner rule is the useful one: each member's write starts a run scoped
@@ -46,6 +47,23 @@ table**, not just permission to write records to it — and, while it runs as ro
 owners (the default), **edit access to the target** too (`agent.update` /
 `workflow.update`; for `POD_DEFAULT`, `pod.update`), because its instruction runs
 with other people's access.
+
+**A member's own trigger: `config.rows: "OWNER_READABLE"`.** A member with the
+default role holds neither of those, so an app that turns on per-person work
+("my booking page", "my follow-ups") sets this. The trigger is then handed only
+the rows its owner can read — **their own rows** on an RLS table, **every row**
+on a shared table — and runs every change **as its owner**. Making one takes
+only `datastore.record.read` on the table (plus `schedule.create` and execute on
+the target, as always); no table or target edit access. Other members' rows on
+an RLS table never reach it, not even as skip counts. Narrow it further with
+`when` (e.g. `{"page_id": "<theirs>"}` on a shared table).
+
+```json
+{ "schedule_type": "DATASTORE", "workflow_name": "booking-confirm",
+  "config": { "table_name": "booking_request", "operations": ["INSERT"],
+              "when": { "page_id": "<page id>" }, "rows": "OWNER_READABLE" },
+  "include_outside_rows": true }
+```
 
 The triggering event becomes the run's **start payload**. Design the first workflow
 node (or the agent's instruction) around that exact shape — see *Event payloads*.

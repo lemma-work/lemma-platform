@@ -74,6 +74,25 @@ export function nextBackoffDelay(attempt: number, options: BackoffOptions = {}):
   return Math.min(Math.max(baseMs, delay), maxMs);
 }
 
+/** First look at a function run that is still going. Short, because a small
+ *  JOB finishes in about a second and a fixed two-second wait made every one of
+ *  them look two seconds slow. */
+export const FUNCTION_RUN_FIRST_POLL_MS = 250;
+
+/**
+ * How long to wait before the `attempt`-th look (0-based) at an unfinished
+ * function run: from {@link FUNCTION_RUN_FIRST_POLL_MS}, doubling, never past
+ * `maxMs` -- so a quick run is seen almost as soon as it ends and a long one is
+ * still asked about only every `maxMs`.
+ */
+export function functionRunPollDelay(attempt: number, maxMs: number): number {
+  const cap = Number.isFinite(maxMs) && maxMs > 0 ? maxMs : FUNCTION_RUN_FIRST_POLL_MS;
+  return nextBackoffDelay(attempt, {
+    baseMs: Math.min(FUNCTION_RUN_FIRST_POLL_MS, cap),
+    maxMs: cap,
+  });
+}
+
 /**
  * Statuses worth retrying with backoff. Deliberately conservative: 429 is an
  * explicit "back off", and 502/503/504 are gateway errors where the request may

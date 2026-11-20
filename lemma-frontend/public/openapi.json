@@ -1421,6 +1421,104 @@
         "title": "AgentRunApprovalDecision",
         "type": "string"
       },
+      "AgentRunResponse": {
+        "description": "One run of a conversation: how it went, and the model tokens it used.",
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "conversation_id": {
+            "format": "uuid",
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "output": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output"
+          },
+          "parent_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Run Id"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AgentRunStatus"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunTokenUsage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Model tokens the run used, summed over its model calls; null when none were recorded against it. A run still working reads what it has used so far. Leaves out the conversation's title and the memory kept after the run, which land later. Tokens only: no cost."
+          }
+        },
+        "required": [
+          "id",
+          "conversation_id",
+          "status",
+          "started_at"
+        ],
+        "title": "AgentRunResponse",
+        "type": "object"
+      },
       "AgentRunStartResponse": {
         "properties": {
           "agent_run_id": {
@@ -6692,6 +6790,19 @@
             ],
             "title": "Last Run Finished At"
           },
+          "last_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The conversation's latest run, to read with `agent.conversation.run.get` -- its outcome and the tokens it used. Set when one conversation is read.",
+            "title": "Last Run Id"
+          },
           "last_run_retryable": {
             "default": false,
             "title": "Last Run Retryable",
@@ -7398,6 +7509,12 @@
         "additionalProperties": false,
         "description": "Request to create a function.\n\nInput and output schemas are derived from the submitted code and returned\non the function response. They are not accepted in create requests.",
         "properties": {
+          "assistant_invoke": {
+            "default": true,
+            "description": "Offer this function to the Lemma's assistant. False keeps it for the flows that call it -- apps, workflows, schedules and other functions: the assistant is not shown it and is refused if it runs it by name.",
+            "title": "Assistant Invoke",
+            "type": "boolean"
+          },
           "code": {
             "anyOf": [
               {
@@ -7709,7 +7826,7 @@
           },
           "config": {
             "additionalProperties": true,
-            "description": "Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`.",
+            "description": "Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`. DATASTORE `rows: OWNER_READABLE` hands the trigger only rows its owner can read (their own on a per-person table, every row on a shared one), each run as the owner; making it needs only to read the table's rows, where the default `rows: ALL` needs `datastore.table.update`.",
             "title": "Config",
             "type": "object"
           },
@@ -8267,6 +8384,23 @@
           "answers"
         ],
         "title": "DecisionExampleBody",
+        "type": "object"
+      },
+      "DecisionImageBody": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "description": "A file of this Lemma, by path (`/receipts/0042.jpg`, or `/me/...` for one of your own). Read with your access: a file you cannot read is refused (422).",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "DecisionImageBody",
         "type": "object"
       },
       "DecisionNode": {
@@ -10726,6 +10860,12 @@
             "title": "Allowed Actions",
             "type": "array"
           },
+          "assistant_invoke": {
+            "default": true,
+            "description": "Offered to the Lemma's assistant and runnable by it.",
+            "title": "Assistant Invoke",
+            "type": "boolean"
+          },
           "code": {
             "anyOf": [
               {
@@ -10909,6 +11049,12 @@
             },
             "title": "Allowed Actions",
             "type": "array"
+          },
+          "assistant_invoke": {
+            "default": true,
+            "description": "Offered to the Lemma's assistant and runnable by it.",
+            "title": "Assistant Invoke",
+            "type": "boolean"
           },
           "code": {
             "anyOf": [
@@ -11359,6 +11505,12 @@
       "FunctionResponse": {
         "description": "Function response.",
         "properties": {
+          "assistant_invoke": {
+            "default": true,
+            "description": "Offered to the Lemma's assistant and runnable by it.",
+            "title": "Assistant Invoke",
+            "type": "boolean"
+          },
           "code": {
             "anyOf": [
               {
@@ -12031,6 +12183,12 @@
             },
             "title": "Allowed Actions",
             "type": "array"
+          },
+          "assistant_invoke": {
+            "default": true,
+            "description": "Offered to the Lemma's assistant and runnable by it.",
+            "title": "Assistant Invoke",
+            "type": "boolean"
           },
           "code_path": {
             "anyOf": [
@@ -14548,7 +14706,7 @@
         "properties": {
           "evidence": {
             "$ref": "#/components/schemas/JsonValue",
-            "description": "What to judge: an email, an event, a row, as text or JSON. Never followed as instructions. At most 64 KiB; send the part that matters."
+            "description": "What to judge: an email, an event, a row, as text or JSON. Never followed as instructions. At most 64 KiB; send the part that matters. Required unless `images` are sent."
           },
           "examples": {
             "description": "Past cases and their answers, to steer the provider.",
@@ -14557,6 +14715,15 @@
             },
             "maxItems": 20,
             "title": "Examples",
+            "type": "array"
+          },
+          "images": {
+            "description": "Images to judge with the evidence -- a receipt photo, a slide -- as files of this Lemma: PNG, JPEG, WebP or GIF (still), at most 10 MiB each; larger than 1568 pixels a side is shrunk before it is sent. What an image says is evidence, never instructions. 422 `DECISION_IMAGES_UNSUPPORTED` when this server's decision model cannot read images.",
+            "items": {
+              "$ref": "#/components/schemas/DecisionImageBody"
+            },
+            "maxItems": 4,
+            "title": "Images",
             "type": "array"
           },
           "instruction": {
@@ -14587,7 +14754,6 @@
         },
         "required": [
           "instruction",
-          "evidence",
           "schema"
         ],
         "title": "MakeDecisionRequest",
@@ -21116,6 +21282,45 @@
         "title": "RowRequest",
         "type": "object"
       },
+      "RunTokenUsage": {
+        "description": "Model tokens one run used, summed over its model calls.",
+        "properties": {
+          "cache_write_tokens": {
+            "default": 0,
+            "description": "Input tokens written to the provider's prompt cache.",
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "cached_input_tokens": {
+            "default": 0,
+            "description": "Input tokens read from the provider's prompt cache.",
+            "title": "Cached Input Tokens",
+            "type": "integer"
+          },
+          "input_tokens": {
+            "default": 0,
+            "description": "Tokens sent to the model, cached ones included (cached_input_tokens says how many of these were cache reads).",
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "models": {
+            "description": "Every model the run's calls were recorded against, by name.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "output_tokens": {
+            "default": 0,
+            "description": "Tokens the model wrote.",
+            "title": "Output Tokens",
+            "type": "integer"
+          }
+        },
+        "title": "RunTokenUsage",
+        "type": "object"
+      },
       "RuntimeModelCapability": {
         "enum": [
           "TEXT",
@@ -26184,6 +26389,18 @@
         "additionalProperties": false,
         "description": "Request to update a function.",
         "properties": {
+          "assistant_invoke": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Offer this function to the Lemma's assistant, or stop. Omit to leave it as it is.",
+            "title": "Assistant Invoke"
+          },
           "code": {
             "anyOf": [
               {
@@ -26490,7 +26707,7 @@
                 "type": "null"
               }
             ],
-            "description": "Replaces the whole config. Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`.",
+            "description": "Replaces the whole config. Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`. DATASTORE `rows: OWNER_READABLE` hands the trigger only rows its owner can read (their own on a per-person table, every row on a shared one), each run as the owner; making it needs only to read the table's rows, where the default `rows: ALL` needs `datastore.table.update`.",
             "title": "Config"
           },
           "filter_instruction": {
@@ -28903,6 +29120,11 @@
             "title": "Id",
             "type": "string"
           },
+          "kind": {
+            "$ref": "#/components/schemas/WorkflowEdgeKind",
+            "default": "NEXT",
+            "description": "`NEXT` is followed when the source finishes. `FAILURE` is followed instead of failing the run when the source fails: its output is then `{error}` (with any partial output), read as `<source>.error`. At most one FAILURE edge per node, never from an END. A LOOP's also catches failures in its body that no body node routes itself."
+          },
           "label": {
             "anyOf": [
               {
@@ -28930,6 +29152,15 @@
         ],
         "title": "WorkflowEdge",
         "type": "object"
+      },
+      "WorkflowEdgeKind": {
+        "description": "What an edge is followed on.",
+        "enum": [
+          "NEXT",
+          "FAILURE"
+        ],
+        "title": "WorkflowEdgeKind",
+        "type": "string"
       },
       "WorkflowGraphUpdateRequest": {
         "description": "Named request body for replacing a workflow graph.",
@@ -37298,8 +37529,8 @@
           "verb": "get"
         }
       },
-      "put": {
-        "description": "Update pod details",
+      "patch": {
+        "description": "Update pod details; only the fields sent change",
         "operationId": "pod.update",
         "parameters": [
           {
@@ -45771,6 +46002,77 @@
           "resource": "agent.conversation",
           "result": "entity",
           "verb": "retry"
+        }
+      }
+    },
+    "/pods/{pod_id}/conversations/{conversation_id}/runs/{run_id}": {
+      "get": {
+        "description": "One run of a conversation: its status, output and error, and the model tokens it used (input, output, cache reads and writes, and the models). A conversation's latest run is `last_run_id` on the conversation; a send's is `agent_run_id` on its answer. 404 for a run of any other conversation.",
+        "operationId": "agent.conversation.run.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Conversation Run",
+        "tags": [
+          "agent_conversations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.conversation.run",
+          "result": "entity",
+          "verb": "get"
         }
       }
     },

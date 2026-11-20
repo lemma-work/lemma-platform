@@ -6,6 +6,21 @@ export interface LemmaAppConfig {
   iconUrl?: string;
 }
 
+/**
+ * One of the pod's web widgets this page may embed, as the host names it in
+ * `window.__LEMMA_CONFIG__`. Load `scriptUrl` with `data-lemma-key` set to
+ * `publicKey` and the widget's chat and forms are on the page.
+ *
+ * Only widgets that are switched on and allow the page's own origin are named,
+ * so a Public app reaches its pod's chat without carrying the key in its links.
+ * The key is publishable: it is written into every page that embeds the widget.
+ */
+export interface LemmaWebWidget {
+  name: string;
+  publicKey: string;
+  scriptUrl: string;
+}
+
 export interface LemmaConfig {
   /** API base URL, e.g. https://api.lemma.work */
   apiUrl: string;
@@ -36,6 +51,9 @@ export interface LemmaConfig {
    *  `X-Lemma-App` so a published app's API calls are attributable to the app
    *  rather than only to the pod. */
   appId?: string;
+  /** The pod's web widgets this page may embed, injected by the app host.
+   *  Absent outside a hosted app, and when none allows the app's origin. */
+  webWidgets?: LemmaWebWidget[];
 }
 
 declare global {
@@ -179,5 +197,6 @@ export function resolveConfig(overrides: Partial<LemmaConfig> = {}): LemmaConfig
     maxRetries: overrides.maxRetries ?? win.maxRetries,
     client: overrides.client ?? win.client,
     appId: overrides.appId ?? win.appId,
+    webWidgets: overrides.webWidgets ?? win.webWidgets,
   };
 }

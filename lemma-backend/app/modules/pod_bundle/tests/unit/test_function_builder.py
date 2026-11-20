@@ -103,3 +103,39 @@ async def test_a_function_this_import_made_before_a_crash_is_its_own(tmp_path) -
     )
 
     assert created.made(StepKind.FUNCTION, "triage")
+
+
+@pytest.mark.parametrize(
+    ("declared", "offered"),
+    [({"assistant_invoke": False}, False), ({}, True)],
+    ids=["kept-from-the-assistant", "absent"],
+)
+async def test_a_bundle_says_whether_its_assistant_runs_a_function(
+    tmp_path, declared, offered
+) -> None:
+    root = tmp_path / "bundle"
+    resource = root / "functions" / "claim"
+    resource.mkdir(parents=True)
+    (resource / "claim.json").write_text(
+        json.dumps(
+            {"name": "claim", "code": "def claim():\n    return None\n"} | declared
+        ),
+        encoding="utf-8",
+    )
+    use_cases = SimpleNamespace(
+        create_function_for_import=AsyncMock(return_value=SimpleNamespace(id=uuid4()))
+    )
+    runner = FunctionStepRunner(uow_factory=object(), use_cases=use_cases)
+
+    await runner.run(
+        PlanStep(
+            index=0, kind=StepKind.FUNCTION, name="claim", action=StepAction.CREATE
+        ),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        bundle_root=root,
+        replacements={},
+    )
+
+    call = use_cases.create_function_for_import.await_args.kwargs
+    assert call["entity"].assistant_invoke is offered

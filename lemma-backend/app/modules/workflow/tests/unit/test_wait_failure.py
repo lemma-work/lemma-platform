@@ -9,6 +9,7 @@ from app.modules.workflow.domain.wait import (
     WorkflowRunWaitEntity,
     WorkflowRunWaitType,
 )
+from app.modules.workflow.domain.workflow import WorkflowEntity
 from app.modules.workflow.execution.wait_failure import fail_run_for_wait
 
 pytestmark = pytest.mark.asyncio
@@ -42,6 +43,16 @@ class _Waits:
         return wait
 
 
+class _Flows:
+    """The workflow as it is now; none of these tests routes a failure."""
+
+    def __init__(self, flow: WorkflowEntity | None = None) -> None:
+        self.flow = flow
+
+    async def get(self, flow_id):
+        return self.flow
+
+
 class _UnitOfWork:
     def __init__(self) -> None:
         self.commits = 0
@@ -54,6 +65,7 @@ class _Engine:
     def __init__(self, runs: _Runs, waits: _Waits) -> None:
         self.run_repo = runs
         self.wait_repo = waits
+        self.flow_repo = _Flows()
         self.uow = _UnitOfWork()
         self.terminal: list[WorkflowRunEntity] = []
         self.announced: list[WorkflowRunEntity] = []

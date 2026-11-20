@@ -17,6 +17,8 @@ from app.core.authorization.sql_actions import (
 )
 from app.core.infrastructure.db.sql_text import starts_with
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.runtime_config import PageWebWidget
+from app.modules.agent_surfaces.contracts.web_widgets import widgets_for_page
 from app.modules.apps.domain.entities import AppEntity, AppReleaseEntity
 from app.modules.apps.domain.errors import AppNotFoundError
 from app.modules.apps.domain.events import AppCreatedEvent
@@ -440,3 +442,10 @@ class AppRepository(AppRepositoryPort):
         )
         result = await self.session.execute(stmt)
         return [model.to_entity() for model in result.scalars().all()]
+
+    async def page_web_widgets(
+        self, pod_id: UUID, origin: str
+    ) -> tuple[PageWebWidget, ...]:
+        # On the session the asset lookup already holds, so serving a page
+        # costs no second connection.
+        return await widgets_for_page(self.session, pod_id=pod_id, origin=origin)

@@ -19,6 +19,10 @@ from app.modules.datastore.contracts.agent_tools import (
     build_file_app_url,
     build_object_url,
 )
+from app.modules.agent.domain.plugin_memory_blocks import (
+    PLUGIN_BLOCK_INDEXES,
+    check_blocks_kept,
+)
 from app.modules.agent.domain.tools import ImagePart
 from app.modules.agent.domain.tools import WithImages
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value
@@ -59,6 +63,7 @@ from app.modules.agent.infrastructure.tools.vision_delegation import (
 )
 from app.modules.datastore.contracts import (
     DatastoreConflictError,
+    DatastoreFileNotFoundError,
     DatastoreFileUpdateEntity,
 )
 
@@ -98,6 +103,35 @@ async def _after_memory_write(
     return {"warning": warning} if warning else {}
 
 
+def _holds_plugin_blocks(services: PodServices, resolved_path: str) -> bool:
+    """Whether ``resolved_path`` is a shared index plugins keep blocks in."""
+    return to_me_path(resolved_path, services.ctx.user_id) in PLUGIN_BLOCK_INDEXES
+
+
+async def _current_text(services: PodServices, resolved_path: str) -> str:
+    """The file's text now; empty when there is none, or none that is text."""
+    try:
+        _, content = await services.file.download_file_content_by_path(
+            services.ctx.pod_id, resolved_path, services.ctx
+        )
+    except DatastoreFileNotFoundError:
+        return ""
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
+
+
+def _plugin_block_refusal(
+    resolved_path: str, before: str, after: str
+) -> JsonObject | None:
+    """The refusal for a write that would not keep a plugin's block, or None."""
+    problem = check_blocks_kept(before, after)
+    if problem is None:
+        return None
+    return {"success": False, "path": resolved_path, "error": problem}
+
+
 class _StoredFile(Protocol):
     """What a write reports back: where the file now lives and how big it is."""
 
@@ -127,17 +161,25 @@ async def pod_write_file(
     ctx: ToolContext,
     request: PodWriteFileRequest,
 ) -> JsonObject:
-    """Write text content to a pod file, creating or overwriting it.
+    """Write text content to a file, creating or overwriting it.
 
-    Without an absolute path, the file lands in your default pod working
-    directory (`/me/c/{date}/{slug}`) — a stable, private location scoped to
-    this conversation. Writes under your own `/me/...` (including that default
-    location) never need approval; writes to a shared pod path may.
+    Without an absolute path, the file lands in your default working directory
+    (`/me/c/{date}/{slug}`) — a stable, private location scoped to this
+    conversation. Writes under your own `/me/...` (including that default
+    location) never need approval; writes to a shared path may.
     """
 
     async def op(services: PodServices) -> JsonObject:
         resolved_path = resolve_pod_path(ctx, request.path)
         directory_path, name = split_pod_path(resolved_path)
+        if _holds_plugin_blocks(services, resolved_path):
+            refused = _plugin_block_refusal(
+                resolved_path,
+                await _current_text(services, resolved_path),
+                request.content,
+            )
+            if refused is not None:
+                return refused
         content_bytes = request.content.encode("utf-8")
         try:
             entity = await services.file.create_file(
@@ -221,7 +263,7 @@ async def pod_edit_file(
     ctx: ToolContext,
     request: PodEditFileRequest,
 ) -> JsonObject:
-    """Change part of an existing pod text file by exact-text replacement.
+    """Change part of an existing text file by exact-text replacement.
 
     The way to edit a doc, a page or any file you did not just write: name the
     text to replace and what goes there, and the rest of the file is kept byte
@@ -269,6 +311,12 @@ async def pod_edit_file(
                     "so nothing was written. Read it again and retry."
                 ),
             }
+        # Checked against the text the edits were placed on, which the checksum
+        # just confirmed is what the file still holds.
+        if _holds_plugin_blocks(services, entity.path):
+            refused = _plugin_block_refusal(resolved_path, text, new_text)
+            if refused is not None:
+                return refused
         updated = await _overwrite(
             services, entity.path, new_text.encode("utf-8"), None
         )
@@ -294,12 +342,12 @@ async def pod_list_files(
     ctx: ToolContext,
     request: PodListFilesRequest,
 ) -> JsonObject:
-    """List pod files under a path.
+    """List files under a path.
 
     ``recursive=false`` (default) lists the immediate files and folders in
     ``path``. ``recursive=true`` returns a file tree rooted at ``path`` (folders
     plus a sample of files per directory). Without an absolute path, resolves
-    against your default pod working directory (`/me/c/{date}/{slug}`).
+    against your default working directory (`/me/c/{date}/{slug}`).
     """
 
     async def op(services: PodServices) -> JsonObject:
@@ -339,7 +387,7 @@ async def pod_read_file(
     ctx: ToolContext,
     request: PodReadFileRequest,
 ) -> JsonObject:
-    """Read a pod file's text.
+    """Read a file's text.
 
     A file that has text of its own -- markdown, plain text, HTML, CSV, code,
     email -- is returned exactly as it is. A file that has none, because it is a
@@ -449,7 +497,7 @@ async def pod_get_file_url(
     ctx: ToolContext,
     request: GetFileUrlRequest,
 ) -> JsonObject:
-    """Get a URL for a pod file, to share a link or embed an image.
+    """Get a URL for a file, to share a link or embed an image.
 
     ``app`` (default) returns an in-app link for a signed-in member plus a
     short-lived download url. ``public`` mints a signed link anyone can open —
@@ -505,7 +553,7 @@ async def pod_search_files(
     ctx: ToolContext,
     request: SearchFilesRequest,
 ) -> JsonObject:
-    """Semantic/keyword search across indexed pod files."""
+    """Semantic/keyword search across indexed files."""
 
     async def op(services: PodServices) -> JsonObject:
         return await search_files(services, request)

@@ -96,5 +96,19 @@ class FunctionConflictError(FunctionDomainError):
         )
 
 
+class FunctionNotForAssistantError(FunctionDomainError):
+    """The function is kept out of the assistant's reach (``assistant_invoke``)."""
+
+    def __init__(self, name: str):
+        super().__init__(
+            message=(
+                f"Function {name} is not run by the assistant. It runs as part "
+                "of an app, a workflow or another function; use that instead."
+            ),
+            code="FUNCTION_NOT_FOR_ASSISTANT",
+            status_code=403,
+        )
+
+
 # Backward-compatible alias
 FunctionError = FunctionDomainError

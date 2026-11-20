@@ -648,6 +648,35 @@ def test_validate_workflow_accepts_decision_with_explicit_branches():
     assert not [i for i in issues if "silently routes" in i]
 
 
+def test_validate_workflow_does_not_take_a_failure_edge_as_the_default():
+    from lemma_cli.cli_app.scaffold import validate_workflow
+
+    # A failure edge listed first is where the decision goes if it fails, not
+    # its default; the default is the plain edge to a catch-all.
+    issues = validate_workflow(
+        {
+            "start": {"type": "MANUAL"},
+            "nodes": [
+                {
+                    "id": "decide",
+                    "type": "DECISION",
+                    "config": {
+                        "rules": [{"condition": "x == 1", "next_node_id": "approve"}]
+                    },
+                },
+                {"id": "approve", "type": "END"},
+                {"id": "needs_review", "type": "END"},
+            ],
+            "edges": [
+                {"source": "decide", "target": "approve", "kind": "FAILURE"},
+                {"source": "decide", "target": "needs_review"},
+            ],
+        }
+    )
+    assert not [i for i in issues if "silently routes" in i], issues
+    assert any("'needs_review'" in i for i in issues), "the plain edge is the default"
+
+
 def test_validate_workflow_flags_decision_with_no_rules():
     from lemma_cli.cli_app.scaffold import validate_workflow
 

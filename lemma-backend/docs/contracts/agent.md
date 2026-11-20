@@ -23,6 +23,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.conversation.pending_interaction.list` | GET | `/pods/{pod_id}/conversations/pending-interactions` | List Interactions Waiting On You |
 | `agent.conversation.repository.list` | GET | `/pods/{pod_id}/conversations/repositories` | List Repositories A Conversation Can Open In |
 | `agent.conversation.retry` | POST | `/pods/{pod_id}/conversations/{conversation_id}/retry` | Retry Failed Pod Conversation Run |
+| `agent.conversation.run.get` | GET | `/pods/{pod_id}/conversations/{conversation_id}/runs/{run_id}` | Get Conversation Run |
 | `agent.conversation.stop` | POST | `/pods/{pod_id}/conversations/{conversation_id}/stop` | Stop Pod Conversation |
 | `agent.conversation.stream` | GET | `/pods/{pod_id}/conversations/{conversation_id}/stream` | Stream Pod Conversation |
 | `agent.conversation.update` | PATCH | `/pods/{pod_id}/conversations/{conversation_id}` | Update Pod Conversation |
