@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import exists, or_, select, tuple_, update
+from sqlalchemy import exists, func, or_, select, tuple_, update
 from sqlalchemy.orm import aliased
 
 from app.modules.agent.domain.calls import (
@@ -259,6 +259,10 @@ class Calls(UnitOfWorkRepository):
                     MessageModel.tool_name == RELAY_TOOL_NAME,
                     MessageModel.created_at > since,
                     MessageModel.tool_call_id.is_not(None),
+                    # Only rows that can be said: a call whose arguments were
+                    # stored without a text must not use up the bound below.
+                    func.jsonb_typeof(MessageModel.tool_args) == "object",
+                    func.jsonb_typeof(MessageModel.tool_args["text"]) == "string",
                     *([MessageModel.tool_call_id.not_in(heard)] if heard else []),
                 )
                 .order_by(MessageModel.created_at, MessageModel.id)

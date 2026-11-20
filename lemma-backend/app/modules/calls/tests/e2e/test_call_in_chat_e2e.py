@@ -243,3 +243,58 @@ async def test_a_catch_up_finds_a_missed_relay_behind_any_number_heard(
             uow, call_id, start - timedelta(seconds=1), heard=heard
         )
     assert found == [("missed", "India 143 for 1.", "now", None)]
+
+
+async def test_a_catch_up_finds_a_missed_relay_behind_rows_it_cannot_say(
+    scenario,
+) -> None:
+    """Relay rows stored without a usable text do not use up the read's bound:
+    the sayable one after more of them than the bound is still found."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.agent.contracts.calls import relays_since
+    from app.modules.agent.infrastructure.db.calls import (
+        MAX_MISSED_RELAYS,
+        MAX_RELAY_PAGES,
+    )
+    from app.modules.agent.infrastructure.models import MessageModel
+
+    await scenario.create_org_with_pod(name_prefix="calls-unsayable")
+    call_id = UUID(await _chat(scenario, "The call"))
+    unsayable = MAX_MISSED_RELAYS * MAX_RELAY_PAGES + 10
+    start = datetime.now(UTC)
+    shapes: list[object] = [{}, {"text": None}, {"text": 7}, "not an object"]
+    async with async_session_maker() as session:
+        session.add_all(
+            [
+                MessageModel(
+                    conversation_id=call_id,
+                    sequence=index + 1,
+                    role="assistant",
+                    kind="TOOL_CALL",
+                    tool_name="relay_to_voice",
+                    tool_call_id=f"bad-{index}",
+                    tool_args=shapes[index % len(shapes)],
+                    created_at=start + timedelta(milliseconds=index),
+                )
+                for index in range(unsayable)
+            ]
+            + [
+                MessageModel(
+                    conversation_id=call_id,
+                    sequence=unsayable + 1,
+                    role="assistant",
+                    kind="TOOL_CALL",
+                    tool_name="relay_to_voice",
+                    tool_call_id="missed",
+                    tool_args={"text": "India 143 for 1.", "urgency": "now"},
+                    created_at=start + timedelta(seconds=5),
+                )
+            ]
+        )
+        await session.commit()
+
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        found = await relays_since(uow, call_id, start - timedelta(seconds=1))
+    assert found == [("missed", "India 143 for 1.", "now", None)]
