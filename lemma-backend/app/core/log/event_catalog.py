@@ -1074,6 +1074,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'pod.pod_member_service.fetch_user_info_event_emission.diagnostic': EventSpec('debug', frozenset()),
     'pod.work.dropped_with_pod': EventSpec('info', frozenset({'count', 'pod_id'})),
     'pod_bundle.ai_readme.readme_ai_polish_using_deterministic.diagnostic': EventSpec('debug', frozenset()),
+    'pod_bundle.app_builder.prebuilt_dist_stale': EventSpec('info', frozenset({'app', 'app_slug'})),
+    'pod_bundle.app_builder.prebuilt_dist_used': EventSpec('info', frozenset({'app', 'app_slug'})),
     'pod_bundle.applier.file_metadata_unreadable.degraded': EventSpec('warning', frozenset({'metadata_file'})),
     'pod_bundle.applier.skipping_grant_unknown_resource_type.diagnostic': EventSpec('debug', frozenset({'raw_type'})),
     'pod_bundle.applier.skipping_grant_without_resource_name.diagnostic': EventSpec('debug', frozenset()),
