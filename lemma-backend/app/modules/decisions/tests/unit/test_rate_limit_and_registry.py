@@ -68,8 +68,18 @@ async def test_redis_trouble_lets_the_decision_through(counter: _Counter) -> Non
     assert await limiter.retry_after("org:a") is None
 
 
-def test_the_model_provider_is_the_default() -> None:
-    assert build_provider(DecisionsSettings()).name == "model"
+def test_gemini_is_the_default_once_its_key_is_set() -> None:
+    provider = build_provider(
+        DecisionsSettings(lemma_google_api_key=SecretStr("AIza-test"))
+    )
+    assert provider.name == "gemini"
+
+
+def test_the_default_without_a_google_key_is_the_model() -> None:
+    """A deployment that never set a Google key keeps deciding on its model."""
+    settings = DecisionsSettings(lemma_google_api_key=None)
+    assert "decision_provider" not in settings.model_fields_set
+    assert build_provider(settings).name == "model"
 
 
 def test_typesafe_is_chosen_by_setting_when_its_key_is_set() -> None:

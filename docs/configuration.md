@@ -835,11 +835,12 @@ durable state, not configuration.
 
 ## Models
 
-Lemma talks to any OpenAI-compatible or Anthropic-compatible endpoint. There is
-no provider-specific logic beyond those two shapes.
+Lemma talks to any OpenAI-compatible or Anthropic-compatible endpoint, and to
+Google's Gen AI API (Gemini) on either of its hosts. There is no
+provider-specific logic beyond those three shapes.
 
 ```dotenv
-LEMMA_DEFAULT_MODEL_TYPE=openai_compat   # openai_compat | anthropic_compat
+LEMMA_DEFAULT_MODEL_TYPE=openai_compat   # openai_compat | anthropic_compat | google_genai
 LEMMA_OPENAI_API_KEY=
 LEMMA_OPENAI_BASE_URL=https://api.openai.com/v1
 LEMMA_OPENAI_DEFAULT_MODEL=
@@ -854,6 +855,20 @@ LEMMA_OPENAI_REASONING_MODEL_NAMES=
 
 LEMMA_ANTHROPIC_API_KEY=
 LEMMA_ANTHROPIC_DEFAULT_MODEL=claude-sonnet-4-5
+
+# Google (LEMMA_DEFAULT_MODEL_TYPE=google_genai). With a project set, models run
+# on Vertex AI as a service account: the key file below if given, else the
+# identity the server runs as (Workload Identity on GKE, or
+# `gcloud auth application-default login` on a laptop), which needs
+# roles/aiplatform.user. Without a project, the Gemini API with its API key.
+LEMMA_GOOGLE_VERTEX_PROJECT=
+LEMMA_GOOGLE_VERTEX_LOCATION=global
+LEMMA_GOOGLE_SERVICE_ACCOUNT_JSON=
+LEMMA_GOOGLE_API_KEY=
+LEMMA_GOOGLE_DEFAULT_MODEL=gemini-4-hydrogen
+LEMMA_GOOGLE_MODEL_NAMES=gemini-4-hydrogen,gemini-4-argon,gemini-4-carbon,gemini-3.8-flash
+# Image models, for the generate_image tool. Never an agent's chat model.
+LEMMA_GOOGLE_IMAGE_MODEL_NAMES=gemini-3.1-flash-image
 
 # Embeddings and reranking for datastore search. `local` runs in-process and
 # needs no key; the dimension must match what your index was built with.
@@ -892,11 +907,17 @@ runs drive their own model loop and ignore these settings.
 
 `POST /pods/{pod_id}/decisions` answers closed questions -- a choice, several
 choices, yes or no, a point on a scale -- about some evidence. One provider
-answers them for the whole deployment. By default it is the language model
-configured above, so decisions need no setting at all.
+answers them for the whole deployment. By default it is Google's Decisions API
+when `LEMMA_GOOGLE_API_KEY` is set, and the language model configured above when
+it is not, so decisions need no setting at all.
 
 ```dotenv
-DECISION_PROVIDER=model       # model | typesafe
+DECISION_PROVIDER=gemini      # gemini | model | typesafe
+# Google's decision model. It is served on the Gemini API only, which refuses
+# service accounts, so it takes LEMMA_GOOGLE_API_KEY even where models run on
+# Vertex AI. Without the key the `model` provider answers instead.
+GEMINI_DECISION_MODEL=gemini-decision-1
+GEMINI_DECISION_PRICE_PER_MILLION_INPUT_TOKENS_USD=0.10
 # The model the `model` provider asks, by public name. Empty: the default model.
 # A small, fast model is a good choice; decisions are short.
 DECISION_MODEL=
@@ -914,8 +935,9 @@ DECISION_BACKGROUND_TIMEOUT_SECONDS=25
 DECISION_RATE_LIMIT_PER_MINUTE=600   # per organization and priority; 0 for none
 ```
 
-Choosing `typesafe` sends the evidence of every decision to Typesafe, so list it
-wherever your deployment names the processors its users' data reaches.
+Choosing `typesafe` sends the evidence of every decision to Typesafe, and a
+Google key with the `gemini` default sends it to Google, so list whichever
+applies wherever your deployment names the processors its users' data reaches.
 
 Live voice calls ask one decision of this API per finished turn, with
 `priority: interactive`: whether it is conversation for the voice alone or

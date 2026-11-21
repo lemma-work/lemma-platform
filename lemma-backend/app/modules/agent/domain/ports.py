@@ -23,6 +23,7 @@ from app.modules.agent.domain.value_objects import (
 
 if TYPE_CHECKING:
     from app.modules.agent.domain.background import BackgroundAnswer, BackgroundCall
+    from app.modules.agent.domain.tools import ImagePart
 
 
 class Harness(Protocol):
@@ -62,6 +63,10 @@ class ModelProvider(Protocol):
 
     async def run(self, model: object, call: BackgroundCall) -> BackgroundAnswer:
         """Ask ``model`` one background call."""
+        ...
+
+    async def draw(self, model: object, call: BackgroundCall) -> ImagePart:
+        """Ask an image model for one image."""
         ...
 
 

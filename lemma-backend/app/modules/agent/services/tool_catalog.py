@@ -48,6 +48,9 @@ from app.modules.agent.infrastructure.tools.user_interaction import (
 from app.modules.agent.infrastructure.tools.waiting import tools as waiting
 from app.modules.agent.infrastructure.tools.web import tools as web
 from app.modules.agent.infrastructure.tools.workspace_cli import tools as workspace_cli
+from app.modules.agent.services.google_system_profile import (
+    image_generation_available,
+)
 from app.modules.agent.services.run_phase_spans import run_phase
 
 
@@ -241,6 +244,16 @@ def _seen_and_placed(
         and ToolGroup.VIEW_IMAGE not in {spec.toolset for spec in specs}
     ):
         specs.extend(workspace_cli.VIEW_IMAGE_SPECS)
+    # `generate_image` beside the workspace tools, where it saves what it
+    # draws, when there is a model that draws; never for a stranger, whose
+    # turn would spend the owner's money on pictures.
+    if (
+        not audience.answers_outsiders
+        and ToolGroup.WORKSPACE_CLI in {spec.toolset for spec in specs}
+        and ToolGroup.IMAGE_GENERATION not in {spec.toolset for spec in specs}
+        and image_generation_available()
+    ):
+        specs.extend(workspace_cli.IMAGE_GENERATION_SPECS)
     if surface is not ToolSurface.RERUN and ctx.host_execution_mode is not None:
         specs = _for_host_execution(specs, native=ctx.host_execution_mode == "native")
     # Answering what was asked of somebody is theirs to do, in their own

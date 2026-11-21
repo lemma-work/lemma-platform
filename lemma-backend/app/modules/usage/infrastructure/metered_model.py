@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 from contextlib import asynccontextmanager
 
 import anyio
-from pydantic_ai.messages import ModelMessage, ModelResponse
+from pydantic_ai.messages import FilePart, ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters, StreamedResponse
 from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.settings import ModelSettings
@@ -56,7 +56,47 @@ def _position(run_context: RunContext[object] | None) -> RequestPosition | None:
     )
 
 
-def _counts(usage: RequestUsage) -> TokenCounts | None:
+#: Where pydantic-ai's Google adapter files image output tokens: the
+#: per-modality count Gemini reports, named `<modality>_candidates_tokens`.
+_OUTPUT_IMAGE_TOKEN_DETAILS = ("image_candidates_tokens",)
+
+
+def _output_image_tokens(usage: RequestUsage) -> int | None:
+    """The image share of the output, or ``None`` when the provider gave none.
+
+    Read only from the per-modality detail the adapter writes from the
+    provider's own report; its absence is unknown, never zero.
+    """
+    reported = [
+        usage.details[key]
+        for key in _OUTPUT_IMAGE_TOKEN_DETAILS
+        if key in usage.details
+    ]
+    if not reported:
+        return None
+    return min(sum(reported), usage.output_tokens)
+
+
+def _images_in(response: ModelResponse) -> int:
+    return sum(
+        1
+        for part in response.parts
+        if isinstance(part, FilePart) and part.content.is_image
+    )
+
+
+def _drew_without_measure(counts: TokenCounts | None) -> bool:
+    """Pictures came back but no image-token count with them.
+
+    Some adapters report no modality split. Pricing those output tokens at
+    the text rate would bill a picture at a fraction of its cost and record it
+    as priced, so the request is left unpriced instead, to follow
+    `USAGE_UNPRICED_LIMIT_POLICY` like any cost this server cannot state.
+    """
+    return bool(counts and counts.output_images and counts.output_image_tokens is None)
+
+
+def _counts(usage: RequestUsage, *, images: int = 0) -> TokenCounts | None:
     # Adapters normalize an absent provider receipt to all-zero usage. A complete
     # response alone cannot prove that a model request consumed no paid tokens.
     if not any(
@@ -79,6 +119,8 @@ def _counts(usage: RequestUsage) -> TokenCounts | None:
         input_audio_tokens=usage.input_audio_tokens,
         output_audio_tokens=usage.output_audio_tokens,
         cache_audio_read_tokens=usage.cache_audio_read_tokens,
+        output_image_tokens=_output_image_tokens(usage),
+        output_images=images,
         request_count=1,
     )
 
@@ -119,6 +161,7 @@ class MeteredModel(WrapperModel):
                     dispatch.responded = True
                     if response.state == "complete":
                         dispatch.usage = response.usage
+                        dispatch.images = _images_in(response)
                     return response
             except provider_errors() as exc:
                 if dispatch is None or dispatch.provider_error is not exc:
@@ -155,6 +198,7 @@ class MeteredModel(WrapperModel):
                     dispatch.responded = True
                     if stream.get().state == "complete":
                         dispatch.usage = stream.usage
+                        dispatch.images = _images_in(stream.get())
                 return
             except provider_errors() as exc:
                 # Once the caller has the stream, only the harness can replace its
@@ -205,6 +249,7 @@ class MeteredModel(WrapperModel):
                 prepared,
                 effective,
                 prices_images_as_text=pricing.prices_images_as_text,
+                prices_image_output=pricing.prices_image_output,
             ) and not _compound_billing(effective)
 
         priceable = priceable_as(parameters)
@@ -265,6 +310,7 @@ class Dispatch:
         #: `_with_local_tool_search`.
         self.parameters = parameters
         self.usage: RequestUsage | None = None
+        self.images = 0
         self.rejected = False
         self.responded = False
         self.provider_error: Exception | None = None
@@ -273,15 +319,21 @@ class Dispatch:
         counts = (
             TokenCounts(request_count=1)
             if self.rejected
-            else _counts(self.usage)
+            else _counts(self.usage, images=self.images)
             if self.usage is not None
             else None
         )
         cost = (
-            Decimal(0) if self.rejected else _price_receipt(pricing, counts, priceable)
+            Decimal(0)
+            if self.rejected
+            else None
+            if _drew_without_measure(counts)
+            else _price_receipt(pricing, counts, priceable)
         )
         if counts is None:
-            counts = TokenCounts(request_count=1, unconfirmed_requests=1)
+            counts = TokenCounts(
+                request_count=1, unconfirmed_requests=1, output_images=self.images
+            )
         elif cost is None:
             counts = counts.model_copy(update={"unpriced_requests": 1})
         return RequestReceipt(

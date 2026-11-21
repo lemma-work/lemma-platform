@@ -15,6 +15,9 @@ from ...models.update_agent_host_runtime_profile_request import (
 from ...models.update_anthropic_compatible_runtime_profile_request import (
     UpdateAnthropicCompatibleRuntimeProfileRequest,
 )
+from ...models.update_google_gen_ai_runtime_profile_request import (
+    UpdateGoogleGenAIRuntimeProfileRequest,
+)
 from ...models.update_open_ai_compatible_runtime_profile_request import (
     UpdateOpenAICompatibleRuntimeProfileRequest,
 )
@@ -27,6 +30,7 @@ def _get_kwargs(
     *,
     body: UpdateAgentHostRuntimeProfileRequest
     | UpdateAnthropicCompatibleRuntimeProfileRequest
+    | UpdateGoogleGenAIRuntimeProfileRequest
     | UpdateOpenAICompatibleRuntimeProfileRequest,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
@@ -42,6 +46,8 @@ def _get_kwargs(
     if isinstance(body, UpdateAgentHostRuntimeProfileRequest):
         _kwargs["json"] = body.to_dict()
     elif isinstance(body, UpdateOpenAICompatibleRuntimeProfileRequest):
+        _kwargs["json"] = body.to_dict()
+    elif isinstance(body, UpdateAnthropicCompatibleRuntimeProfileRequest):
         _kwargs["json"] = body.to_dict()
     else:
         _kwargs["json"] = body.to_dict()
@@ -89,6 +95,7 @@ def sync_detailed(
     client: AuthenticatedClient | Client,
     body: UpdateAgentHostRuntimeProfileRequest
     | UpdateAnthropicCompatibleRuntimeProfileRequest
+    | UpdateGoogleGenAIRuntimeProfileRequest
     | UpdateOpenAICompatibleRuntimeProfileRequest,
 ) -> Response[AgentRuntimeProfileResponse | ErrorResponse]:
     """Update Agent Runtime Profile
@@ -97,7 +104,7 @@ def sync_detailed(
         organization_id (UUID):
         profile_id (str):
         body (UpdateAgentHostRuntimeProfileRequest |
-            UpdateAnthropicCompatibleRuntimeProfileRequest |
+            UpdateAnthropicCompatibleRuntimeProfileRequest | UpdateGoogleGenAIRuntimeProfileRequest |
             UpdateOpenAICompatibleRuntimeProfileRequest):
 
     Raises:
@@ -128,6 +135,7 @@ def sync(
     client: AuthenticatedClient | Client,
     body: UpdateAgentHostRuntimeProfileRequest
     | UpdateAnthropicCompatibleRuntimeProfileRequest
+    | UpdateGoogleGenAIRuntimeProfileRequest
     | UpdateOpenAICompatibleRuntimeProfileRequest,
 ) -> AgentRuntimeProfileResponse | ErrorResponse | None:
     """Update Agent Runtime Profile
@@ -136,7 +144,7 @@ def sync(
         organization_id (UUID):
         profile_id (str):
         body (UpdateAgentHostRuntimeProfileRequest |
-            UpdateAnthropicCompatibleRuntimeProfileRequest |
+            UpdateAnthropicCompatibleRuntimeProfileRequest | UpdateGoogleGenAIRuntimeProfileRequest |
             UpdateOpenAICompatibleRuntimeProfileRequest):
 
     Raises:
@@ -162,6 +170,7 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
     body: UpdateAgentHostRuntimeProfileRequest
     | UpdateAnthropicCompatibleRuntimeProfileRequest
+    | UpdateGoogleGenAIRuntimeProfileRequest
     | UpdateOpenAICompatibleRuntimeProfileRequest,
 ) -> Response[AgentRuntimeProfileResponse | ErrorResponse]:
     """Update Agent Runtime Profile
@@ -170,7 +179,7 @@ async def asyncio_detailed(
         organization_id (UUID):
         profile_id (str):
         body (UpdateAgentHostRuntimeProfileRequest |
-            UpdateAnthropicCompatibleRuntimeProfileRequest |
+            UpdateAnthropicCompatibleRuntimeProfileRequest | UpdateGoogleGenAIRuntimeProfileRequest |
             UpdateOpenAICompatibleRuntimeProfileRequest):
 
     Raises:
@@ -199,6 +208,7 @@ async def asyncio(
     client: AuthenticatedClient | Client,
     body: UpdateAgentHostRuntimeProfileRequest
     | UpdateAnthropicCompatibleRuntimeProfileRequest
+    | UpdateGoogleGenAIRuntimeProfileRequest
     | UpdateOpenAICompatibleRuntimeProfileRequest,
 ) -> AgentRuntimeProfileResponse | ErrorResponse | None:
     """Update Agent Runtime Profile
@@ -207,7 +217,7 @@ async def asyncio(
         organization_id (UUID):
         profile_id (str):
         body (UpdateAgentHostRuntimeProfileRequest |
-            UpdateAnthropicCompatibleRuntimeProfileRequest |
+            UpdateAnthropicCompatibleRuntimeProfileRequest | UpdateGoogleGenAIRuntimeProfileRequest |
             UpdateOpenAICompatibleRuntimeProfileRequest):
 
     Raises:

@@ -32,7 +32,7 @@ Answers closed questions about one piece of evidence and stores nothing.
   ledger, where the call is metered like a model call.
 - **Answers:** one per question, `{value, confidence}`. `confidence` is null
   unless the provider measures one. `value: null` comes only from a provider
-  that judges the evidence insufficient (`model`); `typesafe` always answers
+  that judges the evidence insufficient (`model`); `gemini` and `typesafe` always answer
   its most probable value with that value's probability as `confidence`. An
   answer is unsure when `value` is null, or `confidence` is set and below the
   caller's own threshold ([decisions module](../modules/decisions.md)).
@@ -49,6 +49,6 @@ Answers closed questions about one piece of evidence and stores nothing.
   still PNG, JPEG, WebP or GIF by its bytes refuses the request with 422
   listing each one (`DECISION_INPUT_TOO_LARGE` when size was the problem),
   before the rest of the request is checked. A server whose decision model
-  cannot read images, or whose provider is `typesafe`, refuses any request
+  cannot read images, or whose provider is `typesafe` or `gemini`, refuses any request
   with images: 422 `DECISION_IMAGES_UNSUPPORTED`, before the provider is
   asked. No URL is ever fetched.

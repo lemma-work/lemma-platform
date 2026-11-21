@@ -46,6 +46,11 @@ class UsagePricing:
                         if values.get("cached_input_per_million_usd") is not None
                         else None
                     ),
+                    output_image_per_million_usd=(
+                        float(values["output_image_per_million_usd"])
+                        if values.get("output_image_per_million_usd") is not None
+                        else None
+                    ),
                 )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             logger.error(

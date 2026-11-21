@@ -39,6 +39,8 @@ class RuntimePurpose(StrEnum):
     VISION = "vision"
     #: History compaction's configured model, else the run's own.
     COMPACTION = "summarization"
+    #: The image generator: only a model that draws.
+    IMAGE = "image"
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +88,7 @@ def choose_workspace_runtime(
     pod_default: AgentRuntimeConfig | None,
     model_name: str | None,
     require_vision: bool,
+    require_image_output: bool = False,
 ) -> AgentRuntimeConfig | None:
     """Pick the workspace model a background call should run on, or ``None``.
 
@@ -98,6 +101,7 @@ def choose_workspace_runtime(
             candidate.profile,
             names=(model_name, candidate.preferred_model_name),
             require_vision=require_vision,
+            require_image_output=require_image_output,
         )
         if entry is not None:
             return AgentRuntimeConfig(
@@ -153,11 +157,18 @@ def _pick_entry(
     *,
     names: tuple[str | None, ...],
     require_vision: bool,
+    require_image_output: bool = False,
 ) -> RuntimeModelCatalogEntry | None:
+    # A model that draws is only ever picked to draw, and only it is.
     eligible = [
         entry
         for entry in profile.model_catalog
-        if not require_vision or RuntimeModelCapability.VISION in entry.capabilities
+        if (
+            RuntimeModelCapability.IMAGE_OUTPUT in entry.capabilities
+            if require_image_output
+            else not entry.draws_only
+        )
+        and (not require_vision or RuntimeModelCapability.VISION in entry.capabilities)
     ]
     for name in names:
         for entry in eligible:

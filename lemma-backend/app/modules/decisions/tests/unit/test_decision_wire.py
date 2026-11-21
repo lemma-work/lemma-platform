@@ -11,7 +11,7 @@ from app.modules.decisions.domain.request import (
     DecisionRequest,
     build_task,
 )
-from app.modules.decisions.infrastructure.providers.typesafe_wire import (
+from app.modules.decisions.infrastructure.providers.decision_wire import (
     WireAnswerError,
     build_request,
     parse_response,

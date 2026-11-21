@@ -29,6 +29,14 @@ class VisionUnavailableError(RuntimeError):
     """No vision-capable model is configured for this deployment."""
 
 
+class ImageModelUnavailableError(RuntimeError):
+    """No image-generation model is configured for this deployment."""
+
+
+class ImageGenerationError(RuntimeError):
+    """The image model was reachable but returned no usable image."""
+
+
 class AgentVisionMode(str, Enum):
     DIRECT = "DIRECT"
     DELEGATED = "DELEGATED"

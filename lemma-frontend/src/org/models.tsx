@@ -1,5 +1,5 @@
 import { LoadingIndicator } from "@/ui/loading";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
     source,
@@ -25,9 +25,11 @@ import { useThisMacAvailability } from "@/desktop/this-mac-settings";
 import {
     asksAboutImages,
     canBeOrganizationDefault,
+    canTestRoute,
     chosenVisionModels,
     discoveryRequest,
     firstProviderOffer,
+    googleSignInProblem,
     isLocalRoute,
     keyToSend,
     localRouteAnswering,
@@ -35,6 +37,8 @@ import {
     readDiscoveredModels,
     testFailureMessage,
     visionCandidates,
+    type GoogleSignIn,
+    type ProviderProtocol,
 } from "./provider-draft";
 import { AgentSettingsFields, EditAgentSettings } from "./agent-settings";
 import {
@@ -67,10 +71,12 @@ import { MoreSettings, NOT_A_LOGIN, SecretInput } from "@/ui/form";
 /* Prefilled routes for the providers people actually connect. Everything else
    is the same two protocols with a different URL, which is what "Something
    else" is for. */
-const PRESETS: { id: string; protocol: "openai" | "anthropic"; name: string; baseUrl: string }[] = [
+const PRESETS: { id: string; protocol: ProviderProtocol; name: string; baseUrl: string }[] = [
     { id: "openrouter", protocol: "openai", name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1" },
     { id: "openai", protocol: "openai", name: "OpenAI", baseUrl: "https://api.openai.com/v1" },
     { id: "anthropic", protocol: "anthropic", name: "Anthropic", baseUrl: "https://api.anthropic.com" },
+    /* No URL: Google's two hosts are chosen by how the provider signs in. */
+    { id: "google", protocol: "google", name: "Google Gemini", baseUrl: "" },
     { id: "groq", protocol: "openai", name: "Groq", baseUrl: "https://api.groq.com/openai/v1" },
     { id: "deepseek", protocol: "openai", name: "DeepSeek", baseUrl: "https://api.deepseek.com" },
     { id: "xai", protocol: "openai", name: "xAI", baseUrl: "https://api.x.ai/v1" },
@@ -488,12 +494,24 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
     const [apiKey, setApiKey] = useState("");
     const [models, setModels] = useState("");
     const [vision, setVision] = useState<string[]>([]);
+    const [signIn, setSignIn] = useState<GoogleSignIn>("VERTEX_AI");
+    const [keyFile, setKeyFile] = useState("");
+    const [project, setProject] = useState("");
+    const [location, setLocation] = useState("global");
+    const [imageModels, setImageModels] = useState("");
+    const [draws, setDraws] = useState(true);
+    const [readingKeyFile, setReadingKeyFile] = useState(false);
+    const [keyFileError, setKeyFileError] = useState("");
+    /* Only the latest pick may land: two reads can finish out of order. */
+    const keyFilePick = useRef(0);
     const [tested, setTested] = useState<Tested | null>(null);
     const [error, setError] = useState("");
     /* Testing goes through this computer's own model lookup, which only the
        Lemma app has. A browser saves and lets the backend discover. */
-    const canTest = useThisMacAvailability() === "shown";
-    const presets = canTest ? [...PRESETS, OLLAMA_PRESET] : PRESETS;
+    const onThisMac = useThisMacAvailability() === "shown";
+    const google = preset.protocol === "google";
+    const canTest = onThisMac && canTestRoute(preset.protocol);
+    const presets = onThisMac ? [...PRESETS, OLLAMA_PRESET] : PRESETS;
     const sentKey = keyToSend(apiKey, baseUrl, LOCAL_SERVER_KEY);
 
     const pick = (chosen: typeof PRESETS[number]) => {
@@ -508,7 +526,9 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
 
     const test = useMutation({
         mutationFn: async () => readDiscoveredModels(
-            await thisMac.discoverModels(discoveryRequest(preset.protocol, baseUrl, apiKey)),
+            await thisMac.discoverModels(
+                discoveryRequest(preset.protocol === "anthropic" ? "anthropic" : "openai", baseUrl, apiKey),
+            ),
         ),
         onSuccess: (found) => setTested(
             found.length > 0
@@ -523,13 +543,47 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
             protocol: preset.protocol,
             name: name.trim(),
             baseUrl: baseUrl.trim(),
-            apiKey: sentKey,
+            apiKey: google && signIn === "VERTEX_AI" ? "" : sentKey,
             models: typed,
             visionModels: chosenVisionModels(preset.protocol, vision, candidates),
+            ...(google && {
+                google: {
+                    backend: signIn,
+                    serviceAccountJson: signIn === "VERTEX_AI" ? keyFile.trim() : undefined,
+                    vertexProject: project.trim() || undefined,
+                    vertexLocation: location.trim() || undefined,
+                    imageModels: !draws ? [] : imageModels.trim() ? modelNames(imageModels) : undefined,
+                },
+            }),
         }),
         onSuccess: () => { onAdded(); onClose(); },
         onError: (problem) => setError(problem instanceof Error ? problem.message : "That key could not be saved."),
     });
+
+    const googleProblem = google ? googleSignInProblem(signIn, apiKey, keyFile) : null;
+    const ready = google ? googleProblem === null && !readingKeyFile : Boolean(sentKey);
+    const readKeyFile = async (file: File | undefined) => {
+        /* The previous file is dropped the moment another is picked, so
+           Connect can never save one the input no longer shows. */
+        const pick = ++keyFilePick.current;
+        setKeyFile("");
+        setKeyFileError("");
+        if (!file) {
+            /* A dismissed picker can send an empty pick mid-read; the older
+               read no longer owns the spinner, so this pick clears it. */
+            setReadingKeyFile(false);
+            return;
+        }
+        setReadingKeyFile(true);
+        try {
+            const text = await file.text();
+            if (pick === keyFilePick.current) setKeyFile(text);
+        } catch {
+            if (pick === keyFilePick.current) setKeyFileError("That file could not be read.");
+        } finally {
+            if (pick === keyFilePick.current) setReadingKeyFile(false);
+        }
+    };
 
     const toggleVision = (model: string) =>
         setVision((was) => (was.includes(model) ? was.filter((one) => one !== model) : [...was, model]));
@@ -561,7 +615,7 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
                 <button
                     type="button"
                     className="b b--l b--primary"
-                    disabled={add.isPending || !name.trim() || !sentKey}
+                    disabled={add.isPending || !name.trim() || !ready}
                     onClick={() => { setError(""); add.mutate(); }}
                 >
                     {add.isPending ? "Saving…" : "Connect"}
@@ -586,31 +640,99 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
                     <span>Name</span>
                     <input className="kinput" value={name} onChange={(event) => setName(event.target.value)} />
                 </label>
-                {!preset.baseUrl && address}
-                <div className="kfield">
-                    <label htmlFor="add-key-secret">
-                        API key{isLocalRoute(baseUrl) && <span className="kfield__opt"> (not needed on this computer)</span>}
-                    </label>
-                    <SecretInput
-                        id="add-key-secret"
-                        label="API key"
-                        value={apiKey}
-                        onChange={(event) => { setApiKey(event.target.value); setTested(null); }}
-                    />
-                </div>
+                {google && (
+                    <div className="kfield" role="group" aria-label="Signs in with">
+                        <span>Signs in with</span>
+                        <label className="kset-check">
+                            <input type="radio" name="google-signin" checked={signIn === "VERTEX_AI"} onChange={() => setSignIn("VERTEX_AI")} />
+                            <span>A service account, on Vertex AI</span>
+                        </label>
+                        <label className="kset-check">
+                            <input type="radio" name="google-signin" checked={signIn === "GEMINI_API"} onChange={() => setSignIn("GEMINI_API")} />
+                            <span>An API key, on the Gemini API</span>
+                        </label>
+                    </div>
+                )}
+                {google && signIn === "VERTEX_AI" && (
+                    <>
+                        <div className="kfield">
+                            <label htmlFor="google-keyfile">Service account key file</label>
+                            <input
+                                id="google-keyfile"
+                                type="file"
+                                accept="application/json,.json"
+                                onChange={(event) => void readKeyFile(event.target.files?.[0])}
+                            />
+                            <small>
+                                {readingKeyFile
+                                    ? "Reading the key file…"
+                                    : keyFile
+                                    ? "Key file loaded. It is stored encrypted and never shown again."
+                                    : "The JSON key of a service account with the Vertex AI User role."}
+                            </small>
+                        </div>
+                        <label className="kfield">
+                            <span>Project <span className="kfield__opt">(optional)</span></span>
+                            <input className="kinput" value={project} placeholder="The key file's own" onChange={(event) => setProject(event.target.value)} />
+                        </label>
+                        <label className="kfield">
+                            <span>Location</span>
+                            <input className="kinput" value={location} onChange={(event) => setLocation(event.target.value)} />
+                        </label>
+                    </>
+                )}
+                {!google && !preset.baseUrl && address}
+                {(!google || signIn === "GEMINI_API") && (
+                    <div className="kfield">
+                        <label htmlFor="add-key-secret">
+                            API key{isLocalRoute(baseUrl) && <span className="kfield__opt"> (not needed on this computer)</span>}
+                        </label>
+                        <SecretInput
+                            id="add-key-secret"
+                            label="API key"
+                            value={apiKey}
+                            onChange={(event) => { setApiKey(event.target.value); setTested(null); }}
+                        />
+                    </div>
+                )}
                 <label className="kfield">
                     <span>Models <span className="kfield__opt">(optional)</span></span>
                     <input
                         className="kinput"
                         value={models}
-                        placeholder="gpt-5, o3-mini"
+                        placeholder={google ? "gemini-4-hydrogen, gemini-4-argon" : "gpt-5, o3-mini"}
                         onChange={(event) => setModels(event.target.value)}
                     />
-                    <small>Comma separated. Left empty, the provider&rsquo;s own list is used.</small>
+                    <small>
+                        {google
+                            ? <>Comma separated. Left empty, Google&rsquo;s current Gemini models are offered.</>
+                            : <>Comma separated. Left empty, the provider&rsquo;s own list is used.</>}
+                    </small>
                 </label>
+                {google && (
+                    <div className="kfield">
+                        <label className="kset-check">
+                            <input type="checkbox" checked={draws} onChange={(event) => setDraws(event.target.checked)} />
+                            <span>Agents can make images with this provider</span>
+                        </label>
+                        {draws && (
+                            <>
+                                <label htmlFor="google-image-models">Image models <span className="kfield__opt">(optional)</span></label>
+                                <input
+                                    id="google-image-models"
+                                    className="kinput"
+                                    value={imageModels}
+                                    placeholder="gemini-3.1-flash-image"
+                                    onChange={(event) => setImageModels(event.target.value)}
+                                />
+                                <small>What agents draw with, billed per picture. Left empty, Google&rsquo;s current image model.</small>
+                            </>
+                        )}
+                    </div>
+                )}
                 {/* Each provider's address is filled in by picking it, so
                     it is changed only for a proxy or a self-hosted route. */}
-                {preset.baseUrl && <MoreSettings key={preset.id}>{address}</MoreSettings>}
+                {!google && preset.baseUrl && <MoreSettings key={preset.id}>{address}</MoreSettings>}
                 {canTest && (
                     <div className="kset-acts">
                         <button
@@ -646,6 +768,8 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
                     </div>
                 )}
                 {error && <Problem>{error}</Problem>}
+                {keyFileError && <Problem>{keyFileError}</Problem>}
+                {google && googleProblem && (keyFile || apiKey) && <Problem>{googleProblem}</Problem>}
             </div>
         </Modal>
     );
