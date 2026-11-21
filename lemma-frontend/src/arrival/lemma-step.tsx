@@ -34,7 +34,7 @@ export function LemmaStep({ name, made, failed, retry, pod, onContinue, onStartN
                 <h1 className="ar__t">{failed ? "Your Lemma isn’t made yet" : `${hello(name)} I’m making your Lemma…`}</h1>
                 {failed ? (
                     <>
-                        <p className="ar__problem" role="alert">{failed || "Something went wrong on the way."}</p>
+                        <p className="ar__problem" role="alert">{failed}</p>
                         <div className="ar__acts"><span className="ar__sum" /><button type="button" className="ar__btn ar__btn--primary" onClick={retry}>Try again</button></div>
                     </>
                 ) : (
