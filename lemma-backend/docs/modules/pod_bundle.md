@@ -171,6 +171,12 @@ with the plan; the step event carries only the error. A build still running
 after `LEMMA_POD_BUNDLE_APP_BUILD_TIMEOUT_SECONDS` (600 by default) fails the
 same way. Re-applying the import retries the step and drops the old log.
 
+**A contact-owned table** carries `contact_owned` and `contact_columns` in its
+manifest (written by export only when set), and the TABLE step creates it with
+them. Its `contact_id` is the platform's: a manifest may leave it out of
+`columns`, and the column diff (`lemma_pod_bundle.diff`) never plans to drop it
+from a table the bundle calls contact-owned.
+
 **Pod connectors** (`connectors/<slug>/<slug>.json`) carry the catalog
 connector, mode, `required` and `purpose` -- never the installation or the
 account a SHARED one runs as, which the exporter refuses to write. The plan
@@ -251,6 +257,15 @@ reader of 3 still reads every bundle it read before. Both exporters write it
 after the connectors. `lemma_pod_bundle.check_format_version` refuses a newer
 one at planning (and in the CLI's direct import) instead of importing a bundle
 with what it added left out.
+
+**Workflow graphs** are judged at planning, by the workflow module's own rules
+(`workflow.contracts.graph_checks.workflow_graph_issues`, called from
+`infrastructure/workflow_graphs.py`): a graph its create would refuse -- a LOOP
+with two outgoing edges, a dangling edge, an expression that does not compile
+-- fails the plan, naming each workflow and why, before anything is written. It
+used to plan cleanly and fail at its WORKFLOW step, after the tables, functions
+and agents before it. `${var}` placeholders are judged with their defaults; one
+with none stands in as a plain identifier.
 
 **Grants** travel in the manifest of the agent or function that holds them
 (`permissions.grants`, by resource name), as a deferred `*_GRANTS` step after

@@ -97,6 +97,9 @@ Rules:
     { "resource_type": "datastore_table", "resource_name": "tickets",
       "permission_ids": ["datastore.table.read", "datastore.record.write"] }
   ] } }
+// optional: "assistant_invoke": false -- the Lemma's assistant is not shown it and is
+// refused if it runs it; apps, workflows, schedules and other functions still run it.
+// Export writes the key only when false.
 
 // agents/triage-agent/triage-agent.json — same permissions semantics as functions
 { "name": "triage-agent", "description": "Classifies tickets.",
@@ -161,6 +164,11 @@ lemma pods import . --pod demo --dry-run && lemma pods import . --pod demo
 lemma records create tickets --pod demo --data '{"title":"smoke","status":"new"}'
 lemma agents chat triage "How many open tickets are there?" --pod demo
 ```
+
+Rename a Lemma, or change its description, with `lemma pods update <pod>
+--name "New name" [--description ...]` (only what you pass changes; `--data` takes
+the rest of the update body, e.g. `config`). Importing never renames the target
+unless you pass `--set-pod-meta`.
 
 A created pod is **not** made the active one, so name it with `--pod` (or
 `export LEMMA_POD_ID=<id>`) — otherwise the import lands in whatever pod was

@@ -3,16 +3,21 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { DecisionExampleBody } from './DecisionExampleBody.js';
+import type { DecisionImageBody } from './DecisionImageBody.js';
 import type { JsonValue } from './JsonValue.js';
 export type MakeDecisionRequest = {
     /**
-     * What to judge: an email, an event, a row, as text or JSON. Never followed as instructions. At most 64 KiB; send the part that matters.
+     * What to judge: an email, an event, a row, as text or JSON. Never followed as instructions. At most 64 KiB; send the part that matters. Required unless `images` are sent.
      */
-    evidence: JsonValue;
+    evidence?: JsonValue;
     /**
      * Past cases and their answers, to steer the provider.
      */
     examples?: Array<DecisionExampleBody>;
+    /**
+     * Images to judge with the evidence -- a receipt photo, a slide -- as files of this Lemma: PNG, JPEG, WebP or GIF (still), at most 10 MiB each; larger than 1568 pixels a side is shrunk before it is sent. What an image says is evidence, never instructions. 422 `DECISION_IMAGES_UNSUPPORTED` when this server's decision model cannot read images.
+     */
+    images?: Array<DecisionImageBody>;
     /**
      * What to judge and how, in your words. Trusted: it is the only part of the request the provider follows.
      */

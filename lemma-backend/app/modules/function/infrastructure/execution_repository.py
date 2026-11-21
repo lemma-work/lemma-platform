@@ -32,6 +32,7 @@ from app.modules.function.domain.entities import (
 )
 from app.modules.function.domain.types import JsonObject
 from app.modules.function.infrastructure.models import FunctionModel, FunctionRunModel
+from app.modules.function.infrastructure.person_names import person_name
 
 
 TERMINAL_RUN_STATES = {
@@ -131,7 +132,8 @@ class FunctionExecutionRepository:
             run_id=run.id,
             deadline_at=run.deadline_at,
         )
-        return self._runtime_context(run, function)
+        name = await person_name(self.session, run.user_id)
+        return self._runtime_context(run, function, user_name=name)
 
     async def running_on_pod(self, pod_id: UUID) -> int:
         """How many of the pod's runs hold a slot now."""
@@ -524,6 +526,8 @@ class FunctionExecutionRepository:
     def _runtime_context(
         run: FunctionRunModel,
         function: FunctionModel,
+        *,
+        user_name: str | None = None,
     ) -> FunctionRunRuntimeContext:
         if run.deadline_at is None or run.revision_hash is None:
             raise RuntimeError("function run is missing immutable execution state")
@@ -538,6 +542,7 @@ class FunctionExecutionRepository:
             config=function.config,
             user_id=run.user_id,
             user_email=run.user_email,
+            user_name=user_name,
             contact_id=run.contact_id,
             pod_id=function.pod_id,
             function_id=function.id,

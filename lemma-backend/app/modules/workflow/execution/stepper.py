@@ -4,6 +4,7 @@ The stepper is the only writer of run context and loop frames. Executors
 return outcomes; the stepper interprets them and manages transitions.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
@@ -17,6 +18,7 @@ from app.modules.workflow.domain.run import (
     WorkflowRunEntity,
     WorkflowRunStatus,
     LoopFrame,
+    summarize_error,
 )
 from app.modules.workflow.domain.wait import WaitRequest
 from app.modules.workflow.domain.wait import WorkflowRunWaitType
@@ -114,12 +116,17 @@ class RunStepper:
                         node, self._step_context(run, flow)
                     )
             except WorkflowDomainError as exc:
-                run.fail(exc.message, node_id=node.id)
-                break
-            except Exception as exc:  # noqa: BLE001 — every executor error fails the run
+                if not self.divert_failure(run, flow, node.id, exc.message):
+                    run.fail(exc.message, node_id=node.id)
+                    break
+                continue
+            except Exception as exc:  # noqa: BLE001 — every executor error fails the node
                 raise_if_database_unavailable(exc)
-                run.fail(f"Node '{node.id}' execution failed: {exc}", node_id=node.id)
-                break
+                error = f"Node '{node.id}' execution failed: {exc}"
+                if not self.divert_failure(run, flow, node.id, error):
+                    run.fail(error, node_id=node.id)
+                    break
+                continue
 
             if isinstance(outcome, Suspend):
                 run.suspend_step(
@@ -194,6 +201,60 @@ class RunStepper:
             self._log_outcome(run)
             return StepResult()
         return await self.advance(run, flow)
+
+    def divert_failure(
+        self,
+        run: WorkflowRunEntity,
+        flow: WorkflowEntity,
+        node_id: str,
+        error: str,
+        *,
+        output: Mapping[str, object] | None = None,
+    ) -> bool:
+        """Send node_id's failure down a FAILURE edge; False when there is none.
+
+        The node's own edge catches it first, then the nearest enclosing loop's,
+        which ends that loop (and any inside it) where it stood. With neither,
+        nothing is touched and the caller fails the run exactly as it would on a
+        graph that never had a failure edge. A failure on the branch is a node
+        failing like any other: its own edge, a loop's, or the run fails.
+        """
+        target = flow.failure_target(node_id)
+        caught_by, depth = node_id, len(run.execution_stack)
+        while target is None and depth > 0:
+            depth -= 1
+            caught_by = run.execution_stack[depth].loop_node_id
+            target = flow.failure_target(caught_by)
+        if target is None:
+            return False
+
+        run.fail_step_and_carry_on(node_id, error, output)
+        if caught_by != node_id:
+            frame = run.execution_stack[depth]
+            del run.execution_stack[depth:]
+            outer = run.execution_stack[-1] if run.execution_stack else None
+            if outer is not None:
+                self._seed_loop_scope(run, outer)
+            else:
+                run.execution_context.set_loop_scope(None)
+            run.record_node_output(
+                caught_by,
+                {
+                    "results": frame.results,
+                    "count": len(frame.items),
+                    "error": summarize_error(error),
+                    "failed_node_id": node_id,
+                },
+            )
+        logger.debug(
+            "workflow.step.failure_diverted",
+            run_id=str(run.id),
+            node_id=node_id,
+            caught_by=caught_by,
+            target=target,
+        )
+        self.move_past(run, flow, caught_by, forced=target)
+        return True
 
     # -- transition helpers ----------------------------------------------------
 

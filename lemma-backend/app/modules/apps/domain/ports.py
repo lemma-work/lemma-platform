@@ -8,6 +8,7 @@ from typing import Optional, Protocol, Tuple
 from uuid import UUID
 
 from app.core.authorization.context import Context
+from app.core.runtime_config import PageWebWidget
 from app.modules.apps.domain.entities import AppEntity, AppReleaseEntity
 
 
@@ -126,6 +127,13 @@ class AppRepositoryPort(Protocol):
 
     @abstractmethod
     async def list_releases(self, app_id: UUID) -> list[AppReleaseEntity]:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def page_web_widgets(
+        self, pod_id: UUID, origin: str
+    ) -> tuple[PageWebWidget, ...]:
+        """The pod's web widgets a page on ``origin`` may embed."""
         raise NotImplementedError
 
 

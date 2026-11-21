@@ -136,7 +136,7 @@ export class PodsService {
     }
     /**
      * Update Pod
-     * Update pod details
+     * Update pod details; only the fields sent change
      * @param podId
      * @param requestBody
      * @returns PodResponse Successful Response
@@ -147,7 +147,7 @@ export class PodsService {
         requestBody: PodUpdateRequest,
     ): CancelablePromise<PodResponse> {
         return __request(OpenAPI, {
-            method: 'PUT',
+            method: 'PATCH',
             url: '/pods/{pod_id}',
             path: {
                 'pod_id': podId,

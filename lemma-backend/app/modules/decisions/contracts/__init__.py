@@ -21,6 +21,7 @@ from app.modules.decisions.domain.errors import (
 from app.modules.decisions.domain.request import (
     DecisionCaller,
     DecisionExample,
+    DecisionImage,
     DecisionPriority,
     DecisionRequest,
 )
@@ -39,6 +40,7 @@ __all__ = [
     "AnswerValue",
     "DecisionCaller",
     "DecisionExample",
+    "DecisionImage",
     "DecisionInvalidError",
     "DecisionLimitedError",
     "DecisionMaker",

@@ -162,7 +162,7 @@ export function LandingPluginPage({ plugin, landing }: { plugin: BuiltPlugin; la
             <section className={p.close} data-rise="" aria-labelledby="close-title">
                 <img className={l.closeFace} src={faceSrc(plugin.slug, false)} alt="" width={96} height={96} />
                 <h2 id="close-title">{landing.closing}</h2>
-                {!install && <p className={p.closeSub}>It is built and tested. You can add it to a Lemma once it is published.</p>}
+                {!install && <p className={p.closeSub}>You will be able to add it to a Lemma soon.</p>}
                 <div className={`${m.ctas} ${p.centred}`}>
                     {demo && (
                         <a className={p.closePrimary} href={TRY_HASH}>

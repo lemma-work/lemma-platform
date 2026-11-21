@@ -999,3 +999,20 @@ test("a run assigned to the viewer is theirs even when their wait list missed it
     assert.equal(legal.cards[0].mine, null, "no wait detail without the list");
     assert.equal(board.mine, 1);
 });
+
+test("a step's failure edge is not its next step", () => {
+    // Listed first on purpose: the outline used to take a step's first edge
+    // as the line, so the failure branch read as what runs on success.
+    const shape = readShape({
+        name: "claim-rows",
+        nodes: [node("save", "FUNCTION"), node("mark-failed", "FUNCTION"), node("done", "END")],
+        edges: [
+            { ...edge("save", "mark-failed"), kind: "FAILURE" },
+            edge("save", "done"),
+        ],
+        start: { type: "MANUAL", config: null },
+    });
+    assert.ok(shape);
+    assert.equal(ids(shape.ordered)[0], "save", "the failure target is reached, so it is not the first step");
+    assert.deepEqual(outlineOf(shape.flow).slice(0, 2), ["save", "done"]);
+});

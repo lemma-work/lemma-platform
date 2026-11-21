@@ -122,6 +122,7 @@ class FunctionRuntimeInvoker:
             identity=RuntimeIdentity(
                 user_id=context.user_id,
                 user_email=context.user_email,
+                user_name=context.user_name,
                 contact_id=context.contact_id,
                 pod_id=context.pod_id,
                 function_id=context.function_id,

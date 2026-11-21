@@ -9,7 +9,11 @@ from pydantic import BaseModel, Field
 
 from app.core.authorization.context import ResourceType
 from app.core.domain.aggregate import AggregateRoot
-from app.modules.workflow.domain.graph import WorkflowGraphValidator, WorkflowEdge
+from app.modules.workflow.domain.graph import (
+    WorkflowEdge,
+    WorkflowEdgeKind,
+    WorkflowGraphValidator,
+)
 from app.modules.workflow.domain.nodes import WorkflowNode
 from app.modules.workflow.domain.start import WorkflowStart
 
@@ -72,13 +76,20 @@ class WorkflowEntity(AggregateRoot):
         return any(node.id == node_id for node in self.nodes)
 
     def next_after(self, node_id: str) -> str | None:
-        """Target of the single outgoing edge, or None at chain end.
+        """Target of the node's first NEXT edge, or None at chain end.
 
-        Validation guarantees non-decision nodes have at most one outgoing
-        edge; decision branching uses rule targets, not edges.
+        Validation guarantees non-decision nodes have at most one; decision
+        branching uses rule targets, and its first is the default.
         """
+        return self._first_target(node_id, WorkflowEdgeKind.NEXT)
+
+    def failure_target(self, node_id: str) -> str | None:
+        """Where the node's failure goes instead of failing the run, if anywhere."""
+        return self._first_target(node_id, WorkflowEdgeKind.FAILURE)
+
+    def _first_target(self, node_id: str, kind: WorkflowEdgeKind) -> str | None:
         for edge in self.edges:
-            if edge.source == node_id:
+            if edge.source == node_id and edge.kind is kind:
                 return edge.target
         return None
 

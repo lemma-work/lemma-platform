@@ -24,8 +24,10 @@ Use an existing table or design one with `lemma-builder` (`references/tables.md`
 
 - One row per response. Columns are the questions; the column **description** is
   the question text people see (`"Your name"`), so write it for them.
-- Types a person can fill: TEXT, INTEGER, FLOAT, BOOLEAN, DATE, DATETIME, ENUM.
-  Use ENUM with `options` for a choice. Add a status column with a default
+- Types a person can fill: TEXT, INTEGER, FLOAT, BOOLEAN, DATE, DATETIME, ENUM,
+  UUID. Use ENUM with `options` for a choice. A UUID is for a reference the
+  page fills in itself (the slot or listing the answer is about); one with a
+  foreign key opens to confirmed contacts only. USER, JSON and VECTOR never open. Add a status column with a default
   (`new`) for triage; it stays closed and is filled by the table's default.
 - For an attachment (a CV, a photo, an invoice) add a **FILE_PATH** column. The
   form asks for it with a file picker; the file is stored in the pod under

@@ -73,7 +73,12 @@ chat lasts only as long as the site keeps handing over fresh tokens:
 `Lemma.identify(() => fetch("/lemma-token").then(r => r.text()))`. Reissuing the
 secret ends every signed-in chat. The public key goes in pages; the signing secret
 never does. A new widget answers nobody until `answer` is set, and none answers
-anybody unless the deployment has `PUBLIC_WEB_ENABLED` on.
+anybody unless the deployment has `PUBLIC_WEB_ENABLED` on. A Lemma's own Public
+app is told the key by its host (`window.__LEMMA_CONFIG__.webWidgets`, see
+`apps.md`). To test the email-code step where no inbox can receive it, a test
+server sets `PUBLIC_WEB_TEST_VISITOR_CODE` and every code is those six digits,
+mailed to nobody (refused in production); a local stack writes the mail to its
+`EMAIL_OUTPUT_DIR` instead.
 
 **Forms** — not an object. A **table opened to people outside**
 (`PUT /pods/{pod}/datastore/tables/{t}/public-rows`, SDK

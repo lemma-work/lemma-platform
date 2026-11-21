@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { AgentRunResponse } from '../models/AgentRunResponse.js';
 import type { AgentRunStartResponse } from '../models/AgentRunStartResponse.js';
 import type { ApprovalDecisionResponse } from '../models/ApprovalDecisionResponse.js';
 import type { ConversationListResponse } from '../models/ConversationListResponse.js';
@@ -401,6 +402,33 @@ export class AgentConversationsService {
                 409: `The latest run is not safely retryable`,
                 422: `Validation Error`,
                 429: `The account usage limit was exceeded`,
+            },
+        });
+    }
+    /**
+     * Get Conversation Run
+     * One run of a conversation: its status, output and error, and the model tokens it used (input, output, cache reads and writes, and the models). A conversation's latest run is `last_run_id` on the conversation; a send's is `agent_run_id` on its answer. 404 for a run of any other conversation.
+     * @param podId
+     * @param conversationId
+     * @param runId
+     * @returns AgentRunResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentConversationRunGet(
+        podId: string,
+        conversationId: string,
+        runId: string,
+    ): CancelablePromise<AgentRunResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/conversations/{conversation_id}/runs/{run_id}',
+            path: {
+                'pod_id': podId,
+                'conversation_id': conversationId,
+                'run_id': runId,
+            },
+            errors: {
+                422: `Validation Error`,
             },
         });
     }

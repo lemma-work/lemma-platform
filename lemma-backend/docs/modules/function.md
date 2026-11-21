@@ -55,3 +55,38 @@ deadline. Every terminal transition emits `FunctionRunFinished`
 
 The table list is inventory, not a runtime contract. Attempt, retry, queue, and
 artifact rules live in the canonical design set above.
+
+## Kept from the assistant
+
+`functions.assistant_invoke` (default true; migration 0074) says whether the
+Lemma's assistant is offered the function. A plugin sets it false on a function
+that its own flow calls after a check the flow owns -- an app's "claim" behind
+a daily limit -- so the assistant cannot step around the check by running it by
+name. Such a function is left out of the assistant's resource map
+(`contracts/agent_tools.list_pod_functions`) and of the functions an AI tool is
+offered over MCP (`contracts/person_runs.runnable_functions`), and
+`resolve_execute` refuses the assistant a run of it with 403
+`FUNCTION_NOT_FOR_ASSISTANT` (`services/assistant_access`). "The assistant" is
+`core/authorization/app_sessions.is_the_assistant`: the assistant's context,
+except an app framed in an AI tool, which is signed in with the assistant's
+standing under an `app_session_id` session and is the app's own flow. A person,
+an app in Lemma, a workflow, a schedule, another function, and a named agent
+holding a grant on it all still run it. The assistant still reads the function
+(to build with it), with the flag on it. `contacts_invoke` is a separate opt-in
+and is not narrowed by this. Set on create and update
+(`assistant_invoke`), and carried by a bundle only when false.
+
+The assistant acts with the person's own access, so one who may edit the
+function can have the assistant turn the flag back on; it guards against the
+assistant choosing a shortcut, not against the person.
+
+## What a run is told about its person
+
+`FunctionContext.user_name` is the member's name as Lemma shows it (first and
+last name), read from identity when the run starts
+(`infrastructure/person_names`), so a rename reaches the next run.
+`None` for a run with no member behind it or a member with no name. It reaches
+the runtime as `identity.user_name`, sent only when set, like `contact_id`, and
+the code as `ctx.user_name` and `LEMMA_USER_NAME`. A function runtime older than
+this change forbids the field, so a run with a name needs the runtime image of
+the same release.

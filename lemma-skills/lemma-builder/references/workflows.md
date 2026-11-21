@@ -294,7 +294,8 @@ parse. A node has `rules` **or** a `question`, never both.
   downstream nodes read `triage.answer`; `route` is the node it went to.
 - **It never guesses a branch.** A provider that does not answer is retried
   with backoff for a few minutes, then the run fails saying why. A spent usage
-  limit, an invalid question or too much evidence fails it at once.
+  limit, an invalid question or too much evidence fails it at once. A FAILURE
+  edge on the node catches any of these instead (see below).
 
 Use `rules` when the branch is a fact already in the context
 (``manager_review.approved == `true` ``); use a `question` when someone — or
@@ -315,7 +316,9 @@ something — would have to read the evidence to know.
 }
 ```
 
-Inside the body, read the current item from the reserved `loop` namespace: `loop.line` (or always `loop.item`), index as `loop.index`, total as `loop.count`. Wire an edge from the body's last node back to the loop node. When all items are done, the loop node's output is `{ "results": [<body output per item>], "count": <n> }` — downstream nodes read `line_loop.results`.
+The body starts at `config.child_node_id` — **never draw an edge from the loop to its body.** A LOOP has at most one outgoing (NEXT) edge, and it goes to the node that runs after every item is done (none: the run ends with the loop). A second one is refused when the workflow is created, and a bundle carrying one fails its import plan before anything is written. The body is the chain of edges from `child_node_id`; an iteration ends where that chain ends, or at an edge from the body's last node back to the loop node (optional, but it makes the graph read as a loop).
+
+Inside the body, read the current item from the reserved `loop` namespace: `loop.line` (or always `loop.item`), index as `loop.index`, total as `loop.count`. When all items are done, the loop node's output is `{ "results": [<body output per item>], "count": <n> }` — downstream nodes read `line_loop.results`.
 
 ### WAIT_UNTIL — timer
 
@@ -333,6 +336,52 @@ Use for cooldowns, SLA holds, follow-up gaps. Suspends on a TIME wait (`active_w
 ```
 
 Multiple END nodes are fine when it makes the graph readable. END nodes cannot have outgoing edges.
+
+## When a step fails: FAILURE edges
+
+By default a failed step fails the whole run — and whatever the workflow set
+earlier (a row marked `processing`, say) stays that way. Give the step an edge
+with `"kind": "FAILURE"` and its failure goes down that edge instead: the run
+carries on there, and the step's output is its error, so the branch reads
+`<node_id>.error`.
+
+```json
+"edges": [
+  { "id": "e1", "source": "save", "target": "end" },
+  { "id": "e2", "source": "save", "target": "mark_failed", "kind": "FAILURE" },
+  { "id": "e3", "source": "mark_failed", "target": "end" }
+]
+```
+
+```json
+{ "id": "mark_failed", "type": "FUNCTION",
+  "config": { "function_name": "set_ticket_status",
+    "input_mapping": {
+      "ticket_id": { "type": "expression", "value": "start.metadata.record_id" },
+      "status": { "type": "literal", "value": "failed" },
+      "reason": { "type": "expression", "value": "save.error" } } } }
+```
+
+- An edge with no `kind` is `"NEXT"`, as before. A FAILURE edge is not a
+  branch: a FUNCTION keeps its one NEXT edge beside it, it is never a
+  DECISION's default edge, and a LOOP keeps its one NEXT edge too.
+- At most one FAILURE edge per node, none from an END, never back to the same
+  node (that would retry forever). Save refuses the rest.
+- **What counts as failing:** the function run or agent failed, a required input
+  resolved to nothing, a DECISION `question` could not be asked, a wait
+  outlived its time limit, a FORM expired unanswered. A cancelled run is not a
+  failure.
+- **On a LOOP** it also catches a failure in the loop body that the failing
+  body node does not route itself: the loop stops at that item, its output is
+  `{results, count, error, failed_node_id}`, and the run goes to the loop's
+  FAILURE target. To skip just the bad item and keep looping instead, point the
+  **body node's** FAILURE edge back at the loop node.
+- The failure branch is ordinary steps. If a step on it fails with no FAILURE
+  edge of its own (or a loop's around it), the run fails there.
+- One handler can serve several steps — point each one's FAILURE edge at it.
+  Read whichever error is set with `not_null(save.error, notify.error)`.
+- The step stays `FAILED` in `step_history` with its error; the run's own
+  `error` and `failed_node_id` stay empty, because the run did not fail.
 
 ## Input Mapping
 
@@ -353,6 +402,7 @@ Common paths: `start.payload.<field>` (triggered runs), `<form_node_id>.<field>`
 - **Escalate on low confidence**: ``AGENT classify → DECISION (classify.confidence >= `0.8`?) → auto path / FORM human_classify``. Humans handle only the uncertain tail.
 - **Triage by judgement**: `DECISION (question: what is this about?) → FUNCTION per answer`, with `unsure_next_node_id` pointing at a FORM. One closed question replaces an AGENT node whose only job was to pick a branch.
 - **Exception routing**: `FUNCTION validate → DECISION → FORM fix_data → FUNCTION retry`. Failures become assigned work instead of dead runs.
+- **Clean up on failure**: `FUNCTION process` with a FAILURE edge to `FUNCTION mark_failed` (reads `process.error`) → END, or to a FORM assigned to whoever fixes it. The row never stays stuck in `processing`.
 - **Timed follow-up**: `FORM decision → WAIT_UNTIL → AGENT draft_follow_up → FORM send_review`.
 - **Batch with human sampling**: schedule starts workflow → `FUNCTION load_batch → LOOP → AGENT process`, decision inside the loop assigns FORMs only for flagged items.
 
@@ -428,14 +478,14 @@ Run statuses: `RUNNING → WAITING ⇄ RUNNING → COMPLETED | FAILED | CANCELLE
 Debugging a run, in order:
 
 1. `runs get` → check `status`, `current_node_id`, `failed_node_id`, `error`. Missing-path failures name the exact expression and input.
-2. Read `step_history` — every executed node with status, output, error, timestamps. This shows exactly which mapping or condition misbehaved.
+2. Read `step_history` — every executed node with status, output, error, timestamps. This shows exactly which mapping or condition misbehaved. A `FAILED` step in a run that kept going went down its FAILURE edge; its error is in the step and in `<node_id>.error`.
 3. A run that is not moving: read `active_wait` — `HUMAN` shows the form node and assignee, `AGENT` carries the conversation id in `external_ref` (inspect with `lemma conversations messages`), `FUNCTION` the function run id, `TIME` the wake time, `DECISION` the question and evidence being asked (`payload`). Forms are completed via the app/frontend or `runs submit-form --data`.
 4. Wrong branch taken: read the DECISION node's output in `step_history` (`matched_condition` shows which rule fired, `null` means the default edge) and re-check rule conditions against the context — remember literals need backticks (`` == `true` ``, `` > `0` ``). For a `question`, the output's `answer` and `route` say what was answered and where it went; tighten the `instruction`, the option descriptions or the `examples` rather than the routes.
 
 ## Limits & Gotchas
 
 - Import **replaces the whole graph** — there's no node-level merge. The bundle is the source of truth.
-- Edge `condition` labels are decorative. Routing = DECISION rules + the default edge (the **first-listed** outgoing edge); never let that default edge share a target with a rule, or unmatched inputs get mis-routed silently.
+- Edge `condition` labels are decorative. Routing = DECISION rules + the default edge (the **first-listed** `NEXT` edge); never let that default edge share a target with a rule, or unmatched inputs get mis-routed silently. The only edge field that routes is `"kind": "FAILURE"`.
 - Non-manual `start` types need a `start.config` (`SCHEDULED`/`DATASTORE_EVENT`/`EVENT`); DATASTORE_EVENT exposes the changed record's id at `start.metadata.record_id`, not `start.payload.*`.
 - `input_mapping` strings are not auto-expressions; always `{"type": "expression"|"literal", "value": ...}`.
 - Node ids `start` and `loop` are reserved.

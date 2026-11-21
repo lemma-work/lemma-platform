@@ -15,6 +15,10 @@ import type { JsonObject } from './JsonObject.js';
  */
 export type FunctionSummaryResponse = {
     allowed_actions?: Array<string>;
+    /**
+     * Offered to the Lemma's assistant and runnable by it.
+     */
+    assistant_invoke?: boolean;
     code_path?: (string | null);
     config?: (JsonObject | null);
     /**

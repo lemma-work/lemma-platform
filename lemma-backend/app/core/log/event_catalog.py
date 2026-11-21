@@ -1248,6 +1248,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workflow.run_resume_service.no_active_workflow_wait_agent.observed': EventSpec('debug', frozenset({'conversation_id'})),
     'workflow.schedule_start_service.no_target_schedule.observed': EventSpec('debug', frozenset({'schedule_id'})),
     'workflow.schedule_start_service.start_agent_schedule.propagated': EventSpec('debug', frozenset({'agent_id', 'schedule_id'})),
+    'workflow.step.failure_diverted': EventSpec('debug', frozenset({'caught_by', 'node_id', 'run_id', 'target'})),
     'workflow.step.started': EventSpec('debug', frozenset({'flow_id', 'node_id', 'node_type', 'run_id'})),
     'workflow.step.suspended': EventSpec('debug', frozenset({'node_id', 'run_id', 'wait_type'})),
     'workspace.agent_host_provider.reopened': EventSpec('info', frozenset({'method', 'sandbox_id'})),
