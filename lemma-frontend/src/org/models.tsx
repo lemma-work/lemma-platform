@@ -546,7 +546,12 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
         const pick = ++keyFilePick.current;
         setKeyFile("");
         setKeyFileError("");
-        if (!file) return;
+        if (!file) {
+            /* A dismissed picker can send an empty pick mid-read; the older
+               read no longer owns the spinner, so this pick clears it. */
+            setReadingKeyFile(false);
+            return;
+        }
         setReadingKeyFile(true);
         try {
             const text = await file.text();

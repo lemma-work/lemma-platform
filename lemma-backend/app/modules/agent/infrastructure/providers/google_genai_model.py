@@ -164,10 +164,14 @@ async def verify_google_genai_access(
         )
         try:
             await model.client.aio.models.get(model=model_name)
-        except RefreshError:
-            # The key file's account could not sign in at all: deleted,
-            # disabled, or its key revoked.
-            raise ProviderKeyRejectedError("refresh") from None
+        except RefreshError as exc:
+            # A retryable failure is Google's token endpoint having a moment,
+            # not the key; anything else is an account that cannot sign in at
+            # all: deleted, disabled, or its key revoked.
+            if exc.retryable:
+                _note_unchecked(exc)
+            else:
+                raise ProviderKeyRejectedError("refresh") from None
         except ClientError as exc:
             # Google answers a bad Gemini API key with 400 API_KEY_INVALID,
             # not 401, so the reason is read as well as the code.

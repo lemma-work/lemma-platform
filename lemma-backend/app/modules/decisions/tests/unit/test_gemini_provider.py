@@ -269,3 +269,45 @@ async def test_a_choice_value_gemini_would_refuse_as_a_key_still_round_trips() -
 
     assert result.answers["state"].value == " pending"
     assert result.answers["state"].confidence == pytest.approx(0.8)
+
+
+async def test_an_answer_to_another_parts_question_does_not_fill_it() -> None:
+    task = build_task(
+        DecisionRequest(
+            instruction="Tag it.",
+            evidence="x",
+            schema={
+                "type": "object",
+                "properties": {
+                    f"tags_{n}": {
+                        "type": "array",
+                        "uniqueItems": True,
+                        "items": {
+                            "type": "string",
+                            "enum": [f"tag{i}" for i in range(64)],
+                        },
+                        "description": f"Tags {n}",
+                    }
+                    for n in range(16)
+                },
+            },
+        )
+    )
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        asked = list(json.loads(request.content)["questions"])
+        answers = {key: {"noul": 0.9} for key in asked}
+        if len(calls) == 1:
+            answers["q15-63"] = {"noul": 0.9}  # belongs to the second part
+        else:
+            answers.pop("q15-63")
+        return httpx.Response(200, json={"answers": answers})
+
+    with pytest.raises(DecisionUnavailableError) as raised:
+        await _provider(handler, _Meter()).decide(
+            task, caller=CALLER, timeout_seconds=5
+        )
+
+    assert raised.value.reason == "invalid_output"

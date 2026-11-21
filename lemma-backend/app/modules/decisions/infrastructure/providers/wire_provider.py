@@ -94,7 +94,13 @@ class WireDecisionProvider:
             if remaining <= 0:
                 raise DecisionUnavailableError("timeout")
             wire = await self._ask(part.body, remaining)
-            found.update(wire.answers)
+            # Only what this part asked: an answer to another part's question
+            # must neither fill nor overwrite it.
+            found.update(
+                (key, answer)
+                for key, answer in wire.answers.items()
+                if key in part.questions
+            )
             model = wire.model or model
             if wire.usage and wire.usage.input_tokens is not None:
                 input_tokens = (input_tokens or 0) + wire.usage.input_tokens
