@@ -251,6 +251,39 @@ class IdentitySettings(BaseSettings):
         default=None, description="Google OAuth Client Secret"
     )
 
+    # Sign in with Apple. Apple issues no client secret to copy out of a
+    # console: the secret is a short-lived JWT that SuperTokens signs with the
+    # private key on each exchange, so team, key id and key take its place.
+    apple_client_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Sign in with Apple Services ID, the web client id (for example "
+            "``com.example.signin``). Not the iOS app's bundle id. "
+            "Env: ``APPLE_CLIENT_ID``."
+        ),
+    )
+    apple_team_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Apple Developer Team ID that owns the Services ID and the key. "
+            "Env: ``APPLE_TEAM_ID``."
+        ),
+    )
+    apple_key_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Key ID of the Sign in with Apple private key. Env: ``APPLE_KEY_ID``."
+        ),
+    )
+    apple_private_key: Optional[SecretStr] = Field(
+        default=None,
+        description=(
+            "Contents of the Sign in with Apple ``.p8`` key, PEM text including "
+            "the BEGIN/END lines; newlines may be written as ``\\n``. "
+            "Env: ``APPLE_PRIVATE_KEY``."
+        ),
+    )
+
     def is_google_oauth_configured(self) -> bool:
         """Check if Google OAuth is properly configured."""
         return all(
@@ -258,6 +291,15 @@ class IdentitySettings(BaseSettings):
                 self.google_client_id,
                 self.google_client_secret,
             ]
+        )
+
+    def is_apple_oauth_configured(self) -> bool:
+        """Whether all four values Sign in with Apple needs are set."""
+        return bool(
+            self.apple_client_id
+            and self.apple_team_id
+            and self.apple_key_id
+            and reveal_secret(self.apple_private_key)
         )
 
     def is_microsoft_oauth_configured(self) -> bool:

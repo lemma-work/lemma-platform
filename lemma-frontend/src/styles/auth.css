@@ -189,6 +189,15 @@
     padding: 11px 13px;
 }
 .auth__provider > svg { flex: none; }
+/* Sign in with Apple, in the only two styles Apple allows: black on a light
+   page, white on a dark one, logo and words in the other. Hover keeps the
+   fill and the edge, because a tinted border is a third style. */
+.auth__apple,
+.auth__apple:hover {
+    background: var(--apple);
+    border-color: var(--apple);
+    color: var(--apple-ink);
+}
 
 /* A rule with a word in it. The word is the point: without it the two halves
    read as one form somebody has to fill in all of. */

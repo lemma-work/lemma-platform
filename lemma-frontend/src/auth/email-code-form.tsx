@@ -5,6 +5,8 @@ import { EmailCodeError, mintEmailNonce, resendEmailCode, continueEmail, verifyE
 import { completeAuth } from "./completion";
 import { continueWithProvider } from "./provider-login";
 import { sayProblem } from "./errors";
+import { PROVIDER_NAMES, type ProviderId } from "./login-methods";
+import { AppleMark } from "./marks";
 
 export function EmailCodeForm({ onAttempt, onPassword }: { onAttempt: () => void; onPassword: (email: string) => void }) {
     const [email, setEmail] = useState("");
@@ -12,7 +14,7 @@ export function EmailCodeForm({ onAttempt, onPassword }: { onAttempt: () => void
     const [challenge, setChallenge] = useState<EmailChallenge | null>(null);
     const nonce = useRef<string | null>(null);
     const abandoned = useRef<string | null>(null);
-    const [provider, setProvider] = useState<"google" | "active-directory" | null>(null);
+    const [provider, setProvider] = useState<ProviderId | null>(null);
     const active = useRef(false);
     const [busy, setBusy] = useState(false);
     const [needsNewCode, setNeedsNewCode] = useState(false);
@@ -80,7 +82,7 @@ export function EmailCodeForm({ onAttempt, onPassword }: { onAttempt: () => void
     }
 
     return <form onSubmit={event => void attempt("submit", event)}>
-        {provider ? <p className="auth__note">This email signs in with {provider === "google" ? "Google" : "Microsoft"}. Continue with that provider to sign in.</p> : challenge ? <>
+        {provider ? <p className="auth__note">This email signs in with {PROVIDER_NAMES[provider]}. Continue with {PROVIDER_NAMES[provider]} to sign in.</p> : challenge ? <>
             <p className="auth__note">Enter the six-digit code sent to {email.trim()}. You have three attempts.</p>
             <div className="field">
                 <label htmlFor="email-code">Verification code</label>
@@ -97,8 +99,11 @@ export function EmailCodeForm({ onAttempt, onPassword }: { onAttempt: () => void
         </div>}
         {said && <p className="auth__problem" role="alert">{said}</p>}
         <div className="screen__actions">
-            <button className="btn btn--primary" disabled={busy || (!authenticated && !provider && (challenge ? expired : cooldown > 0))}>
-                {busy ? "One moment…" : authenticated ? "Continue" : provider ? `Continue with ${provider === "google" ? "Google" : "Microsoft"}` : challenge ? "Verify and continue" : "Continue with email"}
+            {/* Apple's button keeps Apple's black or white here too: a coloured
+                fill is the one thing its rules refuse. */}
+            <button className={provider === "apple" ? "btn auth__apple" : "btn btn--primary"} disabled={busy || (!authenticated && !provider && (challenge ? expired : cooldown > 0))}>
+                {provider === "apple" && !busy && !authenticated && <AppleMark />}
+                {busy ? "One moment…" : authenticated ? "Continue" : provider ? `Continue with ${PROVIDER_NAMES[provider]}` : challenge ? "Verify and continue" : "Continue with email"}
             </button>
             {challenge && !authenticated && <>
                 <button className="btn" type="button" disabled={busy || cooldown > 0} onClick={() => void attempt("resend")}>

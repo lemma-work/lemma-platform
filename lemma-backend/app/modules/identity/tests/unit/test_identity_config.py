@@ -23,6 +23,10 @@ pytestmark = pytest.mark.unit
 
 # (field, ENV var, default)
 EXPECTED = [
+    ("apple_client_id", "APPLE_CLIENT_ID", None),
+    ("apple_key_id", "APPLE_KEY_ID", None),
+    ("apple_private_key", "APPLE_PRIVATE_KEY", None),
+    ("apple_team_id", "APPLE_TEAM_ID", None),
     ("auth_altcha_hmac_key", "AUTH_ALTCHA_HMAC_KEY", None),
     ("auth_altcha_max_number", "AUTH_ALTCHA_MAX_NUMBER", 100000),
     ("auth_bounce_webhook_secret", "AUTH_BOUNCE_WEBHOOK_SECRET", None),
@@ -142,10 +146,28 @@ def test_the_two_configured_predicates_moved_with_their_fields():
     assert not hasattr(CoreSettings, "is_telegram_oidc_configured")
 
 
+def test_apple_sign_in_needs_all_four_values():
+    """Apple has no single secret to check for: the client secret is signed on
+    each exchange from team, key id and key, so any one missing is unusable."""
+    complete = {
+        "apple_client_id": "com.example.signin",
+        "apple_team_id": "TEAM123456",
+        "apple_key_id": "KEY1234567",
+        "apple_private_key": SecretStr("-----BEGIN PRIVATE KEY-----"),
+    }
+    assert IdentitySettings.model_construct(**complete).is_apple_oauth_configured()
+    assert IdentitySettings().is_apple_oauth_configured() is False
+    for field in complete:
+        blank = SecretStr("") if field == "apple_private_key" else ""
+        partial = IdentitySettings.model_construct(**{**complete, field: blank})
+        assert partial.is_apple_oauth_configured() is False, field
+
+
 # Identity's credential-valued fields. `microsoft_client_secret` was covered by
 # `core/tests/unit/test_settings_secrets.py` until it moved here; the rest never
 # had this assertion at all, which the move is a good moment to fix.
 SECRET_FIELDS = (
+    "apple_private_key",
     "auth_altcha_hmac_key",
     "auth_bounce_webhook_secret",
     "google_client_secret",

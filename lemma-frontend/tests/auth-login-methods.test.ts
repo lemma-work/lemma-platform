@@ -23,6 +23,13 @@ test("only the providers the deployment registered get a button", () => {
         configuredProviders(answer([{ id: "active-directory", name: "Microsoft" }, { id: "google", name: "Google" }])),
         ["google", "active-directory"],
     );
+    assert.deepEqual(configuredProviders(answer([{ id: "apple", name: "Apple" }])), ["apple"]);
+    assert.deepEqual(
+        configuredProviders(answer([
+            { id: "apple", name: "Apple" }, { id: "active-directory", name: "Microsoft" }, { id: "google", name: "Google" },
+        ])),
+        ["google", "active-directory", "apple"],
+    );
 });
 
 test("a provider this app has no button for is not drawn", () => {

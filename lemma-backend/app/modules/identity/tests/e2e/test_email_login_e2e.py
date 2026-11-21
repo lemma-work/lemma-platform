@@ -245,6 +245,53 @@ async def test_continue_sends_each_account_to_the_door_that_opens(
     assert bool(mailbox.code) is (expected == "code")
 
 
+@pytest.mark.parametrize("apple_configured", [True, False])
+async def test_continue_sends_an_apple_relay_address_to_apple(
+    async_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    test_app,
+    apple_configured: bool,
+) -> None:
+    """A Hide My Email address with no account here is told to use Apple.
+
+    A code would bounce from another developer's relay address, and from one
+    of this deployment's own it would make an account Apple could never sign
+    in to. Without Sign in with Apple configured there is no such button to
+    send anybody to, so the address gets a code like any other.
+    """
+    from app.modules.identity.config import identity_settings
+
+    if apple_configured:
+        monkeypatch.setattr(identity_settings, "apple_client_id", "com.example.signin")
+        monkeypatch.setattr(identity_settings, "apple_team_id", "TEAM123456")
+        monkeypatch.setattr(identity_settings, "apple_key_id", "KEY1234567")
+        monkeypatch.setattr(identity_settings, "apple_private_key", "unread here")
+    else:
+        monkeypatch.setattr(identity_settings, "apple_client_id", None)
+
+    mailbox = Mailbox()
+    _with_email_code_service(
+        test_app, monkeypatch, _challenge_service(db_session, mailbox)
+    )
+    origin = settings.auth_frontend_url.rstrip("/")
+    nonce = await _bind_browser(async_client, origin)
+
+    answered = await async_client.post(
+        "/auth/email-code/continue",
+        json={"email": f"{uuid4().hex}@privaterelay.appleid.com", "nonce": nonce},
+        headers={"origin": origin},
+    )
+    assert answered.status_code == 200, answered.text
+    body = answered.json()
+    if apple_configured:
+        assert body == {"method": "thirdparty", "provider": "apple"}
+        assert mailbox.code == ""
+    else:
+        assert body["method"] == "code", body
+        assert mailbox.code
+
+
 async def test_continue_signs_in_the_account_whatsapp_made(
     async_client: AsyncClient,
     db_session: AsyncSession,

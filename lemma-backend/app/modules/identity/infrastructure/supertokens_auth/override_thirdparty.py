@@ -18,6 +18,9 @@ from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.domain.errors import SignupNotAllowedError
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.services.signup_gate import get_signup_gate
+from app.modules.identity.infrastructure.supertokens_auth.apple import (
+    remember_apple_refresh_token,
+)
 from app.modules.identity.infrastructure.supertokens_auth.provider_profile import (
     names_from_provider,
 )
@@ -175,6 +178,16 @@ def override_thirdparty_functions(
                             signup_method=third_party_id,
                         )
                         await uow.commit()
+                if third_party_id == "apple":
+                    # What a deletion of this account will revoke with Apple.
+                    # Kept on every sign-in, since each exchange issues a new
+                    # refresh token, and not swallowed: a sign-in Lemma could
+                    # not later revoke is one to fail and retry, not to keep.
+                    await remember_apple_refresh_token(
+                        result.user.id,
+                        oauth_tokens,
+                        raw_user_info_from_provider.from_id_token_payload,
+                    )
 
             await lease.require_ownership()
             return result

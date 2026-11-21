@@ -139,6 +139,12 @@
     --field: var(--press-0);
     --field-ink: var(--press-ink);
 
+    /* Sign in with Apple's button. Apple's colours, not the palette's: it
+       allows black or white and nothing warmer, so these are the one pure
+       black and white here, and they swap in dark (`.auth__apple`). */
+    --apple: #000000;
+    --apple-ink: #ffffff;
+
     /* No ground layer. The background is `--canvas` — one value in light, one
        in dark — and everything a tinted, graded, grained surface would be
        asked for is asked of the depth scale below instead. Three attempts at
@@ -243,6 +249,8 @@
         --mark-bg: 26%;
         --mark-fg: 76%;
         --mark-sat: 42%;
+        --apple: #ffffff;
+        --apple-ink: #000000;
     }
 }
 
@@ -281,4 +289,6 @@
     --mark-bg: 26%;
     --mark-fg: 76%;
     --mark-sat: 42%;
+    --apple: #ffffff;
+    --apple-ink: #000000;
 }
