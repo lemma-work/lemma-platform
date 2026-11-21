@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { lemma } from "@/session/client";
 import { source, type LibraryItem } from "@/data";
@@ -18,6 +18,7 @@ import { readingProblem, withItemStatus } from "./file-status";
 import { createOrReplace } from "./replace-on-conflict";
 import { readDropped, type DroppedTree } from "./drop-entries";
 import { forgetMade, rememberMade, renamedMade } from "@/data/made";
+import { ConfirmDialog } from "@/shell/confirm-dialog";
 
 /** Making, renaming and removing things in the library.
  *
@@ -257,21 +258,15 @@ export function ConfirmDelete({
     onCancel: () => void;
     onConfirm: () => void;
 }) {
-    const confirm = useRef<HTMLButtonElement | null>(null);
     return (
-        <div className="library-confirm" role="alertdialog" aria-label={"Delete " + item.name}>
-            <p>
-                Delete <strong>{item.name}</strong>
-                {item.kind === "folder" ? " and everything in it" : ""}? It is gone for everyone.
-            </p>
-            <div className="library-confirm__actions">
-                <button ref={confirm} className="btn btn--danger" onClick={onConfirm}>
-                    Delete
-                </button>
-                <button className="btn" onClick={onCancel}>
-                    Keep it
-                </button>
-            </div>
-        </div>
+        <ConfirmDialog
+            title={"Delete " + item.name + "?"}
+            line={item.kind === "folder" ? "Everything in it goes too, for everyone. It can’t be undone." : "It’s gone for everyone. It can’t be undone."}
+            confirm="Delete"
+            cancel="Keep it"
+            danger
+            onConfirm={onConfirm}
+            onClose={onCancel}
+        />
     );
 }

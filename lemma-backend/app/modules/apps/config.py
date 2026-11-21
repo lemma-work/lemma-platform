@@ -5,6 +5,7 @@ from typing import Self
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.config import settings
 from app.core.settings_env import dotenv_path
 
 
@@ -84,10 +85,36 @@ class AppsSettings(BaseSettings):
         ),
     )
 
+    private_apps_over_http: bool = Field(
+        default=False,
+        description=(
+            "Open private apps at their `*.localhost` address on a local stack "
+            "served over plain HTTP. Over HTTPS they always open for the people "
+            "allowed to read them; over HTTP only public apps do, because the "
+            "access cookie is `__Host-` and so Secure. Set, an HTTP app host "
+            "under `.localhost` uses a host-only `lemmaAppAccess` cookie instead, "
+            "with every other check unchanged. `make dev` sets it; Desktop and "
+            "the Docker install do not. Refused outside local/testing. Env: "
+            "``PRIVATE_APPS_OVER_HTTP``."
+        ),
+    )
+
     @model_validator(mode="after")
     def validate_retention_bounds(self) -> Self:
         if self.app_release_max_keep < self.app_release_keep_last:
             raise ValueError("APP_RELEASE_MAX_KEEP must be >= APP_RELEASE_KEEP_LAST")
+        return self
+
+    @model_validator(mode="after")
+    def refuse_private_apps_over_http_outside_local(self) -> Self:
+        # The app host asks again on every request (`api/app_access.py`);
+        # refusing it here makes a deployment that sets it by mistake fail at
+        # startup instead of quietly doing nothing.
+        if self.private_apps_over_http and not settings.is_local_mode():
+            raise ValueError(
+                "PRIVATE_APPS_OVER_HTTP is permitted only in local/testing: it "
+                "lets a private app's access cookie travel without Secure."
+            )
         return self
 
 

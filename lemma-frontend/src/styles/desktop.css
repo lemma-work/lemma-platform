@@ -2,35 +2,9 @@
    What only the Lemma desktop app draws. Every rule here belongs to a
    component under `src/desktop/`, and every one of those renders nothing in
    a browser — so this file costs a browser some bytes and no layout.
-   Built from the Models page's own pieces (`.mgroup`, `.mrow__state`) where
-   one exists, so this computer reads as one more computer, not a widget. */
-
-/* This computer, heading its own group on the Models page. */
-.thismac__body {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px 14px;
-    padding: 11px 13px;
-    background: var(--paper);
-    border: 1px solid var(--line);
-    border-top: 0;
-}
-.thismac__body:last-child { border-radius: 0 0 var(--r-md) var(--r-md); }
-.thismac__detail {
-    flex: 1 1 240px;
-    min-width: 0;
-    margin: 0;
-    font-size: 12px;
-    line-height: 1.5;
-    color: var(--ink-3);
-    overflow-wrap: anywhere;
-}
-.thismac__acts { display: flex; align-items: center; gap: 12px; flex: none; }
-.thismac__acts .btn { display: inline-flex; align-items: center; gap: 6px; }
-.thismac__problem { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--bad); }
-.thismac .mgroup__empty,
-.thismac .mlist { border-top: 1px solid var(--line); }
+   Its Settings sections are drawn with the kit (`kit.css`, `settings.css`),
+   so this computer reads as one more computer, not a widget; what is left
+   here is the app's own chrome and the setup checklist. */
 
 /* The sandbox download: one quiet card in the corner, above the work and
    out of the composer's way. */
@@ -184,159 +158,21 @@
    control on the right. The Models page's list shapes where a list is
    what is being drawn; everything else is these rows, so a toggle, a
    button and a choice all sit in the same place. */
-.thismac { display: flex; flex-direction: column; gap: 2px; }
-.thismac-health {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin: 0 0 10px;
-    font-size: 13.5px;
-    color: var(--ink);
-    font-variant-numeric: tabular-nums;
-}
-.thismac-health i { width: 7px; height: 7px; border-radius: 999px; background: var(--ink-3); flex: none; }
-.thismac-health--running i { background: var(--ok); }
-.thismac-health--starting i { background: var(--wait); }
-.thismac-health--attention i { background: var(--bad); }
 
-.thismac-row {
-    display: flex;
-    align-items: center;
-    gap: 10px 16px;
-    padding: 12px 0;
-    border-bottom: 1px solid var(--line);
-}
 .thismac-row__text { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .thismac-row__name { font-size: 13.5px; font-weight: 500; color: var(--ink); }
 .thismac-row__said { font-size: 12px; line-height: 1.5; color: var(--ink-3); overflow-wrap: anywhere; }
-.thismac-row__control { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 10px; flex: none; }
-.thismac-row__control .btn,
-.thismac-acts .btn { display: inline-flex; align-items: center; gap: 6px; }
-.thismac-row__control select {
-    font: inherit;
-    font-size: 13px;
-    color: var(--ink);
-    background: var(--paper);
-    border: 1px solid var(--line-2);
-    border-radius: var(--r-md);
-    padding: 8px 10px;
-    max-width: 260px;
-}
-
-/* A switch is a checkbox that says so: `role="switch"`, and the accent
-   rather than a second design for on and off. */
-.thismac-switch { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); cursor: pointer; }
 
 .thismac-said { margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: var(--ink-3); overflow-wrap: anywhere; }
-.thismac-said--bad { color: var(--bad); }
-.thismac-said code, .thismac-command code {
+.thismac-said code {
     font-family: var(--mono);
     font-size: 11.5px;
     background: var(--chrome);
     border-radius: var(--r-sm);
     padding: 1px 6px;
 }
-.thismac-foot { margin: 12px 0 0; font-size: 12px; color: var(--ink-3); }
-.thismac-heading {
-    margin: 22px 0 2px;
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: .06em;
-    text-transform: uppercase;
-    font-family: var(--mono);
-    color: var(--ink-2);
-}
-.thismac-heading:first-child { margin-top: 0; }
-.thismac-group { margin-top: 18px; }
-.thismac-acts { justify-content: flex-start; margin-top: 12px; }
-.thismac .theme__modes { flex-wrap: wrap; }
-.thismac-problem {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 10px 14px;
-    padding: 12px 14px;
-    border: 1px solid var(--line-2);
-    border-radius: var(--r-md);
-    background: var(--paper);
-    font-size: 13px;
-    color: var(--ink-2);
-}
-.thismac-problem p { margin: 0; flex: 1 1 260px; line-height: 1.5; }
-.thismac-problem svg { vertical-align: -2px; color: var(--wait); }
-.thismac-command { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 12px; color: var(--ink-2); }
-.thismac-command code { overflow-wrap: anywhere; }
-/* Scanned by a camera, so it sits on its own paper whatever the theme. */
-.thismac-qr { display: block; width: 148px; height: 148px; margin: 12px 0 0; border-radius: var(--r-sm); background: var(--paper); }
-
-/* One developer credential per drawer, closed until asked for. */
-.thismac-form { border-bottom: 1px solid var(--line); }
-.thismac-form summary {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    min-height: 44px;
-    padding: 12px 0;
-    cursor: pointer;
-    list-style: none;
-}
-.thismac-form summary::-webkit-details-marker { display: none; }
-.thismac-form summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
-.thismac-form__body { padding: 4px 0 16px; }
-.thismac-form__body fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
-.thismac-form__remove { align-self: flex-start; font-size: 12px; }
-
-.thismac-logs { padding: 8px 0 4px; }
-.thismac-log {
-    margin: 10px 0 0;
-    max-height: 280px;
-    overflow: auto;
-    padding: 10px 12px;
-    background: var(--chrome);
-    border-radius: var(--r-md);
-    font-family: var(--mono);
-    font-size: 11.5px;
-    line-height: 1.55;
-    color: var(--ink-2);
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-}
 
 .thismac-setup { display: inline-flex; align-items: center; gap: 6px; }
-
-/* Server setup: one capability per card, closed until asked for, except the
-   one that still needs setting up. */
-.setup-card { border-bottom: 1px solid var(--line); }
-.setup-card > summary {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    min-height: 44px;
-    padding: 14px 0;
-    cursor: pointer;
-    list-style: none;
-}
-.setup-card > summary::-webkit-details-marker { display: none; }
-.setup-card > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
-.setup-card__body { padding: 0 0 18px 14px; border-left: 2px solid var(--line); margin-left: 2px; }
-.setup-card__body > .thismac-form:last-child { border-bottom: 0; }
-.setup-form fieldset { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
-.setup-form .field select {
-    font: inherit;
-    font-size: 13px;
-    color: var(--ink);
-    background: var(--paper);
-    border: 1px solid var(--line-2);
-    border-radius: var(--r-md);
-    padding: 8px 10px;
-    max-width: 100%;
-}
-.setup-form__acts { display: flex; flex-wrap: wrap; gap: 10px; }
-.setup-form__acts .btn { display: inline-flex; align-items: center; gap: 6px; }
-.setup-hint { margin-top: 0; }
-.setup-hint .linkish { display: inline-flex; align-items: center; gap: 4px; }
-.setup-advanced { margin-top: 26px; }
-.setup-card .btn:disabled, .thismac-form .btn:disabled { opacity: .45; }
 
 /* Beside Server setup in Settings, while something required is missing. */
 .settings-nav__dot { width: 7px; height: 7px; margin-left: auto; border-radius: 999px; background: var(--wait); flex: none; }
@@ -346,23 +182,8 @@
 .setup-checklist__row { display: flex; align-items: center; gap: 10px 14px; padding: 12px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .setup-checklist__row .thismac-row__text { flex: 1 1 240px; }
 .setup-checklist__acts { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
-.thismac-operator__key { margin: 8px 0 0; }
 
 @media (max-width: 620px) {
-    .thismac-row { flex-wrap: wrap; }
-    .thismac-row__control { justify-content: flex-start; }
-    .thismac-row__control .btn, .thismac-form summary { min-height: 44px; }
-    .setup-card__body { padding-left: 10px; }
-    .setup-form .btn, .setup-checklist .btn { min-height: 44px; }
+    .setup-checklist .btn { min-height: 44px; }
 }
 
-/* Search model readiness on Overview: a word, coloured only when it needs
-   attention, never a badge competing with the health line above. */
-.thismac-search-model { font-size: 12.5px; color: var(--ink-2); white-space: nowrap; }
-.thismac-search-model--bad { color: var(--bad); white-space: normal; text-align: right; }
-
-/* Under a saved Telegram token: the bot, your number, and the way in. */
-.telegram-chat { display: flex; flex-direction: column; gap: 8px; padding: 12px 0 16px; border-bottom: 1px solid var(--line); }
-.telegram-chat__title { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 14px; font-weight: 500; color: var(--ink); }
-.telegram-chat__number { display: flex; gap: 8px; flex-wrap: wrap; }
-.telegram-chat__number input { flex: 1 1 180px; min-width: 0; }

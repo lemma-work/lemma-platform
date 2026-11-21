@@ -1,0 +1,809 @@
+/* People: everyone in the organization, what they can do, and the Lemmas
+   each one is in (outcomes/people.tsx); one person in a sheet from the
+   right edge (person-sheet.tsx); and the dialogs that ask people in
+   (invite-dialog.tsx). Built on the kit (kit.css) — its page, header,
+   buttons, fields, choice cards and sheet — so only what is theirs is
+   here. Agreed on the "Lemma People and Dialogs" mock, 2026-11-21. */
+
+/* The page measures itself, not the window: the frame's sidebar takes
+   width the window still has. */
+.ox-people {
+    container: ox-people / inline-size;
+}
+
+.ox-people__notice {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 13.5px;
+    line-height: 1.45;
+}
+
+.ox-people__strong {
+    font-weight: 500;
+}
+
+/* ── asking to join: a notice, first, because somebody is waiting ───── */
+
+.ox-people__asks {
+    display: grid;
+    gap: 10px;
+}
+
+.ox-people__ask {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 18px;
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--warn) 9%, var(--paper));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 22%, transparent);
+}
+
+.ox-people__askw {
+    display: grid;
+    flex: 1;
+    gap: 2px;
+    min-width: 0;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.ox-people__asksub {
+    color: var(--ink-2);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+}
+
+.ox-people__askacts {
+    display: flex;
+    flex: none;
+    gap: 8px;
+}
+
+/* ── the tools: filters at the left, search at the right ────────────── */
+
+.ox-people__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.ox-people__chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 13px;
+    border: 1px solid var(--line-2);
+    border-radius: 999px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 140ms, border-color 140ms, color 140ms;
+}
+
+.ox-people__chip:hover {
+    background: var(--wash-b);
+}
+
+.ox-people__chip[aria-pressed="true"] {
+    border-color: var(--ink);
+    background: var(--ink);
+    color: var(--paper);
+}
+
+.ox-people__chip:focus-visible {
+    outline: 2px solid var(--info);
+    outline-offset: 2px;
+}
+
+.ox-people__count {
+    opacity: 0.7;
+    font-variant-numeric: tabular-nums;
+}
+
+.ox-people__find {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: min(240px, 100%);
+    height: 34px;
+    padding: 0 12px;
+    border: 1px solid var(--line-2);
+    border-radius: 11px;
+    background: var(--paper);
+    color: var(--ink-3);
+    transition: border-color 160ms, box-shadow 160ms;
+}
+
+.ox-people__find:focus-within {
+    border-color: var(--info);
+    box-shadow: 0 0 0 3px var(--kit-pick);
+}
+
+.ox-people__find input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    outline: none;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 13.5px;
+}
+
+/* What just happened, in a line. Held in the accessibility tree while it
+   is empty, so the next thing said is heard. */
+.ox-people__said {
+    margin: -8px 0 0;
+    color: var(--ink-2);
+    font-size: 13.5px;
+}
+
+.ox-people__said:empty {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+}
+
+.ox-people__state {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 14px;
+    margin: 0;
+    padding: 18px 0;
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.ox-people__state p {
+    margin: 0;
+}
+
+.ox-people__problem {
+    margin: 0;
+    color: var(--bad);
+    font-size: 13.5px;
+}
+
+/* ── the table ─────────────────────────────────────────────────────── */
+
+.ox-people__table {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    border-top: 1px solid var(--line);
+}
+
+.ox-people__row {
+    display: grid;
+    grid-template-columns: minmax(0, 2.2fr) 150px minmax(0, 1.4fr) 170px 40px;
+    align-items: center;
+    gap: 16px;
+    min-height: 60px;
+    margin: 0 -10px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+    transition: background 140ms;
+}
+
+.ox-people__row:hover {
+    background: var(--wash-b);
+}
+
+.ox-people__row--head {
+    min-height: 38px;
+    color: var(--ink-3);
+    font-size: 12.5px;
+    cursor: default;
+}
+
+.ox-people__row--head:hover {
+    background: none;
+}
+
+.ox-people__row--head > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Somebody new, or just let in: their row lights once and settles. */
+.ox-people__row[data-new] {
+    animation: ox-people-arrive 1.2s ease-out;
+}
+
+@keyframes ox-people-arrive {
+    from {
+        background: var(--kit-pick);
+    }
+}
+
+.ox-people__who {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+.ox-people__words {
+    display: grid;
+    min-width: 0;
+}
+
+.ox-people__name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.ox-people__nm {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-people__you {
+    flex: none;
+    padding: 1px 6px;
+    border-radius: 6px;
+    background: var(--wash-a);
+    color: var(--ink-2);
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 0;
+}
+
+.ox-people__mail {
+    overflow: hidden;
+    color: var(--ink-3);
+    font-size: 12.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-people__rolecell {
+    min-width: 0;
+}
+
+/* A role: a select where the reader may change it, fixed words where not. */
+.ox-people__pick {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+}
+
+.ox-people__pick select {
+    max-width: 100%;
+    height: 32px;
+    padding: 0 28px 0 11px;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    background: var(--wash-a);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    appearance: none;
+    transition: border-color 140ms;
+}
+
+.ox-people__pick select:hover {
+    border-color: var(--line-2);
+}
+
+.ox-people__pick select:focus-visible {
+    outline: 2px solid var(--info);
+    outline-offset: 2px;
+}
+
+.ox-people__pick select:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.ox-people__pick .ox-icon {
+    position: absolute;
+    right: 9px;
+    color: var(--ink-3);
+    pointer-events: none;
+}
+
+.ox-people__fixed {
+    display: inline-block;
+    max-width: 100%;
+    padding: 6px 0;
+    overflow: hidden;
+    border-radius: 0;
+    background: none;
+    color: var(--ink-2);
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-people__lemmas {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+}
+
+.ox-people__faces {
+    display: flex;
+    flex: none;
+}
+
+.ox-people__face {
+    margin-right: -4px;
+    box-shadow: 0 0 0 2px var(--paper);
+}
+
+.ox-people__names {
+    min-width: 0;
+    margin-left: 10px;
+    overflow: hidden;
+    color: var(--ink-3);
+    font-size: 12.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-people__none {
+    color: var(--ink-3);
+    font-size: 12.5px;
+}
+
+.ox-people__status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.ox-people__status[data-tone="wait"] {
+    color: var(--warn);
+}
+
+.ox-people__status[data-tone="gone"] {
+    color: var(--bad);
+}
+
+.ox-people__status i {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.ox-people__end {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.ox-people__door .joins {
+    margin-top: 0;
+}
+
+/* Narrow: each person is a short stack. Name, role and ⋯ on the first
+   line; their Lemmas, then where they stand, under the name. */
+@container ox-people (max-width: 720px) {
+    .ox-people__row {
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        gap: 6px 10px;
+        padding: 12px 10px;
+    }
+
+    .ox-people__row--head {
+        display: none;
+    }
+
+    .ox-people__end {
+        grid-row: 1;
+        grid-column: 3;
+    }
+
+    .ox-people__lemmas,
+    .ox-people__status {
+        grid-column: 1 / -1;
+        padding-left: 42px;
+    }
+
+    .ox-people__ask {
+        flex-wrap: wrap;
+    }
+
+    .ox-people__askacts {
+        justify-content: flex-end;
+        width: 100%;
+    }
+
+    .ox-people__find {
+        flex: 1 1 200px;
+        width: auto;
+    }
+
+    .ox-people__pick select,
+    .ox-people__fixed {
+        max-width: 132px;
+    }
+}
+
+/* ── a person, in a sheet from the right ───────────────────────────── */
+
+.ox-people-sheet .ksheet__head h2 {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    margin-top: 6px;
+    overflow-wrap: anywhere;
+}
+
+.ox-people-sheet .ksheet__head p {
+    color: var(--ink-3);
+    font-size: 13.5px;
+    overflow-wrap: anywhere;
+}
+
+.ox-people-sheet__kv {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.ox-people-sheet__k {
+    min-width: 0;
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.ox-people-sheet__lemmas {
+    display: grid;
+}
+
+.ox-people-sheet__sub {
+    margin: 0 0 4px;
+    color: var(--ink-3);
+    font-size: 12.5px;
+    font-weight: 400;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.ox-people-sheet__lemma {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 52px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--line);
+    transition: opacity 140ms;
+}
+
+.ox-people-sheet__lemma:last-child {
+    border-bottom: 0;
+}
+
+.ox-people-sheet__lemma[data-busy] {
+    opacity: 0.6;
+}
+
+.ox-people-sheet__lname {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--ink);
+    font-weight: 500;
+    text-decoration: none;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-people-sheet__lname:hover {
+    text-decoration: underline;
+}
+
+.ox-people-sheet__lname:focus-visible {
+    border-radius: 4px;
+    outline: 2px solid var(--info);
+    outline-offset: 2px;
+}
+
+.ox-people-sheet__gap {
+    flex: none;
+    width: 32px;
+}
+
+.ox-people-sheet__adds,
+.ox-people-sheet__acts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.ox-people-sheet__note {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 13.5px;
+    line-height: 1.45;
+}
+
+.ox-people-sheet__problem {
+    margin: 0;
+    color: var(--bad);
+    font-size: 13.5px;
+    line-height: 1.45;
+}
+
+.ox-people-sheet__link {
+    display: grid;
+    gap: 8px;
+    justify-items: start;
+}
+
+.ox-people-sheet__link .kinput {
+    height: 40px;
+    font-size: 14px;
+}
+
+/* ── the dialogs ───────────────────────────────────────────────────── */
+
+.ox-people-dlg {
+    display: grid;
+    align-content: start;
+    gap: 22px;
+}
+
+/* A field whose label is a <label>, for the name that suggests people. */
+.ox-people-dlg .kfield > label:first-child {
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.ox-people-dlg__opt[data-off] {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.ox-people-dlg__opt[data-off]:hover {
+    box-shadow: inset 0 0 0 1px transparent;
+}
+
+.ox-people-dlg__select {
+    position: relative;
+    display: block;
+}
+
+.ox-people-dlg__select .kinput {
+    padding-right: 44px;
+}
+
+.ox-people-dlg__select .ox-icon {
+    position: absolute;
+    top: 50%;
+    right: 16px;
+    color: var(--ink-3);
+    pointer-events: none;
+    translate: 0 -50%;
+}
+
+.ox-people-dlg__why {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 14.5px;
+    line-height: 1.5;
+}
+
+.ox-people-dlg .ox-people-dlg__warn {
+    color: var(--bad);
+}
+
+.ox-people-dlg__problem {
+    margin: 0;
+    color: var(--bad);
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+/* Who in the organization matches the name typed so far. In the flow,
+   under the field, so a phone's short dialog never cuts it off. */
+.ox-people-dlg__suggest {
+    display: grid;
+    padding: 6px;
+    border-radius: 14px;
+    background: var(--paper);
+    box-shadow: var(--shadow-soft), 0 0 0 1px var(--line);
+}
+
+.ox-people-dlg__option {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 46px;
+    padding: 6px 10px;
+    border-radius: 10px;
+    cursor: pointer;
+}
+
+.ox-people-dlg__option[data-lit] {
+    background: var(--wash-b);
+}
+
+.ox-people-dlg__option[aria-disabled="true"] {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.ox-people-dlg__pick {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    background: var(--wash-a);
+}
+
+.ox-people-dlg__pickw {
+    display: grid;
+    flex: 1;
+    min-width: 0;
+}
+
+.ox-people-dlg__pickn {
+    overflow: hidden;
+    font-size: 14px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-people-dlg__picks {
+    overflow: hidden;
+    color: var(--ink-3);
+    font-size: 12.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-people-dlg__sent {
+    display: grid;
+    gap: 12px;
+}
+
+.ox-people-dlg__sent > p:first-child {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.ox-people-dlg__link {
+    display: flex;
+    gap: 8px;
+    min-width: 0;
+}
+
+.ox-people-dlg__link .kinput {
+    flex: 1;
+    min-width: 0;
+    height: 40px;
+    font-size: 14px;
+}
+
+/* The line under a dialog's two buttons, saying what pressing the second
+   will do. The foot is two columns while it holds one. */
+.modal__foot:has(> .ox-people-note) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-flow: row;
+}
+
+.ox-people-note {
+    grid-column: 1 / -1;
+    min-height: 1.45em;
+    margin: -4px 0 0;
+    color: var(--ink-3);
+    font-size: 12.5px;
+    line-height: 1.45;
+    text-align: center;
+    text-wrap: pretty;
+}
+
+.ox-people-note[data-bad] {
+    color: var(--bad);
+}
+
+/* ── touch and stillness ───────────────────────────────────────────── */
+
+@media (pointer: coarse) {
+    .ox-people__chip,
+    .ox-people__find {
+        min-height: 44px;
+    }
+
+    .ox-people__pick select {
+        height: 44px;
+    }
+
+    .ox-people-sheet__lname {
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
+    }
+
+    .ox-people-sheet__gap {
+        width: 44px;
+    }
+
+    .ox-people-dlg__option {
+        min-height: 48px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ox-people__row,
+    .ox-people__row[data-new],
+    .ox-people__chip,
+    .ox-people__find,
+    .ox-people__pick select,
+    .ox-people-sheet__lemma {
+        animation: none;
+        transition: none;
+    }
+}
+
+/* Inside Settings: the section's heading, with Invite level with it. */
+.ox-people--embedded {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+}
+
+.ox-people__head .ph__row {
+    align-items: flex-start;
+}
+
+.ox-people__t {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+}
+
+.ox-people__head .ph__line {
+    font-size: 14px;
+}
+
+/* Who else can join, under the people: a plain subheading, no capitals,
+   no rule of its own above it. */
+.ox-people .joins {
+    margin-top: 6px;
+    padding-top: 0;
+    border-top: 0;
+}
+
+.ox-people .joins__ask {
+    margin: 0 0 8px;
+    color: var(--ink);
+    font-family: inherit;
+    font-size: 14.5px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+}

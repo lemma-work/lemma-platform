@@ -8,7 +8,7 @@
  *  its apps, its tables, its pages, its files, and About. The rest are parts
  *  of About -- what it runs, who is in it, who writes in from outside, its
  *  plan, its settings -- each still a page of its own with its own address. */
-export type OutcomeTab = "home" | "chats" | "apps" | "tables" | "pages" | "files" | "about" | "automations" | "people" | "contacts" | "settings";
+export type OutcomeTab = "home" | "chats" | "apps" | "tables" | "pages" | "files" | "about" | "automations" | "agents" | "memory" | "skills" | "add" | "people" | "contacts" | "settings";
 
 /** What a Lemma runs, in one place: its workflows and their runs, its
  *  schedules, its agents, and the X-ray of all of it. The workspace keeps
@@ -49,6 +49,8 @@ export type View =
     /** What the reader's Lemmas have been doing: every one of them, or the
      *  one named. */
     | { name: "history"; podId: string | null }
+    /** Settings, a page: one section of the reader's or the organization's. */
+    | { name: "settings"; section: string | null }
     /** `section` is a part of a Lemma's settings (its About), or one view
      *  of its automations, on that tab. */
     | { name: "outcome"; podId: string; tab: OutcomeTab; section?: string }
@@ -67,10 +69,11 @@ export type View =
     /** Starting a Lemma from scratch, the workspace's own way. */
     | { name: "hire" };
 
-export const OUTCOME_TABS: readonly OutcomeTab[] = ["home", "chats", "apps", "tables", "pages", "files", "about", "automations", "people", "contacts", "settings"];
+export const OUTCOME_TABS: readonly OutcomeTab[] = ["home", "chats", "apps", "tables", "pages", "files", "about", "automations", "agents", "memory", "skills", "add", "people", "contacts", "settings"];
 
-/** The tabs a Lemma's row shows, in order. */
-export const ROW_TABS: readonly OutcomeTab[] = ["home", "chats", "apps", "tables", "pages", "files", "about"];
+/** A Lemma's own pages, each opened from its section on the Lemma's page:
+ *  what it holds and what it does. The rest are parts of About. */
+export const ROW_TABS: readonly OutcomeTab[] = ["home", "chats", "apps", "tables", "pages", "files", "about", "automations", "agents", "memory", "skills", "add"];
 
 /** Whether a page is a part of About rather than a tab of its own: the row
  *  keeps About lit over it, and the page offers the way back. */
@@ -185,6 +188,11 @@ export function readView(pathname: string): View | null {
     if (!head) return null;
     /* Its own places only: `/constructor` is not one because every object
        answers to it. */
+    if (head === "settings") {
+        if (after.length === 0) return { name: "settings", section: null };
+        const section = after.length === 1 ? decoded(after[0]) : null;
+        return section ? { name: "settings", section } : null;
+    }
     if (head === "history") {
         if (after.length === 0) return { name: "history", podId: null };
         const of = after.length === 1 ? decoded(after[0]) : null;
@@ -224,6 +232,10 @@ export function readView(pathname: string): View | null {
            the workspace's old address, which its own grammar reads. */
         case "about": return rest.length === 0 ? outcomeView(podId, "about") : null;
         case "people": return rest.length === 0 ? outcomeView(podId, "people") : null;
+        case "memory": return rest.length === 0 ? outcomeView(podId, "memory") : null;
+        case "skills": return rest.length === 0 ? outcomeView(podId, "skills") : null;
+        /* Adding an app to it: its own page, not a dialog. */
+        case "add": return rest.length === 0 ? outcomeView(podId, "add") : null;
         case "files":
             return rest.length === 0 ? outcomeView(podId, "files") : { name: "file", podId, path: "/" + rest.join("/") };
         case "tables":
@@ -242,7 +254,7 @@ export function readView(pathname: string): View | null {
             if (rest.length === 0) return outcomeView(podId, "automations", "history");
             return rest.length === 1 ? { name: "run", podId, runId: one } : null;
         case "agents":
-            if (rest.length === 0) return outcomeView(podId, "automations", "agents");
+            if (rest.length === 0) return outcomeView(podId, "agents");
             return rest.length === 1 ? { name: "agent", podId, agent: one } : null;
         case "settings":
             return rest.length <= 1 ? outcomeView(podId, "settings", one ?? null) : null;
@@ -265,6 +277,10 @@ const SECTION_WORDS: Readonly<Record<OutcomeTab, string>> = {
     apps: "apps",
     about: "about",
     automations: "automations",
+    agents: "agents",
+    memory: "memory",
+    skills: "skills",
+    add: "add",
     people: "people",
     contacts: "contacts",
     settings: "settings",
@@ -280,6 +296,7 @@ export function writeView(view: View): string {
         case "connectors": return "/connectors";
         case "people": return "/people";
         case "history": return "/history" + (view.podId ? "/" + e(view.podId) : "");
+        case "settings": return "/settings" + (view.section ? "/" + e(view.section) : "");
         case "outcomes": return LEMMAS;
         case "hire": return LEMMAS + "/new";
         case "chats": {

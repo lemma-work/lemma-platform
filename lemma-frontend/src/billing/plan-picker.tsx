@@ -2,11 +2,11 @@
 
 import { LoadingIndicator } from "@/ui/loading";
 
-import { useEffect, useState } from "react";
-import { CheckIcon, ExternalIcon, RefreshIcon } from "@/ui/icons";
+import { useEffect, useId, useState } from "react";
+import { CheckIcon, ExternalIcon } from "@/ui/icons";
 import { captureEvent } from "@/site/analytics/client";
 import {
-    highlights, isContactSales, moveTo, offered as offeredPlans, priceLine,
+    highlights, moveTo, offered as offeredPlans, priceLine,
     type ChangeAcknowledged, type Plan, type PlanAudience, type StartedCheckout, type Subscription,
 } from "./plan";
 
@@ -26,6 +26,11 @@ import {
  *  The link is a link the person clicks, not a window this opens for them. A
  *  popup opened after an await is a popup the browser blocks, and the failure
  *  would land on the one control in the app whose job is to take money.
+ *
+ *  The plans are cards (the kit's `.kopts`): the one you are on is picked to
+ *  begin with, picking another tints it, and the one button under them says
+ *  what it will do with that plan. A plan sold by talking to us says so
+ *  instead of offering a button that cannot sell it.
  */
 export function PlanPicker({
     audience,
@@ -58,8 +63,15 @@ export function PlanPicker({
     const [asked, setAsked] = useState(false);
     const [busy, setBusy] = useState<string | null>(null);
     const [problem, setProblem] = useState<string | null>(null);
+    const [picked, setPicked] = useState<string | null>(null);
+    const group = useId();
 
     const offered = offeredPlans(plans, audience);
+    const selected = offered.find((plan) => plan.id === picked)
+        ?? offered.find((plan) => moveTo(current, plan) === "current")
+        ?? null;
+    const selectedMove = selected ? moveTo(current, selected) : null;
+    const waiting = Boolean(checkout || asked);
     const settled = chosen !== null && current?.plan_id === chosen;
 
     /* The payment landed. Everything about this component is about a decision
@@ -103,76 +115,93 @@ export function PlanPicker({
     }
 
     return (
-        <div className="plans">
-            {(checkout || asked) && (
-                <div className="plans__waiting" role="status">
-                    {checkout && (
-                        <a className="btn btn--primary" href={checkout} target="_blank" rel="noreferrer"
-                            onClick={() => captureEvent("billing.checkout_opened", { plan: chosen ?? "" })}>
-                            Complete the payment <ExternalIcon size={14} />
-                        </a>
-                    )}
-                    <p>
+        <div className="kset-stack">
+            {waiting && (
+                <div className="kset-stack" role="status">
+                    <p className="kstatus kstatus--warn">Waiting for the payment</p>
+                    <p className="kset-said">
                         {checkout
                             ? "The payment happens at our provider. Nothing changes here until it goes through — this page notices when it does."
                             : "Asked for. The card on file settles the difference, and the plan moves once the payment does."}
                     </p>
-                    <span className="plans__wait"><RefreshIcon size={13} /> Waiting for the payment…</span>
-                    {/* A way out for somebody who changed their mind. Without
-                        it, closing the payment tab leaves this panel waiting on
-                        a payment that is never coming, with the plans behind it
-                        disabled — and the only exit is to leave settings. It
-                        stops the asking; it does not cancel anything, because
-                        there is nothing here to cancel: an abandoned checkout
-                        writes nothing at either end. */}
-                    <button className="plans__give-up" onClick={() => {
-                        captureEvent("billing.checkout_abandoned", { plan: chosen ?? "" });
-                        setChosen(null);
-                        setCheckout(null);
-                        setAsked(false);
-                        onWaiting(false);
-                    }}>Not now</button>
+                    <div className="kset-acts">
+                        {checkout && (
+                            <a className="b b--m b--primary" href={checkout} target="_blank" rel="noreferrer"
+                                onClick={() => captureEvent("billing.checkout_opened", { plan: chosen ?? "" })}>
+                                Complete the payment <ExternalIcon />
+                            </a>
+                        )}
+                        {/* A way out for somebody who changed their mind.
+                            Without it, closing the payment tab leaves this
+                            waiting on a payment that is never coming, with the
+                            plans behind it disabled — and the only exit is to
+                            leave settings. It stops the asking; it does not
+                            cancel anything, because there is nothing here to
+                            cancel: an abandoned checkout writes nothing at
+                            either end. */}
+                        <button type="button" className="b b--m b--quiet" onClick={() => {
+                            captureEvent("billing.checkout_abandoned", { plan: chosen ?? "" });
+                            setChosen(null);
+                            setCheckout(null);
+                            setAsked(false);
+                            onWaiting(false);
+                        }}>Not now</button>
+                    </div>
                 </div>
             )}
 
-            {problem && <p className="plans__problem">{problem}</p>}
+            {pending && offered.length === 0 && <p className="kset-note" role="status">Reading the plans…</p>}
 
-            {pending && offered.length === 0 && <p className="usage-quiet" role="status">Reading the plans…</p>}
+            {offered.length > 0 && (
+                <div className="kopts kset-plans" role="radiogroup" aria-label="Plans">
+                    {offered.map((plan) => {
+                        const here = moveTo(current, plan) === "current";
+                        return (
+                            <label className="kopt kopt--compact" key={plan.id}>
+                                <input
+                                    type="radio"
+                                    name={group}
+                                    checked={selected?.id === plan.id}
+                                    disabled={waiting || busy !== null}
+                                    onChange={() => { setProblem(null); setPicked(plan.id); }}
+                                />
+                                <span className="kopt__t">{plan.name}{here && <span className="ktag">Current</span>}</span>
+                                {plan.description && <span className="kopt__d">{plan.description}</span>}
+                                <span className="kset-price">{priceLine(plan)}</span>
+                                <span className="kset-plan-has">
+                                    {highlights(plan).map((line) => (
+                                        <span key={line}><CheckIcon size={13} />{line}</span>
+                                    ))}
+                                </span>
+                                <span className="kopt__dot" aria-hidden="true" />
+                            </label>
+                        );
+                    })}
+                </div>
+            )}
 
-            <div className="plans__grid">
-                {offered.map((plan) => {
-                    const move = moveTo(current, plan);
-                    const here = move === "current";
-                    return (
-                        <article className="plan" key={plan.id} data-current={here} aria-label={plan.name + " plan"}>
-                            <h5>{plan.name}</h5>
-                            <p className="plan__price">{priceLine(plan)}</p>
-                            {plan.description && <p className="plan__blurb">{plan.description}</p>}
-                            <ul className="plan__list">
-                                {highlights(plan).map((line) => (
-                                    <li key={line}><CheckIcon size={13} />{line}</li>
-                                ))}
-                            </ul>
-                            {here ? (
-                                <span className="plan__here">Current plan</span>
-                            ) : isContactSales(plan) ? (
-                                <span className="plan__here">Talk to us</span>
-                            ) : (
-                                <button
-                                    className="btn"
-                                    disabled={Boolean(disabled) || busy !== null || chosen !== null}
-                                    title={disabled}
-                                    onClick={() => void pick(plan)}
-                                >
-                                    {busy === plan.id ? <LoadingIndicator inline label="Loading checkout" /> : move === "change" ? "Switch to this" : "Choose"}
-                                </button>
-                            )}
-                        </article>
-                    );
-                })}
-            </div>
+            {problem && <p className="kset-said kset-said--bad" role="alert">{problem}</p>}
 
-            {disabled && <p className="usage-quiet">{disabled}</p>}
+            {selected && !waiting && selectedMove === "contact" && (
+                <p className="kset-note">Talk to us to move to {selected.name}.</p>
+            )}
+            {selected && !waiting && (selectedMove === "change" || selectedMove === "checkout") && (
+                <div className="kset-acts">
+                    <button
+                        type="button"
+                        className="b b--m b--primary"
+                        disabled={Boolean(disabled) || busy !== null || chosen !== null}
+                        title={disabled}
+                        onClick={() => void pick(selected)}
+                    >
+                        {busy === selected.id
+                            ? <LoadingIndicator inline label="Loading checkout" />
+                            : (selectedMove === "change" ? "Switch to " : "Choose ") + selected.name}
+                    </button>
+                </div>
+            )}
+
+            {disabled && <p className="kset-note">{disabled}</p>}
         </div>
     );
 }

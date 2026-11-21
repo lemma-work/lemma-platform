@@ -1,4 +1,12 @@
 import "@/styles/outcomes.css";
+import "@/styles/add-app.css";
+import "@/styles/lemma-work.css";
+import "@/styles/lemma-knows.css";
+import "@/styles/people.css";
+import "@/styles/connectors-page.css";
+import "@/styles/apps-page.css";
+import "@/styles/needs-page.css";
+import "@/styles/frame-states.css";
 import { productFace } from "@/ui/product-face";
 import { Outcomes } from "./outcomes";
 

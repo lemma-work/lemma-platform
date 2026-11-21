@@ -9,6 +9,7 @@ import { NeedRow } from "./answer";
 import { AskBox } from "./ask";
 import { markOf, readsAhead } from "./sidebar";
 import { Empty, to } from "./parts";
+import { Problem } from "./calm";
 import { Invited } from "./invited";
 
 /** What waits on the reader, on Home, before the rest is a click away. */
@@ -17,7 +18,7 @@ const ASKS_SHOWN = 3;
 const RECENT_SHOWN = 5;
 
 /** A greeting for the hour, the way an empty chat opens. */
-function greeting(now: number): string {
+export function greeting(now: number): string {
     const hour = new Date(now).getHours();
     if (hour < 5 || hour >= 18) return "Good evening";
     if (hour < 12) return "Good morning";
@@ -77,9 +78,9 @@ export function Today({ org, pods, activity, channels, queue, queueFailed, onRet
             {queueFailed && queue.length === 0 && (
                 <section aria-label="Needs you">
                     <div className="ox-sec"><h2>Needs you</h2></div>
-                    <p className="ox-note" role="alert">
-                        Couldn’t read what’s waiting on you. <button type="button" className="ox-textbtn" onClick={onRetryQueue}>Try again</button>
-                    </p>
+                    <div className="ox-sectfail">
+                        <Problem onRetry={onRetryQueue}>Couldn’t read what waits on you. Anything a Lemma asked is still in your chat with it.</Problem>
+                    </div>
                 </section>
             )}
             {queue.length > 0 && (

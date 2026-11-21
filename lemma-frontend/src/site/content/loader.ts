@@ -99,6 +99,11 @@ function parseFrontmatter(
     if (data.cover !== undefined && typeof data.cover !== "string") {
         throw new Error(`${source}: "cover" must be an image path`);
     }
+    for (const field of ["breaking", "desktop"] as const) {
+        if (data[field] !== undefined && typeof data[field] !== "boolean") {
+            throw new Error(`${source}: "${field}" must be true or false`);
+        }
+    }
 
     const published = parseIsoDate(data.published, "published", source);
     const updated =
@@ -124,6 +129,12 @@ function parseFrontmatter(
         pod: data.pod,
         cover: data.cover,
         draft: data.draft === true,
+        breaking: data.breaking === true ? true : undefined,
+        desktop: data.desktop === true ? true : undefined,
+        developer:
+            data.developer === undefined
+                ? undefined
+                : requireString(data.developer, "developer", source),
     };
 }
 

@@ -518,6 +518,12 @@ _NAME_TO_MODULE = {
     'PersonRef': 'person_ref',
     'PlanStepResponse': 'plan_step_response',
     'PlanStepResponseDetail': 'plan_step_response_detail',
+    'PluginInstallItemResponse': 'plugin_install_item_response',
+    'PluginInstallRequest': 'plugin_install_request',
+    'PluginInstallResponse': 'plugin_install_response',
+    'PluginInstallState': 'plugin_install_state',
+    'PluginInstallStepResponse': 'plugin_install_step_response',
+    'PluginSourceRequest': 'plugin_source_request',
     'PodAccountCreateRequest': 'pod_account_create_request',
     'PodAccountListResponse': 'pod_account_list_response',
     'PodAccountResponse': 'pod_account_response',
@@ -1377,6 +1383,12 @@ if TYPE_CHECKING:
     from .person_ref import PersonRef
     from .plan_step_response import PlanStepResponse
     from .plan_step_response_detail import PlanStepResponseDetail
+    from .plugin_install_item_response import PluginInstallItemResponse
+    from .plugin_install_request import PluginInstallRequest
+    from .plugin_install_response import PluginInstallResponse
+    from .plugin_install_state import PluginInstallState
+    from .plugin_install_step_response import PluginInstallStepResponse
+    from .plugin_source_request import PluginSourceRequest
     from .pod_account_create_request import PodAccountCreateRequest
     from .pod_account_list_response import PodAccountListResponse
     from .pod_account_response import PodAccountResponse
@@ -2249,6 +2261,12 @@ __all__ = [
     'PersonRef',
     'PlanStepResponse',
     'PlanStepResponseDetail',
+    'PluginInstallItemResponse',
+    'PluginInstallRequest',
+    'PluginInstallResponse',
+    'PluginInstallState',
+    'PluginInstallStepResponse',
+    'PluginSourceRequest',
     'PodAccountCreateRequest',
     'PodAccountListResponse',
     'PodAccountResponse',

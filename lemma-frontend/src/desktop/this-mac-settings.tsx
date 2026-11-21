@@ -4,7 +4,7 @@ import "@/styles/desktop.css";
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isLocalDeployment } from "@/site/config";
-import { ComputerIcon, DownloadIcon, RefreshIcon, TerminalIcon, WarningIcon } from "@/ui/icons";
+import { ComputerIcon, DownloadIcon, RefreshIcon, TerminalIcon } from "@/ui/icons";
 import { useDesktopBridge } from "./bridge";
 import { openExternal } from "./open-external";
 import { openSettings } from "./open-settings";
@@ -68,30 +68,62 @@ export function useThisMacSnapshot() {
     });
 }
 
+/** The snapshot's three answers: still reading, could not, or the section. */
 function Loading({ snapshot, children }: { snapshot: ReturnType<typeof useThisMacSnapshot>; children: (data: ThisMacSnapshot) => ReactNode }) {
-    if (snapshot.isPending) return <p className="empty-row" role="status">Reading this computer’s settings…</p>;
+    if (snapshot.isPending) return <p className="kset-note" role="status">Reading this computer’s settings…</p>;
     if (snapshot.isError) {
         return (
-            <div className="thismac-problem" role="alert">
-                <p>{friendlyError(snapshot.error)}</p>
-                <button className="btn" onClick={() => void snapshot.refetch()}><RefreshIcon size={13} /> Try again</button>
-            </div>
+            <p className="kset-said kset-said--bad" role="alert">
+                {friendlyError(snapshot.error)}
+                <button type="button" className="b b--s b--secondary" onClick={() => void snapshot.refetch()}><RefreshIcon /> Try again</button>
+            </p>
         );
     }
     return <>{children(snapshot.data)}</>;
 }
 
-/** One setting: its name, its one line of consequence, and its control. */
+/** One setting, as a row on the section's hairlines: its name, its one line
+ *  of consequence, and its control at the right. Rows go in a `.klist`. */
 export function SettingRow({ name, consequence, children, id }: { name: string; consequence?: ReactNode; children?: ReactNode; id?: string }) {
     return (
-        <div className="thismac-row" id={id}>
-            <div className="thismac-row__text">
-                <span className="thismac-row__name">{name}</span>
-                {consequence && <span className="thismac-row__said">{consequence}</span>}
-            </div>
-            {children && <div className="thismac-row__control">{children}</div>}
+        <div className="krow" id={id}>
+            <span className="krow__v kset-wrap">
+                <b>{name}</b>
+                {consequence && <span>{consequence}</span>}
+            </span>
+            {children && <span className="krow__end">{children}</span>}
         </div>
     );
+}
+
+/** An on/off setting: the kit's switch, a button that says its own state. */
+export function Switch({ label, checked, disabled, title, onChange }: {
+    label: string;
+    checked: boolean;
+    disabled?: boolean;
+    title?: string;
+    onChange: (next: boolean) => void;
+}) {
+    return (
+        <button
+            type="button"
+            className="kswitch"
+            role="switch"
+            aria-label={label}
+            aria-checked={checked}
+            disabled={disabled}
+            title={title}
+            onClick={() => onChange(!checked)}
+        />
+    );
+}
+
+/** How the server stands, as the kit's dot. */
+function healthClass(state: ReturnType<typeof healthState>): string {
+    if (state === "running") return "kstatus kset-state";
+    if (state === "starting") return "kstatus kstatus--warn kset-state";
+    if (state === "attention") return "kstatus kstatus--bad kset-state";
+    return "kstatus kstatus--off kset-state";
 }
 
 /* ── overview ──────────────────────────────────────────────────────── */
@@ -119,56 +151,55 @@ function Overview() {
     return (
         <Loading snapshot={snapshot}>
             {(data) => {
-                const state = healthState(data);
+                const stuck = stuckStarting(data, startingSince, Date.now());
                 return (
-                    <div className="thismac">
-                        <p className={"thismac-health thismac-health--" + state} role="status">
-                            <i aria-hidden="true" />
+                    <div className="kset-stack">
+                        <p className={healthClass(healthState(data))} role="status">
                             {healthLine(data, update.data ?? null)}
                         </p>
                         <StartupWarnings warnings={data.warnings ?? []} onLogs={() => { setSaid(null); logs.mutate(); }} />
-                        {stuckStarting(data, startingSince, Date.now()) && (
-                            <p className="thismac-said thismac-said--bad" role="alert">
-                                {stuckStarting(data, startingSince, Date.now())} Open the logs to see why, or quit and reopen Lemma.
+                        {stuck && (
+                            <p className="kset-said kset-said--bad" role="alert">
+                                {stuck} Open the logs to see why, or quit and reopen Lemma.
                             </p>
                         )}
                         {healthDetail(data) && (
-                            <p className="thismac-said thismac-said--bad" role="alert">
+                            <p className="kset-said kset-said--bad" role="alert">
                                 {healthDetail(data)} Quit and reopen Lemma to restart it, or use Lemma → Recovery… in the menu bar.
                             </p>
                         )}
-                        <SettingRow name="Start at login" consequence={`Lemma opens when you sign in to ${noun}, so every chat keeps being answered.`}>
-                            <input
-                                type="checkbox"
-                                className="thismac-switch"
-                                role="switch"
-                                aria-label="Start at login"
-                                checked={data.app.start_at_login}
-                                disabled={login.isPending}
-                                onChange={(event) => { setSaid(null); login.mutate(event.target.checked); }}
-                            />
-                        </SettingRow>
-                        {/* Only where the shell can do it: a bundled or older runtime
-                            has nothing it could download to replace itself with. */}
-                        {data.app.repair_available && (
-                            <SettingRow name="Repair" consequence="Downloads Lemma’s runtime again (this needs internet) and restarts Lemma. Your pods, files and accounts are not touched.">
-                                <button className="btn" disabled={repair.isPending} onClick={() => { setSaid(null); repair.mutate(); }}>
-                                    {repair.isPending ? "Repairing…" : "Verify & repair"}
+                        <div className="klist">
+                            <SettingRow name="Start at login" consequence={`Lemma opens when you sign in to ${noun}, so every chat keeps being answered.`}>
+                                <Switch
+                                    label="Start at login"
+                                    checked={data.app.start_at_login}
+                                    disabled={login.isPending}
+                                    onChange={(next) => { setSaid(null); login.mutate(next); }}
+                                />
+                            </SettingRow>
+                            {/* Only where the shell can do it: a bundled or older
+                                runtime has nothing it could download to replace
+                                itself with. */}
+                            {data.app.repair_available && (
+                                <SettingRow name="Repair" consequence="Downloads Lemma’s runtime again (this needs internet) and restarts Lemma. Your files and accounts are not touched.">
+                                    <button type="button" className="b b--s b--secondary" disabled={repair.isPending} onClick={() => { setSaid(null); repair.mutate(); }}>
+                                        {repair.isPending ? "Repairing…" : "Verify and repair"}
+                                    </button>
+                                </SettingRow>
+                            )}
+                            <SettingRow name="Logs" consequence="What Lemma wrote while it ran, for when something needs explaining.">
+                                <button type="button" className="b b--s b--quiet" onClick={() => { setSaid(null); logs.mutate(); }}><TerminalIcon /> Open logs</button>
+                            </SettingRow>
+                            <SettingRow name="Server setup" consequence={setupSummary(data)}>
+                                <button type="button" className="b b--s b--secondary" onClick={() => openSettings("this-mac-setup")}>
+                                    {needsSetup(data).length ? "Set up" : "Open"}
                                 </button>
                             </SettingRow>
-                        )}
-                        <SettingRow name="Logs" consequence="What Lemma wrote while it ran, for when something needs explaining.">
-                            <button className="linkish" onClick={() => { setSaid(null); logs.mutate(); }}><TerminalIcon size={13} /> Open logs</button>
-                        </SettingRow>
-                        <SettingRow name="Server setup" consequence={setupSummary(data)}>
-                            <button className="btn" onClick={() => openSettings("this-mac-setup")}>
-                                {needsSetup(data).length ? "Set up" : "Open"}
-                            </button>
-                        </SettingRow>
-                        <SearchReadinessRow />
-                        <DiskUsageRows />
-                        {said && <p className="thismac-said" role="status">{said}</p>}
-                        <p className="thismac-foot">
+                            <SearchReadinessRow />
+                            <DiskUsageRows />
+                        </div>
+                        {said && <p className="kset-said" role="status">{said}</p>}
+                        <p className="kset-note">
                             Erasing data and restarting into Recovery stay in the menu bar: Lemma → Recovery…
                         </p>
                     </div>
@@ -187,11 +218,11 @@ function StartupWarnings({ warnings, onLogs }: { warnings: StartupWarning[]; onL
             {warnings.map((warning, index) => {
                 const line = startupWarningLine(warning);
                 return (
-                    <p key={warning.code + index} className="thismac-said thismac-said--bad" role="alert" data-warning-code={warning.code}>
-                        <strong>{line.title}</strong> {warning.message}{" "}
+                    <p key={warning.code + index} className="kset-said kset-said--bad" role="alert" data-warning-code={warning.code}>
+                        <strong>{line.title}</strong> {warning.message}
                         {line.next === "updates"
-                            ? <button className="linkish" onClick={() => openSettings("this-mac-updates")}>Check for updates</button>
-                            : <button className="linkish" onClick={onLogs}>Open logs</button>}
+                            ? <button type="button" className="b b--s b--secondary" onClick={() => openSettings("this-mac-updates")}>Check for updates</button>
+                            : <button type="button" className="b b--s b--secondary" onClick={onLogs}>Open logs</button>}
                     </p>
                 );
             })}
@@ -220,6 +251,8 @@ function useStartingSince(snapshot: ThisMacSnapshot | null): number | null {
 
 /* ── coding agents ─────────────────────────────────────────────────── */
 
+/** This computer's coding agents, how its commands may run, and the sandbox
+ *  its Lemmas work in. */
 function CodingAgents() {
     const noun = useThisComputer();
     const snapshot = useThisMacSnapshot();
@@ -233,40 +266,42 @@ function CodingAgents() {
         onError: (cause) => setProblem(friendlyError(cause)),
     });
     return (
-        <div className="thismac">
-            {/* The same card the Models page leads with, so this computer
+        <div className="kset-stack">
+            {/* The same group the Models page leads with, so this computer
                 reads the same in both places, with what it found: each
                 agent, its release, and what to type to update it. Adding
-                them for teammates to pick is an organization decision and
-                stays on Models. */}
+                them for Lemmas to pick is an organization decision and stays
+                on Models. */}
             <ThisComputerCard>
                 <ThisComputerAgents />
             </ThisComputerCard>
-            <p className="thismac-foot">
+            <p className="kset-note">
                 Choose which of its agents to allow in{" "}
-                <button className="linkish" onClick={() => openSettings("models")}>Models</button>.
+                <button type="button" className="kset-link" onClick={() => openSettings("models")}>Models</button>.
             </p>
-            <HostExecution />
-            <Loading snapshot={snapshot}>
-                {(data) => {
-                    const images = data.sandbox_images;
-                    const wording = sandboxWording(
-                        images?.state,
-                        noun,
-                        images ? downloadedSoFar({ doneMb: images.done_mb, totalMb: images.total_mb }) : null,
-                    );
-                    return (
-                        <SettingRow name="Workspace sandbox" consequence={wording.text}>
-                            {wording.offer && (
-                                <button className="btn" disabled={prepare.isPending} onClick={() => { setProblem(null); prepare.mutate(); }}>
-                                    <DownloadIcon size={13} /> {data.sandbox_images?.state === "failed" ? "Try again" : "Download"}
-                                </button>
-                            )}
-                        </SettingRow>
-                    );
-                }}
-            </Loading>
-            {problem && <p className="thismac-said thismac-said--bad" role="alert">{problem}</p>}
+            <div className="klist">
+                <HostExecution />
+                <Loading snapshot={snapshot}>
+                    {(data) => {
+                        const images = data.sandbox_images;
+                        const wording = sandboxWording(
+                            images?.state,
+                            noun,
+                            images ? downloadedSoFar({ doneMb: images.done_mb, totalMb: images.total_mb }) : null,
+                        );
+                        return (
+                            <SettingRow name="Workspace sandbox" consequence={wording.text}>
+                                {wording.offer && (
+                                    <button type="button" className="b b--s b--secondary" disabled={prepare.isPending} onClick={() => { setProblem(null); prepare.mutate(); }}>
+                                        <DownloadIcon /> {data.sandbox_images?.state === "failed" ? "Try again" : "Download"}
+                                    </button>
+                                )}
+                            </SettingRow>
+                        );
+                    }}
+                </Loading>
+            </div>
+            {problem && <p className="kset-said kset-said--bad" role="alert">{problem}</p>}
         </div>
     );
 }
@@ -286,21 +321,21 @@ function HostExecution() {
     });
     const row = hostExecutionSwitch(host.status, { error: host.error, noun });
     return (
-        <>
-            <SettingRow name={"Run commands on " + noun} consequence={row.blocked ?? row.consequence}>
-                <input
-                    type="checkbox"
-                    className="thismac-switch"
-                    role="switch"
-                    aria-label={"Run commands on " + noun}
-                    checked={change.isPending ? change.variables === true : row.checked}
-                    disabled={row.blocked !== null || change.isPending}
-                    title={row.blocked ?? undefined}
-                    onChange={(event) => { setProblem(null); change.mutate(event.target.checked); }}
-                />
-            </SettingRow>
-            {problem && <p className="thismac-said thismac-said--bad" role="alert">{problem}</p>}
-        </>
+        <SettingRow
+            name={"Run commands on " + noun}
+            consequence={<>
+                {row.blocked ?? row.consequence}
+                {problem && <span className="kset-said--bad" role="alert"> {problem}</span>}
+            </>}
+        >
+            <Switch
+                label={"Run commands on " + noun}
+                checked={change.isPending ? change.variables === true : row.checked}
+                disabled={row.blocked !== null || change.isPending}
+                title={row.blocked ?? undefined}
+                onChange={(next) => { setProblem(null); change.mutate(next); }}
+            />
+        </SettingRow>
     );
 }
 
@@ -324,45 +359,48 @@ function Updates() {
     const channel = snapshot.data?.app.channel ?? status?.channel ?? "unknown";
     const unfinished = (snapshot.data?.warnings ?? []).filter((warning) => startupWarningLine(warning).next === "updates");
     return (
-        <div className="thismac">
+        <div className="kset-stack">
             {unfinished.map((warning, index) => (
-                <p key={warning.code + index} className="thismac-said thismac-said--bad" role="alert">
+                <p key={warning.code + index} className="kset-said kset-said--bad" role="alert">
                     <strong>{startupWarningLine(warning).title}</strong> {warning.message}
                 </p>
             ))}
-            <SettingRow
-                name={status ? "Lemma " + status.currentVersion : "Lemma"}
-                consequence={update.isFetching ? "Checking for updates…"
-                    : update.isError ? updateProblem(update.error).text
-                        : !status ? ""
-                            : !status.updatesSupported ? "This build doesn’t update itself."
-                                : status.availableVersion ? `Lemma ${status.availableVersion} is available.` : "Up to date."}
-            >
-                <button className="btn" disabled={update.isFetching} onClick={() => { setProblem(null); setNote(null); void update.refetch(); }}>
-                    <RefreshIcon size={13} className={update.isFetching ? "spin" : undefined} /> Check now
-                </button>
-            </SettingRow>
-            {status?.availableVersion && (
-                <SettingRow name={"Install " + status.availableVersion} consequence={offer.blocked ?? offer.cost}>
-                    <button
-                        className="btn btn--primary"
-                        disabled={Boolean(offer.blocked) || install.isPending}
-                        /* The version shown, so the shell can refuse if the
-                           feed moved on since; it asks natively first. */
-                        onClick={() => { setProblem(null); setNote(null); install.mutate(status.availableVersion!); }}
-                    >
-                        {install.isPending ? "Downloading…" : "Download and install"}
+            <div className="klist">
+                <SettingRow
+                    name={status ? "Lemma " + status.currentVersion : "Lemma"}
+                    consequence={update.isFetching ? "Checking for updates…"
+                        : update.isError ? updateProblem(update.error).text
+                            : !status ? ""
+                                : !status.updatesSupported ? "This build doesn’t update itself."
+                                    : status.availableVersion ? `Lemma ${status.availableVersion} is available.` : "Up to date."}
+                >
+                    <button type="button" className="b b--s b--secondary" disabled={update.isFetching} onClick={() => { setProblem(null); setNote(null); void update.refetch(); }}>
+                        <RefreshIcon className={update.isFetching ? "spin" : undefined} /> Check now
                     </button>
                 </SettingRow>
-            )}
-            <SettingRow name="Channel" consequence={channelLine(status, channel)}>
-                <span className="pill">{channel}</span>
-                {!status?.updatesSupported && (
-                    <button className="linkish" onClick={() => openExternal(RELEASES_PAGE)}>Releases page</button>
+                {status?.availableVersion && (
+                    <SettingRow name={"Install " + status.availableVersion} consequence={offer.blocked ?? offer.cost}>
+                        <button
+                            type="button"
+                            className="b b--s b--primary"
+                            disabled={Boolean(offer.blocked) || install.isPending}
+                            /* The version shown, so the shell can refuse if the
+                               feed moved on since; it asks natively first. */
+                            onClick={() => { setProblem(null); setNote(null); install.mutate(status.availableVersion!); }}
+                        >
+                            {install.isPending ? "Downloading…" : "Download and install"}
+                        </button>
+                    </SettingRow>
                 )}
-            </SettingRow>
-            {note && <p className="thismac-said" role="status">{note}</p>}
-            {problem && <p className="thismac-said thismac-said--bad" role="alert">{problem}</p>}
+                <SettingRow name="Builds" consequence={channelLine(status, channel)}>
+                    <span className="ktag">{channel}</span>
+                    {!status?.updatesSupported && (
+                        <button type="button" className="b b--s b--quiet" onClick={() => openExternal(RELEASES_PAGE)}>Releases page</button>
+                    )}
+                </SettingRow>
+            </div>
+            {note && <p className="kset-said" role="status">{note}</p>}
+            {problem && <p className="kset-said kset-said--bad" role="alert">{problem}</p>}
         </div>
     );
 }
@@ -373,18 +411,18 @@ function Updates() {
 function Elsewhere() {
     const noun = capitalised(useThisComputer());
     return (
-        <div className="thismac-problem" role="status">
-            <p>
-                <WarningIcon size={14} /> Lemma is shared right now, and this window is on the shared address.
-                {" "}{noun}’s settings open from the menu bar there: Lemma → Desktop settings…, where sharing can be turned off.
-            </p>
-        </div>
+        <p className="kset-said" role="status">
+            Lemma is shared right now, and this window is on the shared address.
+            {" "}{noun}’s settings open from the menu bar there: Lemma → Desktop settings…, where sharing can be turned off.
+        </p>
     );
 }
 
+/** One of this computer's sections, once the app has said whether this
+ *  window may show them. */
 export function ThisMacPane({ section, focus }: { section: ThisMacSection; focus?: string | null }) {
     const availability = useThisMacAvailability();
-    if (availability === "pending") return <p className="empty-row" role="status">Checking…</p>;
+    if (availability === "pending") return <p className="kset-note" role="status">Checking…</p>;
     if (availability === "elsewhere") return <Elsewhere />;
     if (availability === "hidden") return null;
     if (section === "this-mac-agents") return <CodingAgents />;

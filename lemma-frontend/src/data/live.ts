@@ -6,6 +6,7 @@ import { NEW_CONVERSATION } from "./types";
 import { displayAgentName, initialsOf, isPodDefaultAgent } from "./agent-names";
 import { listStamp } from "./stamp";
 import { readableName } from "@/library/reading";
+import { isForbidden } from "@/session/auth-state";
 import { heldPodRole, readPodRoles } from "./pod-roles";
 import { everyPage, readCap, readContact, readContacts, readOrigins, readWidget, type OutreachSent } from "./contacts";
 import { readOpening } from "./public-rows";
@@ -670,7 +671,7 @@ export const liveSource: PodSource = {
     async listTabs(podId: string): Promise<Tab[]> {
         const tabs: Tab[] = [{ id: "conversation", kind: "conversation", label: "Conversation" }, { id: "apps", kind: "apps", label: "Apps" }];
         try {
-            const listed = (await lemma(podId).apps.list({ limit: 12 })) as Listish;
+            const listed = (await lemma(podId).apps.list({ limit: 100 })) as Listish;
             for (const raw of itemsOf(listed)) {
                 const app = raw as { name?: string; url?: string; status?: string; description?: string; visibility?: string; updated_at?: string };
                 if (!app.name || !app.url) continue;
@@ -684,8 +685,11 @@ export const liveSource: PodSource = {
                     updated: app.updated_at,
                 });
             }
-        } catch {
-            /* a pod whose apps you may not list still has a conversation */
+        } catch (error) {
+            /* A pod whose apps you may not list still has a conversation, and
+               no apps to show. Any other failure is a failure: an empty list
+               over it would read as "No apps yet" (design.md, "States"). */
+            if (!isForbidden(error)) throw error;
         }
         tabs.push({ id: "library", kind: "library", label: "Library" });
         /* Unconditional, unlike the apps above: a pod always has at least the

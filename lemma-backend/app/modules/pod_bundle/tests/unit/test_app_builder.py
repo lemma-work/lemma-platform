@@ -759,6 +759,101 @@ async def test_a_static_app_ignores_the_bundled_dist_and_serves_its_source(tmp_p
     assert dist_bytes != b"EXPORTED-DIST"
 
 
+# --- a build the bundle ships, stamped with its source --------------------------
+
+
+def _stamped_bundle(resource: Path) -> None:
+    """A Vite app as a plugin ships it: source, its build, and the digest of the
+    source the build came from."""
+    from lemma_pod_bundle import app_source_digest, write_dist_source_digest
+
+    source = resource / "source"
+    (source / "src").mkdir(parents=True, exist_ok=True)
+    (source / "package.json").write_text('{"name":"a"}')
+    (source / "index.html").write_text("<div id=root></div>")
+    (source / "src" / "main.tsx").write_text("render()")
+    (resource / "dist.zip").write_bytes(b"SHIPPED-DIST")
+    write_dist_source_digest(resource, app_source_digest(source))
+
+
+async def test_a_build_stamped_with_this_source_is_deployed_without_a_sandbox(
+    tmp_path,
+):
+    """The whole point: an install builds nothing it was handed built."""
+    resource = tmp_path / "apps" / "deals"
+    _stamped_bundle(resource)
+
+    source_bytes, dist_bytes = await _runner(_ExplodingSandbox())._artifacts(
+        resource, "deals", app_slug="deals", pod_id=_POD, user_id=uuid4()
+    )
+
+    assert dist_bytes == b"SHIPPED-DIST"
+    # The source still goes with it, so the Lemma can change and rebuild it.
+    with zipfile.ZipFile(io.BytesIO(source_bytes)) as zf:
+        assert sorted(zf.namelist()) == ["index.html", "package.json", "src/main.tsx"]
+
+
+async def test_a_build_of_other_source_is_built_again(tmp_path):
+    """Source edited after the build: the source is what the person meant."""
+    resource = tmp_path / "apps" / "deals"
+    _stamped_bundle(resource)
+    (resource / "source" / "src" / "main.tsx").write_text("render(edited)")
+    sandbox = _RecordingSandbox()
+
+    _source_bytes, dist_bytes = await _runner(sandbox)._artifacts(
+        resource, "deals", app_slug="deals", pod_id=_POD, user_id=uuid4()
+    )
+
+    assert dist_bytes == sandbox.result
+    assert sandbox.calls == 1
+
+
+async def test_build_junk_left_in_the_source_does_not_unstamp_it(tmp_path):
+    """node_modules and dist are never part of the stored source, so they are
+    not part of what the digest is of either."""
+    resource = tmp_path / "apps" / "deals"
+    _stamped_bundle(resource)
+    (resource / "source" / "node_modules" / "x").mkdir(parents=True)
+    (resource / "source" / "node_modules" / "x" / "index.js").write_text("1")
+    (resource / "source" / "dist").mkdir()
+    (resource / "source" / "dist" / "index.html").write_text("old")
+
+    _source_bytes, dist_bytes = await _runner(_ExplodingSandbox())._artifacts(
+        resource, "deals", app_slug="deals", pod_id=_POD, user_id=uuid4()
+    )
+
+    assert dist_bytes == b"SHIPPED-DIST"
+
+
+@pytest.mark.parametrize(
+    "stamp", ["", "sha256:", "sha256:" + "z" * 64, "md5:" + "0" * 64, "garbage"]
+)
+async def test_a_stamp_that_does_not_read_is_built_again(tmp_path, stamp):
+    resource = tmp_path / "apps" / "deals"
+    _stamped_bundle(resource)
+    (resource / "dist.source-digest").write_text(stamp)
+    sandbox = _RecordingSandbox()
+
+    _source_bytes, dist_bytes = await _runner(sandbox)._artifacts(
+        resource, "deals", app_slug="deals", pod_id=_POD, user_id=uuid4()
+    )
+
+    assert dist_bytes == sandbox.result
+
+
+async def test_a_stamp_with_no_build_beside_it_is_built(tmp_path):
+    resource = tmp_path / "apps" / "deals"
+    _stamped_bundle(resource)
+    (resource / "dist.zip").unlink()
+    sandbox = _RecordingSandbox()
+
+    _source_bytes, dist_bytes = await _runner(sandbox)._artifacts(
+        resource, "deals", app_slug="deals", pod_id=_POD, user_id=uuid4()
+    )
+
+    assert dist_bytes == sandbox.result
+
+
 # --- an app the pod already has -------------------------------------------------
 
 

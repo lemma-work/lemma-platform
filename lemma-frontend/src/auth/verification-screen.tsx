@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Screen } from "./screens";
+import { Problem, Screen } from "./frame";
 import { EmailVerification, Session } from "./supertokens";
 import { accountAccess, completionDestination } from "./completion";
 import { authLink, pendingDestination, rememberDestination } from "./redirects";
-import { PORTAL_PATH } from "./config";
+import { appsDomainSuffix, PORTAL_PATH, siteOrigin } from "./config";
+import { headingTo } from "./heading";
 import { authFailure, sayProblem } from "./errors";
 import { checkInbox, startVerification, type VerificationPhase } from "./verification";
 
@@ -112,28 +113,96 @@ export function Verify() {
         return () => { live = false; window.clearInterval(timer); window.removeEventListener("focus", check); };
     }, [phase]);
 
-    const waiting = Math.max(0, Math.ceil((retryAt - now) / 1000));
-    const title = phase === "checking" ? "Checking your email verification…"
-        : phase === "done" ? "Your email is verified"
-        : phase === "expired" ? "That link has expired"
-        : phase === "signed-out" ? "Sign in to verify your email"
-        : phase === "problem" ? "We couldn’t finish verification" : "Check your email";
+    /* "Signed in" on the left only when it is so: a link opened in another
+       browser verifies the address without signing anybody in there. */
+    const [signedIn, setSignedIn] = useState(false);
+    useEffect(() => {
+        if (phase !== "done") return;
+        let live = true;
+        void Session.doesSessionExist().then((exists) => { if (live) setSignedIn(exists); }).catch(() => undefined);
+        return () => { live = false; };
+    }, [phase]);
 
-    return <Screen title={title} lead={phase === "inbox" ? "Open the verification link we sent you, then continue here." : undefined}>
-        {said && <p className="auth__problem" role="alert">{said}</p>}
-        <div className="screen__actions">
-            {phase === "done" && <button className="btn btn--primary" onClick={() => void continueOn()}>Continue</button>}
-            {phase === "inbox" && <button className="btn btn--primary" onClick={() => void continueOn()}>I’ve verified my email</button>}
-            {(phase === "inbox" || phase === "expired" || phase === "problem") &&
-                <button className="btn" disabled={waiting > 0} onClick={() => void run(false)}>
-                    {waiting > 0 ? `Send again in ${waiting}s` : "Send verification email"}
-                </button>}
-            {phase === "problem" && hasToken && <button className="btn" onClick={() => void run(true)}>Retry verification</button>}
-            {phase === "signed-out" && <a className="screen__aside" href={authLink(PORTAL_PATH)}>Sign in</a>}
-            {phase !== "checking" && phase !== "signed-out" && <button className="linkish" onClick={() => {
-                void Session.signOut().then(() => window.location.replace(authLink(PORTAL_PATH)))
-                    .catch(error => setSaid(sayProblem(error)));
-            }}>Use another account</button>}
-        </div>
-    </Screen>;
+    const waiting = Math.max(0, Math.ceil((retryAt - now) / 1000));
+    const sendAgain = (label: string, primary: boolean) => (
+        <button
+            type="button"
+            className={primary ? "b b--l b--primary" : "auth-link"}
+            disabled={waiting > 0}
+            onClick={() => void run(false)}
+        >
+            {label}{waiting > 0 && <> in <span className="auth-fig">{waiting}</span> s</>}
+        </button>
+    );
+    const another = (
+        <button type="button" className="auth-link" onClick={() => {
+            void Session.signOut().then(() => window.location.replace(authLink(PORTAL_PATH)))
+                .catch(error => setSaid(sayProblem(error)));
+        }}>Use another account</button>
+    );
+
+    switch (phase) {
+        case "checking":
+            return <Screen title={hasToken ? "Checking your link…" : "Checking your email…"} />;
+        case "done":
+            return (
+                <Screen
+                    icon={{ glyph: "check", tone: "ok" }}
+                    title="Your email is verified"
+                    then={headingTo({ destination: pendingDestination(window.location.search), origin: siteOrigin(), appsSuffix: appsDomainSuffix() })}
+                    speaker={signedIn ? { kind: "still", status: "Signed in", done: true } : undefined}
+                >
+                    <Problem said={said} />
+                    <div className="auth-row">
+                        <button type="button" className="b b--l b--primary" onClick={() => void continueOn()}>Continue</button>
+                        <span className="auth-row__gap" />
+                        {another}
+                    </div>
+                </Screen>
+            );
+        case "expired":
+            return (
+                <Screen icon={{ glyph: "warn", tone: "warn" }} title="That link has expired" lead="Send a new one and use the newest link.">
+                    <Problem said={said} />
+                    <div className="auth-row">
+                        {sendAgain("Send a new link", true)}
+                        <span className="auth-row__gap" />
+                        {another}
+                    </div>
+                </Screen>
+            );
+        case "signed-out":
+            return (
+                <Screen icon={{ glyph: "mail" }} title="Sign in to verify your email" lead="Sign in with the account the link was for, and I’ll check it from there.">
+                    <Problem said={said} />
+                    <div className="auth-row">
+                        <a className="b b--l b--primary" href={authLink(PORTAL_PATH)}>Sign in</a>
+                    </div>
+                </Screen>
+            );
+        case "problem":
+            return (
+                <Screen icon={{ glyph: "warn", tone: "warn" }} title="I couldn’t finish verifying your email">
+                    <Problem said={said} />
+                    <div className="auth-row">
+                        {hasToken && <button type="button" className="b b--l b--primary" onClick={() => void run(true)}>Try the link again</button>}
+                        {sendAgain("Send a new link", !hasToken)}
+                        <span className="auth-row__gap" />
+                        {another}
+                    </div>
+                </Screen>
+            );
+        default:
+            return (
+                <Screen icon={{ glyph: "mail" }} title="Check your email" lead="Open the link I sent you, then come back here.">
+                    <Problem said={said} />
+                    <div className="auth-row">
+                        <button type="button" className="b b--l b--primary" onClick={() => void continueOn()}>I’ve opened it</button>
+                        {sendAgain("Send it again", false)}
+                    </div>
+                    <div className="auth-row">{another}</div>
+                    <p className="auth-small">It can take a minute. Check spam if it isn’t there.</p>
+                </Screen>
+            );
+    }
 }

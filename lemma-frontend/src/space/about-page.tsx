@@ -97,6 +97,13 @@ export function aboutLabel(section: AboutSection): string {
     return PARTS.find((part) => part.id === section)?.label ?? "About";
 }
 
+/** A part's title and its one line, for a frame that draws the page's
+ *  header itself (`bare`). */
+export function aboutHead(section: AboutSection, name: string): { title: string; note: string } {
+    const part = PARTS.find((one) => one.id === section);
+    return part ? { title: titleOf(part, name, true), note: noteOf(part, name, true) } : { title: "Settings", note: "" };
+}
+
 /** The teammate itself, as a page: who it is and what it is for, then a
  *  tile for each part of how it works, each saying what is true there now.
  *
@@ -108,8 +115,11 @@ export function aboutLabel(section: AboutSection): string {
  *  steps out of it and a link can name it. Each part is still the same
  *  working component it always was; nothing here is a second copy of how a
  *  schedule or a channel works. */
-export function AboutPage({ pod, orgId, orgName, section, onSection, onOpenSettings, onAsk, onOpenAgent, onOpenTeammate, onAskFor, onOpenRun, onOpenConversation, onFile, onDeleted, framed = false }: {
+export function AboutPage({ pod, orgId, orgName, section, onSection, onOpenSettings, onAsk, onOpenAgent, onOpenTeammate, onAskFor, onOpenRun, onOpenConversation, onFile, onDeleted, framed = false, bare = false }: {
     pod: Pod;
+    /** The frame draws the page's header -- the way back, the title and its
+     *  line -- so a part draws only its body and its own buttons. */
+    bare?: boolean;
     /** Drawn inside the Lemma frame (`/o`), on a page that already says who
      *  the Lemma is and how to talk to it: the face and name are a small row
      *  with no "Ask", and a part says "Settings" on its way back. */
@@ -145,6 +155,7 @@ export function AboutPage({ pod, orgId, orgName, section, onSection, onOpenSetti
             <div className="aboutpage__column">
                 {part ? (
                     <PartPage
+                        bare={bare}
                         pod={pod}
                         part={part}
                         orgId={orgId}
@@ -204,8 +215,9 @@ function Parts({ pod, onOpen, framed = false }: { pod: Pod; onOpen: (section: Ab
 
 /** One part on its own page: the way back, its heading and note, and the
  *  same component the part has always been drawn with. */
-function PartPage({ pod, part, orgId, orgName, onBack, onOpenAgent, onOpenTeammate, onAskFor, onOpenRun, onOpenConversation, onFile, framed = false }: {
+function PartPage({ pod, part, orgId, orgName, onBack, onOpenAgent, onOpenTeammate, onAskFor, onOpenRun, onOpenConversation, onFile, framed = false, bare = false }: {
     pod: Pod;
+    bare?: boolean;
     framed?: boolean;
     part: Part;
     orgId: string | null;
@@ -289,6 +301,14 @@ function PartPage({ pod, part, orgId, orgName, onBack, onOpenAgent, onOpenTeamma
             break;
     }
 
+    if (bare) {
+        return (
+            <section className="aboutpart aboutpart--bare" aria-label={titleOf(part, pod.name, framed)}>
+                {action && <div className="aboutpart__acts">{action}</div>}
+                <div className="aboutpage__content">{body}</div>
+            </section>
+        );
+    }
     return (
         <section className="aboutpart" aria-label={titleOf(part, pod.name, framed)}>
             <button className="aboutpart__back" onClick={onBack}>

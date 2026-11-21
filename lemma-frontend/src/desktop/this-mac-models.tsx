@@ -10,6 +10,7 @@ import {
     type DetectedServer, type ProviderDraft,
 } from "./this-mac";
 import { useThisMacAvailability } from "./this-mac-settings";
+import { SecretInput } from "@/ui/form";
 
 /** What this computer can already offer the Models page.
  *
@@ -39,13 +40,9 @@ export function ThisMacModelSuggestions({ orgId, runtimes, onAdded }: { orgId: s
     if (!offerOperator && detected.length === 0) return null;
 
     return (
-        <section className="mgroup" aria-label={"Found on " + noun}>
-            <div className="mgroup__head">
-                <ComputerIcon size={14} />
-                <span className="mgroup__name">On {noun}</span>
-                <span className="mgroup__meta">Not in this list yet</span>
-            </div>
-            <ul className="mlist">
+        <section className="kset-stack" aria-label={"Found on " + noun}>
+            <p className="ksub">On {noun} <span>Not in this list yet</span></p>
+            <ul className="klist">
                 {offerOperator && <OperatorRow draft={offerOperator} orgId={orgId} onAdded={onAdded} noun={noun} />}
                 {detected.map((server) => <ServerRow key={server.id} server={server} orgId={orgId} onAdded={onAdded} noun={noun} />)}
             </ul>
@@ -53,6 +50,8 @@ export function ThisMacModelSuggestions({ orgId, runtimes, onAdded }: { orgId: s
     );
 }
 
+/** A model server answering on this computer, one click from being a
+ *  provider Lemmas can pick. */
 function ServerRow({ server, orgId, onAdded, noun }: { server: DetectedServer; orgId: string; onAdded: () => void; noun: ComputerNoun }) {
     const add = useMutation({
         mutationFn: () => source.addProviderKey(orgId, {
@@ -61,23 +60,27 @@ function ServerRow({ server, orgId, onAdded, noun }: { server: DetectedServer; o
         onSuccess: onAdded,
     });
     return (
-        <li className="mrow">
-            <span className="mrow__mark"><ComputerIcon size={15} /></span>
-            <span className="mrow__body">
-                <span className="mrow__line">
-                    <span className="mrow__name">{server.name}</span>
-                    <span className="mrow__detail">{server.models.length} {server.models.length === 1 ? "model" : "models"} · running on {noun}</span>
+        <li className="krow">
+            <span className="krow__lead">
+                <span className="kmark" aria-hidden="true"><ComputerIcon /></span>
+                <span className="krow__v">
+                    <b>{server.name}</b>
+                    <span>{server.models.length} {server.models.length === 1 ? "model" : "models"} · running on {noun}</span>
+                    <span className="kset-long">Free, and nothing leaves {noun}.</span>
+                    {add.isError && <span className="kset-long kset-said--bad" role="alert">{friendlyError(add.error)}</span>}
                 </span>
-                <span className="mrow__note">Free, and nothing leaves {noun}.</span>
-                {add.isError && <span className="reachrow__error" role="alert">{friendlyError(add.error)}</span>}
             </span>
-            <button className="btn mrow__add" disabled={add.isPending} onClick={() => add.mutate()}>
-                <PlusIcon size={13} /> {add.isPending ? "Adding…" : "Add as provider"}
-            </button>
+            <span className="krow__end">
+                <button type="button" className="b b--s b--secondary" disabled={add.isPending} onClick={() => add.mutate()}>
+                    <PlusIcon /> {add.isPending ? "Adding…" : "Add as provider"}
+                </button>
+            </span>
         </li>
     );
 }
 
+/** The provider this computer was set up with, offered to the organization;
+ *  its key is asked for once more, since it cannot be read back. */
 function OperatorRow({ draft, orgId, onAdded, noun }: { draft: ProviderDraft; orgId: string; onAdded: () => void; noun: ComputerNoun }) {
     const [asking, setAsking] = useState(false);
     const [apiKey, setApiKey] = useState("");
@@ -87,29 +90,31 @@ function OperatorRow({ draft, orgId, onAdded, noun }: { draft: ProviderDraft; or
     });
     const start = () => (draft.needsKey && !asking ? setAsking(true) : add.mutate());
     return (
-        <li className="mrow thismac-operator">
-            <span className="mrow__mark"><KeyIcon size={15} /></span>
-            <span className="mrow__body">
-                <span className="mrow__line">
-                    <span className="mrow__name">{draft.name}</span>
-                    <span className="mrow__detail">{draft.models[0]} · set on {noun}</span>
-                </span>
-                <span className="mrow__note">
-                    {capitalised(noun)} keeps using it for titles and summaries; adding it makes it a model you can pick by name.
-                </span>
-                {asking && (
-                    <span className="field thismac-operator__key">
-                        <label htmlFor="this-mac-operator-key">API key for {draft.name}</label>
-                        <input id="this-mac-operator-key" type="password" autoComplete="off" value={apiKey}
-                            onChange={(event) => setApiKey(event.target.value)} />
-                        <span>Lemma can’t read back the key stored on {noun}, so it is asked for once more.</span>
+        <li className="krow">
+            <span className="krow__lead">
+                <span className="kmark" aria-hidden="true"><KeyIcon /></span>
+                <span className="krow__v">
+                    <b>{draft.name}</b>
+                    <span>{draft.models[0]} · set on {noun}</span>
+                    <span className="kset-long">
+                        {capitalised(noun)} keeps using it for titles and summaries; adding it makes it a model you can pick by name.
                     </span>
-                )}
-                {add.isError && <span className="reachrow__error" role="alert">{friendlyError(add.error)}</span>}
+                    {asking && (
+                        <span className="kfield kset-long">
+                            <label htmlFor={"operator-key-" + draft.name}>API key for {draft.name}</label>
+                            <SecretInput id={"operator-key-" + draft.name} className="kset-input" label={"API key for " + draft.name}
+                                value={apiKey} onChange={(event) => setApiKey(event.target.value)} />
+                            <small>Lemma can’t read back the key stored on {noun}, so it is asked for once more.</small>
+                        </span>
+                    )}
+                    {add.isError && <span className="kset-long kset-said--bad" role="alert">{friendlyError(add.error)}</span>}
+                </span>
             </span>
-            <button className="btn mrow__add" disabled={add.isPending || (asking && !apiKey.trim())} onClick={start}>
-                <PlusIcon size={13} /> {add.isPending ? "Adding…" : "Add to workspace"}
-            </button>
+            <span className="krow__end">
+                <button type="button" className="b b--s b--secondary" disabled={add.isPending || (asking && !apiKey.trim())} onClick={start}>
+                    <PlusIcon /> {add.isPending ? "Adding…" : "Add to workspace"}
+                </button>
+            </span>
         </li>
     );
 }

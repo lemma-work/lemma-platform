@@ -1,0 +1,417 @@
+/* The way in before the frame, and the frame's answers when something stops
+   it: starting up (outcomes/start-screen.tsx), Lemma not answering at start,
+   signed out mid-use (session/session.tsx), a page that broke
+   (outcomes/page-boundary.tsx, app/error.tsx, app/not-found.tsx).
+
+   Loaded by the root layout, so all of it holds before the frame's own
+   stylesheets arrive. Only tokens from base.css and the kit's classes. */
+
+/* ── starting up ───────────────────────────────────────────────────── */
+
+.kboot {
+    display: grid;
+    grid-template-columns: 272px minmax(0, 1fr);
+    height: 100dvh;
+    overflow: hidden;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-outcomes, var(--ui)), var(--ui);
+    font-size: 14px;
+    line-height: 1.45;
+}
+
+/* Every stage's shapes sweep in step (start-screen.tsx sets the phase). */
+.kboot .ksk,
+.kboot__inpage .ksk {
+    animation-delay: var(--kboot-phase, 0ms);
+}
+
+/* The sidebar's own ground, as `.ox-side` paints it. */
+.kboot__side {
+    --kboot-tint: hsl(262 58% 90%);
+    --kboot-tint-2: hsl(196 60% 88%);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    padding: 14px 8px;
+    border-right: 1px solid var(--line-2);
+    background:
+        radial-gradient(150% 62% at 0% 0%, var(--kboot-tint), transparent 70%),
+        radial-gradient(80% 30% at 100% 22%, color-mix(in srgb, var(--kboot-tint-2) 70%, transparent), transparent 75%),
+        radial-gradient(120% 40% at 100% 100%, color-mix(in srgb, var(--brand) 12%, transparent), transparent 70%),
+        var(--chrome);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .kboot__side {
+        --kboot-tint: hsl(262 40% 27%);
+        --kboot-tint-2: hsl(196 38% 25%);
+    }
+}
+
+:root[data-theme="dark"] .kboot__side {
+    --kboot-tint: hsl(262 40% 27%);
+    --kboot-tint-2: hsl(196 38% 25%);
+}
+
+.kboot__top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 34px;
+    padding: 0 8px;
+    margin-bottom: 8px;
+}
+
+/* The logo: three rising bars in the brand's colour, never dots. */
+.kboot__logo {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 20px;
+}
+
+.kboot__logo i {
+    width: 5px;
+    border-radius: 1.5px;
+    background: var(--brand-bars, var(--brand));
+}
+
+.kboot__logo i:nth-child(1) { height: 40%; }
+.kboot__logo i:nth-child(2) { height: 67%; }
+.kboot__logo i:nth-child(3) { height: 100%; }
+
+.kboot__row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 32px;
+    padding: 0 10px;
+}
+
+.kboot__row .ksk {
+    flex: none;
+}
+
+/* Words in the sidebar are 13.5px: their lines are thinner than a page's. */
+.kboot__row .ksk + .ksk,
+.kboot__top .ksk,
+.kboot__me .ksk + .ksk {
+    height: 9px;
+    border-radius: 5px;
+}
+
+.kboot__gap {
+    height: 14px;
+}
+
+.kboot__label {
+    display: flex;
+    align-items: center;
+    height: 28px;
+    padding: 0 10px;
+}
+
+.kboot__me {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 44px;
+    margin-top: auto;
+    padding: 0 10px;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--paper) 70%, transparent);
+}
+
+.kboot__main {
+    position: relative;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.kboot__page {
+    display: grid;
+    gap: 30px;
+    width: 100%;
+    max-width: var(--w-page);
+    margin: 0 auto;
+    padding: 28px var(--page-gutter) 0;
+}
+
+.kboot__head {
+    display: grid;
+    gap: 12px;
+}
+
+.kboot__cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 26px 18px;
+}
+
+.kboot__card {
+    display: grid;
+    gap: 12px;
+}
+
+/* Inside the frame: the page's shapes under the frame's own sidebar. */
+.kboot__inpage {
+    position: relative;
+    min-height: calc(100dvh - 80px);
+}
+
+/* The one line, low in the page, after two seconds. */
+.kboot__note {
+    position: absolute;
+    left: 50%;
+    bottom: 44px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: calc(100% - 32px);
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 13.5px;
+    white-space: nowrap;
+    translate: -50% 0;
+}
+
+.kboot__note[data-fresh] {
+    animation: kboot-in 400ms ease both;
+}
+
+@keyframes kboot-in {
+    from {
+        opacity: 0;
+    }
+}
+
+.kboot__down {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    align-content: center;
+    overflow-y: auto;
+}
+
+.kboot__fig {
+    font-family: var(--ui);
+    font-variant-numeric: tabular-nums;
+}
+
+/* The logo's bars, rising gently while something is on its way. */
+.krise {
+    display: inline-flex;
+    flex: none;
+    align-items: flex-end;
+    gap: 3px;
+    height: 18px;
+}
+
+.krise i {
+    width: 5px;
+    border-radius: 2px;
+    background: var(--brand-bars, var(--brand));
+    transform-origin: bottom;
+    animation: krise 1.2s ease-in-out infinite;
+}
+
+.krise i:nth-child(1) { height: 40%; }
+.krise i:nth-child(2) { height: 67%; animation-delay: 0.15s; }
+.krise i:nth-child(3) { height: 100%; animation-delay: 0.3s; }
+
+@keyframes krise {
+    0%,
+    100% {
+        transform: scaleY(1);
+    }
+
+    50% {
+        transform: scaleY(0.5);
+    }
+}
+
+.krise--still i {
+    animation: none;
+}
+
+.krise--big {
+    gap: 5px;
+    height: 34px;
+}
+
+.krise--big i {
+    width: 9px;
+    border-radius: 3px;
+}
+
+@media (max-width: 1100px) {
+    .kboot {
+        grid-template-columns: 244px minmax(0, 1fr);
+    }
+}
+
+@media (max-width: 760px) {
+    .kboot {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .kboot__side {
+        display: none;
+    }
+
+    .kboot__page {
+        padding-top: 18px;
+    }
+
+    .kboot__cards {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 20px 12px;
+    }
+
+    .kboot__note {
+        justify-content: center;
+        width: calc(100% - 32px);
+        text-align: center;
+        white-space: normal;
+    }
+}
+
+/* ── signed out mid-use ────────────────────────────────────────────── */
+
+/* The dialog has no body: its words are its title and line, its one button
+   and the account under it are its foot. */
+.modal__panel:has(.kout__note) > .modal__body:empty {
+    display: none;
+}
+
+.modal__foot:has(> .kout__note) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-flow: row;
+}
+
+.kout__note {
+    margin: -4px 0 0;
+    color: var(--ink-3);
+    font-size: 12.5px;
+    line-height: 1.45;
+    text-align: center;
+    text-wrap: pretty;
+}
+
+.kout__link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink-2);
+    font: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--line-2);
+    text-underline-offset: 3px;
+    cursor: pointer;
+}
+
+.kout__link:hover {
+    color: var(--ink);
+}
+
+/* Closed, the dialog leaves this at the top of the page. */
+.kout-pill {
+    position: fixed;
+    top: 12px;
+    left: 50%;
+    z-index: 150;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: calc(100% - 32px);
+    min-height: 40px;
+    padding: 4px 4px 4px 14px;
+    border-radius: 999px;
+    background: var(--paper);
+    box-shadow: 0 10px 28px -12px rgb(0 0 0 / 0.3), 0 0 0 1px var(--line-2);
+    color: var(--ink);
+    font-family: var(--font-outcomes, var(--ui)), var(--ui);
+    font-size: 13.5px;
+    translate: -50% 0;
+    animation: kout-in 260ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+
+.kout-pill > i {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--warn);
+}
+
+.kout-pill > span {
+    white-space: nowrap;
+}
+
+@keyframes kout-in {
+    from {
+        opacity: 0;
+        translate: -50% -8px;
+    }
+}
+
+/* ── a page that broke, a page that isn't here ─────────────────────── */
+
+/* Outside the frame (app/error.tsx, app/not-found.tsx): the same calm block,
+   centred on the page. */
+.kstate {
+    display: grid;
+    place-content: center;
+    min-height: 100dvh;
+    padding: 24px 16px;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-outcomes, var(--ui)), var(--ui);
+}
+
+.kstate .kcalm__t {
+    color: var(--ink);
+}
+
+/* A Lemma's face, dimmed, on the door of one the reader is not in. */
+.kcalm__face {
+    display: grid;
+    place-items: center;
+    width: 72px;
+    height: 72px;
+    overflow: hidden;
+    border-radius: 24px;
+}
+
+.kcalm__face--off {
+    filter: grayscale(0.6);
+    opacity: 0.75;
+}
+
+.kdoor {
+    width: 100%;
+    max-width: var(--w-read);
+    margin: 0 auto;
+}
+
+.kdoor .kproblem {
+    justify-content: center;
+    margin-top: 10px;
+}
+
+.kdoor__aside {
+    margin: -16px 0 0;
+    color: var(--ink-3);
+    font-size: 13px;
+    text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .krise i,
+    .kboot__note[data-fresh],
+    .kout-pill {
+        animation: none;
+    }
+}

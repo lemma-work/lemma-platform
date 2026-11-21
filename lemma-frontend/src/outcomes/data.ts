@@ -178,15 +178,21 @@ export async function createLemma(wanted: NewLemma): Promise<{ podId: string; mi
             ...(wanted.everyone ? { auto_join_new_members: true } : {}),
         },
     });
+    return { podId: pod.id, missed: await addLemmaPeople(pod.id, wanted.people) };
+}
+
+/** People added to a Lemma by their organization membership id, each on its
+ *  own, so one that fails does not stop the rest: how many could not be. */
+export async function addLemmaPeople(podId: string, memberIds: readonly string[]): Promise<number> {
     let missed = 0;
-    for (const memberId of wanted.people) {
+    for (const memberId of memberIds) {
         try {
-            await lemma(pod.id).podMembers.add(pod.id, { organization_member_id: memberId, roles: [ADDED_ROLE] });
+            await lemma(podId).podMembers.add(podId, { organization_member_id: memberId, roles: [ADDED_ROLE] });
         } catch {
             missed += 1;
         }
     }
-    return { podId: pod.id, missed };
+    return missed;
 }
 
 /** A face for a new Lemma that no other one here wears yet, while there are

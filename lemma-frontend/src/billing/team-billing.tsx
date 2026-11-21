@@ -25,6 +25,9 @@ import {
  *  A member still sees the plans. One you cannot buy yourself is still one you
  *  can ask an owner for, and a blank panel answers "what would it take to lift
  *  this limit?" with nothing.
+ *
+ *  Drawn as rows (the plan, when it renews, the seats), the plans as cards,
+ *  then the invoices as rows with their state as a dot and a word.
  */
 function statusWord(status: string): string {
     if (status === "paid") return "Paid";
@@ -32,6 +35,15 @@ function statusWord(status: string): string {
     if (status === "failed") return "Payment failed";
     if (status === "void") return "Void";
     return "Draft";
+}
+
+/** The dot beside that word: paid is green, due is warm, failed is red, the
+ *  rest grey. */
+function statusTone(status: string): string {
+    if (status === "paid") return "kstatus";
+    if (status === "unpaid") return "kstatus kstatus--warn";
+    if (status === "failed") return "kstatus kstatus--bad";
+    return "kstatus kstatus--off";
 }
 
 export function TeamBillingSection({ orgId }: { orgId: string }) {
@@ -67,11 +79,11 @@ export function TeamBillingSection({ orgId }: { orgId: string }) {
     const cancel = useCancelTeam(orgId);
 
     if (!live()) {
-        return <p className="usage-quiet">The sample workspace has no real organization, so there is nothing to bill.</p>;
+        return <p className="kset-note">The sample workspace has no real organization, so there is nothing to bill.</p>;
     }
 
     if (isForbidden(plan.error)) {
-        return <p className="usage-quiet">Only members of this organization can see what it pays for.</p>;
+        return <p className="kset-note">Only members of this organization can see what it pays for.</p>;
     }
 
     const subscription = plan.data ?? null;
@@ -80,108 +92,133 @@ export function TeamBillingSection({ orgId }: { orgId: string }) {
     const bought = seats.data?.current_seats ?? 0;
     const present = seats.data?.member_count ?? 0;
 
+    const stoppable = mayStop && paying(subscription) && !subscription?.cancel_at_period_end;
+
     return (
-        <div className="usage-panel">
-            <section className="usage-block">
-                <h4>What this organization is on</h4>
+        <div className="kset-stack">
+            {plan.isPending && <p className="kset-note" role="status">Reading the plan…</p>}
+            {plan.isError && !isForbidden(plan.error) && (
+                <p className="kset-said kset-said--bad" role="alert">
+                    The plan couldn’t be read.
+                    <button type="button" className="b b--s b--secondary" onClick={() => void plan.refetch()}><RefreshIcon /> Try again</button>
+                </p>
+            )}
 
-                {plan.isPending && <p className="usage-quiet" role="status">Reading the plan…</p>}
-                {plan.isError && !isForbidden(plan.error) && (
-                    <p className="usage-quiet">
-                        The plan could not be read.{" "}
-                        <button className="btn" onClick={() => void plan.refetch()}><RefreshIcon size={14} /> Try again</button>
-                    </p>
-                )}
-
-                {!plan.isPending && !plan.isError && (
-                    <div className="plan-now">
-                        <strong>{onPlan?.name ?? "No plan yet"}</strong>
-                        <span className="plan-now__price">
-                            {/* As on the personal screen: free and unbought are
-                                the same sentence, and a price line reading
-                                "Free" under the word Free says nothing twice. */}
-                            {paying(subscription) ? priceLine(onPlan!) : "This organization has not bought a plan."}
-                        </span>
-                        {subscription?.current_period_end && !subscription.cancel_at_period_end && paying(subscription) && (
-                            <small>Renews {onDate(subscription.current_period_end)}</small>
-                        )}
-                    </div>
-                )}
-
-                {note && <p className="plan-note" data-bad={isTrouble(subscription)}>{note}</p>}
-
-                {seats.data && (
-                    <p className="plan-seats">
-                        {/* Two numbers, because they answer different questions
-                            and only their difference is worth acting on: a team
-                            that grew mid-period has more people than it has
-                            paid for, and nothing charges for the difference
-                            until the plan is next changed. */}
-                        Paid for {bought} {bought === 1 ? "seat" : "seats"} · {present} {present === 1 ? "person" : "people"} in the organization
-                        {present > bought && paying(subscription) && (
-                            <em> — {present - bought} not yet paid for.</em>
-                        )}
-                    </p>
-                )}
-
-                {mayStop && paying(subscription) && !subscription?.cancel_at_period_end && (
-                    stopping ? (
-                        <div className="plan-stop">
-                            <p>Stop renewing {onPlan?.name}? Everyone here keeps working until the end of the period already paid for.</p>
-                            <div className="plan-stop__actions">
-                                <button
-                                    className="btn btn--danger"
-                                    disabled={cancel.isPending}
-                                    onClick={() => { cancel.mutate(undefined, { onSuccess: () => setStopping(false) }); }}
-                                >{cancel.isPending ? "Stopping…" : "Stop renewing"}</button>
-                                <button className="btn" onClick={() => setStopping(false)}>Keep it</button>
-                            </div>
-                            {cancel.isError && <p className="plans__problem">That could not be cancelled. Nothing has changed.</p>}
+            {(!plan.isPending && !plan.isError) || seats.data ? (
+                <div className="klist">
+                    {!plan.isPending && !plan.isError && <>
+                        <div className="krow krow--kv">
+                            <span className="krow__k">Plan</span>
+                            <span className="krow__v kset-wrap">
+                                <b>{onPlan?.name ?? "No plan yet"}</b>
+                                {/* As on the personal screen: free and unbought
+                                    are the same sentence, and a price reading
+                                    "Free" under the word Free says nothing
+                                    twice. */}
+                                <span>{paying(subscription) ? priceLine(onPlan!) : "This organization has not bought a plan."}</span>
+                            </span>
+                            <span className="krow__end">
+                                {stoppable && !stopping && (
+                                    <button type="button" className="b b--s b--secondary b--red" onClick={() => setStopping(true)}>Stop renewing</button>
+                                )}
+                            </span>
                         </div>
-                    ) : (
-                        <button className="plan-stop__ask" onClick={() => setStopping(true)}>Stop renewing</button>
-                    )
+                        {subscription?.current_period_end && !subscription.cancel_at_period_end && paying(subscription) && (
+                            <div className="krow krow--kv">
+                                <span className="krow__k">Renews</span>
+                                <span className="krow__v"><b>{onDate(subscription.current_period_end)}</b></span>
+                                <span className="krow__end" />
+                            </div>
+                        )}
+                    </>}
+                    {seats.data && (
+                        /* Two numbers, because they answer different questions
+                           and only their difference is worth acting on: a team
+                           that grew mid-period has more people than it has
+                           paid for, and nothing charges for the difference
+                           until the plan is next changed. */
+                        <div className="krow krow--kv">
+                            <span className="krow__k">Seats</span>
+                            <span className="krow__v kset-wrap">
+                                <b>Paid for {bought} {bought === 1 ? "seat" : "seats"}</b>
+                                <span>{present} {present === 1 ? "person" : "people"} in the organization</span>
+                            </span>
+                            <span className="krow__end">
+                                {present > bought && paying(subscription) && (
+                                    <span className="kstatus kstatus--warn">{present - bought} not yet paid for</span>
+                                )}
+                            </span>
+                        </div>
+                    )}
+                </div>
+            ) : null}
+
+            {note && <p className={"kset-said" + (isTrouble(subscription) ? " kset-said--bad" : "")}>{note}</p>}
+
+            {stoppable && stopping && (
+                <div className="kset-stack" role="group" aria-label="Stop renewing">
+                    <p className="kset-said">Stop renewing {onPlan?.name}? Everyone here keeps working until the end of the period already paid for.</p>
+                    <div className="kset-acts">
+                        <button
+                            type="button"
+                            className="b b--s b--danger"
+                            disabled={cancel.isPending}
+                            onClick={() => { cancel.mutate(undefined, { onSuccess: () => setStopping(false) }); }}
+                        >{cancel.isPending ? "Stopping…" : "Stop renewing"}</button>
+                        <button type="button" className="b b--s b--secondary" onClick={() => setStopping(false)}>Keep it</button>
+                    </div>
+                    {cancel.isError && <p className="kset-said kset-said--bad" role="alert">That could not be cancelled. Nothing has changed.</p>}
+                </div>
+            )}
+
+            <p className="ksub">Plans <span>A month, for each person in the organization</span></p>
+            <PlanPicker
+                audience="TEAM"
+                plans={plans.data}
+                current={subscription}
+                pending={plans.isPending}
+                start={(planId) => start.mutateAsync(planId)}
+                change={(planId) => change.mutateAsync(planId)}
+                onWaiting={setWaiting}
+                disabled={members.isSuccess && !mayBuy
+                    ? "An owner or an editor buys and changes the plan for this organization."
+                    : undefined}
+            />
+            {plans.isError && (
+                <p className="kset-said kset-said--bad" role="alert">
+                    The plans couldn’t be read.
+                    <button type="button" className="b b--s b--secondary" onClick={() => void plans.refetch()}><RefreshIcon /> Try again</button>
+                </p>
+            )}
+
+            {mayBuy && (invoices.isPending || invoices.isError || (invoices.data && invoices.data.length > 0)) && <>
+                <p className="ksub">Invoices</p>
+                {invoices.isPending && <p className="kset-note" role="status">Reading the history…</p>}
+                {invoices.isError && (
+                    <p className="kset-said kset-said--bad" role="alert">
+                        The invoices couldn’t be read.
+                        <button type="button" className="b b--s b--secondary" onClick={() => void invoices.refetch()}><RefreshIcon /> Try again</button>
+                    </p>
                 )}
-            </section>
-
-            <section className="usage-block">
-                <h4>Plans</h4>
-                <PlanPicker
-                    audience="TEAM"
-                    plans={plans.data}
-                    current={subscription}
-                    pending={plans.isPending}
-                    start={(planId) => start.mutateAsync(planId)}
-                    change={(planId) => change.mutateAsync(planId)}
-                    onWaiting={setWaiting}
-                    disabled={members.isSuccess && !mayBuy
-                        ? "An owner or an editor buys and changes the plan for this organization."
-                        : undefined}
-                />
-            </section>
-
-            {mayBuy && (invoices.isPending || (invoices.data && invoices.data.length > 0)) && (
-                <section className="usage-block">
-                    <h4>Invoices</h4>
-                    {invoices.isPending && <p className="usage-quiet" role="status">Reading the history…</p>}
-                    <ul className="usage-breakdown">
+                {(invoices.data ?? []).length > 0 && (
+                    <div className="klist">
                         {(invoices.data ?? []).map((invoice) => (
-                            <li key={invoice.id}>
-                                <span>
-                                    {onDate(invoice.period_start)} — {onDate(invoice.period_end)}
-                                    {" · "}{statusWord(invoice.status)}
+                            <div className="krow" key={invoice.id}>
+                                <span className="krow__v">
+                                    <b>{onDate(invoice.period_start)} — {onDate(invoice.period_end)}</b>
+                                    <span className={statusTone(invoice.status)}>{statusWord(invoice.status)}</span>
                                 </span>
-                                <span className="usage-breakdown__cost">
-                                    {formatPrice(invoice.total_cents, invoice.currency)}
+                                <span className="krow__end">
+                                    <span className="kset-fig">{formatPrice(invoice.total_cents, invoice.currency)}</span>
                                     {invoice.status === "unpaid" && invoice.checkout_url && (
-                                        <> <a href={invoice.checkout_url} target="_blank" rel="noreferrer">Pay <ExternalIcon size={12} /></a></>
+                                        <a className="b b--s b--secondary" href={invoice.checkout_url} target="_blank" rel="noreferrer">Pay <ExternalIcon /></a>
                                     )}
                                 </span>
-                            </li>
+                            </div>
                         ))}
-                    </ul>
-                </section>
-            )}
+                    </div>
+                )}
+            </>}
         </div>
     );
 }

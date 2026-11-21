@@ -41,10 +41,19 @@ test("each of a Lemma's tabs has an address of its own, and reads back to the sa
     }
 });
 
-test("a Lemma's row is its home, what is in it, and About; the rest are parts of About", () => {
-    assert.deepEqual(ROW_TABS, ["home", "chats", "apps", "tables", "pages", "files", "about"]);
-    for (const tab of ["people", "contacts", "automations", "settings"] as const) assert.equal(partOfAbout(tab), true, tab);
+test("a Lemma's own pages are what it holds and does, each opened from its page; the rest are parts of About", () => {
+    assert.deepEqual(ROW_TABS, ["home", "chats", "apps", "tables", "pages", "files", "about", "automations", "agents", "memory", "skills", "add"]);
+    for (const tab of ["people", "contacts", "settings"] as const) assert.equal(partOfAbout(tab), true, tab);
     for (const tab of ROW_TABS) assert.equal(partOfAbout(tab), false, tab);
+});
+
+test("its agents, memory and skills have addresses of their own, and adding an app is a page", () => {
+    assert.deepEqual(readView("/l/p1/agents"), outcomeView("p1", "agents"));
+    assert.deepEqual(readView("/l/p1/memory"), outcomeView("p1", "memory"));
+    assert.deepEqual(readView("/l/p1/skills"), outcomeView("p1", "skills"));
+    assert.deepEqual(readView("/l/p1/add"), outcomeView("p1", "add"));
+    assert.equal(writeView(outcomeView("p1", "add")), "/l/p1/add");
+    assert.deepEqual(readView("/l/p1/agents/researcher"), { name: "agent", podId: "p1", agent: "researcher" });
 });
 
 test("About alone is this app's page; an old link to a part of it is still read the old way", () => {

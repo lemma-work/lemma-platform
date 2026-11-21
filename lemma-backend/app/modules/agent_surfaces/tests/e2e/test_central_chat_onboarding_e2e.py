@@ -627,12 +627,12 @@ async def test_whatsapp_signup_joins_the_pod_they_were_invited_to(
 async def test_whatsapp_signup_lands_in_the_organizations_lemma(
     async_client, db_session, fake_whatsapp, message_store, monkeypatch, arrival
 ):
-    """A chat sign-up lands where a web one does: in the Lemma its organization
-    shares, with WhatsApp's default set to that Lemma's assistant -- not in a
-    private pod made beside it.
+    """A chat sign-up lands where a web one does, with WhatsApp's default set
+    to that Lemma's assistant and nothing private made beside it.
 
     "own" is somebody with a personal address, who gets a workspace of their
-    own; "colleague" arrives from the domain of a company already here.
+    own and its one Lemma, "Personal", theirs alone; "colleague" arrives from
+    the domain of a company already here and lands in the Lemma it shares.
     """
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from app.modules.agent_surfaces.infrastructure.models import AgentSurface
@@ -711,13 +711,17 @@ async def test_whatsapp_signup_lands_in_the_organizations_lemma(
         assert surface is not None
         lemma = await session.get(Pod, surface.pod_id)
         assert lemma is not None
-        assert lemma.config["join_policy"] == "ORG_MEMBERS"
-        assert lemma.config["auto_join_new_members"] is True
         if company is not None:
             assert lemma.id == company.organization_pod_id
+            assert lemma.config["join_policy"] == "ORG_MEMBERS"
+            assert lemma.config["auto_join_new_members"] is True
         else:
             assert lemma.name == "Personal"
             assert lemma.user_id == user.id
+            # Theirs alone: nobody invited into the workspace later is put
+            # in another person's own Lemma.
+            assert lemma.config.get("join_policy", "INVITE_ONLY") == "INVITE_ONLY"
+            assert lemma.config.get("auto_join_new_members", False) is False
         # Nothing private made beside it.
         own_pods = await session.scalar(
             select(func.count(Pod.id)).where(Pod.user_id == user.id, Pod.id != lemma.id)

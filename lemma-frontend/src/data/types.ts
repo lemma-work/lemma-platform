@@ -94,6 +94,9 @@ export interface NewOrg {
     name: string;
     emailDomain?: string;
     derived?: boolean;
+    /** A workspace of one: its first Lemma is its person's own, not one
+     *  everyone who joins later is put in. */
+    personal?: boolean;
 }
 
 /** What the way in asks of the server's first-workspace rule. */

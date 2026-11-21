@@ -35,10 +35,16 @@ export function DiskUsageRows() {
     if (!line) return null;
     const busy = deleteBackup.isPending || freeUp.isPending;
     const backup = usage?.update_backup ?? null;
+    /* What freeing or deleting found is said in the disk row itself, so it
+       stays on the section's hairlines. */
+    const outcome = said && <span className={bad ? "kset-said--bad" : undefined} role={bad ? "alert" : "status"}> {said}</span>;
     return (
         <>
-            <SettingRow name="Disk space" consequence={`${line}. Free up space removes runtimes and sandbox images nothing uses and returns freed space to ${noun}.`}>
-                <button className="btn" disabled={busy} onClick={() => { setSaid(null); freeUp.mutate(); }}>
+            <SettingRow
+                name="Disk space"
+                consequence={<>{`${line}. Free up space removes runtimes and sandbox images nothing uses and returns freed space to ${noun}.`}{outcome}</>}
+            >
+                <button type="button" className="b b--s b--secondary" disabled={busy} onClick={() => { setSaid(null); freeUp.mutate(); }}>
                     {freeUp.isPending ? "Freeing up…" : "Free up space"}
                 </button>
             </SettingRow>
@@ -47,12 +53,11 @@ export function DiskUsageRows() {
                     name="Backup from before the last update"
                     consequence={`${backupSize(backup)}. Kept in case the update went wrong. ${backupExpiry(backup, Date.now())}`}
                 >
-                    <button className="btn" disabled={busy} onClick={() => { setSaid(null); deleteBackup.mutate(); }}>
+                    <button type="button" className="b b--s b--secondary b--red" disabled={busy} onClick={() => { setSaid(null); deleteBackup.mutate(); }}>
                         {deleteBackup.isPending ? "Deleting…" : "Delete"}
                     </button>
                 </SettingRow>
             )}
-            {said && <p className={bad ? "thismac-said thismac-said--bad" : "thismac-said"} role={bad ? "alert" : "status"}>{said}</p>}
         </>
     );
 }

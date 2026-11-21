@@ -125,7 +125,7 @@ async def test_first_chat_workspace_is_ready_and_reused(world):
     assert sum(result["pod_created"] for result in (first, second)) == 1
 
 
-@scenario("Asking for no private pod still lands a person in their organization's Lemma")
+@scenario("Asking for no private pod still lands a person in their first Lemma")
 @proves("PS-ONB-050")
 @covers("users.ensure_first_workspace")
 async def test_no_private_pod_is_made_beside_the_organizations_lemma(world):
@@ -136,7 +136,9 @@ async def test_no_private_pod_is_made_beside_the_organizations_lemma(world):
     """
     person = await world.new_person("import_then_chat")
     imported = await person.prepares_first_workspace(with_pod=False)
-    assert imported["pod_id"] == imported["organization_pod_id"], imported
+    # A workspace of one (the suite's addresses are unverified): its first
+    # Lemma is the person's own, and not one the organization shares.
+    assert imported["organization_pod_id"] is None, imported
     assert imported["pod_id"] and imported["assistant_id"]
     ready = await person.prepares_first_workspace()
     assert ready["organization_id"] == imported["organization_id"]
@@ -144,7 +146,9 @@ async def test_no_private_pod_is_made_beside_the_organizations_lemma(world):
     assert not ready["pod_created"]
 
 
-@scenario("A new organization opens in a Lemma everyone in it shares")
+@scenario(
+    "A workspace of one opens in its person's own Lemma, which nobody invited later is put in"
+)
 @proves("PS-ONB-015")
 @covers(
     "users.ensure_first_workspace",
@@ -154,21 +158,25 @@ async def test_no_private_pod_is_made_beside_the_organizations_lemma(world):
     "org.invitation.accept",
     "org.permissions.me",
 )
-async def test_a_new_organization_opens_in_a_lemma_everyone_shares(world):
+async def test_a_workspace_of_one_opens_in_its_persons_own_lemma(world):
     founder = await world.new_person("founder")
 
     made = await founder.prepares_first_workspace(with_pod=False)
 
     assert made["organization_created"], made
     # The suite's addresses are unverified, so this is a workspace of one,
-    # named after the person, and its Lemma is theirs.
+    # named after the person; its one Lemma, "Personal", is theirs alone. A
+    # company's organization, whose Lemma everyone shares, needs a verified
+    # work address: the backend's e2e suite proves that half.
     assert made["organization_name"] == "Founder's workspace", made
     assert made["organization_open_to_domain"] is None, made
-    assert made["pod_id"] == made["organization_pod_id"], made
     assert made["pod_name"] == "Personal", made
+    assert made["organization_pod_id"] is None, "a workspace of one shares no Lemma"
     lemma = await founder.opens_pod({"id": made["pod_id"], "name": made["pod_name"]})
-    assert lemma["config"]["join_policy"] == "ORG_MEMBERS", lemma["config"]
-    assert lemma["config"]["auto_join_new_members"] is True, lemma["config"]
+    assert lemma["config"].get("join_policy", "INVITE_ONLY") == "INVITE_ONLY", lemma[
+        "config"
+    ]
+    assert not lemma["config"].get("auto_join_new_members"), lemma["config"]
     organization = {"id": made["organization_id"], "name": made["organization_name"]}
     assert "org.member.manage" in await founder.org_permissions_in(organization), (
         "the person a first workspace makes an organization for owns it in "
@@ -181,9 +189,10 @@ async def test_a_new_organization_opens_in_a_lemma_everyone_shares(world):
     arrived = await colleague.prepares_first_workspace(with_pod=False)
 
     assert arrived["organization_id"] == made["organization_id"], arrived
-    assert arrived["pod_id"] == made["organization_pod_id"], arrived
+    # Invited into somebody's workspace, not into their own Lemma.
+    assert arrived["pod_id"] is None, arrived
     assert not arrived["organization_created"] and not arrived["pod_created"]
-    await colleague.sees_pod(lemma)
+    await colleague.does_not_see_pod(lemma)
 
     again = await founder.prepares_first_workspace(with_pod=False)
     assert (again["organization_id"], again["pod_id"]) == (

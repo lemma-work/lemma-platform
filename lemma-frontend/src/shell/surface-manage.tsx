@@ -20,7 +20,8 @@ import { PlaceLink, channelHref, goTo } from "./place-link";
 import { NOWHERE, writeAddress } from "./address";
 import { SetUpOnThisMac } from "@/desktop/set-up-on-this-mac";
 import { credentialFormForChannel } from "@/desktop/this-mac";
-import { BackIcon, WarningIcon } from "@/ui/icons";
+import { WarningIcon } from "@/ui/icons";
+import { StepHead } from "@/ui/form";
 
 /** One channel's settings, in plain words.
  *
@@ -43,14 +44,12 @@ export function SurfaceManage({ pod, surface, onBack, onSaved, onLeave }: {
     /* Who answers here: the space, or an agent with a channel of its own. */
     const bot = surface.mine ? pod.name : surface.agentName || pod.name;
     return <div className="surface-setup smanage">
-        <button className="linkish smanage__back" onClick={onBack}><BackIcon size={14} aria-hidden="true" /> Back</button>
-        <div className="smanage__head">
-            <ChannelIcon platform={surface.platform} size={32} />
-            <div className="smanage__title">
-                <h3>{name}</h3>
-                {surface.handle && <span>{surface.handle}</span>}
-            </div>
-        </div>
+        <StepHead
+            onBack={onBack}
+            mark={<span className="kmark" aria-hidden="true"><ChannelIcon platform={surface.platform} size={20} /></span>}
+            title={name}
+            line={surface.handle || undefined}
+        />
         <Health
             setup={setup.data}
             pending={setup.isPending}

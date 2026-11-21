@@ -1,5 +1,6 @@
 "use client";
 
+import { markTint } from "@/shell/mark-tint";
 import type { MouseEvent, ReactNode } from "react";
 import { writeView, type DayCount, type Go, type GoOptions, type View } from "./model";
 
@@ -31,6 +32,9 @@ const PATHS = {
     chevron: <path d="m7 10 5 5 5-5" />,
     search: <><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></>,
     plus: <path d="M12 5v14M5 12h14" />,
+    brain: <path d="M12 5a3 3 0 0 0-5.6 1.5A3 3 0 0 0 5 12a3 3 0 0 0 2 5.6A3 3 0 0 0 12 19zM12 5a3 3 0 0 1 5.6 1.5A3 3 0 0 1 19 12a3 3 0 0 1-2 5.6A3 3 0 0 1 12 19" />,
+    cast: <path d="M12 12h.01M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7M5.6 5.6a9 9 0 0 0 0 12.8M18.4 5.6a9 9 0 0 1 0 12.8" />,
+    chip: <path d="M8 8h8v8H8zM8 4v2M12 4v2M16 4v2M8 18v2M12 18v2M16 18v2M4 8h2M4 12h2M4 16h2M18 8h2M18 12h2M18 16h2" />,
     table: <><rect x="4" y="5" width="16" height="14" rx="2" /><path d="M4 10h16M10 10v9" /></>,
     app: <><rect x="3.5" y="5" width="17" height="14" rx="2" /><path d="M3.5 9h17" /></>,
     clock: <><circle cx="12" cy="12" r="8" /><path d="M12 8v4l3 2" /></>,
@@ -61,6 +65,9 @@ const PATHS = {
     more: <><circle cx="6" cy="12" r="1.4" /><circle cx="12" cy="12" r="1.4" /><circle cx="18" cy="12" r="1.4" /></>,
     about: <><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5.5M12 7.6v.2" /></>,
     gear: <><circle cx="12" cy="12" r="3" /><path d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4 18 18M6 18l1.6-1.6M16.4 7.6 18 6" /></>,
+    warn: <><path d="M12 4 21 19.5H3z" /><path d="M12 10v4.5M12 17h.01" /></>,
+    refresh: <><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3" /><path d="M19.5 4.5v4h-4" /></>,
+    lock: <><path d="M7 11V8a5 5 0 0 1 10 0v3" /><path d="M5.5 11h13v9h-13z" /></>,
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof PATHS;
@@ -75,7 +82,10 @@ export function Icon({ name, size = 15 }: { name: IconName; size?: number }) {
 
 export function Avatar({ name, size = 24 }: { name: string; size?: number }) {
     const initial = name.trim().charAt(0).toUpperCase() || "?";
-    return <span className="ox-avatar" style={{ width: size, height: size, fontSize: Math.round(size * 0.45) }} aria-hidden="true">{initial}</span>;
+    /* Each person in a colour of their own, from their name, on the same
+       tint scale a Lemma's face stands on, so it holds in either theme. */
+    const tint = markTint("person:" + name.trim().toLowerCase());
+    return <span className="ox-avatar" style={{ width: size, height: size, fontSize: Math.round(size * 0.45), background: tint.background, color: tint.color }} aria-hidden="true">{initial}</span>;
 }
 
 /** Two weeks of work, a bar a day: violet for what Lemma started, dark for

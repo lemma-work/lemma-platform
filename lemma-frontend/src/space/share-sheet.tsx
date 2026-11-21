@@ -1,14 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { source, type LibraryItem, type Pod, type SharedLink, type Tab } from "@/data";
+import { joinChoices, sayJoinWords, saidAbout, source, type JoinPolicy, type LibraryItem, type Member, type Pod, type SharedLink, type Tab } from "@/data";
 import { Modal } from "@/shell/modal";
-import { AddPeople } from "@/shell/add-people";
+import { useCanManageMembers } from "@/shell/add-people";
 import { ShareDialog } from "@/thread/share-dialog";
 import { copyText } from "@/desktop/clipboard";
 import { idAddress } from "@/outcomes/named-address";
-import { CheckIcon, CopyIcon, GlobeIcon, LockIcon, PlusIcon } from "@/ui/icons";
+import { listed } from "@/site/plugins/catalog";
+import { CheckIcon, CopyIcon, GlobeIcon, LinkIcon } from "@/ui/icons";
 
 /** What is being shared: the space itself, or one thing in it. */
 export type ShareSubject =
@@ -60,16 +61,100 @@ function expiresIn(iso: string): string {
 function LiveLink({ link, onRevoke, revoking }: { link: SharedLink; onRevoke: () => void; revoking: boolean }) {
     const [copied, setCopied] = useState(false);
     return (
-        <li className="ssheet__live">
-            <span className="ssheet__live-text">
+        <li className="kd-row">
+            <span className="kd-row__words">
                 <a href={link.readUrl} target="_blank" rel="noreferrer">{link.readUrl.replace(/^https?:\/\//, "")}</a>
                 <small>{expiresIn(link.expiresAt)} · up to {link.maxHits} opens</small>
             </span>
-            <button className="ssheet__small" onClick={() => {
-                copyText(link.readUrl).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1400); }).catch(() => undefined);
-            }}>{copied ? "Copied" : "Copy"}</button>
-            <button className="ssheet__small ssheet__small--quiet" disabled={revoking} onClick={onRevoke}>{revoking ? "Turning off…" : "Turn off"}</button>
+            <span className="kd-row__acts">
+                <button type="button" className="b b--s b--secondary" onClick={() => {
+                    copyText(link.readUrl).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1400); }).catch(() => undefined);
+                }}>{copied ? "Copied" : "Copy"}</button>
+                <button type="button" className="b b--s b--secondary b--red" disabled={revoking} onClick={onRevoke}>{revoking ? "Turning off…" : "Turn off"}</button>
+            </span>
         </li>
+    );
+}
+
+/** Who is in it, as faces and first names, with the way to add more. The
+ *  roster itself is the Lemma's People; adding is its own dialog, which the
+ *  caller opens (`onAddPeople`), so there is one way to add people and not a
+ *  second, smaller one in here. */
+function PeopleRow({ pod, people, onAddPeople }: { pod: Pod; people: Member[]; onAddPeople?: () => void }) {
+    const may = useCanManageMembers(pod.id);
+    const names = people.map((member) => member.name.split(/\s+/)[0]).filter(Boolean);
+    return (
+        <div className="kd-row">
+            {people.length > 0 && (
+                <span className="kd-faces" aria-hidden="true">
+                    {people.slice(0, 4).map((member) => <span key={member.id} className="kd-face">{member.initials}</span>)}
+                </span>
+            )}
+            <span className="kd-row__words">
+                <b>{people.length === 0 ? "Only you so far" : people.length === 1 ? "1 person" : people.length + " people"}</b>
+                {names.length > 0 && <small>{listed(names)}</small>}
+            </span>
+            {onAddPeople && may.allowed && (
+                <button type="button" className="b b--s b--secondary" onClick={onAddPeople}>Add people</button>
+            )}
+        </div>
+    );
+}
+
+/** Who may let themselves in: the Lemma's own rule, as choice cards. The
+ *  same rule and words as `WhoCanJoin` on its page, read and written under
+ *  the same key, so the two always agree. The middle rung is offered beside
+ *  the closed one; "anyone with a Lemma account" is shown only where it is
+ *  already the rule, since most organizations refuse it. Only someone who
+ *  runs the Lemma can change it; everyone else sees it, not a control that
+ *  can only fail. */
+function WhoCanOpen({ pod, orgName }: { pod: Pod; orgName: string }) {
+    const cache = useQueryClient();
+    const may = useCanManageMembers(pod.id);
+    const current = useQuery({ queryKey: ["pod-join", pod.id], queryFn: () => source.getPodJoin(pod.id) });
+    const set = useMutation({
+        mutationFn: (policy: JoinPolicy) => source.setPodJoin(pod.id, policy),
+        onSuccess: (_answer, policy) => {
+            cache.setQueryData(["pod-join", pod.id], policy);
+            void cache.invalidateQueries({ queryKey: ["pod-join", pod.id] });
+        },
+    });
+    const policy: JoinPolicy = set.isPending && set.variables ? set.variables : (current.data ?? "invited");
+    const choices = joinChoices(orgName).filter((choice) => choice.policy !== "anyone" || policy === "anyone");
+    const locked = !may.allowed || current.isPending || set.isPending;
+    return (
+        <div className="kfield" role="radiogroup" aria-label={"Who can join " + pod.name}>
+            <span>Who can join {pod.name}</span>
+            {current.isError ? (
+                <p className="kd-problem" role="alert">
+                    Couldn’t read who can join.{" "}
+                    <button type="button" className="b b--s b--secondary" onClick={() => void current.refetch()}>Try again</button>
+                </p>
+            ) : (
+                <div className="kopts">
+                    {choices.map((choice) => (
+                        <label key={choice.policy} className={"kopt kopt--compact" + (locked && policy !== choice.policy ? " kd-opt--off" : "")}>
+                            <input
+                                type="radio"
+                                name={"join-" + pod.id}
+                                value={choice.policy}
+                                checked={!current.isPending && policy === choice.policy}
+                                disabled={locked}
+                                onChange={() => set.mutate(choice.policy)}
+                            />
+                            <span className="kopt__t">{choice.who}</span>
+                            <span className="kopt__d">{choice.then}</span>
+                            <span className="kopt__dot" aria-hidden="true" />
+                        </label>
+                    ))}
+                </div>
+            )}
+            {current.isPending && <small role="status">Reading who can join…</small>}
+            {may.answered && !may.allowed && <small>Only someone who runs {pod.name} can change this.</small>}
+            {set.isError && (
+                <p className="kd-problem" role="alert">{sayJoinWords(saidAbout(set.error, "That could not be saved."), orgName)}</p>
+            )}
+        </div>
     );
 }
 
@@ -77,18 +162,19 @@ function LiveLink({ link, onRevoke, revoking }: { link: SharedLink; onRevoke: ()
  *  page and a whole space alike.
  *
  *  Access in Lemma is the space's: anyone in it can open what is in it, so
- *  "who has access" is the space's people for every subject, and adding a
- *  person adds them to the space. A file can also go past the space, as a
- *  bounded public link, which is the one thing only a file can do. */
-export function ShareSheet({ pod, orgId, subject, adding: addingFirst = false, onClose }: {
+ *  "who has access" is the space's people for every subject. So the dialog
+ *  is three things in order: who is in it (and the way to add more), who else
+ *  may join, and the link. A file can also go past the space, as a bounded
+ *  public link, which is the one thing only a file can do. */
+export function ShareSheet({ pod, orgId, subject, onAddPeople, onClose }: {
     pod: Pod;
     orgId: string | null;
     subject: ShareSubject;
-    /** Open on adding people — asked for by an Invite button. */
-    adding?: boolean;
+    /** Open the dialog that adds people to this Lemma. Without it there is
+     *  no Add people button here. */
+    onAddPeople?: () => void;
     onClose: () => void;
 }) {
-    const [adding, setAdding] = useState(addingFirst);
     const [copied, setCopied] = useState(false);
     const [publicLink, setPublicLink] = useState(false);
     const path = subject.kind === "file" ? subject.path : "";
@@ -98,6 +184,8 @@ export function ShareSheet({ pod, orgId, subject, adding: addingFirst = false, o
         enabled: Boolean(path),
         staleTime: 5 * 60_000,
     });
+    const orgs = useQuery({ queryKey: ["orgs"], queryFn: () => source.listOrgs(), staleTime: 10 * 60_000 });
+    const orgName = orgs.data?.find((one) => one.id === (orgId ?? pod.orgId))?.name ?? "";
     const cache = useQueryClient();
     const linksKey = ["file-links", pod.id, path];
     const links = useQuery({
@@ -114,13 +202,18 @@ export function ShareSheet({ pod, orgId, subject, adding: addingFirst = false, o
     const people = pod.members.filter(member => member.kind === "person");
     const known = useKnownAccess(pod.id, subject);
     const isPublic = (known.visibility ?? "").toUpperCase() === "PUBLIC";
+    /* By id, not by name: the link is for people not in it yet too, and
+       "anyone else is asked to join first" needs a door to show them. The
+       sheet shows the same link it copies. */
+    const [link, setLink] = useState("");
+    useEffect(() => {
+        const { origin, pathname, search, hash } = window.location;
+        setLink(origin + idAddress(pathname, { id: pod.id, name: pod.storedName ?? pod.name }) + search + hash);
+    }, [pod.id, pod.storedName, pod.name]);
 
     const copy = async () => {
-        /* By id, not by name: the link is for people not in it yet too, and
-           "anyone else is asked to join first" needs a door to show them. */
-        const { origin, pathname, search, hash } = window.location;
         try {
-            await copyText(origin + idAddress(pathname, { id: pod.id, name: pod.storedName ?? pod.name }) + search + hash);
+            await copyText(link || window.location.href);
             setCopied(true);
             setTimeout(() => setCopied(false), 1600);
         } catch {
@@ -134,71 +227,54 @@ export function ShareSheet({ pod, orgId, subject, adding: addingFirst = false, o
     }
 
     return (
-        <Modal narrow title={"Share “" + name + "”"} onClose={onClose}>
-            <div className="ssheet">
-                {adding ? (
-                    <div className="ssheet__adding">
-                        <AddPeople pod={pod} orgId={orgId} />
-                        <button className="ssheet__back" onClick={() => setAdding(false)}>Done adding</button>
-                    </div>
-                ) : (
-                    <button className="ssheet__add" onClick={() => setAdding(true)}>
-                        <PlusIcon size={16} /> Add people to {pod.name}
-                    </button>
-                )}
-
-                <div className="ssheet__label">Who has access</div>
-                <ul className="ssheet__people">
-                    {people.map(member => (
-                        <li key={member.id}>
-                            <span className="ssheet__face">{member.initials}</span>
-                            <span className="ssheet__who">
-                                <span>{member.name}</span>
-                                {member.email && <small>{member.email}</small>}
-                            </span>
-                            <span className="ssheet__role">{member.role}</span>
-                        </li>
-                    ))}
-                    {people.length === 0 && <li className="ssheet__none">Only you so far.</li>}
-                </ul>
+        <Modal
+            title={"Share " + name}
+            subtitle={subject.kind === "space" ? "Who is in it, who else can join, and its link." : "Who can open it, and its link."}
+            onClose={onClose}
+            footer={<button type="button" className="b b--l b--primary" onClick={onClose}>Done</button>}
+        >
+            <div className="kd-stack">
+                <PeopleRow pod={pod} people={people} onAddPeople={onAddPeople} />
                 {subject.kind !== "space" && (
-                    <p className={"ssheet__note" + (isPublic ? " ssheet__note--public" : "")}>{whoCanOpen(pod.name, known)}</p>
+                    <p className={"kd-small" + (isPublic ? " kd-small--warn" : "")}>{whoCanOpen(pod.name, known)}</p>
                 )}
 
-                <div className="ssheet__label">Link</div>
-                <div className="ssheet__link">
-                    <span className="ssheet__link-glyph"><LockIcon size={16} /></span>
-                    <span className="ssheet__link-text">
-                        <span>People in {pod.name}</span>
-                        <small>Anyone else is asked to join first</small>
+                <WhoCanOpen pod={pod} orgName={orgName} />
+
+                <div className="kd-row">
+                    <span className="kd-row__glyph" aria-hidden="true"><LinkIcon size={18} /></span>
+                    <span className="kd-row__words">
+                        <b>{link.replace(/^https?:\/\//, "") || "This page"}</b>
+                        <small>The link to {name}</small>
                     </span>
+                    <button type="button" className="b b--s b--secondary" onClick={() => void copy()}>
+                        {copied ? <CheckIcon size={15} /> : <CopyIcon size={15} />} {copied ? "Copied" : "Copy"}
+                    </button>
                 </div>
+
                 {subject.kind === "file" && (
-                    <div className="ssheet__link">
-                        <span className="ssheet__link-glyph"><GlobeIcon size={16} /></span>
-                        <span className="ssheet__link-text">
-                            <span>Anyone with the link</span>
-                            <small>{live.length === 0 ? "A read-only link that expires"
-                                : live.length === 1 ? "One link is live" : live.length + " links are live"}</small>
+                    <div className="kd-row">
+                        <span className="kd-row__glyph" aria-hidden="true"><GlobeIcon size={18} /></span>
+                        <span className="kd-row__words">
+                            <b>Anyone with the link</b>
+                            <small>{links.isError ? "Couldn’t read its public links"
+                                : live.length === 0 ? "A read-only link that expires"
+                                    : live.length === 1 ? "One link is live" : live.length + " links are live"}</small>
                         </span>
-                        <button className="ssheet__small" disabled={!file.data} onClick={() => setPublicLink(true)}>{live.length ? "New link" : "Create"}</button>
+                        {links.isError
+                            ? <button type="button" className="b b--s b--secondary" onClick={() => void links.refetch()}>Try again</button>
+                            : <button type="button" className="b b--s b--secondary" disabled={!file.data} onClick={() => setPublicLink(true)}>{live.length ? "New link" : "Create"}</button>}
                     </div>
                 )}
                 {live.length > 0 && (
-                    <ul className="ssheet__lives">
+                    <ul className="kd-rows">
                         {live.map(link => (
                             <LiveLink key={link.code} link={link} revoking={revoke.isPending && revoke.variables === link.code}
                                 onRevoke={() => revoke.mutate(link.code)} />
                         ))}
                     </ul>
                 )}
-
-                <div className="ssheet__foot">
-                    <button className="ssheet__copy" onClick={() => void copy()}>
-                        {copied ? <CheckIcon size={16} /> : <CopyIcon size={16} />} {copied ? "Copied" : "Copy link"}
-                    </button>
-                    <button className="ssheet__done" onClick={onClose}>Done</button>
-                </div>
+                {revoke.isError && <p className="kd-problem" role="alert">That link is still live. Try turning it off again.</p>}
             </div>
         </Modal>
     );

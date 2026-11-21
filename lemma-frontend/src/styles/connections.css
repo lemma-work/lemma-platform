@@ -71,8 +71,6 @@
 .signinlink__acts { display: inline-flex; align-items: center; gap: 4px 14px; flex-wrap: wrap; }
 .signinlink__acts .linkish { display: inline-flex; align-items: center; gap: 4px; min-height: 32px; font-size: 12.5px; }
 .signinlink small { font-size: 11.5px; color: var(--ink-3); }
-/* On a catalog card it sits under the card's buttons, as wide as the card. */
-.connector__acts .signinlink { flex: 1 1 100%; }
 .signinlink__url {
     font: inherit; font-family: var(--mono); font-size: 12px; color: var(--ink); background: var(--paper);
     border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 6px 8px; width: 100%; min-width: 0;
@@ -86,13 +84,6 @@
 .podconn__offer b { font-weight: 500; color: var(--ink); }
 .podconn__offer .btn { min-height: 36px; margin-left: auto; }
 .podconn__added { display: flex; flex-direction: column; gap: 10px; font-size: 13px; color: var(--ink-2); }
-
-/* Where one of my accounts is used, under it on the organization's page. */
-.acct__usage { flex-basis: 100%; margin: 0 0 2px 15px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--ink-3); }
-
-/* What removing an installation stops, before it goes. */
-.impact { flex-basis: 100%; margin: 4px 0 0; padding: 10px 12px; border-radius: var(--r-md); background: var(--canvas); box-shadow: 0 0 0 1px var(--line); font-size: 12.5px; color: var(--ink-2); }
-.impact ul { margin: 6px 0 8px; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
 
 /* An agent's connectors, granted by slug. */
 .agentconn { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
@@ -120,4 +111,4 @@
 
 /* A button that cannot act yet looks it, as in every other view. */
 .podconn .btn:disabled, .podconn__form .btn:disabled, .connectbanner .btn:disabled,
-.agentconn__add .btn:disabled, .sconn__move .btn:disabled, .impact .btn:disabled { opacity: .45; cursor: default; }
+.agentconn__add .btn:disabled, .sconn__move .btn:disabled { opacity: .45; cursor: default; }
