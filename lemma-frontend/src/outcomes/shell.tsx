@@ -167,7 +167,7 @@ export function OutcomesShell() {
     const list = useMemo(() => pods.data ?? [], [pods.data]);
 
     const names = useMemo<Names | null>(
-        () => (org && pods.isSuccess ? { org: org.name, handle: org.handle, lemmas: list.map((one) => ({ id: one.id, name: one.name })) } : null),
+        () => (org && pods.isSuccess ? { org: org.name, handle: org.handle, lemmas: list.map((one) => ({ id: one.id, name: one.storedName ?? one.name })) } : null),
         [org, pods.isSuccess, list],
     );
     const path = pathname ?? HOME;
@@ -180,14 +180,21 @@ export function OutcomesShell() {
         return question.kind === "ask" ? question : null;
     }, [path, orgs.data, orgId, names]);
     const lookup = useQuery({
-        queryKey: ["named-lemma", asking?.org, asking?.lemma],
-        queryFn: () => source.findPodByName(asking?.org ?? "", asking?.lemma ?? "").then((podId) => ({ podId })),
+        queryKey: ["named-lemma", asking?.lemma, ...(asking?.orgs ?? [])],
+        /* Each handle in turn, until one of them has a Lemma by that name. */
+        queryFn: async () => {
+            for (const org of asking?.orgs ?? []) {
+                const podId = await source.findPodByName(org, asking?.lemma ?? "");
+                if (podId) return { podId, org };
+            }
+            return { podId: null, org: null };
+        },
         enabled: Boolean(asking),
         staleTime: 5 * 60_000,
     });
     /* A lookup that failed outright opens nothing, as one that found nothing
        does: there is no id to show a door for. */
-    const found = useMemo(() => lookup.data ?? (lookup.isError ? { podId: null } : undefined), [lookup.data, lookup.isError]);
+    const found = useMemo(() => lookup.data ?? (lookup.isError ? { podId: null, org: null } : undefined), [lookup.data, lookup.isError]);
     const reading = useMemo(
         () => readNamed(path, { orgs: orgs.data ?? null, orgId, names, found }),
         [path, orgs.data, orgId, names, found],

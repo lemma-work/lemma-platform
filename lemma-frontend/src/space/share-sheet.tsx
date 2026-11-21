@@ -120,7 +120,7 @@ export function ShareSheet({ pod, orgId, subject, adding: addingFirst = false, o
            "anyone else is asked to join first" needs a door to show them. */
         const { origin, pathname, search, hash } = window.location;
         try {
-            await copyText(origin + idAddress(pathname, pod) + search + hash);
+            await copyText(origin + idAddress(pathname, { id: pod.id, name: pod.storedName ?? pod.name }) + search + hash);
             setCopied(true);
             setTimeout(() => setCopied(false), 1600);
         } catch {

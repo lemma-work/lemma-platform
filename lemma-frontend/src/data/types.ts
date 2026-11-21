@@ -223,6 +223,10 @@ export interface Pod {
     id: string;
     orgId: string;
     name: string;
+    /** The name as the server keeps it, which its address in names is
+     *  spelled from; `name` is the same made readable ("SalesCRM" shows as
+     *  "Sales CRM", and is still `salescrm` in a link). */
+    storedName?: string;
     /** A pod may carry its own icon; without one it wears a generated orb. */
     iconUrl: string | null;
     /** What the teammate is for, in one line: the job it was hired with. The

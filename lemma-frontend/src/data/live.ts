@@ -288,7 +288,7 @@ function podSummary(pod: { id: string; name: string; organization_id: string; ic
     const name = humanizeName(pod.name);
     const description = pod.description?.trim();
     const home = (pod.config as { home_app?: unknown } | null | undefined)?.home_app;
-    return { id: pod.id, orgId: pod.organization_id, name, iconUrl: pod.icon_url ?? null,
+    return { id: pod.id, orgId: pod.organization_id, name, storedName: pod.name, iconUrl: pod.icon_url ?? null,
         ...(description ? { description } : {}),
         ...(sharedByEveryone(pod.config) ? { everyone: true } : {}),
         ...(pod.created_at ? { hiredAt: pod.created_at } : {}),
@@ -1720,6 +1720,7 @@ export const liveSource: PodSource = {
             id: pod.id,
             orgId,
             name: humanizeName(pod.name),
+            storedName: pod.name,
             iconUrl: pod.icon_url ?? null,
             ...(job ? { description: job } : {}),
             teammate: await teammateOf(pod.id, humanizeName(pod.name), pod.icon_url ?? null),

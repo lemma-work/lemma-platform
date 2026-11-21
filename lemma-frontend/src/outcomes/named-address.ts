@@ -155,14 +155,16 @@ export function idAddress(path: string, lemma: { id: string; name: string }): st
  *  - `wait`: something it turns on is still being read.
  *  - `elsewhere`: it names another of the reader's organizations, which the
  *    frame has to move to before the names can be read.
- *  - `ask`: no list of theirs has it; the server is asked which Lemma it is.
+ *  - `ask`: the server is asked which Lemma it is -- by each of `orgs` in
+ *    turn, as an organization's handle -- because no list of theirs has it,
+ *    or because the word may be another organization's handle.
  *  - `nowhere`: it names no Lemma the reader may learn of. Not a door to
  *    knock on: there is no id to knock with. */
 export type NamedReading =
     | { kind: "plain"; path: string; asked: boolean }
     | { kind: "wait" }
     | { kind: "elsewhere"; orgId: string }
-    | { kind: "ask"; org: string; lemma: string }
+    | { kind: "ask"; orgs: string[]; lemma: string }
     | { kind: "nowhere" };
 
 export function readNamed(path: string, read: {
@@ -173,14 +175,28 @@ export function readNamed(path: string, read: {
     /** Its names; null until its Lemmas are read. */
     names: Names | null;
     /** The server's answer, once `ask` has had one: the Lemma's id, or null
-     *  for none. */
-    found?: { podId: string | null };
+     *  for none, and which of the asked handles found it. */
+    found?: { podId: string | null; org?: string | null };
 }): NamedReading {
     const tail = namedTail(path);
     if (tail === null) return { kind: "plain", path, asked: false };
     if (!read.orgs) return { kind: "wait" };
-    const [, org, lemma] = parts(path);
-    const own = read.orgs.find((one) => one.handle === org) ?? read.orgs.find((one) => namesOrg(org, one));
+    const [, word, lemma] = parts(path);
+    const byHandle = read.orgs.find((one) => one.handle === word);
+    const own = byHandle ?? read.orgs.find((one) => namesOrg(word, one));
+    /* The server reads handles. Where the reader's organization was matched
+       by its name, its handle is asked after the word itself. */
+    const asks = own?.handle && own.handle !== word ? [word, own.handle] : [word];
+    const opened = (podId: string): NamedReading => ({ kind: "plain", path: "/l/" + encodeURIComponent(podId) + tail, asked: true });
+    /* A handle is unique and a name is not, so a word that only one of theirs
+       is called by may be another organization's handle. Only the server can
+       tell, so it is asked before the name chooses for them. A link that
+       means that organization opens it; failing that, the word is read as
+       the name of theirs that links written before handles carried. */
+    if (own && !byHandle) {
+        if (!read.found) return { kind: "ask", orgs: asks, lemma };
+        if (read.found.podId && read.found.org === word) return opened(read.found.podId);
+    }
     if (own && own.id !== read.orgId) return { kind: "elsewhere", orgId: own.id };
     if (own) {
         if (!read.names) return { kind: "wait" };
@@ -190,9 +206,9 @@ export function readNamed(path: string, read: {
     /* Theirs or not, a Lemma they are not in is in none of their lists: an
        invite-only one in their own organization, one open to it they have not
        joined, or any in an organization they are not in. */
-    if (!read.found) return { kind: "ask", org, lemma };
+    if (!read.found) return { kind: "ask", orgs: asks, lemma };
     const { podId } = read.found;
-    return podId ? { kind: "plain", path: "/l/" + encodeURIComponent(podId) + tail, asked: true } : { kind: "nowhere" };
+    return podId ? opened(podId) : { kind: "nowhere" };
 }
 
 /** The app's own address for somewhere in a Lemma, spelled in names; the

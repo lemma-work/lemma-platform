@@ -170,20 +170,43 @@ test("a named address in another of the reader's organizations moves the frame t
 
 test("a Lemma none of the reader's lists has is asked of the server", () => {
     /* Somebody who belongs nowhere yet: what they came for comes first. */
-    assert.deepEqual(readNamed(LINK, { orgs: [], orgId: null, names: null }), { kind: "ask", org: "fjord-demo", lemma: "fjord-demo" });
+    assert.deepEqual(readNamed(LINK, { orgs: [], orgId: null, names: null }), { kind: "ask", orgs: ["fjord-demo"], lemma: "fjord-demo" });
     /* A member of another organization: not read as a Lemma's id. */
-    assert.deepEqual(readNamed(LINK, { orgs: [OTHER], orgId: OTHER.id, names: ACME }), { kind: "ask", org: "fjord-demo", lemma: "fjord-demo" });
+    assert.deepEqual(readNamed(LINK, { orgs: [OTHER], orgId: OTHER.id, names: ACME }), { kind: "ask", orgs: ["fjord-demo"], lemma: "fjord-demo" });
     /* Their own organization, a Lemma in it they are not in. */
-    assert.deepEqual(readNamed("/l/fjord-demo-2/board", { orgs: [MINE], orgId: MINE.id, names: FJORD }), { kind: "ask", org: "fjord-demo-2", lemma: "board" });
+    assert.deepEqual(readNamed("/l/fjord-demo-2/board", { orgs: [MINE], orgId: MINE.id, names: FJORD }), { kind: "ask", orgs: ["fjord-demo-2"], lemma: "board" });
 });
 
 test("the server's answer opens the Lemma by its id, or opens nothing", () => {
     const read = { orgs: [OTHER], orgId: OTHER.id, names: ACME };
-    assert.deepEqual(readNamed(LINK, { ...read, found: { podId: STRANGER } }), { kind: "plain", path: "/l/" + STRANGER + "/apps/meetings", asked: true });
+    assert.deepEqual(readNamed(LINK, { ...read, found: { podId: STRANGER, org: "fjord-demo" } }), { kind: "plain", path: "/l/" + STRANGER + "/apps/meetings", asked: true });
     assert.deepEqual(readView("/l/" + STRANGER + "/apps/meetings"), { name: "app", podId: STRANGER, app: "meetings" });
-    assert.deepEqual(readNamed("/l/fjord-demo/fjord-demo", { ...read, found: { podId: STRANGER } }), { kind: "plain", path: "/l/" + STRANGER, asked: true });
+    assert.deepEqual(readNamed("/l/fjord-demo/fjord-demo", { ...read, found: { podId: STRANGER, org: "fjord-demo" } }), { kind: "plain", path: "/l/" + STRANGER, asked: true });
     /* Nothing by that name they may learn of: never the first word read as an id. */
-    assert.deepEqual(readNamed(LINK, { ...read, found: { podId: null } }), { kind: "nowhere" });
+    assert.deepEqual(readNamed(LINK, { ...read, found: { podId: null, org: null } }), { kind: "nowhere" });
+});
+
+test("a word one of theirs is only called by is asked of the server before the name chooses", () => {
+    /* "fjord-demo" is MINE's name, and may be another organization's handle:
+       handles are unique and names are not. */
+    const mine = { orgs: [MINE], orgId: MINE.id, names: FJORD };
+    assert.deepEqual(readNamed("/l/fjord-demo/sales", mine), { kind: "ask", orgs: ["fjord-demo", "fjord-demo-2"], lemma: "sales" });
+    /* The handle had a Lemma by that name: that is the one the link means,
+       even with one of theirs called the same. */
+    assert.deepEqual(readNamed("/l/fjord-demo/sales", { ...mine, found: { podId: STRANGER, org: "fjord-demo" } }), { kind: "plain", path: "/l/" + STRANGER, asked: true });
+    /* Nobody's handle: the name of theirs it is, as links written before
+       handles carried it. */
+    assert.deepEqual(readNamed("/l/fjord-demo/sales", { ...mine, found: { podId: null, org: null } }), { kind: "plain", path: "/l/" + SALES, asked: false });
+    /* From another of their organizations, the frame moves there first. */
+    assert.deepEqual(readNamed("/l/fjord-demo/sales", { orgs: [OTHER, MINE], orgId: OTHER.id, names: ACME, found: { podId: null, org: null } }), { kind: "elsewhere", orgId: MINE.id });
+    /* A Lemma of theirs they are not in is found by their organization's
+       handle, the one word the server reads. */
+    assert.deepEqual(readNamed("/l/fjord-demo/board", { ...mine, found: { podId: STRANGER, org: "fjord-demo-2" } }), { kind: "plain", path: "/l/" + STRANGER, asked: true });
+});
+
+test("a Lemma's word is made from its name as stored, not as shown", () => {
+    /* "SalesCRM" shows as "Sales CRM"; the server spells it `salescrm`. */
+    assert.equal(named("/l/" + SALES, { org: "Fjord Demo", handle: "fjord-demo-2", lemmas: [{ id: SALES, name: "SalesCRM" }] }), "/l/fjord-demo-2/salescrm");
 });
 
 test("a link handed to somebody names the Lemma by its id, and keeps the place", () => {
