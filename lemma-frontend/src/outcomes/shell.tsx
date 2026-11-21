@@ -463,10 +463,11 @@ export function OutcomesShell() {
     /* Two arrivals that start something rather than open a place, answered
        once: `?hire=1`, from the old create-a-pod door, and `?remixSource=`,
        an app somebody chose to rebuild, which lands on the Lemma they picked
-       with the ask waiting in a new chat's box. */
+       with the ask waiting in a new chat's box. A link in names is read
+       first: until then the view is the last one, not the Lemma it names. */
     const arrived = useRef(false);
     useEffect(() => {
-        if (arrived.current) return;
+        if (arrived.current || unread) return;
         arrived.current = true;
         if (arrival.get("hire") === "1") {
             go({ name: "hire" }, { replace: true });
@@ -477,7 +478,7 @@ export function OutcomesShell() {
         if (!remix || !podId) return;
         asks.current += 1;
         go(chatView({ kind: "chat", podId, id: NEW_CHAT }), { replace: true, fill: { text: "Help me rebuild or adapt this app for our workspace: " + remix, id: asks.current, podId } });
-    }, [arrival, go, view]);
+    }, [arrival, go, view, unread]);
 
     /* The one door from a framed app or widget into a chat: it fills a box
        and brings it forward, and the reader decides. A request from a frame
