@@ -22,7 +22,10 @@ import httpx
 
 from app.core.log.log import get_logger
 from app.modules.decisions.domain.answers import DecisionResult, DecisionUsage
-from app.modules.decisions.domain.errors import DecisionUnavailableError
+from app.modules.decisions.domain.errors import (
+    DecisionUnavailableError,
+    images_unsupported,
+)
 from app.modules.decisions.domain.request import DecisionCaller, DecisionTask
 from app.modules.decisions.infrastructure.providers.decision_wire import (
     WireAnswer,
@@ -84,6 +87,11 @@ class WireDecisionProvider:
         self, task: DecisionTask, *, caller: DecisionCaller, timeout_seconds: float
     ) -> DecisionResult:
         del caller  # metered through the execution the service opened
+        if task.images:
+            # Neither decision API takes images as a stable feature yet (System
+            # One only behind a preview header): refused before asking, not
+            # discovered as a provider refusal.
+            raise images_unsupported()
         request = build_request(task, model=self._model, dialect=self.dialect)
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         found: dict[str, WireAnswer] = {}

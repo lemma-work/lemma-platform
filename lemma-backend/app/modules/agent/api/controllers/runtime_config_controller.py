@@ -18,14 +18,16 @@ from app.modules.agent.api.schemas import (
     AgentRuntimeProfileResponse,
     CreateAgentHostRuntimeProfileRequest,
     CreateAnthropicCompatibleRuntimeProfileRequest,
-    CreateGoogleGenAIRuntimeProfileRequest,
     CreateAgentRuntimeProfileRequest,
     CreateOpenAICompatibleRuntimeProfileRequest,
     UpdateAgentHostRuntimeProfileRequest,
     UpdateAnthropicCompatibleRuntimeProfileRequest,
-    UpdateGoogleGenAIRuntimeProfileRequest,
     UpdateAgentRuntimeProfileRequest,
     UpdateOpenAICompatibleRuntimeProfileRequest,
+)
+from app.modules.agent.api.runtime_profile_schemas import (
+    CreateGoogleGenAIRuntimeProfileRequest,
+    UpdateGoogleGenAIRuntimeProfileRequest,
 )
 from app.modules.agent.agent_host.api import AgentHostHarnessResponse
 from app.modules.agent.agent_host.api import effective_agent_host_status

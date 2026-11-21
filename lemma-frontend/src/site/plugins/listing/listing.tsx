@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { BUILT, byLine, dayReader, listed, nameOf, PLANNED, type BuiltPlugin } from "../catalog";
+import { BUILT, byLine, dayReader, listed, nameOf, type BuiltPlugin } from "../catalog";
 import { faceSrc } from "../faces";
 import { MarketingFrame } from "../page/frame";
 import { Shot } from "../shot";
@@ -9,7 +9,7 @@ import s from "./listing.module.css";
 
 export const LISTING_TITLE = "Ready-made apps that fill themselves in";
 export const LISTING_INTRO =
-    "Each plugin adds working apps to your Lemma. Most build on your mail and meetings, read once and shared between them, and bring you only what needs you.";
+    "Each plugin adds working apps to your Lemma. They read your mail and meetings once, share what they find, and bring you only what needs you.";
 
 /** What adding a plugin brings along, said under its name. */
 function bringsLine(plugin: BuiltPlugin): string {
@@ -38,8 +38,10 @@ function Card({ plugin, first, skip }: { plugin: BuiltPlugin; first: boolean; sk
     );
 }
 
-/** `/templates`: the built plugins first and big, how they stack, and the
- *  rest of the catalog in the order it will be built. */
+/** `/templates`: the plugins you can add today, first and big; how they
+ *  stack; and the ones on the way, by line of work. The page is for someone
+ *  choosing a plugin, so it never reads as the build plan: no counts of what
+ *  is built, no build order, no positions. */
 export function PluginListing() {
     const stack = stackOf();
     const sources = stack.main[stack.main.length - 1]?.nodes.map((n) => nameOf(n.slug)) ?? [];
@@ -56,16 +58,14 @@ export function PluginListing() {
                     <div>
                         <p className={s.eyebrow}>Plugins</p>
                         <h1 className={s.title}>{LISTING_TITLE}</h1>
-                        <p className={s.intro}>
-                            {LISTING_INTRO} So far, {BUILT.length} are built.
-                        </p>
+                        <p className={s.intro}>{LISTING_INTRO}</p>
                     </div>
                     <figure className={s.heroPicture}>
                         <Link className={s.heroFrame} href={`/templates/${lead.slug}`}>
                             <Shot picture={leadPicture} alt={`${lead.name}: ${leadPicture.caption}`} sizes="(max-width: 960px) 100vw, 680px" eager />
                         </Link>
                         <figcaption>
-                            {lead.name}, filled in by the other plugins, on made-up sample data.
+                            {lead.name}, filled in by the other plugins. Sample data.
                         </figcaption>
                     </figure>
                 </header>
@@ -73,9 +73,9 @@ export function PluginListing() {
                 <section className={s.section} aria-labelledby="built-title">
                     <div className={s.sectionHead}>
                         <h2 id="built-title" className={s.h2}>
-                            Built and tested
+                            Ready to add
                         </h2>
-                        <p className={s.note}>Every picture is the real app, on made-up sample data.</p>
+                        <p className={s.note}>Add any of them to your Lemma today. Every picture is the real app, on sample data.</p>
                     </div>
                     <ul className={s.cards}>
                         {BUILT.map((plugin, i) => (
@@ -88,13 +88,13 @@ export function PluginListing() {
                     <div className={s.sectionHead}>
                         <p className={s.eyebrow}>How they stack</p>
                         <h2 id="stack-title" className={s.h2}>
-                            Read once, used by everything above
+                            Read once, used by all of them
                         </h2>
                         <p className={s.lede}>
-                            {listed(sources)} sit underneath and read your inbox and calendar. The plugins above
-                            build on what they found, and adding one brings what it stands on.
-                            {day ? ` ${day.name} reads what all of them say needs you.` : ""}
-                            {beside.length ? ` ${listed(beside)} stand beside: they need neither.` : ""}
+                            {listed(sources)} read your inbox and calendar. The plugins above build on what they
+                            find, and adding one brings what it needs.
+                            {day ? ` ${day.name} gathers what all of them say needs you.` : ""}
+                            {beside.length ? ` ${listed(beside)} work on their own.` : ""}
                         </p>
                     </div>
                     <StackPicture />
@@ -102,30 +102,22 @@ export function PluginListing() {
 
                 <section id="next" className={s.section} aria-labelledby="next-title">
                     <div className={s.sectionHead}>
-                        <p className={s.eyebrow}>Coming next</p>
+                        <p className={s.eyebrow}>Coming soon</p>
                         <h2 id="next-title" className={s.h2}>
-                            {PLANNED.length} more, in the order they will be built
+                            More on the way
                         </h2>
-                        <p className={s.lede}>
-                            Grouped by the line of work they are for, and numbered in the order they will be built.
-                        </p>
+                        <p className={s.lede}>Grouped by the kind of work they are for.</p>
                     </div>
                     <div className={s.lines}>
-                        {lines.map(({ line, built, planned }) => (
+                        {lines.map(({ line, planned }) => (
                             <section key={line.id} className={s.line} aria-labelledby={`line-${line.id}`}>
                                 <h3 id={`line-${line.id}`} className={s.lineName}>
                                     {line.name}
-                                    {built.length > 0 && (
-                                        <small>
-                                            after {built.length === 1 ? built[0].name : `the ${built.length} above`}
-                                        </small>
-                                    )}
                                 </h3>
-                                <ol className={s.lineList}>
+                                <ul className={s.lineList}>
                                     {planned.map((p) => (
                                         <li key={p.slug}>
                                             <Link href={`/templates/${p.slug}`}>
-                                                <span className={s.position}>{p.position}</span>
                                                 <span>
                                                     <span className={s.plannedName}>{p.name}</span>
                                                     <span className={s.plannedOne}>{p.one}</span>
@@ -133,7 +125,7 @@ export function PluginListing() {
                                             </Link>
                                         </li>
                                     ))}
-                                </ol>
+                                </ul>
                             </section>
                         ))}
                     </div>

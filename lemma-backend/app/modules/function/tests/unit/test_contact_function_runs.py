@@ -95,7 +95,9 @@ def _dispatch(*, user_id: UUID | None, contact_id: UUID | None):
     )
 
 
-def _context(dispatch: FunctionExecutionDispatch) -> FunctionRunRuntimeContext:
+def _context(
+    dispatch: FunctionExecutionDispatch, *, user_name: str | None = None
+) -> FunctionRunRuntimeContext:
     return FunctionRunRuntimeContext(
         run_id=dispatch.run_id,
         deadline_at=dispatch.deadline_at,
@@ -105,6 +107,7 @@ def _context(dispatch: FunctionExecutionDispatch) -> FunctionRunRuntimeContext:
         config=None,
         user_id=dispatch.user_id,
         user_email=None,
+        user_name=user_name,
         contact_id=dispatch.contact_id,
         pod_id=dispatch.pod_id,
         function_id=dispatch.function_id,
@@ -112,7 +115,9 @@ def _context(dispatch: FunctionExecutionDispatch) -> FunctionRunRuntimeContext:
     )
 
 
-async def _send(dispatch: FunctionExecutionDispatch, minter):
+async def _send(
+    dispatch: FunctionExecutionDispatch, minter, *, user_name: str | None = None
+):
     """Choose the credential and send the invocation, as ``execute`` does.
 
     The two steps are driven directly, with the runtime and the session
@@ -153,7 +158,7 @@ async def _send(dispatch: FunctionExecutionDispatch, minter):
     )
     await dispatcher._invoker.post(
         dispatch,
-        context=_context(dispatch),
+        context=_context(dispatch, user_name=user_name),
         endpoint=endpoint,
         function_token=token.value,
         organization_id=None,
@@ -199,6 +204,25 @@ async def test_a_members_run_reaches_the_runtime_unchanged():
     # No ``contact_id`` key at all: a runtime that predates contacts forbids it.
     assert "contact_id" not in observed["json"]["identity"]
     assert observed["json"]["identity"]["user_id"] == str(member)
+
+
+async def test_a_members_run_tells_the_runtime_their_name():
+    member = uuid4()
+    dispatch = _dispatch(user_id=member, contact_id=None)
+
+    async def _member_session(**_kwargs):
+        return FunctionSessionToken(
+            value="delegated-function-token",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+
+    named = await _send(dispatch, _member_session, user_name="Ada Lovelace")
+    nameless = await _send(dispatch, _member_session)
+
+    assert named["json"]["identity"]["user_name"] == "Ada Lovelace"
+    RuntimeInvocation.model_validate(named["json"])
+    # No key at all without a name: an older runtime forbids the field.
+    assert "user_name" not in nameless["json"]["identity"]
 
 
 def _matches(principal, *, user_id, run_id, revision=_REVISION, ids=None):

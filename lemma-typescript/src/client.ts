@@ -2,6 +2,7 @@ import {
   resolveConfig,
   type LemmaAppConfig,
   type LemmaConfig,
+  type LemmaWebWidget,
 } from "./config.js";
 import { AuthManager, type AuthState, type AuthListener } from "./auth.js";
 import { GeneratedClientAdapter } from "./generated.js";
@@ -41,6 +42,7 @@ import { DatastoreNamespace } from "./namespaces/datastore.js";
 
 export type { LemmaConfig };
 export type { LemmaAppConfig };
+export type { LemmaWebWidget };
 export { AuthManager };
 export type { AuthState, AuthListener };
 
@@ -200,6 +202,18 @@ export class LemmaClient {
 
   get app(): LemmaAppConfig | undefined {
     return this._config.app;
+  }
+
+  /**
+   * A web widget this page may embed, as the app host named it: the one called
+   * `name`, or with no name the first. Like `app`, it describes the page, not
+   * whichever pod the client is pointed at. Undefined when the host named none
+   * -- outside a hosted app, while the deployment's public web is off, or when
+   * no switched-on widget of the app's pod allows the app's address.
+   */
+  webWidget(name?: string): LemmaWebWidget | undefined {
+    const widgets = this._config.webWidgets ?? [];
+    return name === undefined ? widgets[0] : widgets.find((widget) => widget.name === name);
   }
 
   /**

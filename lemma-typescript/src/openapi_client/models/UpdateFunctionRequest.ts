@@ -11,6 +11,10 @@ import type { ResourceVisibility } from './ResourceVisibility.js';
  */
 export type UpdateFunctionRequest = {
     /**
+     * Offer this function to the Lemma's assistant, or stop. Omit to leave it as it is.
+     */
+    assistant_invoke?: (boolean | null);
+    /**
      * Updated Python source for the function. When provided, the platform re-analyzes the code and refreshes input_schema, output_schema, and config_schema on the returned function.
      */
     code?: (string | null);

@@ -13,6 +13,8 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 from urllib.parse import urlencode
 from uuid import UUID
@@ -39,6 +41,24 @@ APP_INSTALL_SENTINEL = app_install.APP_INSTALL_SENTINEL
 # `.localhost` host is a separate site as far as WebKit is concerned, so an app
 # calling the API's real host got no cookie and loaded signed out.
 APP_ORIGIN_API_URL = "/_lemma"
+
+
+@dataclass(frozen=True, slots=True)
+class PageWebWidget:
+    """One of the pod's web widgets a hosted app may put on its pages.
+
+    A widget's public key is publishable -- it is written into every page that
+    embeds the widget, and what it allows is what the internet gets -- so the
+    host hands it to the app rather than making the app's links carry it.
+    Which widgets qualify is the agent surfaces module's call; core only renders
+    them.
+    """
+
+    name: str
+    public_key: str
+    #: Where ``widget.js`` is served: the API host, never the app's own origin,
+    #: because the script derives every call it makes from its own URL.
+    script_url: str
 
 
 def app_api_url() -> str | None:
@@ -81,6 +101,7 @@ def build_runtime_config(
     app: dict[str, str] | None = None,
     app_id: UUID | str | None = None,
     api_url: str | None = None,
+    web_widgets: Sequence[PageWebWidget] = (),
 ) -> dict[str, object]:
     """Pod context handed to the browser SDK at serve time.
 
@@ -112,6 +133,17 @@ def build_runtime_config(
             for key, value in app.items()
             if key in {"name", "description", "iconUrl", "url"} and value
         }
+    if web_widgets:
+        # Only when there is one, so the config -- and the ETag hashed from it --
+        # of every app whose pod has no widget for it stays what it was.
+        config["webWidgets"] = [
+            {
+                "name": widget.name,
+                "publicKey": widget.public_key,
+                "scriptUrl": widget.script_url,
+            }
+            for widget in web_widgets
+        ]
     return config
 
 
@@ -262,9 +294,12 @@ def runtime_config_token(
     app: dict[str, str] | None = None,
     branding: dict[str, str] | None = None,
     api_url: str | None = None,
+    web_widgets: Sequence[PageWebWidget] = (),
 ) -> str:
     """Short, stable hash of the runtime config, for cache busting (ETags)."""
-    config = build_runtime_config(pod_id, app=app, api_url=api_url)
+    config = build_runtime_config(
+        pod_id, app=app, api_url=api_url, web_widgets=web_widgets
+    )
     head = _public_app_social_metadata(app) + _public_app_install(app)
     token_payload: object = (
         {"config": config, "branding": branding} if branding else config
@@ -291,6 +326,7 @@ def inject_runtime_config(
     app_id: UUID | str | None = None,
     branding: dict[str, str] | None = None,
     api_url: str | None = None,
+    web_widgets: Sequence[PageWebWidget] = (),
 ) -> bytes:
     """Insert host runtime data and presentation into an HTML entrypoint.
 
@@ -309,7 +345,13 @@ def inject_runtime_config(
     injection = ""
     if RUNTIME_CONFIG_SENTINEL not in text:
         payload = json.dumps(
-            build_runtime_config(pod_id, app=app, app_id=app_id, api_url=api_url)
+            build_runtime_config(
+                pod_id,
+                app=app,
+                app_id=app_id,
+                api_url=api_url,
+                web_widgets=web_widgets,
+            )
         ).replace("<", "\\u003c")
         injection += (
             f"<script {RUNTIME_CONFIG_SENTINEL}>"

@@ -36,6 +36,10 @@ export interface Graph {
     edges: Map<string, string[]>;
     /** Every node id, in the order they arrived, for anything the walk misses. */
     order: string[];
+    /** Where a node goes when it fails (`kind: "FAILURE"` edges), source →
+     *  target. Not a next step: kept apart so the walk never takes one as the
+     *  line, while the first step is still the one nothing points at. */
+    failures: Map<string, string>;
 }
 
 export interface Arm {
@@ -69,14 +73,21 @@ export function readGraph(raw: unknown): Graph | null {
         order.push(id);
     }
     const edges = new Map<string, string[]>();
+    const failures = new Map<string, string>();
     for (const one of Array.isArray(raw.edges) ? raw.edges : []) {
         if (!isRecord(one)) continue;
         const source = str(one.source);
         const target = str(one.target);
         if (!source || !target || !nodes.has(source) || !nodes.has(target)) continue;
+        /* A branch that ran is still drawn, after the line, with the steps
+           the walk did not reach. */
+        if (str(one.kind)?.toUpperCase() === "FAILURE") {
+            if (!failures.has(source)) failures.set(source, target);
+            continue;
+        }
         edges.set(source, [...(edges.get(source) ?? []), target]);
     }
-    return { nodes, edges, order };
+    return { nodes, edges, order, failures };
 }
 
 interface Route {
@@ -145,6 +156,7 @@ function reach(graph: Graph, from: string): Set<string> {
 export function entryOf(graph: Graph): string | null {
     const pointed = new Set<string>();
     for (const id of graph.order) for (const next of successors(graph, id)) pointed.add(next);
+    for (const target of graph.failures.values()) pointed.add(target);
     return graph.order.find((id) => !pointed.has(id)) ?? graph.order[0] ?? null;
 }
 

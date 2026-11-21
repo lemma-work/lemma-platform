@@ -16,7 +16,7 @@ A function reaches it through the SDKs (`pod.decisions.make(...)`,
 
 | Route | Behavior |
 | --- | --- |
-| `POST /pods/{pod_id}/decisions` | Check the questions, evidence and examples; admit against the organization's rate; ask the configured provider under the caller's usage metering; check the answers; return one per question |
+| `POST /pods/{pod_id}/decisions` | Read any images it names from the Lemma's files as the caller; check the questions, evidence and examples; admit against the organization's rate; ask the configured provider under the caller's usage metering; check the answers; return one per question |
 
 The module owns no tables, events or workers. Its only state is a per-minute
 counter per organization and priority in Redis.
@@ -103,6 +103,50 @@ sequenceDiagram
     S-->>C: one answer per question
 ```
 
+## Images
+
+A decision can look at images as well as text: a receipt photo on an expense
+claim, a slide, a screenshot. The request names them as files of the Lemma,
+`"images": [{"path": "/receipts/0042.jpg"}]`, and `evidence` may then be left
+out. Nothing else is accepted: bytes in the body would be megabytes of base64
+in a route bounded at 512 KiB, and a URL this server fetched would let anyone
+who can ask a decision make it request any address it can reach, internal
+ones included.
+
+- **Read as the caller** (`api/images.py`). Each path is resolved through
+  `datastore.contracts.pod_files` with the request's own context -- a member's
+  access, or a function's or agent's grants -- so a decision shows a model
+  nothing the caller could not open. A file that is missing or not theirs to
+  read gets the same answer. The files are read in one short unit of work,
+  closed before anything is decoded or a model is asked. A file that cannot be
+  used refuses the request (422, every such file listed by
+  `images[i].path` or `images[i]`) before the rest of it is checked.
+- **Sized for the model** (`infrastructure/image_payload.py`, off the event
+  loop). A file is what its bytes say: PNG, JPEG, WebP or GIF, still (an
+  animation is refused, not judged on its first frame), at most 10 MiB and 50
+  megapixels. One larger than 1568 pixels a side -- what models shrink to on
+  arrival -- or over 3 MiB is shrunk and sent as JPEG, transparency laid on
+  white.
+- **Bounded** (`domain/request.py`, which also holds a backend caller handing
+  bytes in directly): at most 4 images of at most 3 MiB each as sent.
+- **Inside the evidence.** The `model` provider sends each image as image
+  content between the evidence markers, after a line naming it (`Image 1 of 2
+  (receipt.jpg):`), and the system prompt says text inside an image is
+  evidence, never instructions. The token ceiling grows by 3,000 input tokens
+  per image. Metering is the model call's own: images are billed as input
+  tokens.
+- **Only to a model that reads them.** The `model` provider sends images only
+  to a model whose runtime profile declares `VISION` (an Anthropic-compatible
+  system profile always does; an OpenAI-compatible one for the names in
+  `LEMMA_OPENAI_VISION_MODEL_NAMES`; a workspace model as marked in Settings).
+  Any other model, `typesafe` and `gemini`, refuse the request with 422
+  `DECISION_IMAGES_UNSUPPORTED` before anything is asked: a text-only model
+  handed an image refuses the whole call, which would otherwise reach the
+  caller as a 503 to retry. Typesafe System One takes images only as an opt-in
+  preview, so this provider does not send them yet; nor does `gemini`.
+
+Examples stay text only.
+
 ## Limits and metering
 
 | Setting | Meaning |
@@ -122,7 +166,11 @@ or agent when one is asking with a delegated token.
 
 Unit tests cover the schema subset, request bounds, the prompt's trust split,
 both providers against scripted models and a mock transport, the service's error
-mapping and answer check, the rate window, and the route. E2E tests cover a
-member asking, a function asking in its own pod and refused in another, a
-colleague outside the pod refused, metering, 422s, an unreachable provider (503)
-and the rate limit (429).
+mapping and answer check, the rate window, and the route; for images, the
+bounds, their place between the markers, the vision check on both providers,
+sizing a file by its bytes, and the reader listing every file it cannot use. E2E
+tests cover a member asking, a function asking in its own pod and refused in
+another, a colleague outside the pod refused, metering, 422s, an unreachable
+provider (503) and the rate limit (429); and a decision on an uploaded photo,
+the 422 from a model that cannot read images, and another member's private
+file refused.

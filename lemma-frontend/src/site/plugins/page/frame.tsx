@@ -37,10 +37,10 @@ export function Neighbours({ position }: { position: number }) {
     const before = all.find((p) => p.position === position - 1);
     const after = all.find((p) => p.position === position + 1);
     return (
-        <nav className={s.neighbours} aria-label="Plugins in build order">
+        <nav className={s.neighbours} aria-label="More plugins">
             {before ? (
                 <Link href={`/templates/${before.slug}`} rel="prev">
-                    <small>Before it</small>
+                    <small>Previous</small>
                     <span>← {before.name}</span>
                 </Link>
             ) : (
@@ -51,7 +51,7 @@ export function Neighbours({ position }: { position: number }) {
             </Link>
             {after ? (
                 <Link href={`/templates/${after.slug}`} rel="next" className={s.after}>
-                    <small>After it</small>
+                    <small>Next</small>
                     <span>{after.name} →</span>
                 </Link>
             ) : (

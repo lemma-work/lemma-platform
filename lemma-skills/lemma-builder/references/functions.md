@@ -109,9 +109,11 @@ Rules:
 - Handler signature is `(ctx: FunctionContext, data: <InputModel>) -> <OutputModel>`,
   async or sync.
 - `FunctionContext` fields: `ctx.pod_id`, `ctx.function_id`, `ctx.user_id`,
-  `ctx.user_email` (the **invoking** user — your delegated identity; both `None`
-  when a contact's conversation called it), `ctx.contact_id` (that contact, else
-  `None`), `ctx.config`, and `ctx.pod` (a ready `Pod` client — see below).
+  `ctx.user_email` and `ctx.user_name` (the **invoking** user — your delegated
+  identity; all `None` when a contact's conversation called it, and `user_name` is
+  also `None` for a person who gave no name, so greet by email then),
+  `ctx.contact_id` (that contact, else `None`), `ctx.config`, and `ctx.pod` (a ready
+  `Pod` client — see below). In the environment: `LEMMA_USER_NAME`.
 - Keep input/output models small and JSON-serializable. Return ids and compact
   summaries, not big record lists.
 - A function is only runnable once it reaches **`READY`**, which happens when it is
@@ -435,6 +437,11 @@ category = None if unsure else answer.value     # "billing", or None for a perso
   value and sets `confidence` to that value's probability. Pick the threshold
   per question, by what a wrong answer costs.
 - Evidence over 64 KiB is refused, not cut: send the part that matters.
+- To judge a picture (a receipt photo, a slide), pass `images=["/receipts/0042.jpg"]`
+  — up to 4 files of this Lemma, PNG, JPEG, WebP or GIF — with or without
+  `evidence`. They are read with the function's own access, so it needs a read
+  grant on those files. Only a deployment whose decision model reads images
+  answers; otherwise the call fails with 422 `DECISION_IMAGES_UNSUPPORTED`.
 - Examples are how answers improve: keep corrected cases in a table and pass the
   recent ones in `examples`.
 - 429 and 503 mean ask again later; for a table of rows, loop in a JOB function
@@ -495,6 +502,24 @@ lemma functions permissions get save_expense
 
 A run failing with `MISSING_WORKLOAD_RESOURCE_GRANT` names the resource it tried to
 reach — add exactly that grant and retry.
+
+### Keeping a function from the assistant
+
+A function your app (or workflow) calls only after a check of its own — "claim"
+behind a daily limit, "pay" behind a confirmation — must not be one the Lemma's
+assistant can run by name, or it will step around the check. Set
+`"assistant_invoke": false` (create, `PATCH`, or the bundle JSON):
+
+- the assistant is not shown it, and running it is refused with 403
+  `FUNCTION_NOT_FOR_ASSISTANT`;
+- a person, your apps (in Lemma and framed in an AI tool), workflows, schedules,
+  other functions, and an agent you granted it still run it.
+
+Give the assistant a function that does the checked thing instead (one that checks
+the limit, then claims), or let it open the app. It still reads the function to
+build with it. This narrows what the assistant chooses to do; it is not access
+control, since the assistant acts with the person's access and someone who may edit
+the function can turn it back on. `contacts_invoke` is separate and unaffected.
 
 ### Opening a function to contacts
 

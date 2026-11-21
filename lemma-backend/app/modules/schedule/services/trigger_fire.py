@@ -88,7 +88,8 @@ def run_person(schedule: ScheduleEntity, row_owner_user_id: UUID | None) -> UUID
     The other direction, a schedule's author borrowing whoever writes, is
     closed where the schedule is made: running as row owners takes edit
     access to the target (``schedule_ownership``). Everything else -- time,
-    webhooks, rows nobody in the pod owns, batches -- runs as the owner.
+    webhooks, rows nobody in the pod owns, batches, and every change a
+    ``rows: OWNER_READABLE`` trigger is handed -- runs as the owner.
     """
     if row_owner_user_id is not None and runs_as_row_owner(schedule):
         return row_owner_user_id

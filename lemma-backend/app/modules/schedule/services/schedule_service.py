@@ -158,7 +158,7 @@ class ScheduleService:
         await self._validate_name_available(schedule_create)
         await self._validate_target(schedule_create)
         await self._require_target_execute(schedule_create, ctx=ctx)
-        await self._require_datastore_table_update(schedule_create, ctx=ctx)
+        await self._require_table_watch(schedule_create, ctx=ctx)
         schedule_create = await self._require_connector_use(schedule_create, ctx)
         if schedule_create.schedule_type == ScheduleType.TIME:
             refuse_time_schedule_filter(
@@ -402,7 +402,7 @@ class ScheduleService:
             update_data,
             ctx=ctx,
             session=self.uow.session,
-            require_datastore_update=self._require_datastore_table_update,
+            require_datastore_update=self._require_table_watch,
         )
         if "name" in update_data and update_data["name"]:
             await self._validate_name_available(
@@ -602,7 +602,7 @@ class ScheduleService:
             schedule, ctx, self.uow, resolve=self._connector_access
         )
 
-    async def _require_datastore_table_update(
+    async def _require_table_watch(
         self,
         schedule: ScheduleCreateEntity | ScheduleEntity,
         ctx: Context | None,
@@ -619,8 +619,9 @@ class ScheduleService:
             raise ScheduleValidationError(
                 "DATASTORE schedules must declare an explicit table_name."
             ) from exc
-        await self.datastore_policy.require_table_update(
+        await self.datastore_policy.require_table_watch(
             pod_id=schedule.pod_id,
             table_name=config.table_name,
+            owner_readable_rows=config.rows == "OWNER_READABLE",
             ctx=ctx,
         )

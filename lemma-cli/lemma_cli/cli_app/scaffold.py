@@ -112,6 +112,7 @@ FUNCTION_JSON = _fill_enums("""{
   "type": "API",         // API = sync request/response; JOB = async background run
   "visibility": "POD",   // __VISIBILITY__
   // "config": { },      // runtime settings for this function (timeouts, memory)
+  // "assistant_invoke": false,  // an internal step: apps, workflows and people run it, the assistant doesn't
   "code": { "$file": "code.py" },
   // Zero access by default. This EMPTY list means "holds nothing" — on import it
   // REPLACES the function's grants, so delete the whole "permissions" key if you
@@ -947,6 +948,9 @@ def _decision_misroute_issues(nodes: list, edges: list) -> list[str]:
     issues: list[str] = []
     outgoing: dict[str, list] = {}
     for edge in edges:
+        # A failure edge is where a node goes when it fails, never its default.
+        if str(edge.get("kind") or "").upper() == "FAILURE":
+            continue
         src = str(edge.get("source") or "")
         outgoing.setdefault(src, []).append(edge)
     for node in nodes:

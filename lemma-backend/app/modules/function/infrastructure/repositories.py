@@ -154,9 +154,16 @@ class FunctionRepository(FunctionRevisionRepositoryMixin, FunctionRepositoryPort
         return self._to_entity_with_allowed_actions(row[0], row[1]) if row else None
 
     async def list_by_pod(
-        self, pod_id: UUID, limit: int = 100, cursor: str | None = None
+        self,
+        pod_id: UUID,
+        limit: int = 100,
+        cursor: str | None = None,
+        *,
+        offered_to_assistant: bool = False,
     ) -> tuple[list[FunctionEntity], str | None]:
         statement = select(FunctionModel).where(FunctionModel.pod_id == pod_id)
+        if offered_to_assistant:
+            statement = statement.where(FunctionModel.assistant_invoke.is_(True))
         if cursor:
             statement = statement.where(FunctionModel.id < UUID(cursor))
         statement = statement.order_by(FunctionModel.id.desc()).limit(limit + 1)
@@ -234,6 +241,7 @@ class FunctionRepository(FunctionRevisionRepositoryMixin, FunctionRepositoryPort
             )
         model.status = function.status
         model.type = function.type
+        model.assistant_invoke = function.assistant_invoke
 
         await self.session.flush()
         return model.to_entity()

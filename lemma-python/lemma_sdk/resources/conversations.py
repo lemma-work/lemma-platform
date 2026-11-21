@@ -17,11 +17,13 @@ from ..openapi_client.api.agent_conversations import (
     agent_conversation_pending_interaction_list,
     agent_conversation_repository_list,
     agent_conversation_retry,
+    agent_conversation_run_get,
     agent_conversation_stream,
     agent_conversation_stop,
     agent_conversation_update,
 )
 from ..openapi_client.models.approval_decision_response import ApprovalDecisionResponse
+from ..openapi_client.models.agent_run_response import AgentRunResponse
 from ..openapi_client.models.agent_run_start_response import AgentRunStartResponse
 from ..openapi_client.models.conversation_list_response import ConversationListResponse
 from ..openapi_client.models.conversation_repository_list_response import (
@@ -160,6 +162,16 @@ class PodConversations(BoundResource):
     def get(self, conversation_id: str) -> ConversationResponse:
         return self._call(
             agent_conversation_get, self._pod_uuid(), as_uuid(conversation_id)
+        )
+
+    def run(self, conversation_id: str, run_id: str) -> AgentRunResponse:
+        """One run of a conversation: its status, output, and the tokens it
+        used (``usage``), so a plugin can meter what an item cost."""
+        return self._call(
+            agent_conversation_run_get,
+            self._pod_uuid(),
+            as_uuid(conversation_id),
+            as_uuid(run_id),
         )
 
     def update(

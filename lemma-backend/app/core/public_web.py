@@ -11,11 +11,16 @@ module that opens something to visitors asks it.
 ``PUBLIC_PAGES_URL`` is where Lemma's hosted chat and form pages are served: an
 origin routed to the API that shares no cookies with it. Unset, they are served
 on ``API_URL``.
+
+``PUBLIC_WEB_TEST_VISITOR_CODE`` is for servers people test pages on, where the
+addresses visitors type are nobody's inbox: every code is that one, and none is
+mailed. It is refused at startup in production.
 """
 
+from typing import Self
 from urllib.parse import urlsplit
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.config import settings
@@ -56,6 +61,31 @@ class PublicWebSettings(BaseSettings):
             "https://pages.example.com. Unset, they are served on API_URL."
         ),
     )
+    public_web_test_visitor_code: str | None = Field(
+        default=None,
+        pattern=r"^\d{6}$",
+        description=(
+            "Testing only: the six digits every email code sent to a web "
+            "visitor is, and no code is mailed. For a server people test "
+            "pages on, where the addresses they type reach no inbox. Anybody "
+            "who knows it can confirm any address on this server's widgets, "
+            "so startup refuses it when ENVIRONMENT=production. Unset (the "
+            "default), codes are random and mailed."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _refuse_test_code_in_production(self) -> Self:
+        # Refused, not ignored: a production deployment that sets it has
+        # mistaken itself for a test server, and should not start until
+        # somebody notices.
+        if self.public_web_test_visitor_code and settings.environment == "production":
+            raise ValueError(
+                "PUBLIC_WEB_TEST_VISITOR_CODE must not be set in production: "
+                "anybody who knows it can confirm any email address on this "
+                "server's web widgets."
+            )
+        return self
 
 
 public_web_settings = PublicWebSettings()
@@ -67,6 +97,11 @@ def public_web_enabled() -> bool:
 
 def public_web_altcha_enabled() -> bool:
     return public_web_settings.public_web_altcha_enabled
+
+
+def public_web_test_visitor_code() -> str | None:
+    """The code every visitor's email code is on a test server; None elsewhere."""
+    return public_web_settings.public_web_test_visitor_code or None
 
 
 def hosted_pages_base() -> str:

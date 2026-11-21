@@ -33,6 +33,7 @@ from fastmcp.apps.config import UI_MIME_TYPE
 from fastmcp.resources import ResourceContent, ResourceResult, ResourceTemplate
 from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations
 
+from app.core.authorization.app_sessions import app_session_id
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.apps.contracts import AppNotFoundError, AppStatus
@@ -186,7 +187,7 @@ async def call_app_tool(
         session = await mint_pod_agent_session(
             user_id=principal.user_id,
             pod_id=pod_id,
-            session_id=f"mcp:{principal.grant_id}",
+            session_id=app_session_id(principal.grant_id),
         )
         return _result(
             {"success": True},
@@ -205,7 +206,7 @@ async def call_app_tool(
         session = await mint_pod_agent_session(
             user_id=principal.user_id,
             pod_id=pod_id,
-            session_id=f"mcp:{principal.grant_id}",
+            session_id=app_session_id(principal.grant_id),
         )
         try:
             ticket = await mint_embedded_app_ticket(

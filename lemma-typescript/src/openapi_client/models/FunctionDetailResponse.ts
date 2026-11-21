@@ -8,6 +8,10 @@ import type { FunctionType } from './FunctionType.js';
 import type { JsonObject } from './JsonObject.js';
 export type FunctionDetailResponse = {
     allowed_actions?: Array<string>;
+    /**
+     * Offered to the Lemma's assistant and runnable by it.
+     */
+    assistant_invoke?: boolean;
     code?: (string | null);
     code_path?: (string | null);
     config?: (JsonObject | null);

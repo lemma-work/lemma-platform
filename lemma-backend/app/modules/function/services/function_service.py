@@ -41,10 +41,7 @@ from app.modules.function.domain.ports import (
     FunctionRunRepositoryPort,
 )
 from app.modules.function.domain.types import JsonObject
-from app.modules.function.services.execution_preflight import (
-    require_ready_revision,
-    validate_input,
-)
+from app.modules.function.services.execution_preflight import preflight
 
 from app.modules.pod.contracts import PodRole
 from app.core.log.log import get_logger
@@ -421,6 +418,8 @@ class FunctionService:
             function.config = update_entity.config
         if update_entity.type is not None:
             function.type = update_entity.type
+        if update_entity.assistant_invoke is not None:
+            function.assistant_invoke = update_entity.assistant_invoke
 
         return FunctionUpdatePlan(
             function=function,
@@ -504,9 +503,8 @@ class FunctionService:
             function = await FunctionRevisionService(
                 self.repository
             ).resolve_for_execution(function, revision_ref, ctx=ctx)
-        require_ready_revision(function)
-        # Reject bad input before spending a run or sandbox lease.
-        validate_input(function, input_data)
+        # Refuse the call before spending a run or sandbox lease.
+        preflight(function, input_data, ctx)
 
         effective_mode = dispatch_mode or (
             FunctionDispatchMode.ASYNCHRONOUS

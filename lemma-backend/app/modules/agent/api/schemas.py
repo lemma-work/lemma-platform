@@ -170,6 +170,14 @@ class ConversationResponse(BaseModel):
     #: When a person last wrote, a notification landed, or a run started or
     #: finished here; the history list is ordered by it.
     last_activity_at: datetime
+    last_run_id: UUID | None = Field(
+        default=None,
+        description=(
+            "The conversation's latest run, to read with "
+            "`agent.conversation.run.get` -- its outcome and the tokens it "
+            "used. Set when one conversation is read."
+        ),
+    )
     last_run_status: AgentRunStatus | None = None
     last_run_error: str | None = None
     last_run_error_code: str | None = None
@@ -583,12 +591,10 @@ from app.modules.agent.api.runtime_profile_schemas import (  # noqa: E402
     CreateAgentHostRuntimeProfileRequest as CreateAgentHostRuntimeProfileRequest,
     CreateAgentRuntimeProfileRequest as CreateAgentRuntimeProfileRequest,
     CreateAnthropicCompatibleRuntimeProfileRequest as CreateAnthropicCompatibleRuntimeProfileRequest,
-    CreateGoogleGenAIRuntimeProfileRequest as CreateGoogleGenAIRuntimeProfileRequest,
     CreateOpenAICompatibleRuntimeProfileRequest as CreateOpenAICompatibleRuntimeProfileRequest,
     SetOrganizationDefaultRuntimeRequest as SetOrganizationDefaultRuntimeRequest,
     UpdateAgentHostRuntimeProfileRequest as UpdateAgentHostRuntimeProfileRequest,
     UpdateAgentRuntimeProfileRequest as UpdateAgentRuntimeProfileRequest,
     UpdateAnthropicCompatibleRuntimeProfileRequest as UpdateAnthropicCompatibleRuntimeProfileRequest,
-    UpdateGoogleGenAIRuntimeProfileRequest as UpdateGoogleGenAIRuntimeProfileRequest,
     UpdateOpenAICompatibleRuntimeProfileRequest as UpdateOpenAICompatibleRuntimeProfileRequest,
 )

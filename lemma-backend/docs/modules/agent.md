@@ -139,7 +139,7 @@ adapter is consolidated.
 | Routes | What they do |
 | --- | --- |
 | `/pods/{pod_id}/agents` | Agent CRUD plus resource permission replacement |
-| `/pods/{pod_id}/conversations` | Create/list/read/update, messages, approvals, send, stream, stop; `/repositories` lists the GitHub repositories one can be opened in |
+| `/pods/{pod_id}/conversations` | Create/list/read/update, messages, approvals, send, stream, stop; `/repositories` lists the GitHub repositories one can be opened in; `/{id}/runs/{run_id}` reads one run back with the model tokens it used |
 | `/organizations/{org}/agent-runtime/profiles` | Discover/create model runtime profiles |
 | `/me/runtime/agent-hosts...`, `/agent-host/link`, `/agent-host/transfers/{id}`, `/agent-host/runs/{run_id}/blobs/{sha256}` | Agent Host pairing and management; the host's link WebSocket (commands, events, harnesses, Lemma MCP), and the host-authenticated HTTP routes its bulk bytes take instead (file chunks, event images) |
 | `/tools/*` | Server-side web search and feedback endpoints used by runtimes |
@@ -254,6 +254,21 @@ reached GitHub stay in the clone, and a conversation that runs again gets its
 worktree made again on its branch. A worktree whose conversations were deleted
 with their pod is not swept.
 
+### A run's tokens
+
+`GET /pods/{pod}/conversations/{id}/runs/{run_id}` answers one run of a
+conversation the caller may read: status, output, error, and `usage` -- input
+tokens (cache reads included), output tokens, cache reads and writes, and the
+models, summed over every row the usage ledger holds for the run
+(`usage/contracts/run_usage`). A run working through the in-process harness
+has a row per request as it streams; an Agent Host run one when it reports at
+the end. The conversation's title and the memory kept after the run are left
+out (`services/background_model.AFTER_THE_RUN_SOURCES`): they land later, and
+the same run would read differently twice. Tokens only -- what they cost is the
+organization's bill, read through the usage routes. A sub-agent's run is its
+own run, in its own conversation. `last_run_id` on a conversation read names
+the latest run; a send's answer names its run as `agent_run_id`.
+
 ## Prompt context
 
 Prompts combine a compact pod resource map, the agent's role, reply guidance,
@@ -318,6 +333,10 @@ their own bound, the newest `MAX_FOLDED_MESSAGES`, apart from the newest
 `MAX_UNATTACHED_MESSAGES` of the other two, and the opening notice says when
 it left some out (`domain/folded_turns`).
 
+The functions the assistant's map lists leave out any kept from it
+(`assistant_invoke` false, see [function](function.md)); it is refused one it
+runs by name all the same, so the list and the refusal agree.
+
 Table summaries include primary keys, column types and write constraints,
 foreign keys, RLS, and visibility. Column descriptions are available through
 table inspection rather than repeated in every prompt. Omission counts mark
@@ -329,6 +348,26 @@ declares `__pod_inventory__`, and any committed change to one of its rows
 replaces its pod's token (`app/core/infrastructure/db/pod_inventory.py`), so
 a table an agent has just created is in the next run's brief rather than one a
 TTL later.
+
+### Memory
+
+The four `AGENTS.md` indexes reach every memory-enabled run's brief
+(`services/context_brief/memory.py`); how memory is laid out, written and kept
+is [agent-memory.md](../../../docs/architecture/agent-memory.md). The brief,
+the memory prompts and the file tools' descriptions call the shared scope
+"this Lemma", never "pod", because the model repeats them to people.
+
+A plugin keeps a block between `<!-- plugin:<slug> -->` and
+`<!-- /plugin:<slug> -->` in `/memory/AGENTS.md` and `/me/AGENTS.md`, written
+by its own function through the file API. The agent's writes to those two
+files -- `pod_write_file` and `pod_edit_file`, and so the memory pass, which
+calls the same tool -- are refused unless every complete block in the file now
+is in the new text byte for byte (moving it is fine) and no new block appears
+(`domain/plugin_memory_blocks.check_blocks_kept`). An opening marker with no
+closing one is not a block and locks nothing. The plugin's own writes do not
+pass through these tools, so its set-up can still add, replace and remove its
+block; nor do `lemma files write` from a workspace or the file API, which this
+does not guard.
 
 ## Key dependencies
 

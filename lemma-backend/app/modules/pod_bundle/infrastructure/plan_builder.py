@@ -44,6 +44,7 @@ from lemma_pod_bundle.limits import (
 from app.modules.pod_bundle.domain.exportable import is_exportable_agent
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import BundleInvalidError
+from app.modules.pod_bundle.infrastructure.workflow_graphs import check_workflow_graphs
 from app.modules.pod_bundle.infrastructure.connector_grants import (
     ConnectorDirectory,
     plan_connector_grants,
@@ -377,6 +378,7 @@ class PlanBuilder:
         steps += data_steps
 
         _check_step_count(steps)
+        check_workflow_graphs(bundle_root, pod_manifest)
 
         for i, step in enumerate(steps):
             step.index = i

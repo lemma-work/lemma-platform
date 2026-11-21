@@ -268,6 +268,7 @@ class AppAssetResolver:
             public_url=public_url,
             is_entrypoint=is_entrypoint,
         )
+        web_widgets = await self._web_widgets(app, public_url) if is_entrypoint else ()
         cover = (
             self._cover_spec(app, public_url)
             if normalized_asset_path == app_cover.COVER_ASSET_PATH
@@ -285,6 +286,9 @@ class AppAssetResolver:
                 # Must match what the storage phase injects, or a cached page
                 # keeps an apiUrl the served config no longer agrees with.
                 api_url=runtime_config.app_api_url(),
+                # And a widget switched on, off or re-keyed reaches pages
+                # already cached.
+                web_widgets=web_widgets,
             )
             etag = f"{release.version}.{config_token}"
         else:
@@ -313,7 +317,24 @@ class AppAssetResolver:
             branding=branding,
             private=private,
             cover=cover,
+            web_widgets=web_widgets,
         )
+
+    async def _web_widgets(
+        self, app: AppEntity, public_url: str | None
+    ) -> tuple[runtime_config.PageWebWidget, ...]:
+        """The pod's web widgets this app's pages may embed.
+
+        Only on the app's own origin, the one a widget allows or refuses; an
+        app read through the API has no page of its own to embed one on. Any
+        visibility: a widget's key is publishable, and an app made public
+        later must find what it was built against.
+        """
+        if not public_url:
+            return ()
+        parts = urlparse(public_url)
+        origin = f"{parts.scheme}://{parts.netloc}"
+        return tuple(await self.repository.page_web_widgets(app.pod_id, origin))
 
     def _cover_spec(self, app: AppEntity, public_url: str | None) -> AppCoverSpec:
         return AppCoverSpec(

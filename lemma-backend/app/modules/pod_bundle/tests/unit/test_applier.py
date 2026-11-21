@@ -113,8 +113,11 @@ class FakeTableOperations:
         enable_rls,
         visibility,
         ctx,
+        contact_owned=False,
+        contact_columns=None,
     ):
         self.created.append((name, [c.name for c in columns]))
+        self.contact_owned = (contact_owned, contact_columns)
 
     async def add_table_column(self, uow, *, pod_id, table_name, column, ctx):
         self.added.append(column.name)
@@ -243,6 +246,40 @@ async def test_table_create_calls_service(tmp_path, monkeypatch):
     await _applier(root).apply_step(_step(StepKind.TABLE, "leads"))
     # System column dropped; only user columns created.
     assert fake.created == [("leads", ["id", "title"])]
+
+
+async def test_table_create_keeps_contact_ownership(tmp_path, monkeypatch):
+    # Dropped before: the table arrived as an ordinary one, so the contact
+    # policy never existed and a re-import saw `contact_id` as a stray column.
+    root = tmp_path / "bundle"
+    _write(
+        root / "tables" / "visitors" / "visitors.json",
+        {
+            "name": "visitors",
+            "primary_key_column": "id",
+            "enable_rls": False,
+            "contact_owned": True,
+            "contact_columns": ["title"],
+            "columns": [
+                {"name": "id", "type": "UUID"},
+                {"name": "title", "type": "TEXT"},
+            ],
+        },
+    )
+    fake = FakeTableOperations().patch(monkeypatch)
+    await _applier(root).apply_step(_step(StepKind.TABLE, "visitors"))
+    assert fake.contact_owned == (True, ["title"])
+
+
+async def test_table_create_defaults_to_not_contact_owned(tmp_path, monkeypatch):
+    root = tmp_path / "bundle"
+    _write(
+        root / "tables" / "leads" / "leads.json",
+        {"name": "leads", "columns": [{"name": "id", "type": "UUID"}]},
+    )
+    fake = FakeTableOperations().patch(monkeypatch)
+    await _applier(root).apply_step(_step(StepKind.TABLE, "leads"))
+    assert fake.contact_owned == (False, None)
 
 
 async def test_table_update_adds_new_columns_only(tmp_path, monkeypatch):

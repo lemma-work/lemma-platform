@@ -71,3 +71,17 @@ def test_examples_and_priority_are_passed_through() -> None:
     assert sent["examples"] == [
         {"evidence": "refund please", "answers": {"category": "billing"}}
     ]
+
+
+def test_images_go_by_path_and_evidence_is_left_out_when_not_given() -> None:
+    transport = RecordingTransport()
+
+    PodDecisions(transport, pod_id=POD).make(
+        instruction="Is this a receipt?",
+        schema=SCHEMA,
+        images=["/receipts/0042.jpg"],
+    )
+
+    sent = _sent(transport)
+    assert sent["images"] == [{"path": "/receipts/0042.jpg"}]
+    assert "evidence" not in sent

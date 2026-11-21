@@ -9178,7 +9178,7 @@ var LemmaClient = (() => {
     return {};
   }
   function resolveConfig(overrides = {}) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n;
     const win = windowConfig();
     const configuredApiUrl = (_b = (_a = overrides.apiUrl) != null ? _a : win.apiUrl) != null ? _b : apiUrlFromEnv();
     if (!configuredApiUrl && typeof window === "undefined") {
@@ -9200,7 +9200,8 @@ var LemmaClient = (() => {
       timeoutMs: (_j = overrides.timeoutMs) != null ? _j : win.timeoutMs,
       maxRetries: (_k = overrides.maxRetries) != null ? _k : win.maxRetries,
       client: (_l = overrides.client) != null ? _l : win.client,
-      appId: (_m = overrides.appId) != null ? _m : win.appId
+      appId: (_m = overrides.appId) != null ? _m : win.appId,
+      webWidgets: (_n = overrides.webWidgets) != null ? _n : win.webWidgets
     };
   }
 
@@ -9271,6 +9272,16 @@ var LemmaClient = (() => {
     const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
     return withLeadingSlash.endsWith("/") ? withLeadingSlash.slice(0, -1) : withLeadingSlash;
   }
+  function isPublicApiPath(url, apiPrefix) {
+    let pathname;
+    try {
+      const base = typeof window === "undefined" ? "http://localhost" : window.location.href;
+      pathname = new URL(url, base).pathname;
+    } catch {
+      return false;
+    }
+    return pathname.startsWith("/public/") || apiPrefix !== "" && pathname.startsWith(`${apiPrefix}/public/`);
+  }
   function resolveApiBase(apiUrl) {
     if (typeof window === "undefined") {
       throw new Error("Cookie session support requires a browser environment.");
@@ -9297,6 +9308,7 @@ var LemmaClient = (() => {
       unauthorisedListeners.add(onUnauthorised);
     }
     const { apiDomain, apiBasePath } = resolveApiBase(apiUrl);
+    const apiPrefix = apiBasePath.slice(0, -SESSION_API_SUFFIX.length);
     const signature = `${apiDomain}${apiBasePath}`;
     if (initializedSignature === signature) {
       return;
@@ -9353,6 +9365,12 @@ var LemmaClient = (() => {
             if (event.action === "UNAUTHORISED") {
               unauthorisedListeners.forEach((listener) => listener());
             }
+          },
+          override: {
+            functions: (original) => ({
+              ...original,
+              shouldDoInterceptionBasedOnUrl: (url, domain, backendDomain) => !isPublicApiPath(url, apiPrefix) && original.shouldDoInterceptionBasedOnUrl(url, domain, backendDomain)
+            })
           }
         })
       ]
@@ -16720,7 +16738,7 @@ var LemmaClient = (() => {
     }
     /**
      * Update Pod
-     * Update pod details
+     * Update pod details; only the fields sent change
      * @param podId
      * @param requestBody
      * @returns PodResponse Successful Response
@@ -16728,7 +16746,7 @@ var LemmaClient = (() => {
      */
     static podUpdate(podId, requestBody) {
       return request(OpenAPI, {
-        method: "PUT",
+        method: "PATCH",
         url: "/pods/{pod_id}",
         path: {
           "pod_id": podId
@@ -23616,6 +23634,18 @@ var LemmaClient = (() => {
     }
     get app() {
       return this._config.app;
+    }
+    /**
+     * A web widget this page may embed, as the app host named it: the one called
+     * `name`, or with no name the first. Like `app`, it describes the page, not
+     * whichever pod the client is pointed at. Undefined when the host named none
+     * -- outside a hosted app, while the deployment's public web is off, or when
+     * no switched-on widget of the app's pod allows the app's address.
+     */
+    webWidget(name) {
+      var _a;
+      const widgets = (_a = this._config.webWidgets) != null ? _a : [];
+      return name === void 0 ? widgets[0] : widgets.find((widget) => widget.name === name);
     }
     /**
      * Initialize the client by checking auth state.

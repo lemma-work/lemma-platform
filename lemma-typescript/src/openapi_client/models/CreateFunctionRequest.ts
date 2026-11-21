@@ -14,6 +14,10 @@ import type { ResourceVisibility } from './ResourceVisibility.js';
  */
 export type CreateFunctionRequest = {
     /**
+     * Offer this function to the Lemma's assistant. False keeps it for the flows that call it -- apps, workflows, schedules and other functions: the assistant is not shown it and is refused if it runs it by name.
+     */
+    assistant_invoke?: boolean;
+    /**
      * Python source for the function. When provided, the platform analyzes the code and populates input_schema, output_schema, and config_schema on the returned function.
      */
     code?: (string | null);

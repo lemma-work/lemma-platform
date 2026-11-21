@@ -97,7 +97,11 @@
     if (options.body !== undefined) headers["Content-Type"] = "application/json";
     // A FormData body names its own type, boundary included.
     var sends = options.body !== undefined || options.form !== undefined;
-    return fetch(base + path, {
+    // The fragment is never sent. It is how SuperTokens is told to leave a
+    // call alone: on a Lemma app the page's session client patches fetch, and
+    // apps built with an older SDK would otherwise add headers this
+    // endpoint's CORS refuses, and treat a visitor's 401 as a member's.
+    return fetch(base + path + "#superTokensDoNotDoInterception", {
       method: options.method || (sends ? "POST" : "GET"),
       headers: headers,
       body: options.form || (options.body !== undefined ? JSON.stringify(options.body) : undefined),
