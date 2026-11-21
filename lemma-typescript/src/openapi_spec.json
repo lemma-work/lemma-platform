@@ -15214,6 +15214,21 @@
         "title": "MyUsageLimitsResponse",
         "type": "object"
       },
+      "NamedPodResponse": {
+        "description": "Which pod an address in names means: its id, and nothing else.\n\nSomebody not in it learns no more than an id link would have told them.",
+        "properties": {
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pod_id"
+        ],
+        "title": "NamedPodResponse",
+        "type": "object"
+      },
       "NavigateCommand": {
         "additionalProperties": false,
         "properties": {
@@ -37147,6 +37162,69 @@
           "resource": "pod.bundle",
           "result": "entity",
           "verb": "templates"
+        }
+      }
+    },
+    "/pods/by-name": {
+      "get": {
+        "description": "Which pod a web address spelled in names means (`/l/{organization}/{pod}/...`): `organization` is the organization's handle, `pod` the pod's name as one word of an address -- lower case, letters and digits, a hyphen for every other run. Answers only for a pod the caller could already see by name or walk into without asking: one they are in, any pod for the organization's owner, a pod open to everyone, and a pod open to the organization for anyone in it or free to join it. Every other name, an unknown handle, and a word two pods share are one 404. Open the pod, or ask to join it, by the id.",
+        "operationId": "pod.find_by_name",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "organization",
+            "required": true,
+            "schema": {
+              "maxLength": 255,
+              "minLength": 1,
+              "title": "Organization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pod",
+            "required": true,
+            "schema": {
+              "maxLength": 255,
+              "minLength": 1,
+              "title": "Pod",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamedPodResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Find a Pod by Name",
+        "tags": [
+          "Pods"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "pod",
+          "result": "entity",
+          "verb": "find_by_name"
         }
       }
     },

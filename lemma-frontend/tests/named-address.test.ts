@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { looksNamed, named, namedTail, slug, unnamed, type Names } from "../src/outcomes/named-address.ts";
+import { idAddress, looksNamed, named, namedTail, readNamed, slug, unnamed, type Names } from "../src/outcomes/named-address.ts";
 import { readView, writeView, type View } from "../src/outcomes/address.ts";
 import { toRouteTemplate } from "../src/site/analytics/route-template.ts";
 
@@ -121,4 +121,77 @@ test("analytics is told what kind of place a named address is, and never which",
             assert.ok(!template.includes(word), template + " names " + word);
         }
     }
+});
+
+/* Whose a link is: an organization's handle is unique and never renamed, so
+   it is the word written; the word its name makes is what links written before
+   carried, and is still read. */
+const FJORD: Names = { org: "Fjord Demo", handle: "fjord-demo-2", lemmas: [{ id: SALES, name: "Sales" }] };
+
+test("an organization is written by its handle, and read by it or its name", () => {
+    assert.equal(named("/l/" + SALES + "/apps/deals", FJORD), "/l/fjord-demo-2/sales/apps/deals");
+    assert.equal(unnamed("/l/fjord-demo-2/sales/apps/deals", FJORD), "/l/" + SALES + "/apps/deals");
+    assert.equal(unnamed("/l/fjord-demo/sales/apps/deals", FJORD), "/l/" + SALES + "/apps/deals");
+});
+
+/* What the frame does with a named address, from what it has read. */
+const STRANGER = "6c2e9f1a-0b7d-4e3a-9c5f-1d8b2a7e4f60";
+const MINE = { id: "org-fjord", name: "Fjord Demo", handle: "fjord-demo-2" };
+const OTHER = { id: "org-acme", name: "Acme Inc.", handle: "acme" };
+const LINK = "/l/fjord-demo/fjord-demo/apps/meetings";
+
+test("an address not in names is itself, whatever has been read", () => {
+    for (const path of ["/home", "/l/" + SALES + "/apps/people", "/l"]) {
+        assert.deepEqual(readNamed(path, { orgs: null, orgId: null, names: null }), { kind: "plain", path, asked: false });
+    }
+});
+
+test("a named address waits for the reader's organizations, and for their names", () => {
+    assert.deepEqual(readNamed("/l/fjord-demo-2/sales", { orgs: null, orgId: null, names: null }), { kind: "wait" });
+    assert.deepEqual(readNamed("/l/fjord-demo-2/sales", { orgs: [MINE], orgId: MINE.id, names: null }), { kind: "wait" });
+    assert.deepEqual(readNamed("/l/fjord-demo-2/sales/apps/deals", { orgs: [MINE], orgId: MINE.id, names: FJORD }), { kind: "plain", path: "/l/" + SALES + "/apps/deals", asked: false });
+});
+
+test("a named address in another of the reader's organizations moves the frame there", () => {
+    assert.deepEqual(readNamed("/l/fjord-demo-2/sales", { orgs: [OTHER, MINE], orgId: OTHER.id, names: ACME }), { kind: "elsewhere", orgId: MINE.id });
+    /* The handle decides before a name does: another organization of theirs
+       may be called what this handle spells. */
+    const named = { id: "org-named", name: "Fjord Demo 2", handle: "fd2" };
+    assert.deepEqual(readNamed("/l/fjord-demo-2/sales", { orgs: [named, MINE], orgId: named.id, names: null }), { kind: "elsewhere", orgId: MINE.id });
+});
+
+test("a Lemma none of the reader's lists has is asked of the server", () => {
+    /* Somebody who belongs nowhere yet: what they came for comes first. */
+    assert.deepEqual(readNamed(LINK, { orgs: [], orgId: null, names: null }), { kind: "ask", org: "fjord-demo", lemma: "fjord-demo" });
+    /* A member of another organization: not read as a Lemma's id. */
+    assert.deepEqual(readNamed(LINK, { orgs: [OTHER], orgId: OTHER.id, names: ACME }), { kind: "ask", org: "fjord-demo", lemma: "fjord-demo" });
+    /* Their own organization, a Lemma in it they are not in. */
+    assert.deepEqual(readNamed("/l/fjord-demo-2/board", { orgs: [MINE], orgId: MINE.id, names: FJORD }), { kind: "ask", org: "fjord-demo-2", lemma: "board" });
+});
+
+test("the server's answer opens the Lemma by its id, or opens nothing", () => {
+    const read = { orgs: [OTHER], orgId: OTHER.id, names: ACME };
+    assert.deepEqual(readNamed(LINK, { ...read, found: { podId: STRANGER } }), { kind: "plain", path: "/l/" + STRANGER + "/apps/meetings", asked: true });
+    assert.deepEqual(readView("/l/" + STRANGER + "/apps/meetings"), { name: "app", podId: STRANGER, app: "meetings" });
+    assert.deepEqual(readNamed("/l/fjord-demo/fjord-demo", { ...read, found: { podId: STRANGER } }), { kind: "plain", path: "/l/" + STRANGER, asked: true });
+    /* Nothing by that name they may learn of: never the first word read as an id. */
+    assert.deepEqual(readNamed(LINK, { ...read, found: { podId: null } }), { kind: "nowhere" });
+});
+
+test("a link handed to somebody names the Lemma by its id, and keeps the place", () => {
+    const sales = { id: SALES, name: "Sales" };
+    /* Spelled in names: the same place, by id, so it opens a door for
+       somebody not in it. */
+    assert.equal(idAddress("/l/acme-inc/sales/apps/people/1042", sales), "/l/" + SALES + "/apps/people/1042");
+    assert.equal(idAddress("/l/acme-inc/sales", sales), "/l/" + SALES);
+    /* Already by id: unchanged. */
+    assert.equal(idAddress("/l/" + SALES + "/tables/people/r%209", sales), "/l/" + SALES + "/tables/people/r%209");
+    /* Somewhere else -- another Lemma, by name or id, or no Lemma at all --
+       hands out the Lemma itself. */
+    assert.equal(idAddress("/l/acme-inc/customer-support/chats", sales), "/l/" + SALES);
+    assert.equal(idAddress("/l/" + SUPPORT + "/chats", sales), "/l/" + SALES);
+    for (const path of ["/home", "/apps", "/l", "/l/new", "/"]) assert.equal(idAddress(path, sales), "/l/" + SALES, path);
+    /* What it hands out reads back to the place it was copied from. */
+    const view: View = { name: "app", podId: SALES, app: "people", at: "/1042" };
+    assert.deepEqual(readView(idAddress(named(writeView(view), ACME), sales)), view);
 });

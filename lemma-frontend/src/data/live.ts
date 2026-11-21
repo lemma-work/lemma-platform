@@ -1,5 +1,6 @@
 import { originOf } from "@/thread/conversation-origin";
 import { askApi, lemma } from "@/session/client";
+import { isMissing } from "@/session/auth-state";
 import { RESOURCE_KEY } from "@/thread/resource-conversation";
 import { NEW_CONVERSATION } from "./types";
 import { displayAgentName, initialsOf, isPodDefaultAgent } from "./agent-names";
@@ -433,9 +434,9 @@ export const liveSource: PodSource = {
     async listOrgs(): Promise<Org[]> {
         const listed = (await lemma().organizations.list()) as Listish;
         return itemsOf(listed)
-            .map((raw) => raw as { id?: string; name?: string })
-            .filter((o): o is { id: string; name: string } => Boolean(o.id && o.name))
-            .map((o) => ({ id: o.id, name: shortOrgName(o.name) }));
+            .map((raw) => raw as { id?: string; name?: string; slug?: string })
+            .filter((o): o is { id: string; name: string; slug?: string } => Boolean(o.id && o.name))
+            .map((o) => ({ id: o.id, name: shortOrgName(o.name), ...(o.slug ? { handle: o.slug } : {}) }));
     },
 
     /** Invitations addressed to whoever is signed in.
@@ -513,9 +514,9 @@ export const liveSource: PodSource = {
             ...(wanted.emailDomain
                 ? { email_domain: wanted.emailDomain, join_policy: "EMAIL_DOMAIN" as never }
                 : {}),
-        })) as { id?: string; name?: string };
+        })) as { id?: string; name?: string; slug?: string };
         if (!made?.id) throw new Error("The organization was made but came back without an id.");
-        return { id: made.id, name: shortOrgName(made.name ?? wanted.name) };
+        return { id: made.id, name: shortOrgName(made.name ?? wanted.name), ...(made.slug ? { handle: made.slug } : {}) };
     },
 
     /** One request, and deliberately not 2N. Fetching each pod's roster and
@@ -589,6 +590,18 @@ export const liveSource: PodSource = {
         /* Through the held row: the surfaces, the agents and the schedules
            each read the same pod for its name while the space opens. */
         return podSummary(await podRow(podId) as Parameters<typeof podSummary>[0]);
+    },
+
+    async findPodByName(orgHandle: string, word: string): Promise<string | null> {
+        try {
+            const found = (await lemma().pods.findByName(orgHandle, word)) as { pod_id?: string };
+            return found.pod_id ? String(found.pod_id) : null;
+        } catch (error) {
+            /* One answer for a name nobody has and one the reader may not
+               learn of: either way the link opens nothing for them. */
+            if (isMissing(error)) return null;
+            throw error;
+        }
     },
 
     async getPodDetail(podId: string, podName: string, podIcon?: string | null): Promise<PodDetail> {

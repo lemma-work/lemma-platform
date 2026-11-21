@@ -23,7 +23,29 @@
 /** What an organization and its Lemmas are called, for the one the reader is in. */
 export interface Names {
     org: string;
+    /** The organization's handle: unique and never renamed, so it is the word
+     *  written for the organization where there is one. Its name's word is
+     *  still read, as links written before handles were are spelled in it. */
+    handle?: string | null;
     lemmas: readonly { id: string; name: string }[];
+}
+
+/** An organization as the reader's list has it, for telling whose a link is. */
+export interface OrgNames {
+    id: string;
+    name: string;
+    handle?: string | null;
+}
+
+/** The word an organization is written as in its addresses. */
+function orgWord(org: { org?: string; name?: string; handle?: string | null }): string {
+    return org.handle || slug(org.org ?? org.name ?? "");
+}
+
+/** Whether a link's first word names this organization: its handle, or the
+ *  word its name makes, which older links carry. */
+function namesOrg(word: string, org: { org?: string; name?: string; handle?: string | null }): boolean {
+    return word === org.handle || word === slug(org.org ?? org.name ?? "");
 }
 
 /** The words that follow a Lemma's id in the app's own grammar. */
@@ -80,9 +102,82 @@ export function unnamed(path: string, names: Names): string | null {
     const tail = namedTail(path);
     if (tail === null) return null;
     const [, org, lemma] = parts(path);
-    if (org !== slug(names.org)) return null;
+    if (!namesOrg(org, names)) return null;
     const id = byWord(names).get(lemma);
     return id ? "/l/" + encodeURIComponent(id) + tail : null;
+}
+
+/** The address to hand somebody for a Lemma: the same place in it, with the
+ *  Lemma named by its id.
+ *
+ *  A name opens only for somebody who could already see the Lemma or walk in
+ *  (`GET /pods/by-name`); an id opens for anyone, as the Lemma itself or, for
+ *  somebody not in it, its door. So a link meant to be sent spells the Lemma
+ *  by id, and the frame writes it back in names for whoever is in it.
+ *
+ *  Where the page is somewhere else -- another Lemma, or no Lemma at all --
+ *  the Lemma's own address, rather than the page's. */
+export function idAddress(path: string, lemma: { id: string; name: string }): string {
+    const own = "/l/" + encodeURIComponent(lemma.id);
+    const tail = namedTail(path);
+    if (tail !== null) return parts(path)[2] === slug(lemma.name) ? own + tail : own;
+    const [root, id, ...rest] = parts(path);
+    if (root !== "l" || !id) return own;
+    let plain: string;
+    try {
+        plain = decodeURIComponent(id);
+    } catch {
+        return own;
+    }
+    return plain === lemma.id ? own + rest.map((part) => "/" + part).join("") : own;
+}
+
+/** What a named address comes to, from what the frame has read so far.
+ *
+ *  - `plain`: the app's own address for it, by id. `asked` when only the
+ *    server could say which Lemma the names mean -- the reader is not in it,
+ *    so their own lists do not have it.
+ *  - `wait`: something it turns on is still being read.
+ *  - `elsewhere`: it names another of the reader's organizations, which the
+ *    frame has to move to before the names can be read.
+ *  - `ask`: no list of theirs has it; the server is asked which Lemma it is.
+ *  - `nowhere`: it names no Lemma the reader may learn of. Not a door to
+ *    knock on: there is no id to knock with. */
+export type NamedReading =
+    | { kind: "plain"; path: string; asked: boolean }
+    | { kind: "wait" }
+    | { kind: "elsewhere"; orgId: string }
+    | { kind: "ask"; org: string; lemma: string }
+    | { kind: "nowhere" };
+
+export function readNamed(path: string, read: {
+    /** The reader's organizations; null until read. */
+    orgs: readonly OrgNames[] | null;
+    /** The one the frame is in. */
+    orgId: string | null;
+    /** Its names; null until its Lemmas are read. */
+    names: Names | null;
+    /** The server's answer, once `ask` has had one: the Lemma's id, or null
+     *  for none. */
+    found?: { podId: string | null };
+}): NamedReading {
+    const tail = namedTail(path);
+    if (tail === null) return { kind: "plain", path, asked: false };
+    if (!read.orgs) return { kind: "wait" };
+    const [, org, lemma] = parts(path);
+    const own = read.orgs.find((one) => one.handle === org) ?? read.orgs.find((one) => namesOrg(org, one));
+    if (own && own.id !== read.orgId) return { kind: "elsewhere", orgId: own.id };
+    if (own) {
+        if (!read.names) return { kind: "wait" };
+        const local = unnamed(path, read.names);
+        if (local) return { kind: "plain", path: local, asked: false };
+    }
+    /* Theirs or not, a Lemma they are not in is in none of their lists: an
+       invite-only one in their own organization, one open to it they have not
+       joined, or any in an organization they are not in. */
+    if (!read.found) return { kind: "ask", org, lemma };
+    const { podId } = read.found;
+    return podId ? { kind: "plain", path: "/l/" + encodeURIComponent(podId) + tail, asked: true } : { kind: "nowhere" };
 }
 
 /** The app's own address for somewhere in a Lemma, spelled in names; the
@@ -91,7 +186,7 @@ export function unnamed(path: string, names: Names): string | null {
 export function named(path: string, names: Names): string {
     const [root, id, section, ...rest] = parts(path);
     if (root !== "l" || !id || (section !== undefined && !SECTIONS.has(section))) return path;
-    const org = slug(names.org);
+    const org = orgWord(names);
     let plain: string;
     try {
         plain = decodeURIComponent(id);

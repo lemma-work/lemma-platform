@@ -7,6 +7,7 @@ import { Modal } from "@/shell/modal";
 import { AddPeople } from "@/shell/add-people";
 import { ShareDialog } from "@/thread/share-dialog";
 import { copyText } from "@/desktop/clipboard";
+import { idAddress } from "@/outcomes/named-address";
 import { CheckIcon, CopyIcon, GlobeIcon, LockIcon, PlusIcon } from "@/ui/icons";
 
 /** What is being shared: the space itself, or one thing in it. */
@@ -115,8 +116,11 @@ export function ShareSheet({ pod, orgId, subject, adding: addingFirst = false, o
     const isPublic = (known.visibility ?? "").toUpperCase() === "PUBLIC";
 
     const copy = async () => {
+        /* By id, not by name: the link is for people not in it yet too, and
+           "anyone else is asked to join first" needs a door to show them. */
+        const { origin, pathname, search, hash } = window.location;
         try {
-            await copyText(window.location.href);
+            await copyText(origin + idAddress(pathname, pod) + search + hash);
             setCopied(true);
             setTimeout(() => setCopied(false), 1600);
         } catch {

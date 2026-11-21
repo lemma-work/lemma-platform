@@ -14,6 +14,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `outcome.set` | PUT | `/pods/{pod_id}/outcome` | Set what the pod owns |
 | `pod.create` | POST | `/pods` | Create Pod |
 | `pod.delete` | DELETE | `/pods/{pod_id}` | Delete Pod |
+| `pod.find_by_name` | GET | `/pods/by-name` | Find a Pod by Name |
 | `pod.get` | GET | `/pods/{pod_id}` | Get Pod |
 | `pod.join` | POST | `/pods/{pod_id}/join` | Join Pod |
 | `pod.join_request.approve` | POST | `/pods/{pod_id}/join-requests/{join_request_id}/approve` | Approve Pod Join Request |

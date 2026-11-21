@@ -16681,6 +16681,27 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Find a Pod by Name
+     * Which pod a web address spelled in names means (`/l/{organization}/{pod}/...`): `organization` is the organization's handle, `pod` the pod's name as one word of an address -- lower case, letters and digits, a hyphen for every other run. Answers only for a pod the caller could already see by name or walk into without asking: one they are in, any pod for the organization's owner, a pod open to everyone, and a pod open to the organization for anyone in it or free to join it. Every other name, an unknown handle, and a word two pods share are one 404. Open the pod, or ask to join it, by the id.
+     * @param organization
+     * @param pod
+     * @returns NamedPodResponse Successful Response
+     * @throws ApiError
+     */
+    static podFindByName(organization, pod) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/by-name",
+        query: {
+          "organization": organization,
+          "pod": pod
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Delete Pod
      * Delete a pod
      * @param podId
@@ -16925,6 +16946,15 @@ var LemmaClient = (() => {
     }
     get(podId) {
       return this.client.request(() => PodsService.podGet(podId));
+    }
+    /**
+     * The id of the pod an address in names means (`/l/{organization}/{pod}`):
+     * the organization's handle, and the pod's name as one word of an address.
+     * Answered only for a pod you could already see by name or walk into
+     * without asking; every other name is a 404, as a name nobody has is.
+     */
+    findByName(organization, pod) {
+      return this.client.request(() => PodsService.podFindByName(organization, pod));
     }
     /**
      * Make a pod. `config.join_policy` says who may join it (invite-only unless
