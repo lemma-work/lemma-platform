@@ -54,6 +54,20 @@ const SECTIONS: ReadonlySet<string> = new Set([
     "automations", "workflows", "runs", "agents", "settings", "computer",
 ]);
 
+/** The words the workspace put after a Lemma's id, which links written before
+ *  the app moved still carry (`/l/{id}/conversation/…`, `/l/{id}/record/…`).
+ *  They follow an id too: read as names, such a link would be sent to the
+ *  server as an organization called by a Lemma's id, and open nothing. */
+const OLD_SECTIONS: ReadonlySet<string> = new Set([
+    "conversation", "home", "all", "channels", "library", "history", "profile",
+    "table", "bot", "run", "workflow", "group", "channel", "app", "record", "file",
+]);
+
+/** Whether a word, second under `/l`, says the first was an id. */
+function followsId(word: string): boolean {
+    return SECTIONS.has(word) || OLD_SECTIONS.has(word);
+}
+
 /** Words `/l/{word}` already means something by. */
 const TAKEN: ReadonlySet<string> = new Set(["new", "teammates"]);
 
@@ -73,7 +87,7 @@ function byWord(names: Names): Map<string, string> {
     const seen = new Map<string, string | null>();
     for (const lemma of names.lemmas) {
         const word = slug(lemma.name);
-        if (!word || SECTIONS.has(word) || TAKEN.has(word)) continue;
+        if (!word || followsId(word) || TAKEN.has(word)) continue;
         seen.set(word, seen.has(word) ? null : lemma.id);
     }
     const words = new Map<string, string>();
@@ -82,10 +96,11 @@ function byWord(names: Names): Map<string, string> {
 }
 
 /** Whether an address under `/l` is spelled in names rather than an id: its
- *  second word is not a section. Says nothing of whether the names are real. */
+ *  second word is not a section, the app's or the workspace's. Says nothing
+ *  of whether the names are real. */
 export function looksNamed(path: string): boolean {
     const [root, , second] = parts(path);
-    return root === "l" && second !== undefined && !SECTIONS.has(second);
+    return root === "l" && second !== undefined && !followsId(second);
 }
 
 /** What a named address says after the Lemma -- `/apps/people/1042`, or

@@ -90,11 +90,19 @@ test("an id address, and an old one, are not taken for names", () => {
         assert.equal(looksNamed(path), false, path);
         assert.equal(unnamed(path, ACME), null, path);
     }
-    /* Words only the workspace used look like names until they are read
-       against the ones there are, and then are nobody's. */
-    for (const path of ["/l/" + SALES + "/conversation/c1", "/l/" + SALES + "/table/leads", "/l/other-org/sales/apps/people", "/l/acme-inc/nobody/apps/people", "/l/acme-inc/ops/apps/people", "/l/acme-inc/chats"]) {
+    /* The workspace's own words follow an id as the app's do, so a link
+       written before the app moved is never asked of the server as names. */
+    for (const path of ["/l/" + SALES + "/conversation/c1", "/l/" + SALES + "/table/leads", "/l/" + SALES + "/record/leads/r1", "/l/" + SALES + "/library", "/l/" + SALES + "/file/me/notes.md"]) {
+        assert.equal(looksNamed(path), false, path);
+        assert.deepEqual(readNamed(path, { orgs: [], orgId: null, names: null }), { kind: "plain", path, asked: false }, path);
+    }
+    for (const path of ["/l/other-org/sales/apps/people", "/l/acme-inc/nobody/apps/people", "/l/acme-inc/ops/apps/people", "/l/acme-inc/chats"]) {
         assert.equal(unnamed(path, ACME), null, path);
     }
+    /* So a Lemma called by one of those words keeps its id, as one called by
+       a section's name does. */
+    const LIBRARY: Names = { org: "Acme Inc.", lemmas: [{ id: SALES, name: "Library" }] };
+    assert.equal(named("/l/" + SALES, LIBRARY), "/l/" + SALES);
 });
 
 test("what a named address says after the Lemma is what it is, without whose", () => {
