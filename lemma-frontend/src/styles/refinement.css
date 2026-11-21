@@ -119,9 +119,9 @@ button svg, a svg { flex-shrink:0; }
 .channel-skeleton { width:34px;height:34px;border-radius:var(--r-sm);background:var(--chrome);animation:skeleton-pulse 1.6s ease-in-out infinite; }
 .account-card .btn { display:inline-flex;align-items:center;justify-content:center;gap:9px;text-decoration:none;min-height:42px; }
 .linkish { display:inline-flex;align-items:center;gap:6px; }
-.account-card { display:flex;flex-direction:column;align-items:center;gap:14px;padding:8px 0; }.human-avatar--large { width:64px;height:64px;font-size:22px; }.account-card h3 { margin:0;font-size:22px; }.account-tag { font:10px var(--mono);color:var(--ink-3);border:1px solid var(--line);padding:4px 8px;border-radius:5px; }
-.account-details { width:100%;margin:10px 0; }.account-details > div { display:flex;justify-content:space-between;gap:20px;padding:13px 0;border-bottom:1px solid var(--line);font-size:12px; }.account-details dt { display:flex;align-items:center;gap:7px;color:var(--ink-2); }.account-details dd { margin:0;text-align:right;overflow-wrap:anywhere; }.account-disconnect { border:0;background:none;display:flex;align-items:center;gap:7px;font-size:12px;padding:10px;color:var(--ink-2);cursor:pointer; }.account-disconnect[disabled] { opacity:.6;cursor:default; }.account-aside { font-size:11.5px;color:var(--ink-3);text-decoration:none; }.account-aside:hover { color:var(--ink-2); }.account-error { text-align:center; }
-.modal { z-index:1000;animation:backdrop-in 160ms ease;backdrop-filter:blur(5px); }.modal__panel { animation:panel-in 200ms var(--ease-out); }.modal__close { display:grid;place-items:center; }.theme__menu { animation:menu-in 150ms var(--ease-out); }
+.account-card { display:flex;flex-direction:column;align-items:center;gap:14px;padding:8px 0; }.account-card h3 { margin:0;font-size:22px; }
+.account-details { width:100%;margin:10px 0; }.account-details > div { display:flex;justify-content:space-between;gap:20px;padding:13px 0;border-bottom:1px solid var(--line);font-size:12px; }.account-details dt { display:flex;align-items:center;gap:7px;color:var(--ink-2); }.account-details dd { margin:0;text-align:right;overflow-wrap:anywhere; }
+.modal { z-index:1000;animation:backdrop-in 200ms ease;backdrop-filter:blur(5px); }.modal__panel { animation:dialog-in 280ms cubic-bezier(.2,.9,.3,1); }@keyframes dialog-in { from { opacity:0;transform:translateY(12px) scale(.98); } }.theme__menu { animation:menu-in 150ms var(--ease-out); }
 .hero__acts { flex-wrap:wrap; }.hero__oncall { letter-spacing:.05em; }.project__status,.resource__go { display:inline-flex;align-items:center;gap:5px; }
 .history__new,.history__more,.callbar__mute,.callbar__end { display:flex;align-items:center;gap:8px; }.history__item { min-height:36px; }.composer__input { padding-left:8px; }.composer__send,.composer__stop { display:grid;place-items:center; }.composer__box:focus-within { border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft),var(--shadow-soft); }.composer__wave { display:grid;place-items:center; }
 .pane--profile .profile { animation:panel-in 180ms var(--ease-out); }
@@ -137,7 +137,7 @@ button svg, a svg { flex-shrink:0; }
     .shell--mobile-open .side { transform:none;visibility:visible; }.sidebar-backdrop { display:block;position:fixed;inset:0;z-index:99;background:rgb(10 8 20 / .35);border:0;backdrop-filter:blur(2px); }
     .shell--mobile-open .side__brand { justify-content:space-between;align-items:center;height:36px; }.shell--mobile-open .sidebar-toggle { position:static;width:36px;height:36px; }.shell--mobile-open .rail__section { display:flex; }.shell--mobile-open .rail__name,.shell--mobile-open .rail__add-label,.shell--mobile-open .side__settings span { display:block; }.shell--mobile-open .rail__pod,.shell--mobile-open .rail__add,.shell--mobile-open .side__settings { justify-content:flex-start; }.shell--mobile-open .human-profile__text { display:flex; }.shell--mobile-open .human-profile__chevron { display:block; }.shell--mobile-open .human-profile { justify-content:flex-start;padding:9px; }.shell--mobile-open .org__menu { left:0;top:calc(100% + 6px); }
     .mobile-nav-toggle { display:grid;position:absolute;left:10px;top:17px;z-index:10;width:40px;height:40px; }.head { padding:18px 12px 10px 58px;align-items:flex-start;gap:8px;min-height:120px; }.head > .mark,.head > .being { display:none; }.head__title h1 { font-size:19px;max-width:calc(100vw - 164px); }.head__title p { max-width:calc(100vw - 96px);font-size:11px; }.head__title .reaches { order:3;margin:10px 0 0;width:100%;gap:6px; }.head__spacer { display:none; }.head .theme { margin-left:auto; }.head > .head__gear { display:none; }.reach--compact,.reach--add { min-height:38px;min-width:38px; }.head__gear { width:38px;height:38px; }.head__flag { display:none; }
-    .tabs { padding-inline:18px;gap:14px; }.tab { min-height:44px; }.convo-host { min-width:0; }.convo-host .history { display:none; }.convo-host { grid-template-columns:minmax(0,1fr); }.pane__inner { padding-inline:18px; }.composer { padding:12px 14px 18px; }.composer__row { gap:8px;flex-wrap:wrap; }.composer__box { min-width:0; }.composer__note { font-size:10px; }.composer__send,.composer__wave { min-width:40px;min-height:40px; }.profile { padding:18px!important;gap:24px; }.profile__aside { min-width:0; }.idwrap { max-width:300px;margin-inline:auto; }.hero__name { font-size:30px; }.reaches--expanded .reach { min-height:44px; }.reach__handle { max-width:190px; }.modal { padding:14px; }.modal__panel { max-height:calc(100dvh - 28px);width:100%; }.modal__head { padding:20px; }.modal__body { padding:20px; }.modal__close { min-width:44px;min-height:44px; }.rail__pod,.rail__add,.side__settings { min-height:44px; }.theme__menu { right:0;max-width:calc(100vw - 24px); }
+    .tabs { padding-inline:18px;gap:14px; }.tab { min-height:44px; }.convo-host { min-width:0; }.convo-host .history { display:none; }.convo-host { grid-template-columns:minmax(0,1fr); }.pane__inner { padding-inline:18px; }.composer { padding:12px 14px 18px; }.composer__row { gap:8px;flex-wrap:wrap; }.composer__box { min-width:0; }.composer__note { font-size:10px; }.composer__send,.composer__wave { min-width:40px;min-height:40px; }.profile { padding:18px!important;gap:24px; }.profile__aside { min-width:0; }.idwrap { max-width:300px;margin-inline:auto; }.hero__name { font-size:30px; }.reaches--expanded .reach { min-height:44px; }.reach__handle { max-width:190px; }.modal__close { min-width:44px;min-height:44px; }.rail__pod,.rail__add,.side__settings { min-height:44px; }.theme__menu { right:0;max-width:calc(100vw - 24px); }
 }
 @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important; } }
 .workspace { display:flex;flex-direction:column;min-height:0;flex:1; }.workspace[hidden] { display:none; }.settings-view { display:flex;flex-direction:column;min-height:0;flex:1; }
@@ -449,7 +449,6 @@ button svg, a svg { flex-shrink:0; }
 .head__collapse:hover { color:var(--accent); }
 /* Nothing should animate its way out from under the reader's cursor, but a
    header that vanishes instantly reads as a glitch, so it folds. */
-
 
 /* No `border-left` on the toolbar's actions, though the history panel below
    carries one. Stacked, the two read as a single vertical rule down the page
@@ -1106,50 +1105,24 @@ button svg, a svg { flex-shrink:0; }
 @keyframes turn-in { from { opacity:0;transform:translateY(6px); } }
 .steps__list { animation:turn-in 160ms var(--ease-out) both; }
 
-
 /* ── Reaching a teammate ──────────────────────────────────────────────
    Connecting is sorted by what it costs and says so before the click.
    Three amounts of work should not look identical, which is what a row
    of equal grey icons said for as long as this strip existed. */
-.reachsheet { display:flex;flex-direction:column;gap:18px; }
-.reachsheet__who { display:flex;align-items:center;gap:13px; }
-.reachsheet__who p { margin:0;font-size:13.5px;line-height:1.5;color:var(--ink-2); }
-.reachsheet__more { margin:4px 0 -6px;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);font-weight:500; }
-
 .reachrows { list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px; }
 .reachrow {
     display:flex;align-items:center;gap:13px;
     border:1px solid var(--line);border-radius:var(--r-md);
     padding:12px 14px;background:var(--paper);
 }
-.reachrow__mark { display:grid;place-items:center;width:34px;height:34px;border-radius:var(--r-sm);background:var(--chrome);flex:none; }
 .reachrow__body { display:flex;flex-direction:column;gap:2px;min-width:0;flex:1; }
 .reachrow__body b { font-weight:500;font-size:13.5px;color:var(--ink); }
 .reachrow__note { font-size:12px;line-height:1.45;color:var(--ink-3); }
 .reachrow__acts { display:flex;align-items:center;gap:8px;flex:none;flex-wrap:wrap;justify-content:flex-end; }
-.reachrow__acts .btn { display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap; }
-
-/* The address is the point of the whole exercise, so it is the thing that
-   looks like a value rather than a caption. */
-.reachrow__handle {
-    display:inline-flex;align-items:center;gap:7px;padding:0;border:0;background:none;cursor:pointer;
-    font-family:var(--mono);font-size:12.5px;color:var(--ink-2);max-width:100%;
-}
-.reachrow__handle span { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
-.reachrow__handle:hover { color:var(--ink); }
-.reachrow--on { border-color:color-mix(in srgb,var(--accent) 22%,var(--line)); }
 .reachrow__error { font-size:11.5px;color:var(--bad);max-width:220px;text-align:right; }
-.reachrow__alt { align-self:flex-start;font-size:11.5px;color:var(--ink-3);margin-top:2px; }
-.reachrow__alt:hover { color:var(--accent); }
 .reachrow__quiet { color:var(--ink-3);font-size:12px; }
 .reachrow__quiet:hover { color:var(--bad); }
 .reachrow__drop { border-color:color-mix(in srgb, var(--bad) 35%, transparent);color:var(--bad); }
-
-/* What it costs, said in the row rather than discovered by clicking. */
-.reachrow__cost { font-size:11px;letter-spacing:.04em;color:var(--ink-3);white-space:nowrap; }
-.reachrow__cost[data-effort="instant"] { color:var(--accent); }
-.reachrow[data-effort="unavailable"] { opacity:.65; }
-.reachrow[data-effort="instant"] { border-color:var(--accent-line); }
 
 /* A row mid-flow stops competing for horizontal space.
    The panel that explains what is happening is wider than a button, and
@@ -1157,16 +1130,17 @@ button svg, a svg { flex-shrink:0; }
    already works in." into a one-word-per-line column. */
 .reachrow:has(.guided),
 .reachrow:has(.guided__wait) { flex-wrap:wrap; }
-.reachrow:has(.guided) .reachrow__cost,
-.reachrow:has(.guided__wait) .reachrow__cost { display:none; }
 .reachrow:has(.guided) .reachrow__acts,
 .reachrow:has(.guided__wait) .reachrow__acts {
     width:100%;justify-content:flex-start;padding-left:47px;margin-top:4px;
 }
-.reachrow:has(.guided) .reachrow__alt { display:none; }
 
-.guided { display:flex;flex-direction:column;align-items:flex-start;gap:7px;max-width:34rem;text-align:left; }
-.guided p { margin:0;font-size:11.5px;line-height:1.5;color:var(--ink-3); }
+/* A step that waits on somewhere else (Telegram, a provider's consent page):
+   its one button, what happens next, and the wait, left-aligned in the
+   sheet's step. */
+.guided { display:flex;flex-direction:column;align-items:flex-start;gap:10px;text-align:left; }
+.guided > p:not(.kproblem) { margin:0;font-size:13.5px;line-height:1.5;color:var(--ink-2); }
+.kstep .guided__wait { font-size:13px; }
 .guided__wait { display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--ink-3); }
 .guided__wait svg { animation:spin 1.6s linear infinite; }
 .guided--done { flex-direction:row;align-items:center;color:var(--accent);font-size:12.5px; }
@@ -1177,78 +1151,15 @@ button svg, a svg { flex-shrink:0; }
     .reachrow__acts { width:100%;justify-content:flex-start;padding-left:47px; }
 }
 
-/* ── Connected accounts ───────────────────────────────────────────────
-   A connector matters to an organization when it has an account on it
-   and that account works. So the grid gives way to a list: connected
-   ones first, each naming its accounts and saying what is wrong with
-   them, and the rest of a long catalog behind a search. */
-.connectors { grid-template-columns:minmax(0,1fr);gap:8px; }
-.connector { align-items:flex-start;padding:12px 14px;background:var(--paper); }
-.connector[data-on] { border-color:color-mix(in srgb,var(--accent) 22%,var(--line)); }
-.connector__logo { width:26px;height:26px;margin-top:1px; }
-.connector__logo--blank {
-    display:grid;place-items:center;font-size:12px;color:var(--ink-3);
-    text-transform:uppercase;background:var(--chrome);
-}
-.connector__body { display:flex;flex-direction:column;gap:3px;flex:1;min-width:0; }
-.connector__name { flex:none;font-size:13.5px;color:var(--ink); }
-.connector__blurb { font-size:12px;line-height:1.45;color:var(--ink-3); }
-.connector__acts { display:flex;align-items:center;gap:8px;flex:none;flex-wrap:wrap;justify-content:flex-end; }
-.connector__acts .btn { display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap; }
-
-.accts { list-style:none;margin:8px 0 2px;padding:0;display:flex;flex-direction:column;gap:6px; }
-.acct { display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:12.5px;color:var(--ink-2); }
+/* ── an account's dot ──────────────────────────────────────────────────
+   Beside each connector a Lemma works through (connect/pod-connections):
+   green when it is working for the reader, grey when it is not. */
 .acct__dot {
     width:6px;height:6px;border-radius:999px;flex:none;
     background:var(--ink-3);box-shadow:0 0 0 3px color-mix(in srgb,var(--ink-3) 14%,transparent);
 }
 .acct__dot--ok { background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft); }
-.acct__who { display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:12px;min-width:0;max-width:100%;flex:1 1 auto; }
-.acct__who .pill { font-size:9px;padding:1px 6px; }
-/* An account reference is an opaque id of unpredictable length. Left to size itself it pushed the whole card past the edge of a phone. */
-.acct__ref { font-family:var(--mono);font-size:10.5px;color:var(--ink-3);opacity:.75;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
-.acct__trouble { display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--wait); }
 .acct__confirm { display:inline-flex;align-items:center;gap:8px;margin-left:auto; }
-.acct > .linkish { margin-left:auto; }
-
-.connectors__find {
-    display:flex;align-items:center;gap:9px;margin-top:14px;
-    border:1px solid var(--line-2);border-radius:var(--r-md);padding:9px 12px;color:var(--ink-3);
-}
-.connectors__find input { flex:1;border:0;background:none;font:inherit;font-size:13px;color:var(--ink);outline:none; }
-.connectors__find:focus-within { border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft); }
-.connectors__note {
-    display:flex;align-items:center;gap:7px;margin:14px 0 0;
-    font-size:11.5px;color:var(--ink-3);
-}
-
-@media(max-width:620px) {
-    .connector { flex-wrap:wrap; }
-    .connector__acts { width:100%;justify-content:flex-start;padding-left:35px; }
-}
-
-/* ── One channel, focused ─────────────────────────────────────────────
-   The list answers "where could this teammate be?" and is the wrong
-   shape for "how do I set this one up", which is a few sentences and a
-   single action. Picking a channel that needs work replaces the list
-   rather than nesting a dialog: the original connect modal's focused
-   treatment, which read better than a row ever will, without its habit
-   of sending you elsewhere to do the work. */
-.focused { display:flex;flex-direction:column;align-items:center;text-align:center;gap:14px;padding:4px 0 2px; }
-.focused__back {
-    align-self:flex-start;display:inline-flex;align-items:center;gap:6px;
-    border:0;background:none;padding:0;cursor:pointer;font-size:12.5px;color:var(--ink-3);
-}
-.focused__back:hover { color:var(--ink-2); }
-.focused__logo {
-    width:72px;height:72px;background:var(--chrome);border:1px solid var(--line);
-    border-radius:20px;display:grid;place-items:center;
-}
-.focused h3 { margin:0;font-size:20px;letter-spacing:-.025em;line-height:1.3; }
-.focused > p { margin:0;max-width:34rem;font-size:14px;line-height:1.6;color:var(--ink-2); }
-.focused .guided { align-items:center;text-align:center;max-width:32rem; }
-.focused__alt { font-size:12.5px;color:var(--ink-3); }
-.focused__alt:hover { color:var(--accent); }
 
 /* Four steps, and the one you are on is the only one with controls. */
 .ownbot { width:100%;text-align:left;margin-top:4px; }
@@ -1269,17 +1180,11 @@ button svg, a svg { flex-shrink:0; }
 .ownbot__steps li[data-done] { opacity:.6; }
 .ownbot__steps li:not([data-now]):not([data-done]) { opacity:.45; }
 .ownbot__steps b { display:block;font-weight:500;font-size:13.5px;color:var(--ink); }
-.ownbot__steps p { margin:3px 0 0;font-size:12.5px;line-height:1.5;color:var(--ink-3); }
+.ownbot__steps li > p { margin:3px 0 0;font-size:12.5px;line-height:1.5;color:var(--ink-3); }
 .ownbot__acts { display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px; }
-.ownbot__acts .btn { display:inline-flex;align-items:center;gap:7px;text-decoration:none; }
-.ownbot__fields { display:flex;flex-direction:column;gap:9px;margin-top:10px;max-width:24rem; }
-.ownbot__fields label { display:flex;flex-direction:column;gap:4px; }
-.ownbot__fields span { font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3); }
-.ownbot__fields input {
-    border:1px solid var(--line-2);border-radius:var(--r-md);padding:8px 11px;
-    font:inherit;font-family:var(--mono);font-size:12.5px;background:var(--paper);color:var(--ink);
-}
-.ownbot__fields input:focus { outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft); }
+.ownbot__fields { margin-top:12px;gap:14px; }
+.ownbot > .kfield { margin-top:10px; }
+.ownbot > .kproblem { margin-top:10px; }
 
 /* ── Models ───────────────────────────────────────────────────────────
    One ledger. A bought key and Claude Code on a laptop are the same kind
@@ -1288,72 +1193,12 @@ button svg, a svg { flex-shrink:0; }
    which is the whole of what says "these came from here". */
 .models__lead { margin:0 0 14px;font-size:12.5px;line-height:1.55;color:var(--ink-3);max-width:62ch; }
 
-.mlist { list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden; }
-.mgroup + .mgroup .mlist,.mgroup .mlist { border-radius:0 0 var(--r-md) var(--r-md);border-top:0; }
-.mlist + .mgroup { margin-top:14px; }
-
-.mrow { display:flex;align-items:center;gap:11px;padding:10px 13px;background:var(--paper); }
-.mrow + .mrow { border-top:1px solid var(--line); }
-.mrow--quiet { opacity:.62; }
-.mrow__logo { width:20px;height:20px;flex:none;object-fit:contain;border-radius:4px; }
-.mrow__mark {
-    width:24px;height:24px;flex:none;display:grid;place-items:center;
-    border-radius:7px;background:var(--chrome);color:var(--ink-3);
-}
-.mrow__body { flex:1;min-width:0;display:flex;flex-direction:column;gap:2px; }
-.mrow__line { display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0; }
-.mrow__name { font-size:13.5px;color:var(--ink); }
-.mrow__detail { font-size:11.5px;color:var(--ink-3); }
-/* The fix travels with the state. An unusable agent that reads as an
-   opaque code is a dead end on a page whose whole job is to be acted on. */
-.mrow__note { font-size:11.5px;line-height:1.45;color:var(--ink-3); }
 .mrow__state { display:inline-flex;align-items:center;gap:6px;flex:none;font-size:11.5px;color:var(--ink-3);white-space:nowrap; }
 .mrow__state i { width:6px;height:6px;border-radius:999px;background:currentColor;flex:none; }
 .mrow__state--ok { color:var(--accent); }
 .mrow__state--warn { color:var(--wait); }
-.mrow__add { display:inline-flex;align-items:center;gap:5px;padding:5px 10px;flex:none; }
-.mrow__confirm { display:inline-flex;align-items:center;gap:8px;flex:none; }
-/* Quiet until wanted, like every other row in this app that can destroy
-   something. It stays reachable by keyboard the whole time. */
-.mrow__quiet { opacity:0;transition:opacity 140ms ease; }
-.mrow:hover .mrow__quiet,.mrow:focus-within .mrow__quiet { opacity:1; }
 
-.mgroup { margin-top:14px; }
-.mgroup__head {
-    display:flex;align-items:center;gap:8px;padding:8px 13px;color:var(--ink-3);
-    background:var(--chrome);border:1px solid var(--line);border-radius:var(--r-md) var(--r-md) 0 0;
-}
-.mgroup__name { font-size:11px;letter-spacing:.06em;text-transform:uppercase;font-family:var(--mono);color:var(--ink-2); }
-.mgroup__meta { flex:1;min-width:0;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
-.mgroup__empty {
-    margin:0;padding:11px 13px;font-size:12px;line-height:1.5;color:var(--ink-3);
-    background:var(--paper);border:1px solid var(--line);border-top:0;border-radius:0 0 var(--r-md) var(--r-md);
-}
-.mgroup__empty svg { vertical-align:-2px;margin-right:6px; }
-
-.getapp {
-    display:flex;align-items:flex-start;gap:12px;margin-top:14px;padding:14px;
-    border:1px dashed var(--line-2);border-radius:var(--r-md);
-}
-.getapp__mark { width:32px;height:32px;flex:none;display:grid;place-items:center;border-radius:9px;background:var(--chrome);color:var(--ink-2); }
-.getapp__body { flex:1;min-width:0;display:flex;flex-direction:column;gap:4px; }
-.getapp__body b { font-weight:500;font-size:13.5px;color:var(--ink); }
-.getapp__body span { font-size:12px;line-height:1.5;color:var(--ink-3); }
-.getapp .btn { flex:none;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap; }
-
-.models__acts { display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:14px; }
-.models__acts .btn { display:inline-flex;align-items:center;gap:6px; }
 .spin { animation:spin 1.1s linear infinite; }
-
-/* One key at a time, and the route is prefilled rather than looked up —
-   every one of these is the same two protocols with a different URL. */
-.presets { display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px; }
-.preset {
-    font:inherit;font-size:12px;padding:6px 11px;border-radius:999px;cursor:pointer;
-    border:1px solid var(--line-2);background:var(--paper);color:var(--ink-2);
-}
-.preset:hover { border-color:var(--ink-3); }
-.preset--on { border-color:var(--accent);background:var(--accent-soft);color:var(--accent); }
 
 .field select {
     font:inherit;font-size:13.5px;color:var(--ink);background:var(--paper);
@@ -1364,15 +1209,6 @@ button svg, a svg { flex-shrink:0; }
 .check span { font-size:13px;line-height:1.5;color:var(--ink-2);display:flex;flex-direction:column;gap:3px; }
 .check em { font-style:normal;font-size:11.5px;color:var(--ink-3); }
 .modal__acts { display:flex;align-items:center;justify-content:flex-end;gap:14px;margin-top:4px; }
-
-@media(max-width:620px) {
-    .mrow { flex-wrap:wrap; }
-    .mrow__body { flex:1 0 60%; }
-    .getapp { flex-wrap:wrap; }
-    .getapp .btn { margin-left:44px; }
-    /* Touch targets, same 44px floor the rest of the app keeps. */
-    .mrow__add,.preset { min-height:44px; }
-}
 
 /* ── The picker ───────────────────────────────────────────────────────
    A control on a page of facts, so it reads as a fact with a caret
@@ -1548,89 +1384,13 @@ button svg, a svg { flex-shrink:0; }
 .colleague__text strong { font-size:13px;font-weight:500;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
 .colleague__text small { font-size:11.5px;color:var(--ink-3);line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
 
-/* ── the catalogue is a list, not eighty-three cards ─────────────────
-   Every row was a bordered box with a gap under it, so a scroll through
-   "Available" was a column of boxes with a truncated marketing sentence in
-   each — and the eye had to cross a border to get from one name to the next.
-   Every other list in this app is flat rows on a divider: the library, the
-   people, the accounts inside these very cards. This is that.
-
-   The blurb is the other half of it. Two lines of vendor copy per row made
-   each one twice as tall as the name it was there to explain, and cut off
-   mid-sentence besides. Beside the name, on one line, it is a gloss; above the
-   fold on its own line it was the row. */
-.connectors { display:flex;flex-direction:column;gap:0;grid-template-columns:none; }
-.connector {
-    /* A grid, so the accounts can be a row of the connector rather than a
-       child of its middle column. Nested in the body they inherited its right
-       edge, which stops short of the action column — so every account's
-       actions hung a couple of hundred pixels left of the button above them.
-       Three columns: the logo, everything it labels, and what you can do. */
-    display:grid;
-    grid-template-columns:auto minmax(0,1fr) auto;
-    column-gap:12px;
-    border:0;border-bottom:1px solid var(--line);border-radius:0;
-    padding:14px 8px;background:none;
-    /* Top, not centre. A connected row carries its accounts underneath, and a
-       logo centred against that floats halfway down the row beside a list it
-       is supposed to be labelling. The brief rows are one line tall and centre
-       for real. */
-    align-items:start;
-    transition:background .12s ease;
-}
-.connector__logo { grid-column:1;grid-row:1; }
-.connector__body { grid-column:2;grid-row:1; }
-.connector__acts { grid-column:3;grid-row:1;justify-self:end; }
-/* From the name across to the far edge: an account's actions line up with the
-   button they sit beneath, because now they end in the same place.
-   No row named: a connector installed more than once has one list per install,
-   and pinning them all to row 2 drew every install on top of the others — the
-   names overprinted into one garbled line under a single set of actions. Left
-   to auto-placement, each list takes the next row down. */
-.connector .accts { grid-column:2 / -1; }
-.connector:last-child { border-bottom:0; }
-.connector:hover { background:var(--chrome); }
-/* The accent outline said "connected" on a row that is only ever shown under
-   the Connected pill. The accounts listed inside it say it better. */
-.connector[data-on] { border-color:var(--line); }
-.connector__logo { width:24px;height:24px;margin-top:1px; }
-
-.connector--brief { align-items:center;padding:11px 8px; }
-.connector--brief .connector__logo { margin-top:0; }
-/* The accounts are the row's content, not a footnote to it. */
-.connector .accts { margin-top:9px;display:flex;flex-direction:column;gap:8px; }
-.connector--brief .connector__body { flex-direction:row;align-items:baseline;gap:9px; }
-.connector--brief .connector__name { flex:none; }
-.connector--brief .connector__blurb {
-    display:block;flex:1;min-width:0;
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-    -webkit-line-clamp:none;line-clamp:none;
-}
-/* Eighty-three outlined buttons in a column is eighty-three things shouting
-   the same word. Quiet until the row is under the pointer, and never hidden —
-   a control that needs a pointer to exist does not exist on a phone. */
-.connector--brief .connector__acts .btn {
-    border-color:transparent;background:none;color:var(--ink-3);
-}
-.connector--brief:hover .connector__acts .btn,
-.connector--brief .connector__acts .btn:focus-visible {
-    border-color:var(--line-2);background:var(--paper);color:var(--ink);
-}
-@media(hover:none) {
-    .connector--brief .connector__acts .btn { border-color:var(--line-2);background:var(--paper);color:var(--ink); }
-}
-@media(max-width:600px) {
-    .connector--brief .connector__body { flex-direction:column;align-items:flex-start;gap:3px; }
-    .connector--brief .connector__blurb { white-space:normal;display:-webkit-box;-webkit-line-clamp:1;line-clamp:1;-webkit-box-orient:vertical; }
-}
-
 /* An account's line reads as one line.
    `.linkish` carries `margin-top:6px` from the places it sits *under*
    something; inside this flex row that margin drops it below everything
    beside it, and the two sizes (11.5px against 12.5px) put the baselines out
    even once the boxes are centred. Measured, not guessed: the warning and the
    Remove beside it were seven pixels apart. */
-.acct__trouble, .acct__acts .linkish, .acct > .linkish { font-size:12px; }
+.acct__acts .linkish { font-size:12px; }
 .acct__acts { align-items:center; }
 
 /* The account line was not the only row this happened in. Every one of these
@@ -1640,12 +1400,7 @@ button svg, a svg { flex-shrink:0; }
    644.2, and the same three pixels in all six. The base margin stays, because
    the "…see more" under a teammate's About has nothing but that margin holding
    it off the paragraph. */
-.acct .linkish,
-.connector__acts .linkish,
-.mrow .linkish,
 .modal__acts .linkish,
-.models__acts .linkish,
-.ownbot__acts .linkish,
 .reachrow__acts .linkish { margin-top:0; }
 
 /* ── who reports to a teammate ──────────────────────────────────────

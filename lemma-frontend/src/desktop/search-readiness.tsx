@@ -5,7 +5,8 @@ import { apiUrl, hasApiUrl } from "@/session/client";
 import { SettingRow } from "./this-mac-settings";
 import { embeddingsStatus, searchModelRow } from "./search-model";
 
-/** One Overview row: whether this Mac's search model is ready.
+/** One Overview row: whether this Mac's search model is ready, as a dot and
+ *  a word at the row's end.
  *
  *  Polled briskly while it is downloading or retrying, so the row turns to
  *  Ready on its own, and slowly once it is settled. Hidden when the backend
@@ -27,7 +28,10 @@ export function SearchReadinessRow() {
     if (!row) return null;
     return (
         <SettingRow name="Search model" consequence={row.consequence}>
-            <span className={"thismac-search-model thismac-search-model--" + row.state} role="status">{row.value}</span>
+            <span
+                className={row.state === "ready" ? "kstatus" : row.state === "bad" ? "kstatus kstatus--bad kset-wraps" : "kstatus kstatus--warn kset-wraps"}
+                role="status"
+            >{row.value}</span>
         </SettingRow>
     );
 }

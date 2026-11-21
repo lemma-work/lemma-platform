@@ -64,5 +64,5 @@ test("the scan reads words where they are said", () => {
     /* A check that finds nothing should be finding something to look at. */
     const said = FILES.flatMap(saidIn);
     assert.ok(said.length > 200, `only ${said.length} strings read`);
-    assert.ok(said.some((text) => text.includes("Where’s your team’s stuff today?")));
+    assert.ok(said.some((text) => text.includes("Or bring your work in from")));
 });

@@ -16,6 +16,8 @@ export interface StageSlot {
     progress: number;
     /** Picked, and on its way over from the list: drawn once it lands. */
     landing?: boolean;
+    /** Its name, where the spot can be pressed (a Lemma's own page). */
+    label?: string;
 }
 
 /** More than this many spots crowd the face; the rest are in the list. */

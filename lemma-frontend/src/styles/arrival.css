@@ -8,6 +8,21 @@
    lowest: the one solid button that moves on; a blue tint and tick for
    whatever is picked; ink for words; lines for structure. */
 
+/* A Lemma's own page draws the same scene, so it takes the same surfaces. */
+.ox-scene {
+    --ar-ground: var(--wash-a);
+    --ar-page: var(--paper);
+    --ar-band: var(--wash-b);
+    --ar-well: var(--wash-a);
+    --ar-field: var(--paper);
+    --ar-quiet: var(--paper);
+    --ar-pick: var(--select, var(--accent-soft));
+    --ar-pick-ink: var(--info);
+    display: grid;
+    justify-items: center;
+    width: 100%;
+}
+
 .ar {
     --ar-ground: var(--wash-a);
     --ar-page: var(--paper);
@@ -28,7 +43,8 @@
 }
 
 @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .ar {
+    :root:not([data-theme="light"]) .ar,
+    :root:not([data-theme="light"]) .ox-scene {
         --ar-ground: var(--chrome);
         --ar-page: var(--wash-b);
         --ar-band: var(--paper);
@@ -38,7 +54,8 @@
     }
 }
 
-:root[data-theme="dark"] .ar {
+:root[data-theme="dark"] .ar,
+:root[data-theme="dark"] .ox-scene {
     --ar-ground: var(--chrome);
     --ar-page: var(--wash-b);
     --ar-band: var(--paper);
@@ -321,6 +338,125 @@
     scale: 1;
 }
 
+/* On a Lemma's own page (`act`) the parts around the face are buttons:
+   each lifts a little under the pointer and names itself in a pill under
+   it. The way in draws the same parts as a picture, and is untouched. */
+button.ast__slot,
+button.ast__you,
+button.ast__place {
+    padding: 0;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+button.ast__slot {
+    border: 0;
+    background: none;
+}
+
+button.ast__you {
+    border: 0;
+    color: var(--ink);
+}
+
+button.ast__slot:hover,
+button.ast__slot:focus-visible,
+button.ast__you:hover,
+button.ast__you:focus-visible,
+button.ast__place:hover,
+button.ast__place:focus-visible {
+    scale: 1.08;
+    z-index: 4;
+    outline: none;
+}
+
+button.ast__slot:hover .ast__tile {
+    box-shadow: 0 0 0 1px var(--line-2), 0 12px 26px rgb(0 0 0 / 0.14);
+}
+
+button.ast__slot:focus-visible .ast__tile,
+button.ast__you:focus-visible,
+button.ast__place:focus-visible {
+    box-shadow: 0 0 0 2px var(--info), 0 8px 20px rgb(0 0 0 / 0.08);
+}
+
+button.ast__slot[data-state="empty"]:hover .ast__tile {
+    border-color: var(--ink-3);
+    color: var(--ink);
+}
+
+/* A place it could answer on, but doesn't yet: an outline to press. */
+.ast__place[data-ghost] {
+    scale: 0.86;
+    border: 1.5px dashed var(--line-2);
+    background: var(--ar-page);
+    box-shadow: none;
+    color: var(--ink-3);
+}
+
+.ast__place[data-ghost] > * {
+    opacity: 0.55;
+    filter: grayscale(1);
+    transition: opacity 160ms, filter 160ms;
+}
+
+.ast__place[data-ghost]:hover > *,
+.ast__place[data-ghost]:focus-visible > * {
+    opacity: 1;
+    filter: none;
+}
+
+.ast__place[data-ghost]:hover {
+    scale: 0.96;
+    border-color: var(--ink-3);
+}
+
+/* Others in it besides the reader, on the reader's spot. */
+.ast__more {
+    position: absolute;
+    top: -6px;
+    right: -8px;
+    display: grid;
+    place-items: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 4px;
+    border-radius: 9px;
+    background: var(--ink);
+    color: var(--paper);
+    font-size: 10.5px;
+    font-style: normal;
+    font-variant-numeric: tabular-nums;
+}
+
+/* The name of what is pointed at, in a pill under it. */
+.ast [data-tip]::after {
+    content: attr(data-tip);
+    position: absolute;
+    left: 50%;
+    top: calc(100% + 8px);
+    translate: -50% 0;
+    padding: 4px 9px;
+    border-radius: 999px;
+    background: var(--ink);
+    color: var(--paper);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.3;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 140ms;
+    z-index: 5;
+}
+
+.ast [data-tip]:hover::after,
+.ast [data-tip]:focus-visible::after {
+    opacity: 1;
+}
+
 .ast__ripples {
     position: absolute;
     left: 22%;
@@ -363,6 +499,9 @@
     transform-origin: 0 100%;
     transition: opacity 260ms ease, transform 420ms cubic-bezier(.34, 1.5, .55, 1);
     z-index: 6;
+    /* Words, not a control: unseen, it would otherwise take the clicks
+       meant for the spots it sits over. */
+    pointer-events: none;
 }
 
 .ast__said[data-on] {

@@ -10,11 +10,19 @@ test("a teammate with no apps still offers the Apps view", async context => {
     assert.equal(tabs.filter(tab => tab.kind === "app").length, 0);
 });
 
-test("app discovery stays reachable when the app list is unavailable", async context => {
-    context.mock.method(lemma("unavailable-apps").apps, "list", async () => { throw new Error("offline"); });
-    const tabs = await liveSource.listTabs("unavailable-apps");
+test("a Lemma whose apps you may not list still offers the Apps view, with no apps", async context => {
+    context.mock.method(lemma("forbidden-apps").apps, "list", async () => { throw Object.assign(new Error("forbidden"), { statusCode: 403 }); });
+    const tabs = await liveSource.listTabs("forbidden-apps");
     assert.ok(tabs.some(tab => tab.id === "apps"));
     assert.ok(tabs.some(tab => tab.id === "conversation"));
+    assert.equal(tabs.filter(tab => tab.kind === "app").length, 0);
+});
+
+test("an app list that failed is a failure, never an empty list", async context => {
+    /* "No apps yet" over a failed read would send somebody away from apps
+       that are there (design.md, "States"). */
+    context.mock.method(lemma("unavailable-apps").apps, "list", async () => { throw new Error("offline"); });
+    await assert.rejects(liveSource.listTabs("unavailable-apps"), /offline/);
 });
 
 import { APP_CATEGORIES } from "../src/stage/app-ideas.ts";

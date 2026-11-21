@@ -1,5 +1,9 @@
 /** Each app's own mark on the way in: a line drawing of what it is, on a
- *  quiet tile. Characters belong to Lemmas; an app is a thing you use. */
+ *  quiet tile. Characters belong to Lemmas; an app is a thing you use. A
+ *  name that is not one of the plugins' is one of the frame's app drawings
+ *  (`outcomes/app-mark.tsx`), so an app made in a Lemma is drawn too. */
+
+import { DRAWINGS } from "@/outcomes/app-mark";
 
 const PATHS: Record<string, string> = {
     mail: "M3.5 6.5A2.5 2.5 0 0 1 6 4h12a2.5 2.5 0 0 1 2.5 2.5v11A2.5 2.5 0 0 1 18 20H6a2.5 2.5 0 0 1-2.5-2.5zM4.5 7l7.5 6 7.5-6",
@@ -20,7 +24,7 @@ const FALLBACK = "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z";
 export function GlyphIcon({ slug, size = 20 }: { slug: string | null; size?: number }) {
     return (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d={slug ? PATHS[slug] ?? FALLBACK : "M12 7v10M7 12h10"} />
+            <path d={slug ? PATHS[slug] ?? DRAWINGS[slug] ?? FALLBACK : "M12 7v10M7 12h10"} />
         </svg>
     );
 }
@@ -30,7 +34,7 @@ export function AppGlyph({ slug, size = 40 }: { slug: string; size?: number }) {
     return (
         <span className="ar__glyph" style={{ width: size, height: size }} aria-hidden="true">
             <svg width={icon} height={icon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <path d={PATHS[slug] ?? FALLBACK} />
+                <path d={PATHS[slug] ?? DRAWINGS[slug] ?? FALLBACK} />
             </svg>
         </span>
     );

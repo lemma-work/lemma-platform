@@ -30,7 +30,7 @@ test("a schema becomes the form it describes, in the order it describes it", () 
     assert.equal(list[0].placeholder, "https://mcp.example.com/sse");
     assert.deepEqual(list[4].options, ["sse", "streamable_http"]);
     // A name with no title becomes words, not a snake_case identifier.
-    assert.equal(list[0].label, "Server url");
+    assert.equal(list[0].label, "Server address");
 });
 
 test("a schema with nothing in it is a form with no fields, not a crash", () => {

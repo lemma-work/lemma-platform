@@ -1,5 +1,6 @@
 "use client";
 
+import { PageHead } from "./page-head";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ConversationRef, Org, Pod } from "@/data";
@@ -25,11 +26,9 @@ export function OutcomesList({ org, pods, activity, days, queue, go, actions }: 
 }) {
     return (
         <div className="ox-page">
-            <header className="ox-list__head">
-                <h1 className="ox-title">Lemmas at {org.name}</h1>
-                <button type="button" className="ox-btn ox-btn--primary" onClick={actions.newLemma}>New Lemma</button>
-            </header>
-            <p className="ox-sub">Each one holds a team’s chats, pages, tables, files and apps, with an assistant that works in all of them.</p>
+            <PageHead title="Lemmas" line={`Every Lemma at ${org.name}. Each one holds a team’s chats, pages, tables, files and apps, with an assistant that works in all of them.`}>
+                <button type="button" className="b b--m b--primary" onClick={actions.newLemma}>New Lemma</button>
+            </PageHead>
 
             <div className="ox-sec">
                 <h2>Yours</h2>

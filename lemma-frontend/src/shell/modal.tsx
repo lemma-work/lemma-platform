@@ -10,14 +10,19 @@ import { CloseIcon } from "@/ui/icons";
  *  keypress closed both. Only the innermost answers the keyboard now. */
 const open: symbol[] = [];
 
-export function Modal({ title, subtitle, mark, narrow, wide, flush, sticky, onClose, children }: {
-    title: string; subtitle?: string;
+export function Modal({ title, subtitle, mark, narrow, wide, flush, sticky, footer, onClose, children }: {
+    title: string;
+    /** One plain line under the title. */
+    subtitle?: string;
     /** What the dialog is about, drawn before its title — a channel's mark. */
     mark?: ReactNode;
     narrow?: boolean; wide?: boolean; flush?: boolean;
     /** Closed only by a button inside it: no Escape, no click outside, no ✕.
      *  For something shown once, like a secret, that a stray click would lose. */
     sticky?: boolean;
+    /** The dialog's buttons, at its foot: two of them share the width
+     *  equally (Cancel, then the action); one takes all of it. */
+    footer?: ReactNode;
     onClose: () => void; children: ReactNode;
 }) {
     const panel = useRef<HTMLDivElement>(null);
@@ -55,9 +60,10 @@ export function Modal({ title, subtitle, mark, narrow, wide, flush, sticky, onCl
                 {mark
                     ? <div className="modal__titled"><span className="modal__mark" aria-hidden="true">{mark}</span><div><h2 id={titleId}>{title}</h2>{subtitle && <p>{subtitle}</p>}</div></div>
                     : <div><h2 id={titleId}>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>}
-                {!sticky && <button className="modal__close" onClick={onClose} aria-label="Close"><CloseIcon size={20} /></button>}
+                {!sticky && <button className="modal__close b b--m b--quiet b--icon" onClick={onClose} aria-label="Close"><CloseIcon size={19} /></button>}
             </header>
-            <div className={`modal__body${flush ? " modal__body--flush" : ""}`}>{children}</div>
+            <div className={`modal__body${flush ? " modal__body--flush" : ""}${footer ? " modal__body--footed" : ""}`}>{children}</div>
+            {footer && <footer className="modal__foot">{footer}</footer>}
         </div>
     </div>, document.body);
 }

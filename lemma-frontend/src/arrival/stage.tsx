@@ -35,8 +35,36 @@ export interface StageModel {
 const PLACE_ORDER: PlaceKey[] = ["SLACK", "WHATSAPP", "TELEGRAM", "EMAIL"];
 const PLACE_NAMES: Record<PlaceKey, string> = { EMAIL: "Email", WHATSAPP: "WhatsApp", TELEGRAM: "Telegram", SLACK: "Slack" };
 
+/** What the scene does when its parts are pressed. Left out, as on the way
+ *  in, it is a picture of what is being made. Given, as on a Lemma's own
+ *  page, each thing around the face is a button that goes where it says:
+ *  an app opens, the empty spot adds one, the reader's spot opens who is in
+ *  it, and a place -- one it answers on, or one it could -- opens where to
+ *  reach it. Each names itself in a pill under it. */
+export interface StageActions {
+    /** The Lemma's name, for what each part says it does. */
+    name: string;
+    slot: (slot: StageSlot) => void;
+    you: () => void;
+    /** People in it besides the reader: "+2" on the reader's spot. */
+    others: number;
+    place: (place: PlaceKey) => void;
+}
+
+function slotWords(slot: StageSlot): { label: string; tip: string } {
+    const name = slot.label ?? "An app";
+    const percent = Math.round(slot.progress * 100);
+    switch (slot.state) {
+        case "empty": return { label: "Add an app", tip: "Add an app" };
+        case "going": return { label: `${name}, going in, ${percent}%`, tip: `${name} · ${percent}%` };
+        case "next": return { label: `${name}, next to go in`, tip: `${name} · next` };
+        case "stopped": return { label: `${name}, stopped before it was in`, tip: `${name} · stopped` };
+        default: return { label: `Open ${name}`, tip: name };
+    }
+}
+
 /** The scene: who is speaking, big, and what attaches to it. */
-export function ArrivalStage({ model }: { model: StageModel }) {
+export function ArrivalStage({ model, act }: { model: StageModel; act?: StageActions }) {
     const box = useRef<HTMLDivElement>(null);
     const width = useWidth(box);
     const face = Math.round(width * 0.56);
@@ -49,7 +77,8 @@ export function ArrivalStage({ model }: { model: StageModel }) {
             data-born={born ? "" : undefined}
             data-part={model.part ?? undefined}
             data-heard={model.heard ? "" : undefined}
-            aria-hidden="true"
+            data-act={act ? "" : undefined}
+            aria-hidden={act ? undefined : "true"}
         >
             <span className="ast__glow" />
             <Bars typing={model.typing} />
@@ -57,29 +86,66 @@ export function ArrivalStage({ model }: { model: StageModel }) {
             <span className="ast__face" style={model.pod ? { background: markTint(model.pod.id).background } : undefined}>
                 {model.pod && face > 0 && <Face pod={model.pod} size={face} mood={model.mood} greeting={model.greeting} />}
             </span>
-            {model.slots.map((slot, index) => (
-                <span
-                    key={slot.key}
-                    className="ast__slot"
-                    data-slot={slot.key}
-                    data-state={slot.state}
-                    data-landing={slot.landing ? "" : undefined}
-                    style={{ "--a": `${angles[index] ?? 270}deg` } as CSSProperties}
-                >
-                    <svg className="ast__ring" viewBox="0 0 62 62">
-                        <circle className="ast__track" cx="31" cy="31" r="28" />
-                        <circle className="ast__done" cx="31" cy="31" r="28" pathLength={100} strokeDasharray="100" strokeDashoffset={100 - slot.progress * 100} />
-                    </svg>
-                    <span className="ast__tile"><GlyphIcon slug={slot.slug} size={slot.slug ? 22 : 16} /></span>
-                    <span className="ast__tick"><Tick /></span>
-                </span>
-            ))}
-            {model.you && <span className="ast__you" style={{ "--a": `${YOU_ANGLE}deg` } as CSSProperties}>{model.you}</span>}
-            {PLACE_ORDER.map((key) => (
-                <span key={key} className="ast__place" data-place={key} data-on={model.reach.includes(key) ? "" : undefined} style={{ "--a": `${PLACE_ANGLES[key]}deg` } as CSSProperties}>
-                    <PlaceLogo place={key} size={18} />
-                </span>
-            ))}
+            {model.slots.map((slot, index) => {
+                const inside = (
+                    <>
+                        <svg className="ast__ring" viewBox="0 0 62 62" aria-hidden="true">
+                            <circle className="ast__track" cx="31" cy="31" r="28" />
+                            <circle className="ast__done" cx="31" cy="31" r="28" pathLength={100} strokeDasharray="100" strokeDashoffset={100 - slot.progress * 100} />
+                        </svg>
+                        <span className="ast__tile"><GlyphIcon slug={slot.slug} size={slot.slug ? 22 : 16} /></span>
+                        <span className="ast__tick" aria-hidden="true"><Tick /></span>
+                    </>
+                );
+                const look = {
+                    className: "ast__slot",
+                    "data-slot": slot.key,
+                    "data-state": slot.state,
+                    "data-landing": slot.landing ? "" : undefined,
+                    style: { "--a": `${angles[index] ?? 270}deg` } as CSSProperties,
+                };
+                if (!act) return <span key={slot.key} {...look}>{inside}</span>;
+                const words = slotWords(slot);
+                return <button key={slot.key} type="button" {...look} aria-label={words.label} data-tip={words.tip} onClick={() => act.slot(slot)}>{inside}</button>;
+            })}
+            {model.you && (act
+                ? (
+                    <button
+                        type="button"
+                        className="ast__you"
+                        style={{ "--a": `${YOU_ANGLE}deg` } as CSSProperties}
+                        aria-label={`People in ${act.name}`}
+                        data-tip="People"
+                        onClick={act.you}
+                    >
+                        {model.you}
+                        {act.others > 0 && <i className="ast__more" aria-hidden="true">+{act.others}</i>}
+                    </button>
+                )
+                : <span className="ast__you" style={{ "--a": `${YOU_ANGLE}deg` } as CSSProperties}>{model.you}</span>)}
+            {PLACE_ORDER.map((key) => {
+                const on = model.reach.includes(key);
+                const look = {
+                    className: "ast__place",
+                    "data-place": key,
+                    "data-on": on || act ? "" : undefined,
+                    "data-ghost": act && !on ? "" : undefined,
+                    style: { "--a": `${PLACE_ANGLES[key]}deg` } as CSSProperties,
+                };
+                if (!act) return <span key={key} {...look}><PlaceLogo place={key} size={18} /></span>;
+                return (
+                    <button
+                        key={key}
+                        type="button"
+                        {...look}
+                        aria-label={on ? `${PLACE_NAMES[key]}: where to reach ${act.name}` : `Reach ${act.name} on ${PLACE_NAMES[key]}`}
+                        data-tip={on ? PLACE_NAMES[key] : `Add ${PLACE_NAMES[key]}`}
+                        onClick={() => act.place(key)}
+                    >
+                        <PlaceLogo place={key} size={18} />
+                    </button>
+                );
+            })}
             <span className="ast__said" data-on={model.heard ? "" : undefined}>
                 {model.heard && <><PlaceLogo place={model.heard} size={14} />Heard you on {PLACE_NAMES[model.heard]}</>}
             </span>

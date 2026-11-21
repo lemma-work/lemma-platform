@@ -22,7 +22,10 @@ import { SettingRow, useThisMacSnapshot } from "./this-mac-settings";
  *
  *  Turning sharing on moves this window to the shared address, where the
  *  shell deliberately answers nothing, so the page says that before it
- *  happens rather than after. */
+ *  happens rather than after.
+ *
+ *  The three ways to be reached are cards (the kit's `.kopts`); what is in
+ *  use now, and who can join, are rows on the section's hairlines. */
 
 const MODES: SharingMode[] = ["this_computer", "local_network", "public"];
 
@@ -75,11 +78,18 @@ export function ThisMacSharing() {
         onError: (problem) => setSaid({ text: friendlyError(problem), bad: true }),
     });
 
-    if (snapshot.isPending) return <p className="empty-row" role="status">Reading this computer’s settings…</p>;
-    if (snapshot.isError) return <p className="thismac-said thismac-said--bad" role="alert">{friendlyError(snapshot.error)}</p>;
+    if (snapshot.isPending) return <p className="kset-note" role="status">Reading this computer’s settings…</p>;
+    if (snapshot.isError) {
+        return (
+            <p className="kset-said kset-said--bad" role="alert">
+                {friendlyError(snapshot.error)}
+                <button type="button" className="b b--s b--secondary" onClick={() => void snapshot.refetch()}>Try again</button>
+            </p>
+        );
+    }
     const sharing: Sharing | null = snapshot.data.sharing;
     if (!sharing) {
-        return <p className="empty-row">This installation runs no sharing gateway, so it can only be reached from {noun}.</p>;
+        return <p className="kset-note">This installation runs no sharing gateway, so it can only be reached from {noun}.</p>;
     }
 
     const busy = act.isPending || sharingBusy(sharing);
@@ -113,127 +123,132 @@ export function ThisMacSharing() {
     };
 
     return (
-        <div className="thismac">
-            <div className="theme__modes" role="radiogroup" aria-label="Who can reach Lemma">
+        <div className="kset-stack">
+            <div className="kopts" role="radiogroup" aria-label="Who can reach Lemma">
                 {MODES.map((mode) => (
-                    <button
-                        key={mode}
-                        type="button"
-                        role="radio"
-                        className="theme__mode"
-                        aria-checked={selected === mode}
-                        aria-pressed={selected === mode}
-                        disabled={busy}
-                        onClick={() => { setSaid(null); setChoice(mode); }}
-                    >
-                        {sharingModeName(mode, noun)}
-                    </button>
+                    <label key={mode} className="kopt kopt--compact">
+                        <input
+                            type="radio"
+                            name="this-mac-sharing"
+                            checked={selected === mode}
+                            disabled={busy}
+                            onChange={() => { setSaid(null); setChoice(mode); }}
+                        />
+                        <span className="kopt__t">{sharingModeName(mode, noun)}</span>
+                        <span className="kopt__d">{sharingModeConsequence(mode, noun)}</span>
+                        <span className="kopt__dot" aria-hidden="true" />
+                    </label>
                 ))}
             </div>
-            <p className="thismac-said">{sharingModeConsequence(selected, noun)}</p>
 
             {active !== "this_computer" && (
-                <SettingRow
-                    name={"Shared on the " + (active === "public" ? "internet" : "local network")}
-                    consequence={sharing.canonical_url || "Getting the address…"}
-                >
-                    {sharing.canonical_url && (
-                        <button className="linkish" onClick={() => void copyText(sharing.canonical_url).then(
-                            () => setSaid({ text: "Copied." }),
-                            () => setSaid({ text: "Couldn’t copy. Select the address and copy it.", bad: true }),
-                        )}><CopyIcon size={13} /> Copy</button>
-                    )}
-                    <button className="btn" disabled={busy} onClick={() => { setSaid(null); act.mutate({ action: "disable" }); }}>
-                        Stop sharing
-                    </button>
-                </SettingRow>
+                <div className="klist">
+                    <SettingRow
+                        name={"Shared on the " + (active === "public" ? "internet" : "local network")}
+                        consequence={sharing.canonical_url || "Getting the address…"}
+                    >
+                        {sharing.canonical_url && (
+                            <button type="button" className="b b--s b--quiet" onClick={() => void copyText(sharing.canonical_url).then(
+                                () => setSaid({ text: "Copied." }),
+                                () => setSaid({ text: "Couldn’t copy. Select the address and copy it.", bad: true }),
+                            )}><CopyIcon /> Copy</button>
+                        )}
+                        <button type="button" className="b b--s b--secondary" disabled={busy} onClick={() => { setSaid(null); act.mutate({ action: "disable" }); }}>
+                            Stop sharing
+                        </button>
+                    </SettingRow>
+                </div>
             )}
             {active === "local_network" && sharing.qr_svg && (
                 /* An <img> and never markup: the SVG arrives from the daemon,
                    and an image cannot run script. */
                 <img
-                    className="thismac-qr"
+                    className="kset-qr"
                     src={"data:image/svg+xml;charset=utf-8," + encodeURIComponent(sharing.qr_svg)}
                     alt="QR code for the shared address"
                 />
             )}
-            {sharing.last_error && <p className="thismac-said thismac-said--bad" role="alert">{sharing.last_error}</p>}
+            {sharing.last_error && <p className="kset-said kset-said--bad" role="alert">{sharing.last_error}</p>}
             {/* The daemon's own cautions about the address in use -- said,
                 not parsed and dropped. */}
             {active !== "this_computer" && sharing.warnings.map((warning) => (
-                <p className="thismac-said" key={warning}><WarningIcon size={12} /> {warning}</p>
+                <p className="kset-said" key={warning}><WarningIcon size={12} /> {warning}</p>
             ))}
             {busy && active === "this_computer" && !act.isPending && (
-                <p className="thismac-said" role="status">{sharingPhaseWords(sharing.phase)}…</p>
+                <p className="kset-note" role="status">{sharingPhaseWords(sharing.phase)}…</p>
             )}
 
             {selected === "local_network" && active !== "local_network" && (
                 <>
-                    <SettingRow name="Network" consequence="Lemma listens only on the interface you choose, over plain HTTP.">
-                        <select aria-label="Network interface" value={iface} onChange={(event) => setLanInterface(event.target.value)}>
-                            <option value="">Choose…</option>
-                            {sharing.interfaces.map((item) => <option key={item.address} value={item.address}>{item.label}</option>)}
-                        </select>
-                    </SettingRow>
-                    <div className="modal__acts thismac-acts">
-                        <button className="btn btn--primary" disabled={busy || !stackReady} title={!stackReady ? NOT_READY : undefined} onClick={() => enable("lan")}>Share on this network</button>
+                    <div className="klist">
+                        <SettingRow name="Network" consequence="Lemma listens only on the interface you choose, over plain HTTP.">
+                            <select className="kinput kset-input" aria-label="Network interface" value={iface} onChange={(event) => setLanInterface(event.target.value)}>
+                                <option value="">Choose…</option>
+                                {sharing.interfaces.map((item) => <option key={item.address} value={item.address}>{item.label}</option>)}
+                            </select>
+                        </SettingRow>
+                    </div>
+                    <div className="kset-acts">
+                        <button type="button" className="b b--m b--primary" disabled={busy || !stackReady} title={!stackReady ? NOT_READY : undefined} onClick={() => enable("lan")}>Share on this network</button>
                     </div>
                 </>
             )}
 
             {selected === "public" && active !== "public" && (
                 <>
-                    <div className="presets" role="group" aria-label="Tunnel">
+                    <div className="kset-range" role="group" aria-label="Tunnel">
                         {(["ngrok", "cloudflare"] as TunnelProvider[]).map((one) => (
-                            <button key={one} className={"preset" + (provider === one ? " preset--on" : "")} aria-pressed={provider === one}
+                            <button key={one} type="button" className="kchip" aria-pressed={provider === one}
                                 onClick={() => { setProvider(one); act.mutate({ action: "preflight", payload: { provider: one } }); }}>
                                 {one === "ngrok" ? "ngrok" : "Cloudflare"}
                             </button>
                         ))}
                     </div>
-                    <SettingRow
-                        name={providerReady ? (provider === "ngrok" ? "ngrok" : "cloudflared") + " is ready" : (provider === "ngrok" ? "ngrok" : "cloudflared") + (readiness?.installed ? " needs signing in" : " isn’t installed")}
-                        consequence={readiness?.message || (providerReady ? "Lemma uses your own account and configuration." : "Finish in Terminal, then come back.")}
-                    />
+                    <div className="klist">
+                        <SettingRow
+                            name={providerReady ? (provider === "ngrok" ? "ngrok" : "cloudflared") + " is ready" : (provider === "ngrok" ? "ngrok" : "cloudflared") + (readiness?.installed ? " needs signing in" : " isn’t installed")}
+                            consequence={readiness?.message || (providerReady ? "Lemma uses your own account and configuration." : "Finish in Terminal, then come back.")}
+                        />
+                    </div>
                     {!providerReady && setupCommands(readiness).map((step, index) => (
-                        <div className="thismac-command" key={index}>
+                        <div className="kset-command" key={index}>
                             {step.command ? <code>{step.command}</code> : <span>{step.text}</span>}
-                            {step.command && <button className="linkish" onClick={() => void copyText(step.command!)}><CopyIcon size={13} /> Copy</button>}
+                            {step.command && <button type="button" className="b b--s b--quiet" onClick={() => void copyText(step.command!)}><CopyIcon /> Copy</button>}
                         </div>
                     ))}
                     {provider === "cloudflare" && (
-                        <>
-                            <div className="field">
+                        <div className="kset-form">
+                            <div className="kfield">
                                 <label htmlFor="cf-host">Public hostname</label>
-                                <input id="cf-host" value={cfHost} placeholder="lemma.example.com" onChange={(event) => setHostname(event.target.value)} />
+                                <input id="cf-host" className="kinput" value={cfHost} placeholder="lemma.example.com" onChange={(event) => setHostname(event.target.value)} />
                             </div>
-                            <label className="check">
+                            <label className="kset-check">
                                 <input type="checkbox" checked={cloudflareSetup === "existing"}
                                     onChange={(event) => setCloudflareSetup(event.target.checked ? "existing" : "automatic")} />
                                 <span>Use a named tunnel I already have
                                     <em>Otherwise Lemma creates one for this computer and a DNS route, and reuses them.</em></span>
                             </label>
                             {cloudflareSetup === "existing" && (
-                                <div className="field">
+                                <div className="kfield">
                                     <label htmlFor="cf-tunnel">Named tunnel</label>
-                                    <select id="cf-tunnel" value={tunnelId} onChange={(event) => setTunnelId(event.target.value)}>
+                                    <select id="cf-tunnel" className="kinput" value={tunnelId} onChange={(event) => setTunnelId(event.target.value)}>
                                         <option value="">Choose…</option>
                                         {tunnels.map((tunnel) => <option key={tunnel.id} value={tunnel.id}>{tunnel.name}</option>)}
                                     </select>
                                 </div>
                             )}
-                        </>
+                        </div>
                     )}
-                    <p className="thismac-said">{sharing.apps_limitation}</p>
-                    <div className="modal__acts thismac-acts">
-                        <button className="btn btn--primary" disabled={busy || !stackReady || !providerReady} title={!stackReady ? NOT_READY : undefined} onClick={() => enable("public")}>
+                    <p className="kset-note">{sharing.apps_limitation}</p>
+                    <div className="kset-acts">
+                        <button type="button" className="b b--m b--primary" disabled={busy || !stackReady || !providerReady} title={!stackReady ? NOT_READY : undefined} onClick={() => enable("public")}>
                             Create public link…
                         </button>
                     </div>
                 </>
             )}
             {selected !== active && selected !== "this_computer" && (
-                <p className="thismac-foot">
+                <p className="kset-note">
                     {!stackReady ? "Lemma has to be running before it can be shared. " : ""}
                     Sharing moves this window to the shared address, where these settings open from the menu bar.
                     Lemma restarts its server to do it, so anything an agent is running right now stops, and
@@ -241,11 +256,12 @@ export function ThisMacSharing() {
                 </p>
             )}
 
-            <div className="thismac-group">
-                <SettingRow name="Who can join" consequence={joinPolicyCopy(sharing.who_can_join, active)}>
-                    <div className="theme__modes" role="radiogroup" aria-label="Who can join">
+            <p className="ksub">Who can join</p>
+            <div className="klist">
+                <SettingRow name={sharing.who_can_join === "open" ? "Open" : "Invite-only"} consequence={joinPolicyCopy(sharing.who_can_join, active)}>
+                    <div className="kset-range" role="radiogroup" aria-label="Who can join">
                         {(["invite_only", "open"] as WhoCanJoin[]).map((one) => (
-                            <button key={one} type="button" role="radio" className="theme__mode"
+                            <button key={one} type="button" role="radio" className="kchip"
                                 aria-checked={sharing.who_can_join === one} aria-pressed={sharing.who_can_join === one}
                                 disabled={busy || sharing.who_can_join === one}
                                 onClick={() => setJoin(one)}>
@@ -256,12 +272,12 @@ export function ThisMacSharing() {
                 </SettingRow>
                 {sharing.who_can_join === "invite_only" && (
                     <SettingRow name="Invite people" consequence="An invitation is what lets someone make an account here.">
-                        <button className="btn" onClick={() => openSettings("people")}><PeopleIcon size={13} /> Invite</button>
+                        <button type="button" className="b b--s b--secondary" onClick={() => openSettings("people")}><PeopleIcon /> Invite</button>
                     </SettingRow>
                 )}
             </div>
 
-            {said && <p className={"thismac-said" + (said.bad ? " thismac-said--bad" : "")} role={said.bad ? "alert" : "status"}>{said.text}</p>}
+            {said && <p className={"kset-said" + (said.bad ? " kset-said--bad" : "")} role={said.bad ? "alert" : "status"}>{said.text}</p>}
         </div>
     );
 }

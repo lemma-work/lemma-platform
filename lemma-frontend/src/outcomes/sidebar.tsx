@@ -8,22 +8,22 @@ import { badge, sinceShort, type Channel } from "@/channels/model";
 import { ChannelMark } from "@/channels/chat-mark";
 import { ChannelIcon, channelName } from "@/shell/channels";
 import { TeammateFace } from "@/space/teammate-face";
-import { HumanProfile } from "@/session/human-profile";
+import { AppMark } from "./app-mark";
 import { AllowanceNote } from "@/usage/allowance-note";
-import { HelpMenu } from "@/tour/help-menu";
 import { useMe } from "@/session/use-me";
 import { key } from "@/session/storage";
 import {
     NEW_CHAT, SIDE_DEFAULTS,
-    chatItems, chatView, foldSection, inSidebar, outcomeView, podOfView, readSideSettings, rowOfChat, repeatedTitles, sectionRows, sidebarSections, workRows, writeView,
-    type Go, type OutcomeTab, type SideGrouping, type SideRow, type SideSettings, type SideShowing, type View,
+    chatItems, chatView, foldSection, inSidebar, isRunning, outcomeView, podOfView, readSideSettings, rowOfChat, repeatedTitles, sectionRows, sidebarSections, workRows, writeView,
+    type Go, type SideGrouping, type SideRow, type SideSettings, type SideShowing, type View,
 } from "./model";
 import { useChannelsByPod } from "./chats";
 import { useApps } from "./ask";
 import { appName, useLemmaApps, type AppTab } from "./lemma-apps";
+import { useGoingIn, type GoingIn } from "./installs";
 import { appPinKey, toggleAppPin, usePins, type Pin } from "./pins";
 import { prefetchOnIntent } from "@/thread/opened-transcripts";
-import { Bars, Icon, to, type IconName } from "./parts";
+import { Avatar, Bars, Icon, to, type IconName } from "./parts";
 
 /** The organization picker's last choice, which makes a new one. */
 const NEW_ORG = "__new-organization";
@@ -43,20 +43,9 @@ function readSettings(): SideSettings {
         return SIDE_DEFAULTS;
     }
 }
-/** Sections the reader opened or folded themselves: theirs, on this
- *  browser only. Every other section opens or folds by how lively it is. */
-const CHOSEN_KEY = key("outcomes-sections");
-
-function readChosen(): Map<string, boolean> {
-    try {
-        const raw = localStorage.getItem(CHOSEN_KEY);
-        return new Map(raw ? (Object.entries(JSON.parse(raw)) as [string, boolean][]) : []);
-    } catch {
-        return new Map();
-    }
-}
-
-const NOTHING = () => undefined;
+/** No Lemma is opened or folded by hand: the one the reader is in is open,
+ *  every other is its name. */
+const ONLY_HERE: ReadonlyMap<string, boolean> = new Map();
 /** No apps: the same empty list every render. */
 const NO_APPS: readonly AppTab[] = [];
 
@@ -80,7 +69,7 @@ function pinnedRow(pin: Pin, live: ReadonlyMap<string, SideRow>): SideRow | null
  *  the tables it changed lately; under each Lemma, or all together, newest
  *  first. People outside who wrote in are in Needs you while they wait, and
  *  on the Lemma's Contacts tab. */
-export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs, waitingIn, onChannels, me, onFind, onSettings, onPlan, onNewOrg, onNewLemma, onAddApp, open, closed, onToggle }: {
+export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs, waitingIn, onChannels, me, onFind, onSettings, onPlan, onNewOrg, onNewLemma, open, closed, onToggle }: {
     org: Org | null;
     orgs: readonly Org[];
     onPickOrg: (id: string) => void;
@@ -104,8 +93,6 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
     onNewOrg: () => void;
     /** A new Lemma, made in a dialog over the page. */
     onNewLemma: () => void;
-    /** One more app for a Lemma, asked of it in a chat. */
-    onAddApp: (podId: string) => void;
     /** Shown on a narrow screen, over the page. */
     open: boolean;
     /** Put away by the reader: only a rail of its places shows. */
@@ -113,13 +100,6 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
     onToggle: () => void;
 }) {
     const reader = useMe();
-    const [chosen, setChosen] = useState<Map<string, boolean>>(readChosen);
-    const choose = useCallback((podId: string, opened: boolean) => {
-        setChosen((was) => new Map(was).set(podId, opened));
-    }, []);
-    useEffect(() => {
-        try { localStorage.setItem(CHOSEN_KEY, JSON.stringify(Object.fromEntries(chosen))); } catch { /* kept for this visit only */ }
-    }, [chosen]);
     const here = podOfView(view);
     const pins = usePins();
     const [settings, setSettings] = useState<SideSettings>(readSettings);
@@ -135,8 +115,8 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
     const showsChats = useMemo(() => {
         if (settings.grouping === "together") return pods;
         const pinnedIn = new Set(pins.flatMap((pin) => (pin.open ? [pin.open.podId] : [])));
-        return pods.filter((pod) => (chosen.get(pod.id) ?? pod.id === here) || pinnedIn.has(pod.id));
-    }, [pods, settings.grouping, pins, chosen, here]);
+        return pods.filter((pod) => pod.id === here || pinnedIn.has(pod.id));
+    }, [pods, settings.grouping, pins, here]);
     const [channels, feeds] = useChannelsByPod(showsChats, { live: true });
     useEffect(() => { onChannels(channels); }, [channels, onChannels]);
     /* Each Lemma's tables, read only once the reader asks to see the ones
@@ -171,12 +151,12 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
         /* A pinned chat is listed once, up top, not again under its Lemma. */
         const unpinned = rows.map(({ pod, chats, work }) => ({ pod, items: sectionRows(chats.filter((chat) => !held.has(chat.key)), work) }));
         return {
-            sections: sidebarSections(unpinned, chosen, here),
+            sections: sidebarSections(unpinned, ONLY_HERE, here),
             together: sectionRows(rows.flatMap(({ chats }) => chats.filter((chat) => !held.has(chat.key))), rows.flatMap(({ work }) => work)),
             pinned: pins.flatMap((pin) => pinnedRow(pin, live) ?? []),
         };
         /* `tableLists` is read through `tablesAt`, which changes when it does. */
-    }, [pods, activity, channels, reader, pins, chosen, here, settings.showing, now, tablesAt]);
+    }, [pods, activity, channels, reader, pins, here, settings.showing, now, tablesAt]);
     const faces = useMemo(() => new Map(pods.map((pod) => [pod.id, pod])), [pods]);
     /* An unfolded Lemma lists its apps, so theirs are read; a folded one is
        still only a name. */
@@ -184,14 +164,16 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
     const lemmaApps = useLemmaApps(unfolded);
     const at = writeView(view);
 
+    /* Four places: the Lemmas are the list below them, and each one's
+       history opens from its own chats. People are in Settings. */
     const places: { view: View; label: string; icon: IconName; count?: number }[] = [
         { view: { name: "today" }, label: "New chat", icon: "plus" },
         { view: { name: "needs" }, label: "Needs you", icon: "inbox", count: needs },
-        { view: { name: "apps" }, label: "Apps", icon: "app" },
+        { view: { name: "apps" }, label: "Apps", icon: "grid" },
         { view: { name: "connectors" }, label: "Connectors", icon: "plug" },
-        { view: { name: "outcomes" }, label: "Lemmas", icon: "grid" },
-        { view: { name: "history", podId: null }, label: "History", icon: "clock" },
     ];
+    const working = useMemo(() => new Set(pods.filter((pod) => (activity.get(pod.id) ?? []).some(isRunning)).map((pod) => pod.id)), [pods, activity]);
+    const inSettings = view.name === "settings";
 
     /* Put away: the places as icons on a rail, and the way to bring the
        rest back. A narrow screen's sidebar slides over the page instead, and
@@ -211,6 +193,10 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
                         {place.count ? <i className="ox-rail__dot" aria-hidden="true" /> : null}
                     </a>
                 ))}
+                {/* The account row, put away to its initial at the foot. */}
+                <button type="button" className="ox-rail__b ox-rail__me" onClick={onSettings} aria-current={inSettings ? "page" : undefined} aria-label={`Settings, ${me}`} title="Settings">
+                    <Avatar name={me} size={26} />
+                </button>
             </aside>
         );
     }
@@ -240,7 +226,7 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
                     <a key={place.label} className="ox-place" {...to(place.view, go)} aria-current={view.name === place.view.name ? "page" : undefined}>
                         <span className="ox-glyph"><Icon name={place.icon} size={15} /></span>
                         <span className="ox-place__t">{place.label}</span>
-                        {place.count ? <span className="ox-count">{place.count}</span> : null}
+                        {place.count ? <span key={place.count} className="ox-count ox-count--warm">{place.count}</span> : null}
                     </a>
                 ))}
             </nav>
@@ -266,12 +252,11 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
                         pod={section.pod}
                         items={section.items}
                         waiting={Math.max(section.waiting, waitingIn.get(section.pod.id) ?? 0)}
-                        unfolded={section.open}
+                        open={section.open}
                         view={view}
-                        here={here === section.pod.id && view.name !== "chats"}
-                        onFold={() => choose(section.pod.id, !section.open)}
+                        here={here === section.pod.id && view.name === "outcome"}
+                        working={working.has(section.pod.id)}
                         apps={lemmaApps.get(section.pod.id) ?? NO_APPS}
-                        onAddApp={() => onAddApp(section.pod.id)}
                         go={go}
                     />
                 ))}
@@ -279,100 +264,72 @@ export function Sidebar({ org, orgs, onPickOrg, pods, view, go, activity, needs,
             {/* Silent unless the allowance is close or spent; above the
                 account, because it is about the account. */}
             <AllowanceNote orgId={org?.id ?? null} onOpenPlan={onPlan} />
-            <div className="ox-side__foot" aria-label={me}>
-                <HumanProfile compact onOpen={onSettings} />
-                <HelpMenu nudge={false} onNudged={NOTHING} />
+            {/* Who is signed in, and the way into Settings: one quiet row,
+                lit like a place while Settings is open. The address is in
+                Settings › Account; help is a section there too. */}
+            <div className="ox-side__foot">
+                <button type="button" className="ox-me-row" onClick={onSettings} aria-current={inSettings ? "page" : undefined} aria-label={`Settings, ${me}`} title="Settings">
+                    <Avatar name={me} size={26} />
+                    <span className="ox-me-row__t">{me}</span>
+                    <Icon name="gear" size={16} />
+                </button>
             </div>
         </aside>
     );
 }
 
-/** Following a Lemma's name asks for the Lemma itself, which opens on its
- *  first app where it has one. */
-const LANDING = { landing: true } as const;
-
-/** A Lemma's own places, under its apps: every chat with it, what it holds,
- *  and what it is. `holds` are the tabs each line stays lit over. */
-const LEMMA_PLACES: readonly { tab: OutcomeTab; label: string; icon: IconName; holds: readonly OutcomeTab[] }[] = [
-    { tab: "chats", label: "Chats", icon: "chat", holds: ["chats"] },
-    { tab: "tables", label: "Tables, pages and files", icon: "table", holds: ["tables", "pages", "files"] },
-    { tab: "about", label: "About", icon: "about", holds: ["about", "automations", "people", "contacts", "settings"] },
-];
-
-/** One Lemma: its face and name, which open it, the chevron after the name,
- *  which folds and unfolds it, and -- unless it is folded -- what it holds
- *  under it. A Lemma with apps lists them, then the way to one more and to
- *  its own places; one with none lists its chats. A + at the row's end,
- *  waiting for a pointer, starts a chat with it. The chats waiting on the
- *  reader and the open one always show; the rest fold past a few. */
-function Section({ pod, items, waiting, unfolded, view, here, onFold, apps, onAddApp, go }: {
+/** One Lemma. Its face and name are the one thing to click: that opens its
+ *  page, and opens it here -- its apps, then its chats -- on a lit card, its
+ *  face breathing. Every other Lemma is only its name, with the logo's bars
+ *  while it works and a count of what waits on the reader. One open at a
+ *  time, so the list stays a list of Lemmas. Its name is lit while the
+ *  reader is on its own pages; an app or a chat of it lights that row
+ *  instead. The chats waiting on the reader and the open one always show;
+ *  the rest fold past a few. */
+function Section({ pod, items, waiting, open, view, here, working, apps, go }: {
     pod: Pod;
     items: readonly SideRow[];
     waiting: number;
-    unfolded: boolean;
+    /** The reader is in it, on its page or in one of its chats or apps. */
+    open: boolean;
     view: View;
+    /** The reader is on one of its own pages. */
     here: boolean;
-    onFold: () => void;
-    /** Its apps, which are read only while it is unfolded. */
+    /** Something of it is running now. */
+    working: boolean;
+    /** Its apps, which are read only while it is open. */
     apps: readonly AppTab[];
-    onAddApp: () => void;
     go: Go;
 }) {
     const [all, setAll] = useState(false);
     const { shown, hidden } = all ? { shown: [...items], hidden: 0 } : foldSection(items, view, FOLD);
     const repeated = repeatedTitles(shown);
     const at = writeView(view);
-    /* Only a Lemma that is showing something stands apart from its
-       neighbours. One with nothing yet has nothing to unfold, so it reads as
-       a name in the list and offers no chevron. */
-    const withApps = apps.length > 0;
-    const showing = unfolded && (items.length > 0 || withApps);
+    const arriving = useGoingIn(open ? pod.id : null).filter((one) => one.kind !== "added" || !apps.some((app) => appName(app) === one.app));
+    const showing = open && (items.length > 0 || apps.length > 0 || arriving.length > 0);
     return (
-        <section className={"ox-group" + (unfolded ? "" : " ox-group--folded") + (showing ? " ox-group--showing" : "")} aria-label={pod.name}>
-            <div className="ox-group__head">
-                <a className="ox-group__name" {...to(outcomeView(pod.id), go, LANDING)} aria-current={here ? "page" : undefined}>
-                    <span className="ox-group__face"><TeammateFace pod={pod} size={26} /></span>
-                    <span className="ox-group__t">{pod.name}</span>
-                    {pod.everyone && <span className="ox-everyone" title={`Everyone in the organization is in ${pod.name}`}>Everyone</span>}
-                </a>
-                {(items.length > 0 || withApps) && (
-                    <button type="button" className="ox-group__chev" aria-expanded={unfolded} aria-label={unfolded ? `Fold ${pod.name}` : withApps ? `Show ${pod.name}’s apps` : `Show ${pod.name}’s chats`} onClick={onFold}>
-                        <Icon name="chevron" size={12} />
-                    </button>
-                )}
+        <section className={"ox-group" + (open ? " ox-group--lit" : "")} aria-label={pod.name}>
+            <a className="ox-group__name" {...to(outcomeView(pod.id), go)} aria-current={here ? "page" : undefined}>
+                <span className="ox-group__face" data-hero={`face:${pod.id}`}><TeammateFace pod={pod} size={open ? 26 : 22} /></span>
+                <span className="ox-group__t">{pod.name}</span>
+                {pod.everyone && <span className="ox-everyone" title={`Everyone in the organization is in ${pod.name}`}>Everyone</span>}
                 <span className="ox-group__fill" />
-                {!unfolded && waiting > 0 && <i className="ox-sign ox-sign--ask" role="img" aria-label={`${waiting} waiting on you`} />}
-                <a className="ox-group__add" {...to(outcomeView(pod.id), go)} aria-label={`New chat with ${pod.name}`} title="New chat">
-                    <Icon name="plus" size={15} />
-                </a>
-            </div>
-            {showing && withApps && (
+                {working && <LiveBars />}
+                {!open && waiting > 0 && <span key={waiting} className="ox-count ox-count--warm" role="img" aria-label={`${waiting} waiting on you`}>{waiting}</span>}
+            </a>
+            {showing && (
                 <div className="ox-group__rows">
                     {apps.map((app) => {
                         const name = appName(app);
                         return (
-                            <a key={app.id} className="ox-srow" {...to({ name: "app", podId: pod.id, app: name }, go)} aria-current={view.name === "app" && view.podId === pod.id && view.app === name ? "page" : undefined} title={`App: ${app.label}`}>
-                                <span className="ox-glyph"><Icon name="app" size={14} /></span>
+                            <a key={app.id} className="ox-srow ox-srow--app" {...to({ name: "app", podId: pod.id, app: name }, go)} aria-current={view.name === "app" && view.podId === pod.id && view.app === name ? "page" : undefined} title={`App: ${app.label}`}>
+                                <span className="ox-glyph"><AppMark name={name} label={app.label} size={20} /></span>
                                 <span className="ox-srow__t">{app.label}</span>
                             </a>
                         );
                     })}
-                    <button type="button" className="ox-srow ox-srow--add" onClick={onAddApp}>
-                        <span className="ox-glyph"><Icon name="plus" size={14} /></span>
-                        <span className="ox-srow__t">Add an app</span>
-                    </button>
-                    <span className="ox-group__rule" aria-hidden="true" />
-                    {LEMMA_PLACES.map((place) => (
-                        <a key={place.tab} className="ox-srow" {...to(outcomeView(pod.id, place.tab), go)} aria-current={view.name === "outcome" && view.podId === pod.id && place.holds.includes(view.tab) ? "page" : undefined}>
-                            <span className="ox-glyph"><Icon name={place.icon} size={14} /></span>
-                            <span className="ox-srow__t">{place.label}</span>
-                            {place.tab === "chats" && waiting > 0 && <i className="ox-sign ox-sign--ask" role="img" aria-label={`${waiting} waiting on you`} />}
-                        </a>
-                    ))}
-                </div>
-            )}
-            {showing && !withApps && (
-                <div className="ox-group__rows">
+                    <GoingRows going={arriving} />
+                    {apps.length + arriving.length > 0 && items.length > 0 && <span className="ox-group__rule" aria-hidden="true" />}
                     {shown.map((row) => <SideLine key={row.key} row={row} here={writeView(row.view) === at} stamped={repeated.has(row.key)} link={to(row.view, go)} />)}
                     {(hidden > 0 || all) && items.length > FOLD && (
                         <button type="button" className="ox-group__more" onClick={() => setAll((was) => !was)}>{all ? "Show fewer" : `Show ${hidden} more`}</button>
@@ -381,6 +338,24 @@ function Section({ pod, items, waiting, unfolded, view, here, onFold, apps, onAd
             )}
         </section>
     );
+}
+
+/** Apps on their way into the Lemma the reader is in, from the Add an app
+ *  page: a spinner where its mark will be and how far along it is, until it
+ *  lands among the apps above. */
+function GoingRows({ going }: { going: readonly GoingIn[] }) {
+    return going.map((one) => (
+        <span key={one.slug} className="ox-srow ox-srow--going" data-kind={one.kind} title={one.reason ?? undefined}>
+            <span className="ox-glyph">{one.kind === "failed" || one.kind === "asks" ? <i className="ox-sign ox-sign--ask" aria-hidden="true" /> : <span className="ox-spin" aria-hidden="true" />}</span>
+            <span className="ox-srow__t">{one.name}</span>
+            <span className="ox-srow__when ox-num">{one.kind === "failed" || one.kind === "asks" ? "Stopped" : one.kind === "waiting" ? "Next" : `${Math.round(one.progress * 100)}%`}</span>
+        </span>
+    ));
+}
+
+/** The logo's bars, rising and falling while a Lemma works. */
+function LiveBars() {
+    return <span className="ox-livebars" role="img" aria-label="Working now"><i /><i /><i /></span>;
 }
 
 /** Every Lemma's lines in one list, newest first -- what waits on the
@@ -562,7 +537,7 @@ function SideLine({ row, here, stamped, link, lead }: {
     lead?: ReactNode;
 }) {
     return (
-        <a className="ox-srow" {...link} {...readsAhead(row.view)} aria-current={here ? "page" : undefined} title={`${kindOf(row)}: ${row.title}${row.said ? " · " + row.said : ""}`}>
+        <a className="ox-srow" {...link} {...readsAhead(row.view)} aria-current={here ? "page" : undefined} data-busy={row.running || undefined} title={`${kindOf(row)}: ${row.title}${row.said ? " · " + row.said : ""}`}>
             <span className="ox-glyph">{lead ?? markOf(row)}</span>
             <span className="ox-srow__t">{row.title}</span>
             {row.needsYou

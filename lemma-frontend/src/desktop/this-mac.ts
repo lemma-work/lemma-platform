@@ -773,7 +773,7 @@ export const CREDENTIAL_FORMS: CredentialFormSpec[] = [
     { form: "whatsapp", group: "channels", title: "WhatsApp Business", use: "Answer on WhatsApp.", needsPublicLink: true,
         fields: [{ key: "whatsapp_phone_number_id", label: "Phone number ID" }, { key: "whatsapp_waba_id", label: "Business account ID" },
             { key: "surfaces.whatsapp_access_token", label: "Access token", secret: true },
-            { key: "surfaces.whatsapp_verify_token", label: "Verify token", secret: true },
+            { key: "surfaces.whatsapp_verify_token", label: "Webhook check token", secret: true },
             { key: "surfaces.whatsapp_app_secret", label: "App secret", secret: true }],
         hint: { steps: "Needs Public sharing: Meta delivers messages to a webhook on the internet. In Meta for Developers, add WhatsApp to an app and copy the IDs and a permanent access token.", url: "https://developers.facebook.com/apps", label: "Open Meta for Developers" } },
     { form: "teams", group: "channels", title: "Microsoft Teams", use: "Answer in Teams.", needsPublicLink: true,

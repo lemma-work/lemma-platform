@@ -126,76 +126,69 @@ export function useAppearance() {
  *  It was a menu behind a gear beside the teammate's name, which put a choice
  *  about the whole app inside the chrome of one teammate. Nothing about it is
  *  per-teammate, so it belongs where the other account-wide choices are.
+ *
+ *  Each choice is a set of cards (the kit's `.kopts`): the whole card is the
+ *  target, and the one in use is the blue tint with its dot filled.
  */
 export function AppearancePanel() {
     const { theme, setTheme, accent, setAccent, corners, setCorners, textSize, setTextSize } = useAppearance();
 
     return (
-        <div className="appearance">
-            <div className="appearance__group">
-                <div className="theme__label">Theme</div>
-                <div className="theme__modes">
+        <div className="kset-form">
+            <div className="kfield" role="radiogroup" aria-label="Theme">
+                <span>Theme</span>
+                <div className="kopts kset-opts">
                     {MODES.map((mode) => (
-                        <button
-                            key={mode.value}
-                            className="theme__mode"
-                            aria-current={theme === mode.value}
-                            onClick={() => setTheme(mode.value)}
-                        >
-                            <mode.icon size={17} />
-                            {mode.label}
-                        </button>
+                        <label key={mode.value} className="kopt kopt--compact">
+                            <input type="radio" name="appearance-theme" checked={theme === mode.value} onChange={() => setTheme(mode.value)} />
+                            <span className="kopt__t"><mode.icon size={16} />{mode.value === "system" ? "Match this device" : mode.label}</span>
+                            <span className="kopt__dot" aria-hidden="true" />
+                        </label>
                     ))}
                 </div>
             </div>
 
-            <div className="appearance__group">
-                <div className="theme__label" id="chat-text-label">Chat text size</div>
-                <div className="theme__modes" role="group" aria-labelledby="chat-text-label">
-                    {CHAT_TEXT_SIZES.map(entry => <button
-                        key={entry.value} className="theme__mode" type="button"
-                        aria-pressed={textSize === entry.value}
-                        onClick={() => setTextSize(entry.value)}
-                    >{entry.label}</button>)}
+            <div className="kfield" role="radiogroup" aria-label="Chat text">
+                <span>Chat text</span>
+                <div className="kopts kset-opts">
+                    {CHAT_TEXT_SIZES.map((entry) => (
+                        <label key={entry.value} className="kopt kopt--compact">
+                            <input type="radio" name="appearance-text" checked={textSize === entry.value} onChange={() => setTextSize(entry.value)} />
+                            <span className="kopt__t">{entry.label}</span>
+                            <span className="kopt__d">{entry.pixels}px</span>
+                            <span className="kopt__dot" aria-hidden="true" />
+                        </label>
+                    ))}
                 </div>
-                <p className="appearance__hint">Message and composer text. Saved in this browser.</p>
-                <div className="appearance__chat-preview" aria-label="Chat text preview">
-                    <span>Kit</span>
-                    <p>The draft is ready. Take a look and tell me what you’d like to change.</p>
-                </div>
+                <small>Messages and what you type. Saved in this browser.</small>
+            </div>
+            <div className="kset-preview" aria-label="Chat text preview">
+                <span>Preview</span>
+                <p>The draft is ready. Take a look and tell me what you’d like to change.</p>
             </div>
 
-            <div className="appearance__group">
-                <div className="theme__label">Accent</div>
-                <div className="theme__accents">
+            <div className="kfield" role="radiogroup" aria-label="Accent">
+                <span>Accent</span>
+                <div className="kopts kset-opts kset-opts--small">
                     {ACCENTS.map((entry) => (
-                        <button
-                            key={entry.value}
-                            className="theme__accent"
-                            aria-current={accent === entry.value}
-                            title={entry.label}
-                            onClick={() => setAccent(entry.value)}
-                        >
-                            <span className="theme__swatch" style={{ background: entry.swatch }} />
-                            {entry.label}
-                        </button>
+                        <label key={entry.value} className="kopt kopt--compact">
+                            <input type="radio" name="appearance-accent" checked={accent === entry.value} onChange={() => setAccent(entry.value)} />
+                            <span className="kopt__t"><span className="kset-swatch" style={{ background: entry.swatch }} aria-hidden="true" />{entry.label}</span>
+                            <span className="kopt__dot" aria-hidden="true" />
+                        </label>
                     ))}
                 </div>
             </div>
 
-            <div className="appearance__group">
-                <div className="theme__label">Corners</div>
-                <div className="theme__modes">
+            <div className="kfield" role="radiogroup" aria-label="Corners">
+                <span>Corners</span>
+                <div className="kopts kset-opts">
                     {CORNERS.map((entry) => (
-                        <button
-                            key={entry.value}
-                            className={"theme__mode theme__corner theme__corner--" + entry.value}
-                            aria-current={corners === entry.value}
-                            onClick={() => setCorners(entry.value)}
-                        >
-                            <span className="theme__cornerbox" />
-                            {entry.label}
-                        </button>
+                        <label key={entry.value} className="kopt kopt--compact">
+                            <input type="radio" name="appearance-corners" checked={corners === entry.value} onChange={() => setCorners(entry.value)} />
+                            <span className="kopt__t"><span className={"kset-corner kset-corner--" + entry.value} aria-hidden="true" />{entry.label}</span>
+                            <span className="kopt__dot" aria-hidden="true" />
+                        </label>
                     ))}
                 </div>
             </div>
