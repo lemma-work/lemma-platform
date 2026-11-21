@@ -5,7 +5,7 @@ be a pod's machine or one of your own:
 
   me                     your default machine
   pod:<pod>:<name>       a pod's machine, the pod by id or name
-                         (pod:<name> for the selected pod)
+                         (pod:<name> for the selected pod, or --pod)
   <machine-id>
 
 `exec` and `shell` follow the process over a socket, so what it prints shows up
@@ -130,6 +130,28 @@ def _resolved(
 
     named, name = split_pod_ref(ref)
     return resolve_pod_id(client, cli_state, named or pod), name
+
+
+def _check_pod_flag(ref: str, pod: str | None) -> None:
+    if pod is not None and not ref.startswith("pod:"):
+        raise typer.BadParameter(
+            f"--pod only applies to a pod's machine (pod:<name>), not {ref!r}",
+            param_hint="--pod",
+        )
+
+
+def _wire_ref(client: Lemma, cli_state: CliState, ref: str, pod: str | None) -> str:
+    """The ref as an API path wants it.
+
+    A pod's machine resolves through `_resolved` -- the same path as
+    create/update/delete/grants -- so the pod in the wire ref is the ref's
+    own, then --pod's, then the selected pod's. Any other ref (``me``, an
+    id) names no pod and passes through.
+    """
+    if not ref.startswith("pod:"):
+        return ref
+    pod_id, name = _resolved(client, cli_state, ref, pod)
+    return f"pod:{pod_id}:{name}"
 
 
 @app.command(
@@ -297,6 +319,26 @@ def _command_line(command: list[str]) -> str:
     return shlex.join(command)
 
 
+def _reject_misplaced_pod_flag(ref: str, command: list[str]) -> None:
+    """`exec` reads everything after the ref as the command, so a `--pod`
+    typed there is swallowed into the shell line while the ref still binds
+    to the stored default pod -- the wrong machine, with no error. Refuse
+    it instead."""
+    if not ref.startswith("pod:"):
+        return
+    for word in command:
+        if word == "--":
+            return
+        if word == "--pod" or word.startswith("--pod="):
+            raise typer.BadParameter(
+                "--pod goes before the ref: `lemma machine exec --pod <pod> "
+                f"{ref} <command>` (or name the pod in the ref: "
+                "pod:<pod>:<name>). If --pod is part of the command, quote "
+                "the command as one argument.",
+                param_hint="--pod",
+            )
+
+
 def _parse_env(pairs: list[str] | None) -> dict[str, str]:
     env: dict[str, str] = {}
     for pair in pairs or []:
@@ -321,7 +363,8 @@ def _exit_code_of(stream: Any) -> int:
         "Examples:\n\n"
         "  lemma machine exec me ls -la\n"
         "  lemma machine exec pod:builder 'npm ci && npm test'\n"
-        "  lemma machine exec --cwd /home/user/src me make\n\n"
+        "  lemma machine exec --cwd /home/user/src me make\n"
+        "  lemma machine exec --pod research pod:qa make test\n\n"
         "Options go before the ref: everything after it is the command."
     ),
 )
@@ -340,8 +383,11 @@ def exec_command(
     timeout: int | None = typer.Option(
         None, "--time-limit", help="Stop the command after this many seconds."
     ),
+    pod: str | None = _pod_option(),
 ) -> None:
     """Run a command on a machine, stream its output, and exit with its code."""
+    _check_pod_flag(ref, pod)
+    _reject_misplaced_pod_flag(ref, command)
     state = state_from_ctx(ctx)
     line = _command_line(command)
     environment = _parse_env(env)
@@ -349,7 +395,11 @@ def exec_command(
 
     def call(client: Lemma, _state: CliState) -> dict[str, object]:
         stream = client.machines.exec(
-            ref, line, cwd=cwd, env=environment or None, timeout_seconds=timeout
+            _wire_ref(client, _state, ref, pod),
+            line,
+            cwd=cwd,
+            env=environment or None,
+            timeout_seconds=timeout,
         )
         stdout: list[str] = []
         stderr: list[str] = []
@@ -389,8 +439,10 @@ def shell(
     command: str = typer.Option(
         "bash -l", "--command", "-c", help="What to run in the terminal."
     ),
+    pod: str | None = _pod_option(),
 ) -> None:
     """Open an interactive terminal on a machine."""
+    _check_pod_flag(ref, pod)
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         fail(
             "`lemma machine shell` needs a terminal. To run one command, use "
@@ -404,7 +456,7 @@ def shell(
     def call(client: Lemma, _state: CliState) -> int:
         from ..machine_shell import run_shell
 
-        return run_shell(client, ref, command)
+        return run_shell(client, _wire_ref(client, _state, ref, pod), command)
 
     code = run_with_client(ctx, call)
     raise typer.Exit(code=code if isinstance(code, int) else 1)
@@ -414,12 +466,19 @@ def shell(
 
 
 @app.command("ps")
-def list_processes(ctx: typer.Context, ref: str = _ref_option()) -> None:
+def list_processes(
+    ctx: typer.Context,
+    ref: str = _ref_option(),
+    pod: str | None = _pod_option(),
+) -> None:
     """Show what is running on a machine."""
+    _check_pod_flag(ref, pod)
     state = state_from_ctx(ctx)
-    result = run_with_client(
-        ctx, lambda client, _s: client.machines.processes.list(ref)
-    )
+
+    def call(client: Lemma, _state: CliState) -> object:
+        return client.machines.processes.list(_wire_ref(client, _state, ref, pod))
+
+    result = run_with_client(ctx, call)
     if result is not None:
         emit(state, result)
 
@@ -432,14 +491,18 @@ def kill_process(
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Skip the confirmation prompt."
     ),
+    pod: str | None = _pod_option(),
 ) -> None:
     """Stop a process on a machine."""
+    _check_pod_flag(ref, pod)
     state = state_from_ctx(ctx)
     confirm_destructive(f"Stop process {process_id} on {ref}?", yes)
-    result = run_with_client(
-        ctx,
-        lambda client, _s: client.machines.processes.kill(ref, process_id) or True,
-    )
+
+    def call(client: Lemma, _state: CliState) -> bool:
+        client.machines.processes.kill(_wire_ref(client, _state, ref, pod), process_id)
+        return True
+
+    result = run_with_client(ctx, call)
     if result is not None:
         emit(state, {"process_id": process_id, "stopped": True})
 
