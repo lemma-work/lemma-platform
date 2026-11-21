@@ -61,13 +61,20 @@ def _position(run_context: RunContext[object] | None) -> RequestPosition | None:
 _OUTPUT_IMAGE_TOKEN_DETAILS = ("image_candidates_tokens",)
 
 
-def _output_image_tokens(usage: RequestUsage) -> int:
-    # pydantic-ai sets it as an attribute when its price extractor reads one
-    # from the provider's payload; the details entry is the adapter's own.
-    extracted = getattr(usage, "output_image_tokens", None)
-    if isinstance(extracted, int) and extracted > 0:
-        return extracted
-    return sum(usage.details.get(key, 0) for key in _OUTPUT_IMAGE_TOKEN_DETAILS)
+def _output_image_tokens(usage: RequestUsage) -> int | None:
+    """The image share of the output, or ``None`` when the provider gave none.
+
+    Read only from the per-modality detail the adapter writes from the
+    provider's own report; its absence is unknown, never zero.
+    """
+    reported = [
+        usage.details[key]
+        for key in _OUTPUT_IMAGE_TOKEN_DETAILS
+        if key in usage.details
+    ]
+    if not reported:
+        return None
+    return min(sum(reported), usage.output_tokens)
 
 
 def _images_in(response: ModelResponse) -> int:
@@ -86,7 +93,7 @@ def _drew_without_measure(counts: TokenCounts | None) -> bool:
     as priced, so the request is left unpriced instead, to follow
     `USAGE_UNPRICED_LIMIT_POLICY` like any cost this server cannot state.
     """
-    return bool(counts and counts.output_images and not counts.output_image_tokens)
+    return bool(counts and counts.output_images and counts.output_image_tokens is None)
 
 
 def _counts(usage: RequestUsage, *, images: int = 0) -> TokenCounts | None:
@@ -112,7 +119,7 @@ def _counts(usage: RequestUsage, *, images: int = 0) -> TokenCounts | None:
         input_audio_tokens=usage.input_audio_tokens,
         output_audio_tokens=usage.output_audio_tokens,
         cache_audio_read_tokens=usage.cache_audio_read_tokens,
-        output_image_tokens=min(_output_image_tokens(usage), usage.output_tokens),
+        output_image_tokens=_output_image_tokens(usage),
         output_images=images,
         request_count=1,
     )

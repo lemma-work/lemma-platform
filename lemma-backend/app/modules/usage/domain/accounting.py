@@ -72,7 +72,9 @@ class TokenCounts(BaseModel):
     cache_audio_read_tokens: int = Field(default=0, ge=0)
     #: Image tokens a model drew. Included in `output_tokens`, and billed at
     #: an image rate an order of magnitude above text where a card has one.
-    output_image_tokens: int = Field(default=0, ge=0)
+    #: ``None`` when the provider reported no image split at all, which is not
+    #: the same as reporting none drawn.
+    output_image_tokens: int | None = Field(default=None, ge=0)
     #: Images a model returned: what an image request is counted in.
     output_images: int = Field(default=0, ge=0)
     unpriced_requests: int = Field(default=0, ge=0)

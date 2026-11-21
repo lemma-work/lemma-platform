@@ -62,7 +62,7 @@ def test_a_text_answer_draws_nothing() -> None:
         ModelResponse(parts=[TextPart(content="ok")]),
     ).receipt(_CARD, priceable=True)
 
-    assert receipt.counts.output_image_tokens == 0
+    assert receipt.counts.output_image_tokens is None
     assert receipt.counts.output_images == 0
 
 
@@ -78,6 +78,22 @@ def test_a_picture_with_no_image_token_count_is_not_priced_as_text() -> None:
     assert receipt.cost is None
     assert receipt.counts.unpriced_requests == 1
     assert receipt.counts.output_images == 1
+    assert receipt.counts.output_image_tokens is None
+
+
+def test_a_reported_zero_image_split_is_a_measurement_not_a_gap() -> None:
+    """The provider said how much of the output was picture -- none -- so the
+    receipt keeps that zero and prices what it was told."""
+    picture = BinaryImage(data=b"\x89PNG", media_type="image/png")
+    receipt = _dispatch(
+        RequestUsage(
+            input_tokens=11, output_tokens=20, details={"image_candidates_tokens": 0}
+        ),
+        ModelResponse(parts=[FilePart(content=picture)]),
+    ).receipt(_CARD, priceable=True)
+
+    assert receipt.counts.output_image_tokens == 0
+    assert receipt.cost == Decimal("0.00003275")
 
 
 def test_a_picture_with_no_usage_at_all_is_still_counted() -> None:

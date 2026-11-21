@@ -57,7 +57,7 @@ class RateCard(BaseModel):
             "input_audio_mtok": counts.input_audio_tokens,
             "output_audio_mtok": counts.output_audio_tokens,
             "cache_audio_read_mtok": counts.cache_audio_read_tokens,
-            "output_image_mtok": counts.output_image_tokens,
+            "output_image_mtok": counts.output_image_tokens or 0,
         }
         if any(
             count and category not in self.rates
@@ -82,7 +82,7 @@ class RateCard(BaseModel):
                     input_audio_tokens=counts.input_audio_tokens,
                     output_audio_tokens=counts.output_audio_tokens,
                     cache_audio_read_tokens=counts.cache_audio_read_tokens,
-                    output_image_tokens=counts.output_image_tokens,
+                    output_image_tokens=counts.output_image_tokens or 0,
                 )
             )["total_price"]
         )
