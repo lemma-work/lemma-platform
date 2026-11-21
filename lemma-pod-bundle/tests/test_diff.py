@@ -172,3 +172,21 @@ def test_the_same_options_change_nothing():
     column = {"name": "stage", "type": "ENUM", "options": ["lead", "won"]}
     diff = diff_table_columns({"columns": [column]}, {"columns": [dict(column)]})
     assert diff.options_to_add == {} and diff.options_kept == {}
+
+
+def test_diff_keeps_contact_id_of_a_contact_owned_table():
+    # The platform adds `contact_id` to a contact-owned table; a bundle that
+    # leaves it out of `columns` still means the table to have it.
+    existing = _table(
+        [{"name": "id", "type": "uuid"}, {"name": "contact_id", "type": "uuid"}]
+    )
+    desired = {**_table([{"name": "id", "type": "uuid"}]), "contact_owned": True}
+    assert diff_table_columns(existing, desired).to_remove == []
+
+
+def test_diff_removes_contact_id_from_an_ordinary_table():
+    existing = _table(
+        [{"name": "id", "type": "uuid"}, {"name": "contact_id", "type": "uuid"}]
+    )
+    desired = _table([{"name": "id", "type": "uuid"}])
+    assert diff_table_columns(existing, desired).to_remove == ["contact_id"]

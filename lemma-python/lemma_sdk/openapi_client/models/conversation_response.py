@@ -50,6 +50,8 @@ class ConversationResponse:
         last_run_error_code (None | str | Unset):
         last_run_error_reason (None | str | Unset):
         last_run_finished_at (datetime.datetime | None | Unset):
+        last_run_id (None | Unset | UUID): The conversation's latest run, to read with `agent.conversation.run.get` --
+            its outcome and the tokens it used. Set when one conversation is read.
         last_run_retryable (bool | Unset):  Default: False.
         last_run_status (AgentRunStatus | None | Unset):
         metadata (ConversationResponseMetadataType0 | None | Unset):
@@ -82,6 +84,7 @@ class ConversationResponse:
     last_run_error_code: None | str | Unset = UNSET
     last_run_error_reason: None | str | Unset = UNSET
     last_run_finished_at: datetime.datetime | None | Unset = UNSET
+    last_run_id: None | Unset | UUID = UNSET
     last_run_retryable: bool | Unset = False
     last_run_status: AgentRunStatus | None | Unset = UNSET
     metadata: ConversationResponseMetadataType0 | None | Unset = UNSET
@@ -175,6 +178,14 @@ class ConversationResponse:
             last_run_finished_at = self.last_run_finished_at.isoformat()
         else:
             last_run_finished_at = self.last_run_finished_at
+
+        last_run_id: None | str | Unset
+        if isinstance(self.last_run_id, Unset):
+            last_run_id = UNSET
+        elif isinstance(self.last_run_id, UUID):
+            last_run_id = str(self.last_run_id)
+        else:
+            last_run_id = self.last_run_id
 
         last_run_retryable = self.last_run_retryable
 
@@ -270,6 +281,8 @@ class ConversationResponse:
             field_dict["last_run_error_reason"] = last_run_error_reason
         if last_run_finished_at is not UNSET:
             field_dict["last_run_finished_at"] = last_run_finished_at
+        if last_run_id is not UNSET:
+            field_dict["last_run_id"] = last_run_id
         if last_run_retryable is not UNSET:
             field_dict["last_run_retryable"] = last_run_retryable
         if last_run_status is not UNSET:
@@ -433,6 +446,23 @@ class ConversationResponse:
             d.pop("last_run_finished_at", UNSET)
         )
 
+        def _parse_last_run_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                last_run_id_type_0 = UUID(data)
+
+                return last_run_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        last_run_id = _parse_last_run_id(d.pop("last_run_id", UNSET))
+
         last_run_retryable = d.pop("last_run_retryable", UNSET)
 
         def _parse_last_run_status(data: object) -> AgentRunStatus | None | Unset:
@@ -568,6 +598,7 @@ class ConversationResponse:
             last_run_error_code=last_run_error_code,
             last_run_error_reason=last_run_error_reason,
             last_run_finished_at=last_run_finished_at,
+            last_run_id=last_run_id,
             last_run_retryable=last_run_retryable,
             last_run_status=last_run_status,
             metadata=metadata,

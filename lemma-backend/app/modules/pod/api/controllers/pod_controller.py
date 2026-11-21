@@ -125,14 +125,24 @@ async def get_pod(
     return PodResponse.model_validate(pod)
 
 
-@router.put(
+@router.patch(
     "/{pod_id}",
     dependencies=[PodEditorDep],
     status_code=status.HTTP_200_OK,
     operation_id="pod.update",
     summary="Update Pod",
-    description="Update pod details",
+    description="Update pod details; only the fields sent change",
     response_model=PodResponse,
+)
+# PUT predates PATCH and has always been a partial update, so it stays for
+# clients built against it but leaves the schema: one operation per action.
+@router.put(
+    "/{pod_id}",
+    dependencies=[PodEditorDep],
+    status_code=status.HTTP_200_OK,
+    operation_id="pod.update.put",
+    response_model=PodResponse,
+    include_in_schema=False,
 )
 async def update_pod(
     pod_id: UUID,

@@ -60,6 +60,12 @@ class FunctionModel(UUIDAuditBase):
     contacts_invoke: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false", nullable=False
     )
+    #: Offered to the Lemma's assistant and runnable by it. False keeps a
+    #: function to the flows that call it: apps, workflows, schedules and other
+    #: functions (``services/assistant_access``).
+    assistant_invoke: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true", nullable=False
+    )
 
     def __str__(self) -> str:
         return self.name or str(self.id)

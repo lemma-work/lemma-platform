@@ -145,10 +145,6 @@
     line-height: 1.55;
     color: var(--ink-2);
 }
-.figure {
-    font-family: var(--ui);
-    font-variant-numeric: tabular-nums;
-}
 
 /* ── The app's pictures ───────────────────────────────────────────────── */
 .app {

@@ -56,7 +56,7 @@ RLS scopes *which rows* a caller touches; it does **not** change *what permissio
 | `INTEGER` | counts, scores without decimals | `3` |
 | `FLOAT` | amounts, confidence, quantities | `23.5` |
 | `BOOLEAN` | flags | `true` |
-| `JSON` | flexible payloads, model outputs, snapshots | `{"vendor": "Acme"}` |
+| `JSON` | flexible payloads, model outputs, snapshots; any JSON value (object, array, number, boolean, string) comes back as sent. A string holding an object or array as JSON text (`"{\"a\": 1}"`) is stored as that object/array; any other string stays a string | `{"vendor": "Acme"}` |
 | `DATE` | calendar date | `"2026-05-13"` |
 | `DATETIME` | timestamp | `"2026-05-13T09:30:00Z"` |
 | `UUID` | resource ids, stable references | `"4d06f8d1-..."` |
@@ -162,8 +162,8 @@ Two different needs, two mechanisms — don't conflate them (pod-model: server-s
 
 ## Tables people outside the pod use
 
-- **`contact_owned: true`** — rows the pod keeps about its contacts; adds `contact_id`, and a contact reads only their own rows. Not combinable with `enable_rls`.
-- **Opened to outside rows** — anyone, or confirmed contacts, may add rows with chosen columns (`PUT .../tables/{t}/public-rows`). This is what a form is; build one with the `lemma-form` skill. Only a shared table (`enable_rls: false`) can be opened.
+- **`contact_owned: true`** — rows the pod keeps about its contacts; adds `contact_id`, and a contact reads only their own rows. Not combinable with `enable_rls`. In a bundle it goes in the table's JSON with `contact_columns` and `"enable_rls": false`; you don't need to list `contact_id` in `columns`.
+- **Opened to outside rows** — anyone, or confirmed contacts, may add rows with chosen columns (`PUT .../tables/{t}/public-rows`). This is what a form is; build one with the `lemma-form` skill. Only a shared table (`enable_rls: false`) can be opened. Openable column types: TEXT, INTEGER, FLOAT, BOOLEAN, DATE, DATETIME, ENUM, UUID (e.g. the slot a booking page fills in), and FILE_PATH on a page that uploads; never USER, JSON or VECTOR. A refusal is 422 `TABLE_OPENING_REFUSED` naming each column and why.
 
 See `people-outside.md`.
 

@@ -29,7 +29,14 @@ from ..confirm import confirm_destructive
 from ..io import emit, to_plain
 from ..payload import build_request, read_json
 from ..sdk import pod_client
-from ..state import console, fail, run_with_client, state_from_ctx
+from ..state import (
+    CliState,
+    console,
+    fail,
+    resolved_auth_urls,
+    run_with_client,
+    state_from_ctx,
+)
 from lemma_sdk.config import resolve_auth_url, resolve_base_url, resolve_token
 from ...cli_app.app_bundle import (
     classify_app_source,
@@ -80,6 +87,20 @@ def _app_browser_url(url: str, *, env_key: str, log: bool = True) -> str:
             "from inside Docker."
         )
     return browser_url
+
+
+def target_app_env(state: CliState) -> dict[str, str]:
+    """The API and sign-in URLs of the server an app is deployed through, as
+    the ``VITE_LEMMA_*`` values a build reads when its project sets none."""
+    api_url, auth_url = resolved_auth_urls(state)
+    return {
+        "VITE_LEMMA_API_URL": _app_browser_url(
+            api_url, env_key="VITE_LEMMA_API_URL", log=False
+        ),
+        "VITE_LEMMA_AUTH_URL": _app_browser_url(
+            auth_url, env_key="VITE_LEMMA_AUTH_URL", log=False
+        ),
+    }
 
 
 @app.command("list")
@@ -403,6 +424,7 @@ def deploy_app(
             source_dir=source_dir,
             dist_dir=dist_dir,
             ensure_exists=create,
+            target_env=target_app_env(s),
         )
 
     result = run_with_client(

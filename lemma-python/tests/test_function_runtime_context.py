@@ -61,3 +61,17 @@ def test_function_context_rejects_cross_pod_override() -> None:
             assert "cannot override" in str(exc)
         else:
             raise AssertionError("cross-pod override must fail")
+
+
+def test_function_context_carries_the_member_name_and_defaults_to_none() -> None:
+    named = FunctionContext(
+        pod_id=uuid7(),
+        function_id=str(uuid7()),
+        user_id=uuid7(),
+        user_email="ada@example.test",
+        user_name="Ada Lovelace",
+    )
+    nobody = FunctionContext(pod_id=uuid7(), function_id=str(uuid7()))
+
+    assert named.user_name == "Ada Lovelace"
+    assert nobody.user_name is None

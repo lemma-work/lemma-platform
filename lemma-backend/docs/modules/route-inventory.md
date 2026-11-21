@@ -27,6 +27,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/conversations/{conversation_id}` | `agent.conversation.get` | Get Pod Conversation |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/approvals` | `agent.conversation.approval.list` | List Agent Run Approvals |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/messages` | `agent.conversation.message.list` | List Pod Conversation Messages |
+| GET | `/pods/{pod_id}/conversations/{conversation_id}/runs/{run_id}` | `agent.conversation.run.get` | Get Conversation Run |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/stream` | `agent.conversation.stream` | Stream Pod Conversation |
 | GET | `/pods/{pod_id}/pod-links` | `agent.pod_link.list` | List Pods That Can Ask This Pod |
 | PATCH | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | `agent.runtime.profiles.update` | Update Agent Runtime Profile |
@@ -385,6 +386,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/resources/{resource_type}/{resource_name}/access` | `pod.resource_access.get` | Get Resource Access |
 | GET | `/pods/{pod_id}/roles` | `pod.roles.list` | List Pod Roles |
 | GET | `/pods/{pod_id}/roles/{role_name}/permissions` | `pod.role.permissions.get` | Get Pod Role Permissions |
+| PATCH | `/pods/{pod_id}` | `pod.update` | Update Pod |
 | PATCH | `/pods/{pod_id}/members/{pod_member_id}/roles` | `pod.member.update_roles` | Update Member Roles |
 | PATCH | `/pods/{pod_id}/roles/{role_name}` | `pod.roles.update` | Update Pod Role |
 | POST | `/pods` | `pod.create` | Create Pod |
@@ -394,7 +396,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/join-requests/{join_request_id}/reject` | `pod.join_request.reject` | Reject Pod Join Request |
 | POST | `/pods/{pod_id}/members` | `pod.member.add` | Add Pod Member |
 | POST | `/pods/{pod_id}/roles` | `pod.roles.create` | Create Pod Role |
-| PUT | `/pods/{pod_id}` | `pod.update` | Update Pod |
 | PUT | `/pods/{pod_id}/outcome` | `outcome.set` | Set what the pod owns |
 | PUT | `/pods/{pod_id}/resources/{resource_type}/{resource_name}/access/grantees/{grantee_type}/{grantee_id}` | `pod.resource_access.grant.replace` | Replace Resource Access Grant |
 | PUT | `/pods/{pod_id}/roles/{role_name}/permissions` | `pod.role.permissions.replace` | Replace Pod Role Permissions |

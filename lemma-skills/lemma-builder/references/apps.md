@@ -26,7 +26,8 @@ what the pod model allows them to see — nothing special, nothing extra.
   operation through one of the pod's connectors, as the account it resolves to
   for the signed-in person — the app never holds credentials.
 - **Runtime context.** The host injects `window.__LEMMA_CONFIG__` (`podId`,
-  `apiUrl`, `authUrl`) at serve time, so the same app runs unchanged against
+  `apiUrl`, `authUrl`, and `webWidgets` when the Lemma has a web widget for the
+  app's address) at serve time, so the same app runs unchanged against
   local / staging / cloud. Auth is one bearer (`localStorage["lemma_token"]`) or a
   cookie session — the tooling below seeds it for you.
 
@@ -135,6 +136,10 @@ lemma apps open support-app          # open the DEPLOYED app in the agent browse
   only a fallback for `vite dev` (where the host isn't in the loop). Do **not** pass
   `podId: import.meta.env.VITE_LEMMA_POD_ID` into the client — that re-bakes a pod
   and breaks portability.
+- **No `.env.local` needed to deploy.** `lemma apps deploy` (and `lemma pods import`
+  of an app's `source/`) fills any `VITE_LEMMA_*` the project leaves empty from the
+  Lemma it deploys to; values the project sets win. `--dist-dir` deploys a prebuilt
+  `dist/` as it is and asks for no build env at all.
 - `init` materializes a bundled **Vite + React + `lemma-sdk`** template offline
   (pass `--template <git|path>` to override). It writes `.env.local` (dev fallback),
   a working `tsconfig`, `lemma.app.json`, `AGENTS.md`, and a `.lemma.<server>.env`
@@ -142,7 +147,11 @@ lemma apps open support-app          # open the DEPLOYED app in the agent browse
   `--nav sidebar|topbar|single-page`,
   `--style soft|neobrutal|editorial|terminal`, `--chat-mode page|popup|right-sidebar`,
   `--members/--no-members`, `--sdk-path <local-lemma-typescript>` (offline SDK),
-  `--proxy` (same-origin `/api` dev proxy — use this on a Lemma machine / in the agent browser),
+  `--proxy` (same-origin `/api` dev proxy — use this on a Lemma machine / in the agent browser,
+  and whenever `vite dev` talks to a hosted Lemma server: a hosted API refuses
+  `localhost`/`127.0.0.1` origins on purpose, since it answers them with credentials;
+  a server you run yourself in local mode allows both on ports 3000, 3711, 4173 and
+  5173, and `CORS_ORIGINS` there adds others),
   `--no-install`.
 - **Latest SDK, automatically.** `init` resolves the **latest published `lemma-sdk` from
   npm** and pins it (`^x.y.z`) in `package.json` (or a local `file:` when a sibling
@@ -200,7 +209,9 @@ pass `appName` only to override that identity in local development. Prefer **hoo
 - **Workflows**: `useWorkflowStart`, `useWorkflowRuns`, `useWorkflowRun`,
   `useWorkflowForm`/`<WorkflowForm>`, `useWorkflowResume`,
   `useWorkflowRunWaitAssignments`, `useFlowRunHistory`
-- **Functions**: `useFunctionRun`, `useFunctionRuns`, `useFunctionSession`
+- **Functions**: `useFunctionRun`, `useFunctionRuns`, `useFunctionSession` —
+  an `API` function's `start` resolves with the finished run; a `JOB` is polled
+  from 250 ms, backing off to `pollIntervalMs` (2 s). Don't add your own poll.
 - **Members/search**: `useMembers`, `useGlobalSearch`
 
 Plus **generated CRUD hooks** (`use<Resource>List/Get/Create/Update/Delete` for
@@ -393,6 +404,15 @@ adopt any one design system.
   `apps/<name>/<name>.json` (or `lemma apps update <app> -d '{"visibility":
   "PUBLIC"}'`, or the share dialog). An app's data calls are authorized on their
   own either way.
+- **A Public app's chat and forms for strangers go through the Lemma's web
+  widget** (`people-outside.md`). The host names the widgets the app may embed in
+  `__LEMMA_CONFIG__.webWidgets` — `{name, publicKey, scriptUrl}` for each one
+  switched on whose `allowed_origins` include the app's address (or are empty) —
+  and `client.webWidget(name?)` returns one. Load it with
+  `<script src={scriptUrl} data-lemma-key={publicKey}>`; never put the key in the
+  app's links. The page reloads to see a widget made after it loaded. Loading the
+  SDK on the same page is fine: it leaves `/public/` calls alone, so the widget's
+  calls carry no session headers.
 
 ## See also
 

@@ -44,7 +44,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `pod.roles.delete` | DELETE | `/pods/{pod_id}/roles/{role_name}` | Delete Pod Role |
 | `pod.roles.list` | GET | `/pods/{pod_id}/roles` | List Pod Roles |
 | `pod.roles.update` | PATCH | `/pods/{pod_id}/roles/{role_name}` | Update Pod Role |
-| `pod.update` | PUT | `/pods/{pod_id}` | Update Pod |
+| `pod.update` | PATCH | `/pods/{pod_id}` | Update Pod |
 
 <!-- /generated:operations -->
 

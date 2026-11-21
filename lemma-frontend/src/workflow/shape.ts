@@ -365,7 +365,10 @@ function sayTimeout(config: Record<string, unknown> | null): string[] {
 
 /* ── the order they run in ─────────────────────────────────────────── */
 
-interface EdgeRow { source: string; target: string }
+/** `failure` marks where a step goes when it fails (`kind: "FAILURE"`): not
+ *  its next step, so the outline leaves it out of the line, while the order
+ *  still counts it as reaching its target. */
+interface EdgeRow { source: string; target: string; failure?: boolean }
 
 function readEdges(raw: unknown): EdgeRow[] {
     const list = Array.isArray(raw) ? raw : [];
@@ -374,7 +377,7 @@ function readEdges(raw: unknown): EdgeRow[] {
         if (!isRecord(edge)) continue;
         const source = str(edge.source);
         const target = str(edge.target);
-        if (source && target) out.push({ source, target });
+        if (source && target) out.push({ source, target, failure: str(edge.kind)?.toUpperCase() === "FAILURE" });
     }
     return out;
 }
@@ -677,7 +680,7 @@ function wire(steps: FlowStep[], edges: EdgeRow[]): Wiring {
 
     const next = steps.map((step) => {
         if (!step.id || step.kind === "END") return undefined;
-        const edge = edges.find((one) => one.source === step.id);
+        const edge = edges.find((one) => one.source === step.id && !one.failure);
         return edge ? find(edge.target) : undefined;
     });
     const rules = steps.map((step) =>

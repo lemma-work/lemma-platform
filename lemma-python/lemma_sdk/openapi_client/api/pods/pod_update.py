@@ -21,7 +21,7 @@ def _get_kwargs(
     headers: dict[str, Any] = {}
 
     _kwargs: dict[str, Any] = {
-        "method": "put",
+        "method": "patch",
         "url": "/pods/{pod_id}".format(
             pod_id=quote(str(pod_id), safe=""),
         ),
@@ -73,7 +73,7 @@ def sync_detailed(
 ) -> Response[ErrorResponse | PodResponse]:
     """Update Pod
 
-     Update pod details
+     Update pod details; only the fields sent change
 
     Args:
         pod_id (UUID):
@@ -107,7 +107,7 @@ def sync(
 ) -> ErrorResponse | PodResponse | None:
     """Update Pod
 
-     Update pod details
+     Update pod details; only the fields sent change
 
     Args:
         pod_id (UUID):
@@ -136,7 +136,7 @@ async def asyncio_detailed(
 ) -> Response[ErrorResponse | PodResponse]:
     """Update Pod
 
-     Update pod details
+     Update pod details; only the fields sent change
 
     Args:
         pod_id (UUID):
@@ -168,7 +168,7 @@ async def asyncio(
 ) -> ErrorResponse | PodResponse | None:
     """Update Pod
 
-     Update pod details
+     Update pod details; only the fields sent change
 
     Args:
         pod_id (UUID):

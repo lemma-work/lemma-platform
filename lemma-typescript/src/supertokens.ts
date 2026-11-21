@@ -27,6 +27,33 @@ function normalizePath(pathname: string): string {
   return withLeadingSlash.endsWith("/") ? withLeadingSlash.slice(0, -1) : withLeadingSlash;
 }
 
+/**
+ * Whether a request is to one of the API's `/public/` endpoints.
+ *
+ * Nothing under `/public/` is reached with a Lemma session: it is the web
+ * widget's chat and forms, short file links, SDK bundles and the like, each
+ * answering whoever holds the capability in its URL. SuperTokens' fetch
+ * interceptor patches `window.fetch` for the whole page, so without this every
+ * such call made by *any* script on a page that loaded the SDK -- the web
+ * widget on a Public app, most of all -- carried `rid` and `st-auth-mode`, which
+ * the widget's strict CORS refuses at the pre-flight, and had its 401s taken
+ * for the member's session expiring.
+ *
+ * `apiPrefix` is the API's own path on its host (`/_lemma` when an app reaches
+ * the API through its own origin); `/public/` is matched both under it and at
+ * the root, where the widget script derives its calls from its own origin.
+ */
+export function isPublicApiPath(url: string, apiPrefix: string): boolean {
+  let pathname: string;
+  try {
+    const base = typeof window === "undefined" ? "http://localhost" : window.location.href;
+    pathname = new URL(url, base).pathname;
+  } catch {
+    return false;
+  }
+  return pathname.startsWith("/public/") || (apiPrefix !== "" && pathname.startsWith(`${apiPrefix}/public/`));
+}
+
 function resolveApiBase(apiUrl: string): { apiDomain: string; apiBasePath: string } {
   if (typeof window === "undefined") {
     throw new Error("Cookie session support requires a browser environment.");
@@ -61,6 +88,7 @@ export function ensureCookieSessionSupport(
   }
 
   const { apiDomain, apiBasePath } = resolveApiBase(apiUrl);
+  const apiPrefix = apiBasePath.slice(0, -SESSION_API_SUFFIX.length);
   const signature = `${apiDomain}${apiBasePath}`;
   if (initializedSignature === signature) {
     return;
@@ -119,6 +147,14 @@ export function ensureCookieSessionSupport(
           if (event.action === "UNAUTHORISED") {
             unauthorisedListeners.forEach((listener) => listener());
           }
+        },
+        override: {
+          functions: (original) => ({
+            ...original,
+            shouldDoInterceptionBasedOnUrl: (url, domain, backendDomain) =>
+              !isPublicApiPath(url, apiPrefix) &&
+              original.shouldDoInterceptionBasedOnUrl(url, domain, backendDomain),
+          }),
         },
       }),
     ],

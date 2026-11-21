@@ -36,6 +36,26 @@ class DecisionInvalidError(DomainError):
         self.problems = problems
 
 
+def images_unsupported() -> DecisionInvalidError:
+    """The request has images and what answers decisions here cannot see them.
+
+    A 422 rather than a 503: the same request will not succeed later on this
+    deployment, and the caller's fix -- send the evidence as text -- is theirs
+    to make. Said before the provider is asked, never discovered as a provider
+    refusing image content.
+    """
+    return DecisionInvalidError(
+        [
+            {
+                "path": "images",
+                "message": "Decisions on this server cannot look at images.",
+            }
+        ],
+        message="Decisions on this server cannot look at images.",
+        code="DECISION_IMAGES_UNSUPPORTED",
+    )
+
+
 class DecisionLimitedError(DomainError):
     """Too many decisions for this organization this minute. Ask again later."""
 

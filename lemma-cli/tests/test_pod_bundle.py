@@ -1980,6 +1980,7 @@ def test_import_pod_bundle_validates_and_uploads_app_source(tmp_path: Path):
         source_dir: Path,
         dist_dir=None,
         ensure_exists=False,
+        target_env=None,
     ):
         deploy_calls.append(
             {
@@ -2080,7 +2081,7 @@ def test_import_pod_bundle_retries_app_create_with_unique_public_slug_on_conflic
         resource_dir / "dist.zip"
     )
     pod_bundle.deploy_app_bundle = (
-        lambda client, *, pod_id, app_name, source_dir, dist_dir=None, ensure_exists=False: {}
+        lambda client, *, pod_id, app_name, source_dir, dist_dir=None, ensure_exists=False, target_env=None: {}
     )
     try:
         result = import_pod_bundle(client, pod_id="pod_123", source_dir=tmp_path)

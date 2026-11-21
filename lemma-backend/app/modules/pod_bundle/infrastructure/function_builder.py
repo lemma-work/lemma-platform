@@ -62,6 +62,9 @@ class FunctionStepRunner:
         code_value = payload.get("code")
         code = code_value if isinstance(code_value, str) else None
         function_type = FunctionType(str(payload.get("type") or FunctionType.API.value))
+        # Absent means offered to the assistant: what every function was before
+        # the field, and what an export leaves out.
+        assistant_invoke = payload.get("assistant_invoke")
         entity = FunctionEntity(
             pod_id=pod_id,
             user_id=user_id,
@@ -71,6 +74,7 @@ class FunctionStepRunner:
             config=payload.get("config"),
             type=function_type,
             visibility=payload.get("visibility") or "POD",
+            assistant_invoke=assistant_invoke is not False,
         )
         made = await self._use_cases.create_function_for_import(
             entity=entity, code=code, user_id=user_id

@@ -23,6 +23,10 @@ export type ConversationResponse = {
     last_run_error_code?: (string | null);
     last_run_error_reason?: (string | null);
     last_run_finished_at?: (string | null);
+    /**
+     * The conversation's latest run, to read with `agent.conversation.run.get` -- its outcome and the tokens it used. Set when one conversation is read.
+     */
+    last_run_id?: (string | null);
     last_run_retryable?: boolean;
     last_run_status?: (AgentRunStatus | null);
     metadata?: (Record<string, any> | null);

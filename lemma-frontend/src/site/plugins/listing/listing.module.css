@@ -344,21 +344,12 @@
 }
 .lineList a {
     display: grid;
-    grid-template-columns: 28px minmax(0, 1fr);
-    gap: 8px;
     padding: 8px 0;
     border-radius: var(--r-sm);
 }
 .lineList a:hover .plannedName {
     text-decoration: underline;
     text-underline-offset: 0.2em;
-}
-.position {
-    font-family: var(--ui);
-    font-variant-numeric: tabular-nums;
-    font-size: 13px;
-    line-height: 22px;
-    color: var(--ink-3);
 }
 .plannedName {
     display: block;
