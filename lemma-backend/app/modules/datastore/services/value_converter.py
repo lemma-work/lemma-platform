@@ -16,6 +16,45 @@ def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
+def _json_default(value: object) -> str:
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, UUID):
+        return str(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _is_container_json_text(value: str) -> bool:
+    text = value.strip()
+    if text[:1] not in ("{", "["):
+        return False
+    try:
+        json.loads(text)
+    except json.JSONDecodeError:
+        return False
+    return True
+
+
+def json_text(value: object) -> str:
+    """The JSON text a JSON column is bound with, for any JSON value.
+
+    The driver binds a JSONB parameter as JSON *text* and encodes nothing
+    itself, so a number, a boolean or a string has to be encoded here as much
+    as an object or a list -- passed through, ``42`` and ``True`` failed in the
+    driver and ``"hello"`` was refused by the database as malformed JSON.
+
+    A string is stored as a JSON string, with one exception: a string that is
+    an object or an array written as JSON (``'{"a": 1}'``, ``'[1, 2]'``) is
+    stored as that object or array. The column always took such a string that
+    way, and a client that serializes its payload before sending depends on
+    it. Any other string -- ``"hello"``, ``"42"``, ``"true"`` -- is the string
+    it is.
+    """
+    if isinstance(value, str) and _is_container_json_text(value):
+        return value
+    return json.dumps(value, default=_json_default)
+
+
 class ValueConverter:
     @staticmethod
     def parse_datetime(value: str) -> datetime:
@@ -112,8 +151,7 @@ class ValueConverter:
         if value is None:
             return None
         if column.type == DatastoreDataType.JSON:
-            if isinstance(value, (dict, list)):
-                return json.dumps(value)
+            return json_text(value)
         return value
 
     @staticmethod
@@ -149,11 +187,10 @@ class ValueConverter:
         col_type = column.type
 
         if col_type == DatastoreDataType.JSON:
-            if isinstance(value, str):
-                try:
-                    return json.loads(value)
-                except json.JSONDecodeError:
-                    return value
+            # The driver has already decoded the column's JSON. A ``str`` here
+            # is a JSON string, so parsing it again would turn a stored "42"
+            # into 42 and "true" into True.
+            return value
 
         # Handle Decimal from numeric/int columns if driver returns it
         from decimal import Decimal

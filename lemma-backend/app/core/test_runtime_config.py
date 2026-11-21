@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from app.core import app_install
 from app.core.runtime_config import (
+    PageWebWidget,
     build_runtime_config,
     inject_runtime_config,
     runtime_config_token,
@@ -123,3 +124,49 @@ def test_token_covers_the_install_script():
     assert runtime_config_token(pod_id, app=_public_app()) != runtime_config_token(
         pod_id, app={"name": "Invoice Tracker", "description": "Track invoices"}
     )
+
+
+def _booking_widget(name: str = "Booking") -> PageWebWidget:
+    return PageWebWidget(
+        name=name,
+        public_key="pk_abc",
+        script_url="https://api.lemma.work/public/web/widget.js",
+    )
+
+
+def test_an_app_is_told_the_web_widgets_its_pages_may_embed():
+    # A Public app has no other way to learn its pod's widget key; links that
+    # carried it as ?k= were the workaround.
+    cfg = build_runtime_config(uuid4(), web_widgets=[_booking_widget()])
+    assert cfg["webWidgets"] == [
+        {
+            "name": "Booking",
+            "publicKey": "pk_abc",
+            "scriptUrl": "https://api.lemma.work/public/web/widget.js",
+        }
+    ]
+
+
+def test_an_app_with_no_widget_for_it_keeps_the_config_it_had():
+    # So no app's ETag moves for a pod that has no widget.
+    pod_id = uuid4()
+    assert "webWidgets" not in build_runtime_config(pod_id, web_widgets=())
+    assert runtime_config_token(pod_id, web_widgets=()) == runtime_config_token(pod_id)
+
+
+def test_a_widget_switched_on_or_off_reaches_cached_pages():
+    pod_id = uuid4()
+    assert runtime_config_token(pod_id) != runtime_config_token(
+        pod_id, web_widgets=[_booking_widget()]
+    )
+
+
+def test_a_widget_name_cannot_break_out_of_the_config_script():
+    # A widget's name is a member's free text.
+    out = inject_runtime_config(
+        b"<head></head>",
+        uuid4(),
+        web_widgets=[_booking_widget("</script><script>alert(1)</script>")],
+    ).decode()
+    assert out.count("</script>") == 1
+    assert "pk_abc" in out

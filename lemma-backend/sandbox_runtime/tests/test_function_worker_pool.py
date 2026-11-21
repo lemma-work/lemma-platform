@@ -324,15 +324,19 @@ class Input(BaseModel):
 
 class Output(BaseModel):
     user_id: str | None
+    user_name: str | None
     contact_id: str | None
     env_user_id: str | None
+    env_user_name: str | None
     env_contact_id: str | None
 
 def execute(ctx, data):
     return Output(
         user_id=str(ctx.user_id) if ctx.user_id else None,
+        user_name=ctx.user_name,
         contact_id=str(ctx.contact_id) if ctx.contact_id else None,
         env_user_id=os.environ.get("LEMMA_USER_ID"),
+        env_user_name=os.environ.get("LEMMA_USER_NAME"),
         env_contact_id=os.environ.get("LEMMA_CONTACT_ID"),
     )
 """.strip(),
@@ -373,10 +377,42 @@ async def test_a_contacts_run_has_no_user_and_names_its_contact(
     # must not find one.
     assert result.output_data == {
         "user_id": None,
+        "user_name": None,
         "contact_id": str(contact_id),
         "env_user_id": None,
+        "env_user_name": None,
         "env_contact_id": str(contact_id),
     }
+
+
+@pytest.mark.asyncio
+async def test_a_members_run_knows_their_name(tmp_path: Path) -> None:
+    artifact, manifest = _contact_artifact(tmp_path)
+    registry = RevisionWorkerRegistry(max_workers=1)
+    function_id = uuid4()
+    request = _request(artifact, manifest, function_id=function_id, value=1)
+    request = request.model_copy(
+        update={
+            "identity": request.identity.model_copy(
+                update={"user_name": "Ada Lovelace"}
+            )
+        }
+    )
+    try:
+        result = await registry.execute(
+            function_id=function_id,
+            revision_hash=f"sha256:{'c' * 64}",
+            artifact_root=artifact,
+            run_id=request.run_id,
+            request=request,
+            deadline_at=datetime.now(timezone.utc) + timedelta(seconds=10),
+        )
+    finally:
+        await registry.close()
+
+    assert result.output_data is not None
+    assert result.output_data["user_name"] == "Ada Lovelace"
+    assert result.output_data["env_user_name"] == "Ada Lovelace"
 
 
 @pytest.mark.asyncio

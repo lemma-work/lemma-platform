@@ -47,6 +47,14 @@ USAGE_SOURCES: dict[RuntimePurpose, str] = {
     RuntimePurpose.MEMORY: "agent_memory",
     RuntimePurpose.VISION: "vision",
 }
+#: Recorded against a run but not part of its answer: the conversation's title
+#: and the memory kept once it ended. A run's own token count leaves them out,
+#: so it reads the same before and after they land. Vision is the run reading
+#: an image, and counts.
+AFTER_THE_RUN_SOURCES = (
+    USAGE_SOURCES[RuntimePurpose.TITLE],
+    USAGE_SOURCES[RuntimePurpose.MEMORY],
+)
 
 
 @lru_cache(maxsize=1)
@@ -165,4 +173,10 @@ class BackgroundModel:
         return await self.ask(purpose, model, call_for(resolved), usage=usage)
 
 
-__all__ = ["USAGE_SOURCES", "BackgroundModel", "CallFor", "default_model_provider"]
+__all__ = [
+    "AFTER_THE_RUN_SOURCES",
+    "USAGE_SOURCES",
+    "BackgroundModel",
+    "CallFor",
+    "default_model_provider",
+]

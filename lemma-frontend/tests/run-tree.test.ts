@@ -160,3 +160,12 @@ test("an unreadable graph is null, not a throw", () => {
     assert.equal(readGraph(null), null);
     assert.deepEqual(buildTree(readGraph({})!), []);
 });
+
+test("a failure edge is not the line, and its target is not the first step", () => {
+    const graph = readGraph({
+        nodes: [node("save", "FUNCTION"), node("mark", "FUNCTION"), node("done", "END")],
+        edges: [{ ...edge("save", "mark"), kind: "FAILURE" }, edge("save", "done")],
+    })!;
+    assert.equal(entryOf(graph), "save");
+    assert.deepEqual(buildTree(graph).map((item) => item.id), ["save", "done", "mark"]);
+});

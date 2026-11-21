@@ -60,6 +60,14 @@ The platform does not rely on that being obeyed:
 - Writing an oversized index through `pod_write_file` returns a warning saying
   how much of it will actually reach the prompt.
 
+Plugins tell every agent they are installed with a marked block in the two
+shared indexes, `<!-- plugin:<slug> -->` … `<!-- /plugin:<slug> -->`, written
+from the plugin's own function through the file API. An agent's write to
+either index through `pod_write_file` or `pod_edit_file` (the memory pass
+included) must carry every complete block over unchanged and add none, or it
+is refused with what to do instead
+(`domain/plugin_memory_blocks.check_blocks_kept`).
+
 Both caps are per-module settings on the agent module — see
 [configuration](../configuration.md).
 

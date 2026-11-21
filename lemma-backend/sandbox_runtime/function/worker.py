@@ -105,6 +105,7 @@ def _invocation_environment(request: WorkerRequest) -> Iterator[None]:
             else None
         ),
         "LEMMA_USER_EMAIL": identity.user_email,
+        "LEMMA_USER_NAME": identity.user_name,
     }
     previous: dict[str, str | object] = {
         key: os.environ.get(key, _MISSING_ENV) for key in values
@@ -168,6 +169,7 @@ async def execute_loaded(
             function_id=str(identity.function_id),
             user_id=identity.user_id,
             user_email=identity.user_email,
+            user_name=identity.user_name,
             contact_id=identity.contact_id,
             config=config,
         )

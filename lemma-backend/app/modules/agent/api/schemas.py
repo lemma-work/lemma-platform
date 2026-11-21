@@ -170,6 +170,14 @@ class ConversationResponse(BaseModel):
     #: When a person last wrote, a notification landed, or a run started or
     #: finished here; the history list is ordered by it.
     last_activity_at: datetime
+    last_run_id: UUID | None = Field(
+        default=None,
+        description=(
+            "The conversation's latest run, to read with "
+            "`agent.conversation.run.get` -- its outcome and the tokens it "
+            "used. Set when one conversation is read."
+        ),
+    )
     last_run_status: AgentRunStatus | None = None
     last_run_error: str | None = None
     last_run_error_code: str | None = None

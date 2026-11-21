@@ -2847,7 +2847,7 @@
   {
     "tool_name": "pod_edit_file",
     "toolset": "POD",
-    "description": "Change part of an existing pod text file by exact-text replacement.\n\nThe way to edit a doc, a page or any file you did not just write: name the\ntext to replace and what goes there, and the rest of the file is kept byte\nfor byte. Every edit is placed before anything is written, so either all of\nthem land or none do. No need to download the file or rewrite it whole.",
+    "description": "Change part of an existing text file by exact-text replacement.\n\nThe way to edit a doc, a page or any file you did not just write: name the\ntext to replace and what goes there, and the rest of the file is kept byte\nfor byte. Every edit is placed before anything is written, so either all of\nthem land or none do. No need to download the file or rewrite it whole.",
     "input_schema": {
       "$defs": {
         "FileEdit": {
@@ -2877,7 +2877,7 @@
       },
       "properties": {
         "path": {
-          "description": "Pod file path of an existing text file. A relative path resolves against `/me/c/{date}/{slug}`.",
+          "description": "Path of an existing text file. A relative path resolves against `/me/c/{date}/{slug}`.",
           "type": "string"
         },
         "edits": {
@@ -2905,16 +2905,16 @@
   {
     "tool_name": "pod_get_file_url",
     "toolset": "POD",
-    "description": "Get a URL for a pod file, to share a link or embed an image.\n\n``app`` (default) returns an in-app link for a signed-in member plus a\nshort-lived download url. ``public`` mints a signed link anyone can open \u2014\nit expires and dies after ``max_hits`` downloads.",
+    "description": "Get a URL for a file, to share a link or embed an image.\n\n``app`` (default) returns an in-app link for a signed-in member plus a\nshort-lived download url. ``public`` mints a signed link anyone can open \u2014\nit expires and dies after ``max_hits`` downloads.",
     "input_schema": {
       "properties": {
         "path": {
-          "description": "Absolute pod file path.",
+          "description": "Absolute file path.",
           "type": "string"
         },
         "url_type": {
           "default": "app",
-          "description": "'app' = in-app link for a signed-in pod member. 'public' = hit-capped signed link anyone can open \u2014 use to send a file outside the pod.",
+          "description": "'app' = in-app link for a signed-in member. 'public' = hit-capped signed link anyone can open \u2014 use to send a file outside this Lemma.",
           "enum": [
             "app",
             "public"
@@ -3098,7 +3098,7 @@
   {
     "tool_name": "pod_list_files",
     "toolset": "POD",
-    "description": "List pod files under a path.\n\n``recursive=false`` (default) lists the immediate files and folders in\n``path``. ``recursive=true`` returns a file tree rooted at ``path`` (folders\nplus a sample of files per directory). Without an absolute path, resolves\nagainst your default pod working directory (`/me/c/{date}/{slug}`).",
+    "description": "List files under a path.\n\n``recursive=false`` (default) lists the immediate files and folders in\n``path``. ``recursive=true`` returns a file tree rooted at ``path`` (folders\nplus a sample of files per directory). Without an absolute path, resolves\nagainst your default working directory (`/me/c/{date}/{slug}`).",
     "input_schema": {
       "properties": {
         "path": {
@@ -3159,11 +3159,11 @@
   {
     "tool_name": "pod_read_file",
     "toolset": "POD",
-    "description": "Read a pod file's text.\n\nA file that has text of its own -- markdown, plain text, HTML, CSV, code,\nemail -- is returned exactly as it is. A file that has none, because it is a\nbinary document like a PDF or a DOCX, is returned as the markdown it was\nconverted into at upload.\n\nUse ``pod_view_document_pages`` to *see* pages rather than read them.",
+    "description": "Read a file's text.\n\nA file that has text of its own -- markdown, plain text, HTML, CSV, code,\nemail -- is returned exactly as it is. A file that has none, because it is a\nbinary document like a PDF or a DOCX, is returned as the markdown it was\nconverted into at upload.\n\nUse ``pod_view_document_pages`` to *see* pages rather than read them.",
     "input_schema": {
       "properties": {
         "path": {
-          "description": "Pod file path. Absolute paths (e.g. `/knowledge/notes.txt`) are used as-is; a relative path resolves against `/me/c/{date}/{slug}`.",
+          "description": "File path. Absolute paths (e.g. `/knowledge/notes.txt`) are used as-is; a relative path resolves against `/me/c/{date}/{slug}`.",
           "type": "string"
         },
         "page_start": {
@@ -3213,7 +3213,7 @@
   {
     "tool_name": "pod_search_files",
     "toolset": "POD",
-    "description": "Semantic/keyword search across indexed pod files.",
+    "description": "Semantic/keyword search across indexed files.",
     "input_schema": {
       "properties": {
         "query": {
@@ -3299,7 +3299,7 @@
     "input_schema": {
       "properties": {
         "path": {
-          "description": "Path of a PDF document in the pod.",
+          "description": "Path of a PDF document.",
           "type": "string"
         },
         "page_start": {
@@ -3393,11 +3393,11 @@
   {
     "tool_name": "pod_write_file",
     "toolset": "POD",
-    "description": "Write text content to a pod file, creating or overwriting it.\n\nWithout an absolute path, the file lands in your default pod working\ndirectory (`/me/c/{date}/{slug}`) \u2014 a stable, private location scoped to\nthis conversation. Writes under your own `/me/...` (including that default\nlocation) never need approval; writes to a shared pod path may.",
+    "description": "Write text content to a file, creating or overwriting it.\n\nWithout an absolute path, the file lands in your default working directory\n(`/me/c/{date}/{slug}`) \u2014 a stable, private location scoped to this\nconversation. Writes under your own `/me/...` (including that default\nlocation) never need approval; writes to a shared path may.",
     "input_schema": {
       "properties": {
         "path": {
-          "description": "Pod file path. A relative path resolves against `/me/c/{date}/{slug}` \u2014 write there unless a specific shared location is needed.",
+          "description": "File path. A relative path resolves against `/me/c/{date}/{slug}` \u2014 write there unless a specific shared location is needed.",
           "type": "string"
         },
         "content": {

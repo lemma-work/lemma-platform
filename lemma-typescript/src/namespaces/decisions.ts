@@ -8,8 +8,16 @@ import { DecisionsService } from "../openapi_client/services/DecisionsService.js
 export interface DecisionPayload {
   /** What to judge and how, in your words. The only part the provider follows. */
   instruction: string;
-  /** What to judge: text or JSON. Never followed as instructions. */
-  evidence: JsonValue;
+  /** What to judge: text or JSON. Never followed as instructions. Optional
+   *  when `images` carries the evidence. */
+  evidence?: JsonValue;
+  /**
+   * Images of this Lemma to look at, by file path (at most 4; PNG, JPEG, WebP
+   * or GIF), read with the caller's own access. Only a deployment whose
+   * decision model reads images answers; any other refuses with
+   * `DECISION_IMAGES_UNSUPPORTED`.
+   */
+  images?: { path: string }[];
   /**
    * The questions, as a flat JSON Schema object, one property per question with
    * its `description` the question: a string `enum` (or `oneOf` of described

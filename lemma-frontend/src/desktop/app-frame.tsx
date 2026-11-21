@@ -53,6 +53,10 @@ export function AppFrameView({
             className="frame"
             title="App"
             src={frame.src}
+            /* A deck's present mode, a video, a map: an app may ask for the
+               whole screen, and a frame without this refuses it silently. */
+            allow="fullscreen"
+            allowFullScreen
             hidden={hidden}
             onLoad={event => {
                 const view = event.currentTarget.contentWindow;

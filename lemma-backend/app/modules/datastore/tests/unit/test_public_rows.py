@@ -97,6 +97,53 @@ def test_a_unique_column_opens_to_confirmed_contacts_only():
     assert opening_problem(columns, "id", chosen, audience=CONTACTS) is None
 
 
+def test_a_plain_uuid_column_opens_to_anyone():
+    """A reference the page fills in -- the slot being booked -- tells nothing."""
+    columns = [*SIGNUPS, _col("slot_ref", "UUID")]
+    chosen = ["email", "full_name", "slot_ref"]
+    assert opening_problem(columns, "id", chosen, audience=ANYONE) is None
+    assert public_column(columns[-1]).input == "text"
+
+
+def test_a_uuid_pointing_at_another_row_opens_to_confirmed_contacts_only():
+    columns = [
+        *SIGNUPS,
+        _col("slot_id", "UUID", foreign_key={"references": "slots.id"}),
+    ]
+    chosen = ["email", "full_name", "slot_id"]
+    problem = opening_problem(columns, "id", chosen, audience=ANYONE)
+    assert problem is not None and "slot_id" in problem
+    assert "only confirmed contacts" in problem
+    assert opening_problem(columns, "id", chosen, audience=CONTACTS) is None
+
+
+@pytest.mark.parametrize(
+    ("column", "why"),
+    [
+        ("owner", "names a member of this Lemma"),
+        ("embedding", "holds an embedding"),
+        ("contact_id", "filled in automatically"),
+        ("id", "filled in automatically"),
+        ("nowhere", "no such column"),
+    ],
+)
+def test_a_refused_column_is_named_with_why(column, why):
+    problem = opening_problem(
+        SIGNUPS, "id", ["email", "full_name", column], audience=CONTACTS
+    )
+    assert problem is not None
+    assert f"can't fill in {column} (" in problem
+    assert why in problem
+    assert "pod" not in problem.lower()
+
+
+def test_a_needed_column_nobody_outside_could_fill_says_why():
+    columns = [*SIGNUPS, _col("profile", "JSON", required=True)]
+    problem = opening_problem(columns, "id", ["email", "full_name"], audience=ANYONE)
+    assert problem is not None
+    assert "profile (it holds structured data" in problem
+
+
 def test_a_required_contact_id_is_the_platforms_to_fill_for_contacts():
     columns = [
         _col("id", "UUID"),

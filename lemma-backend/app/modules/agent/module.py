@@ -117,6 +117,9 @@ def _routers():
     from app.modules.agent.api.controllers.conversation_open_controller import (
         router as conversation_open,
     )
+    from app.modules.agent.api.controllers.conversation_run_controller import (
+        router as conversation_run,
+    )
     from app.modules.agent.api.controllers.askable_pods_controller import (
         router as askable_pods,
     )
@@ -140,6 +143,7 @@ def _routers():
         conversation_pending,
         conversation_open,
         conversation,
+        conversation_run,
         conversation_queue,
         askable_pods,
         pod_links,

@@ -635,6 +635,19 @@ protection of your own:
 PUBLIC_WEB_ALTCHA_ENABLED=false
 ```
 
+On a server people test pages on, a visitor's email-code step can't be
+finished: the addresses testers type reach no inbox. Name the code instead, and
+every code a visitor is sent is those six digits and nothing is mailed. Expiry,
+the five-guess limit and rate limits still apply. Anybody who knows it can
+confirm any address on that server's widgets, so startup refuses it when
+`ENVIRONMENT=production`. Unset by default; a local stack with
+`EMAIL_TRANSPORT=filesystem` needs none, since the code lands in
+`EMAIL_OUTPUT_DIR`.
+
+```dotenv
+PUBLIC_WEB_TEST_VISITOR_CODE=424242
+```
+
 ## Authentication and email
 
 Email transport, sender identity, and the sign-up abuse controls are covered in

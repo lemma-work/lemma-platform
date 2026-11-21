@@ -6,6 +6,11 @@ providers put them between markers and never follow them.
 
 Nothing is truncated. A caller that has a 200 KB event decides what part of it
 matters; quietly cutting it here would change the answer without saying so.
+
+Images are evidence too: the bytes themselves, already read and sized by
+whoever had the right to read them (the route reads a Lemma's files as the
+caller). This module only bounds them, so a backend caller handing bytes in
+directly is held to the same limits.
 """
 
 from __future__ import annotations
@@ -32,6 +37,15 @@ MAX_INSTRUCTION_CHARS = 8000
 MAX_EVIDENCE_BYTES = 64 * 1024
 MAX_EXAMPLES = 20
 MAX_EXAMPLE_BYTES = 32 * 1024
+#: Few enough that every image's tokens fit the per-request ceiling, which a
+#: model provider budgets per image.
+MAX_IMAGES = 4
+#: Per image, as it is sent. Under the smallest per-image limit of the model
+#: providers a deployment runs (Anthropic's 5 MB, on the base64 text, which is
+#: a third larger than this).
+MAX_IMAGE_BYTES = 3 * 1024 * 1024
+#: What every model provider behind the `model` provider takes.
+IMAGE_MEDIA_TYPES = frozenset({"image/png", "image/jpeg", "image/webp", "image/gif"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,8 +61,20 @@ class DecisionExample:
 
 
 @dataclass(frozen=True, slots=True)
+class DecisionImage:
+    """One image to judge, as the provider will be sent it."""
+
+    data: bytes
+    media_type: str
+    #: The file's name, so the instruction and the answer can tell images apart.
+    #: Untrusted, like the rest of the evidence.
+    name: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class DecisionRequest:
     instruction: str
+    #: Text or JSON. May be empty only when there are images to judge.
     evidence: JsonValue
     #: The questions, as a closed JSON Schema object (see `questions.py`).
     schema: Mapping[str, object]
@@ -56,6 +82,8 @@ class DecisionRequest:
     #: `interactive` for someone waiting on the answer (a call being routed),
     #: `background` for everything else. It sets how long the provider gets.
     priority: DecisionPriority = "background"
+    #: Part of the evidence, after any text of it.
+    images: Sequence[DecisionImage] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,10 +114,12 @@ class DecisionTask:
     schema: DecisionSchema
     #: The evidence as the asker sent it, for a provider that takes structure.
     evidence: JsonValue
-    #: The same evidence as text, for a provider that takes a prompt.
+    #: The same evidence as text, for a provider that takes a prompt. Empty
+    #: when the evidence is images alone.
     evidence_text: str
     examples: tuple[RenderedExample, ...] = ()
     priority: DecisionPriority = "background"
+    images: tuple[DecisionImage, ...] = ()
 
 
 class _Checks:
@@ -123,7 +153,12 @@ def build_task(request: DecisionRequest) -> DecisionTask:
         checks.add("instruction", "Must not be empty.")
     elif len(instruction) > MAX_INSTRUCTION_CHARS:
         checks.add("instruction", f"At most {MAX_INSTRUCTION_CHARS} characters.")
-    evidence_text = _render(request.evidence, "evidence", MAX_EVIDENCE_BYTES, checks)
+    images = _images(request.images, checks)
+    evidence_text = (
+        ""
+        if images and _empty(request.evidence)
+        else _render(request.evidence, "evidence", MAX_EVIDENCE_BYTES, checks)
+    )
     examples = _examples(schema, request.examples, checks) if schema is not None else ()
     if schema is None or evidence_text is None or checks.problems:
         raise checks.error()
@@ -134,7 +169,32 @@ def build_task(request: DecisionRequest) -> DecisionTask:
         evidence_text=evidence_text,
         examples=examples,
         priority=request.priority,
+        images=images,
     )
+
+
+def _images(
+    images: Sequence[DecisionImage], checks: _Checks
+) -> tuple[DecisionImage, ...]:
+    if len(images) > MAX_IMAGES:
+        checks.add("images", f"At most {MAX_IMAGES} images.", too_large=True)
+        return ()
+    for index, image in enumerate(images):
+        if image.media_type not in IMAGE_MEDIA_TYPES:
+            checks.add(f"images[{index}]", "Must be a PNG, JPEG, WebP or GIF image.")
+        elif not image.data:
+            checks.add(f"images[{index}]", "Must not be empty.")
+        elif len(image.data) > MAX_IMAGE_BYTES:
+            checks.add(
+                f"images[{index}]",
+                f"At most {MAX_IMAGE_BYTES} bytes as sent.",
+                too_large=True,
+            )
+    return tuple(images)
+
+
+def _empty(evidence: JsonValue) -> bool:
+    return evidence is None or evidence == ""
 
 
 def _examples(
@@ -162,7 +222,7 @@ def _examples(
 
 
 def _render(evidence: JsonValue, path: str, limit: int, checks: _Checks) -> str | None:
-    if evidence is None or evidence == "":
+    if _empty(evidence):
         checks.add(path, "Must not be empty.")
         return None
     text = (

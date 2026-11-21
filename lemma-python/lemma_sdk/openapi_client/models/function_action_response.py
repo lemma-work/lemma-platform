@@ -35,6 +35,7 @@ class FunctionActionResponse:
         updated_at (datetime.datetime | None):
         user_id (UUID):
         allowed_actions (list[str] | Unset):
+        assistant_invoke (bool | Unset): Offered to the Lemma's assistant and runnable by it. Default: True.
         code (None | str | Unset):
         code_path (None | str | Unset):
         config (JsonObject | None | Unset):
@@ -57,6 +58,7 @@ class FunctionActionResponse:
     updated_at: datetime.datetime | None
     user_id: UUID
     allowed_actions: list[str] | Unset = UNSET
+    assistant_invoke: bool | Unset = True
     code: None | str | Unset = UNSET
     code_path: None | str | Unset = UNSET
     config: JsonObject | None | Unset = UNSET
@@ -102,6 +104,8 @@ class FunctionActionResponse:
         allowed_actions: list[str] | Unset = UNSET
         if not isinstance(self.allowed_actions, Unset):
             allowed_actions = self.allowed_actions
+
+        assistant_invoke = self.assistant_invoke
 
         code: None | str | Unset
         if isinstance(self.code, Unset):
@@ -171,6 +175,8 @@ class FunctionActionResponse:
         )
         if allowed_actions is not UNSET:
             field_dict["allowed_actions"] = allowed_actions
+        if assistant_invoke is not UNSET:
+            field_dict["assistant_invoke"] = assistant_invoke
         if code is not UNSET:
             field_dict["code"] = code
         if code_path is not UNSET:
@@ -245,6 +251,8 @@ class FunctionActionResponse:
         user_id = UUID(d.pop("user_id"))
 
         allowed_actions = cast(list[str], d.pop("allowed_actions", UNSET))
+
+        assistant_invoke = d.pop("assistant_invoke", UNSET)
 
         def _parse_code(data: object) -> None | str | Unset:
             if data is None:
@@ -341,6 +349,7 @@ class FunctionActionResponse:
             updated_at=updated_at,
             user_id=user_id,
             allowed_actions=allowed_actions,
+            assistant_invoke=assistant_invoke,
             code=code,
             code_path=code_path,
             config=config,

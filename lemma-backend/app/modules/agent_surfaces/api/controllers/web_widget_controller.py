@@ -24,9 +24,9 @@ from pydantic import BaseModel, Field
 from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.authorization.dependencies import require_action
 from app.core.authorization.permissions import Permissions
-from app.core.config import settings
 from app.core.public_web import hosted_pages_base, public_web_enabled
 from app.modules.agent.contracts.agents import agent_id_for_name
+from app.modules.agent_surfaces.contracts.web_widgets import widget_script_url
 from app.modules.agent_surfaces.domain.web_widgets import (
     WebWidget,
     WidgetAnswer,
@@ -112,13 +112,9 @@ class WebWidgetSecretResponse(BaseModel):
     signing_secret: str
 
 
-def _base() -> str:
-    return str(settings.api_url).rstrip("/")
-
-
 def _embed(widget: WebWidget) -> str:
     return (
-        f'<script src="{_base()}/public/web/widget.js" '
+        f'<script src="{widget_script_url()}" '
         f'data-lemma-key="{widget.public_key}" async></script>'
     )
 

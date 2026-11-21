@@ -19,6 +19,8 @@ class RuntimeIdentity(RuntimeContract):
     #: ``None`` on a run started for a contact, which acts for no member.
     user_id: UUID | None
     user_email: str | None = None
+    #: The person's name. Sent only when set, like ``contact_id``.
+    user_name: str | None = None
     #: Sent only when set. A runtime that predates contacts forbids unknown
     #: fields, and a member's run must keep reaching it unchanged.
     contact_id: UUID | None = None
@@ -38,10 +40,15 @@ class RuntimeInvocationRequest(RuntimeContract):
 
 
 def invocation_payload(body: RuntimeInvocationRequest) -> dict[str, object]:
-    """The body as sent. ``identity.contact_id`` only when there is one: an
-    older runtime forbids the field, and a member's run must still reach it
-    unchanged."""
-    exclude = {"identity": {"contact_id"}} if body.identity.contact_id is None else None
+    """The body as sent. ``identity.contact_id`` and ``identity.user_name``
+    only when there is one: an older runtime forbids either field, and a run
+    without them must still reach it unchanged."""
+    unset = {
+        name
+        for name in ("contact_id", "user_name")
+        if getattr(body.identity, name) is None
+    }
+    exclude = {"identity": unset} if unset else None
     return body.model_dump(mode="json", exclude=exclude)
 
 

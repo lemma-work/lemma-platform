@@ -57,6 +57,7 @@ _NAME_TO_MODULE = {
     'AgentResourcePermissionRequest': 'agent_resource_permission_request',
     'AgentResourcePermissionResponse': 'agent_resource_permission_response',
     'AgentRunApprovalDecision': 'agent_run_approval_decision',
+    'AgentRunResponse': 'agent_run_response',
     'AgentRunStartResponse': 'agent_run_start_response',
     'AgentRunStatus': 'agent_run_status',
     'AgentRuntimeConfig': 'agent_runtime_config',
@@ -241,6 +242,7 @@ _NAME_TO_MODULE = {
     'DecisionAnswerResponse': 'decision_answer_response',
     'DecisionExampleBody': 'decision_example_body',
     'DecisionExampleBodyAnswers': 'decision_example_body_answers',
+    'DecisionImageBody': 'decision_image_body',
     'DecisionNode': 'decision_node',
     'DecisionNodeConfig': 'decision_node_config',
     'DecisionNodePositionType0': 'decision_node_position_type_0',
@@ -616,6 +618,7 @@ _NAME_TO_MODULE = {
     'ResourceVisibility': 'resource_visibility',
     'RowRequest': 'row_request',
     'RowRequestValues': 'row_request_values',
+    'RunTokenUsage': 'run_token_usage',
     'RuntimeModelCapability': 'runtime_model_capability',
     'RuntimeModelCatalogEntry': 'runtime_model_catalog_entry',
     'RuntimeModelCatalogEntryDefaultModelSettings': 'runtime_model_catalog_entry_default_model_settings',
@@ -838,6 +841,7 @@ _NAME_TO_MODULE = {
     'WorkflowCreateRequest': 'workflow_create_request',
     'WorkflowDetailResponse': 'workflow_detail_response',
     'WorkflowEdge': 'workflow_edge',
+    'WorkflowEdgeKind': 'workflow_edge_kind',
     'WorkflowGraphUpdateRequest': 'workflow_graph_update_request',
     'WorkflowListResponse': 'workflow_list_response',
     'WorkflowMode': 'workflow_mode',
@@ -911,6 +915,7 @@ if TYPE_CHECKING:
     from .agent_resource_permission_request import AgentResourcePermissionRequest
     from .agent_resource_permission_response import AgentResourcePermissionResponse
     from .agent_run_approval_decision import AgentRunApprovalDecision
+    from .agent_run_response import AgentRunResponse
     from .agent_run_start_response import AgentRunStartResponse
     from .agent_run_status import AgentRunStatus
     from .agent_runtime_config import AgentRuntimeConfig
@@ -1095,6 +1100,7 @@ if TYPE_CHECKING:
     from .decision_answer_response import DecisionAnswerResponse
     from .decision_example_body import DecisionExampleBody
     from .decision_example_body_answers import DecisionExampleBodyAnswers
+    from .decision_image_body import DecisionImageBody
     from .decision_node import DecisionNode
     from .decision_node_config import DecisionNodeConfig
     from .decision_node_position_type_0 import DecisionNodePositionType0
@@ -1470,6 +1476,7 @@ if TYPE_CHECKING:
     from .resource_visibility import ResourceVisibility
     from .row_request import RowRequest
     from .row_request_values import RowRequestValues
+    from .run_token_usage import RunTokenUsage
     from .runtime_model_capability import RuntimeModelCapability
     from .runtime_model_catalog_entry import RuntimeModelCatalogEntry
     from .runtime_model_catalog_entry_default_model_settings import RuntimeModelCatalogEntryDefaultModelSettings
@@ -1692,6 +1699,7 @@ if TYPE_CHECKING:
     from .workflow_create_request import WorkflowCreateRequest
     from .workflow_detail_response import WorkflowDetailResponse
     from .workflow_edge import WorkflowEdge
+    from .workflow_edge_kind import WorkflowEdgeKind
     from .workflow_graph_update_request import WorkflowGraphUpdateRequest
     from .workflow_list_response import WorkflowListResponse
     from .workflow_mode import WorkflowMode
@@ -1778,6 +1786,7 @@ __all__ = [
     'AgentResourcePermissionRequest',
     'AgentResourcePermissionResponse',
     'AgentRunApprovalDecision',
+    'AgentRunResponse',
     'AgentRunStartResponse',
     'AgentRunStatus',
     'AgentRuntimeConfig',
@@ -1962,6 +1971,7 @@ __all__ = [
     'DecisionAnswerResponse',
     'DecisionExampleBody',
     'DecisionExampleBodyAnswers',
+    'DecisionImageBody',
     'DecisionNode',
     'DecisionNodeConfig',
     'DecisionNodePositionType0',
@@ -2337,6 +2347,7 @@ __all__ = [
     'ResourceVisibility',
     'RowRequest',
     'RowRequestValues',
+    'RunTokenUsage',
     'RuntimeModelCapability',
     'RuntimeModelCatalogEntry',
     'RuntimeModelCatalogEntryDefaultModelSettings',
@@ -2559,6 +2570,7 @@ __all__ = [
     'WorkflowCreateRequest',
     'WorkflowDetailResponse',
     'WorkflowEdge',
+    'WorkflowEdgeKind',
     'WorkflowGraphUpdateRequest',
     'WorkflowListResponse',
     'WorkflowMode',

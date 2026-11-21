@@ -120,6 +120,56 @@ async def test_a_table_needing_a_column_nobody_outside_fills_does_not_open(
     assert "profile" in refused.text
 
 
+async def test_a_uuid_column_opens_and_takes_a_uuid_from_outside(
+    pod_api: DatastoreApi, db_session: AsyncSession
+):
+    """A plain UUID -- the slot a page books -- is fillable; a member reference
+    is not, and the refusal names the column and says why, with a code."""
+    table = await _signups(
+        pod_api,
+        {"name": "slot_ref", "type": "UUID"},
+        {"name": "owner", "type": "USER"},
+    )
+    refused = await _open(
+        pod_api, table, audience="anyone", columns=["full_name", "owner"]
+    )
+    assert refused.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    error = refused.json()
+    assert error["code"] == "TABLE_OPENING_REFUSED"
+    assert "can't fill in owner (it names a member" in error["message"]
+
+    opened = await _open(
+        pod_api, table, audience="anyone", columns=["full_name", "slot_ref"]
+    )
+    assert opened.status_code == status.HTTP_200_OK, opened.text
+    assert {"name": "slot_ref", "type": "UUID"}.items() <= next(
+        column for column in opened.json()["offered"] if column["name"] == "slot_ref"
+    ).items()
+
+    slot = uuid4()
+    await add_visitor_row(
+        _uow_factory(db_session),
+        pod_id=UUID(pod_api.pod_id),
+        table_name=table,
+        answers={"full_name": "Ana", "slot_ref": str(slot)},
+        contact_id=None,
+        vouched=False,
+    )
+    [row] = (await pod_api.list_records(table))["items"]
+    assert row["slot_ref"] == str(slot)
+
+    with pytest.raises(PublicRowRefused) as malformed:
+        await add_visitor_row(
+            _uow_factory(db_session),
+            pod_id=UUID(pod_api.pod_id),
+            table_name=table,
+            answers={"full_name": "Ben", "slot_ref": "not-a-uuid"},
+            contact_id=None,
+            vouched=False,
+        )
+    assert malformed.value.column == "slot_ref"
+
+
 async def test_an_answer_the_validator_refuses_is_said_in_the_persons_words(
     pod_api: DatastoreApi, db_session: AsyncSession
 ):

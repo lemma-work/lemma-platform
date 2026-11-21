@@ -2644,6 +2644,7 @@ def import_pod_bundle(
     connector_installations: dict[str, str] | None = None,
     share_accounts: dict[str, str] | None = None,
     create_installations: bool = False,
+    app_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if not source_dir.exists():
         raise ValueError(f"Source directory does not exist: {source_dir}")
@@ -2665,6 +2666,7 @@ def import_pod_bundle(
                 connector_installations=connector_installations,
                 share_accounts=share_accounts,
                 create_installations=create_installations,
+                app_env=app_env,
             )
             result["source_dir"] = str(source_dir)
             return result
@@ -3073,6 +3075,7 @@ def import_pod_bundle(
                 app_name=app_name,
                 source_dir=source_subdir,
                 ensure_exists=False,
+                target_env=app_env,
             )
             _progress_done("app", app_name, "deployed bundle")
         elif dist_archive_file.exists() or html_file.exists():

@@ -115,11 +115,7 @@ class BundleApplier:
 
     async def _apply_table(self, step: PlanStep) -> None:
         from app.modules.datastore.contracts import ColumnSchema
-        from app.modules.datastore.contracts.provisioning import (
-            add_table_column,
-            create_table,
-            get_table,
-        )
+        from app.modules.datastore.contracts import provisioning as tables
 
         payload = self._load("tables", step.name)
         columns = [
@@ -127,11 +123,11 @@ class BundleApplier:
             for c in payload.get("columns") or []
             if not _is_system_column(c)
         ]
-        existing = await get_table(
+        existing = await tables.get_table(
             self._uow, pod_id=self._pod_id, name=step.name, ctx=self._ctx
         )
         if existing is None:
-            await create_table(
+            await tables.create_table(
                 self._uow,
                 pod_id=self._pod_id,
                 name=step.name,
@@ -141,6 +137,8 @@ class BundleApplier:
                 enable_rls=bool(payload.get("enable_rls", True)),
                 visibility=payload.get("visibility"),
                 ctx=self._ctx,
+                contact_owned=bool(payload.get("contact_owned", False)),
+                contact_columns=payload.get("contact_columns"),
             )
             self._created.add(StepKind.TABLE, step.name)
             return
@@ -153,7 +151,7 @@ class BundleApplier:
         existing_names = {c.name for c in existing.columns}
         for column in columns:
             if column.name not in existing_names:
-                await add_table_column(
+                await tables.add_table_column(
                     self._uow,
                     pod_id=self._pod_id,
                     table_name=step.name,
