@@ -105,9 +105,14 @@ Provider invoices remain the authority for reconciliation. Updating the snapshot
 is a reviewed release change; no background refresh changes request pricing.
 
 Limited requests require input and output token prices and a supported billing
-mode. Native provider tools, unsupported multimedia, image output, one-hour cache
-writes, premium service tiers and raw provider body overrides are rejected where
-their additional costs cannot be represented faithfully. The check covers model
+mode. Native provider tools, unsupported multimedia, one-hour cache writes,
+premium service tiers and raw provider body overrides are rejected where their
+additional costs cannot be represented faithfully. Image output is accepted only
+on a rate card with an image-output rate (`output_image_mtok`, or a configured
+`output_image_per_million_usd`): an image model bills the tokens it draws an order
+of magnitude above text, so they are split out of the output total and priced
+at that rate. A request that returned images is recorded with `usage_kind`
+`IMAGE` and the number of images as its units. The check covers model
 defaults, request settings and replayed history. Ordinary JSON function tools
 and signed reasoning remain supported. Missing prices for positive audio or
 cache usage produce an unknown cost rather than a fabricated zero.

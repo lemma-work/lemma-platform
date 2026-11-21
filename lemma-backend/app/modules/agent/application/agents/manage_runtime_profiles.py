@@ -32,7 +32,17 @@ from app.modules.agent.agent_host.api import (
     validate_agent_host_model,
     validate_agent_host_selections,
 )
+from app.modules.agent.application.agents.google_genai_profiles import (
+    google_genai_config,
+    google_genai_credentials,
+    verified_google_access,
+)
 from app.modules.agent.domain.errors import RuntimeProfileValidationError
+from app.modules.agent.domain.google_genai_catalog import (
+    DEFAULT_GOOGLE_CHAT_MODELS,
+    DEFAULT_GOOGLE_IMAGE_MODELS,
+    google_genai_catalog,
+)
 from app.modules.agent.domain.runtime_profiles import (
     DEFAULT_HOST_WAIT_TIMEOUT_SECONDS,
     HARNESS_KEY,
@@ -41,6 +51,7 @@ from app.modules.agent.domain.runtime_profiles import (
     AnthropicCompatibleRuntimeConfig,
     AgentRuntimeProfile,
     ApiKeyRuntimeCredentials,
+    GoogleGenAIBackend,
     HarnessRuntimeConfig,
     OpenAICompatibleRuntimeConfig,
     RuntimeProfileKind,
@@ -337,6 +348,79 @@ class RuntimeProfileCreation:
                 "source": "anthropic_compatible",
                 "catalog_discovered": bool(discovered_models),
             },
+        )
+        return await _create_profile(self.repository, profile, name=normalized_name)
+
+    async def create_google_genai_profile(
+        self,
+        *,
+        organization_id: UUID,
+        name: str,
+        backend: GoogleGenAIBackend,
+        api_key: str | None = None,
+        service_account_json: str | None = None,
+        vertex_project: str | None = None,
+        vertex_location: str | None = None,
+        description: str | None = None,
+        default_model_name: str | None = None,
+        model_names: list[str] | None = None,
+        image_model_names: list[str] | None = None,
+        model_settings: dict[str, object] | None = None,
+    ) -> AgentRuntimeProfile:
+        """A Google provider, on the Gemini API with a key or Vertex AI with a
+        service account key file.
+
+        Never the server's own Google identity: an organization's provider
+        signs in with what its owner gave it, or not at all.
+        """
+        if self.repository is None:
+            raise RuntimeError("Runtime profile repository is required")
+        normalized_name = normalize_profile_name(name)
+        credentials = google_genai_credentials(
+            backend, api_key=api_key, service_account_json=service_account_json
+        )
+        config = google_genai_config(
+            backend,
+            credentials=credentials,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            model_settings=normalize_model_settings(model_settings),
+        )
+        catalog = google_genai_catalog(
+            model_names or list(DEFAULT_GOOGLE_CHAT_MODELS),
+            image_model_names
+            if image_model_names is not None
+            else list(DEFAULT_GOOGLE_IMAGE_MODELS),
+        )
+        if not any(not entry.draws_only for entry in catalog):
+            raise RuntimeProfileValidationError(
+                "Add at least one chat model, not only image models."
+            )
+        selected_default_model = discovery._select_provider_default_model(
+            requested_model_name=default_model_name,
+            catalog=[entry for entry in catalog if not entry.draws_only],
+        )
+        async with connection_released(self._session()):
+            await verified_google_access(
+                config,
+                credentials,
+                model_name=selected_default_model,
+                provider_name=normalized_name,
+            )
+        profile = checked_profile(
+            id=str(uuid7()),
+            organization_id=organization_id,
+            scope=RuntimeProfileScope.ORGANIZATION,
+            kind=RuntimeProfileKind.MODEL_PROVIDER,
+            protocol=RuntimeProfileProtocol.GOOGLE_GENAI,
+            name=normalized_name,
+            description=description.strip() if description else None,
+            default_model_name=selected_default_model,
+            model_catalog=catalog,
+            config=config,
+            credentials=credentials,
+            status=RuntimeProfileStatus.ACTIVE,
+            metadata={"source": "google_genai", "catalog_discovered": False},
         )
         return await _create_profile(self.repository, profile, name=normalized_name)
 

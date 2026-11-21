@@ -6,20 +6,23 @@ import type { AgentRuntimeProfileResponse } from "../openapi_client/models/Agent
 import type { AgentRuntimeProfileTestResponse } from "../openapi_client/models/AgentRuntimeProfileTestResponse.js";
 import type { CreateAgentHostRuntimeProfileRequest } from "../openapi_client/models/CreateAgentHostRuntimeProfileRequest.js";
 import type { CreateAnthropicCompatibleRuntimeProfileRequest } from "../openapi_client/models/CreateAnthropicCompatibleRuntimeProfileRequest.js";
+import type { CreateGoogleGenAIRuntimeProfileRequest } from "../openapi_client/models/CreateGoogleGenAIRuntimeProfileRequest.js";
 import type { CreateOpenAICompatibleRuntimeProfileRequest } from "../openapi_client/models/CreateOpenAICompatibleRuntimeProfileRequest.js";
 import type { SetOrganizationDefaultRuntimeRequest } from "../openapi_client/models/SetOrganizationDefaultRuntimeRequest.js";
 import type { UpdateAgentHostRuntimeProfileRequest } from "../openapi_client/models/UpdateAgentHostRuntimeProfileRequest.js";
 import type { UpdateAnthropicCompatibleRuntimeProfileRequest } from "../openapi_client/models/UpdateAnthropicCompatibleRuntimeProfileRequest.js";
+import type { UpdateGoogleGenAIRuntimeProfileRequest } from "../openapi_client/models/UpdateGoogleGenAIRuntimeProfileRequest.js";
 import type { UpdateOpenAICompatibleRuntimeProfileRequest } from "../openapi_client/models/UpdateOpenAICompatibleRuntimeProfileRequest.js";
 import { AgentRuntimeService } from "../openapi_client/services/AgentRuntimeService.js";
 
-// Mirrors the discriminated union the create endpoint accepts. Keep all three
-// members: omitting one makes that profile kind uncreatable through the typed
+// Mirrors the discriminated union the create endpoint accepts. Keep every
+// member: omitting one makes that profile kind uncreatable through the typed
 // client even though the endpoint takes it.
 export type CreateAgentRuntimeProfileRequest =
   | CreateAgentHostRuntimeProfileRequest
   | CreateOpenAICompatibleRuntimeProfileRequest
-  | CreateAnthropicCompatibleRuntimeProfileRequest;
+  | CreateAnthropicCompatibleRuntimeProfileRequest
+  | CreateGoogleGenAIRuntimeProfileRequest;
 
 // Compile-time guard on the union above. It is hand-written while the members
 // are generated from the schema, so a profile kind the API accepts can silently
@@ -31,7 +34,8 @@ type MemberOfCreateUnion<T extends CreateAgentRuntimeProfileRequest> = T;
 type _CreateUnionIsExhaustive =
   | MemberOfCreateUnion<CreateAgentHostRuntimeProfileRequest>
   | MemberOfCreateUnion<CreateOpenAICompatibleRuntimeProfileRequest>
-  | MemberOfCreateUnion<CreateAnthropicCompatibleRuntimeProfileRequest>;
+  | MemberOfCreateUnion<CreateAnthropicCompatibleRuntimeProfileRequest>
+  | MemberOfCreateUnion<CreateGoogleGenAIRuntimeProfileRequest>;
 
 // Mirrors the discriminated union the update endpoint accepts. Every field is
 // optional there: the backend distinguishes "absent" from "explicitly null" via
@@ -41,14 +45,16 @@ type _CreateUnionIsExhaustive =
 export type UpdateAgentRuntimeProfileRequest =
   | UpdateAgentHostRuntimeProfileRequest
   | UpdateOpenAICompatibleRuntimeProfileRequest
-  | UpdateAnthropicCompatibleRuntimeProfileRequest;
+  | UpdateAnthropicCompatibleRuntimeProfileRequest
+  | UpdateGoogleGenAIRuntimeProfileRequest;
 
 // Same guard as the create union above, for the same reason.
 type MemberOfUpdateUnion<T extends UpdateAgentRuntimeProfileRequest> = T;
 type _UpdateUnionIsExhaustive =
   | MemberOfUpdateUnion<UpdateAgentHostRuntimeProfileRequest>
   | MemberOfUpdateUnion<UpdateOpenAICompatibleRuntimeProfileRequest>
-  | MemberOfUpdateUnion<UpdateAnthropicCompatibleRuntimeProfileRequest>;
+  | MemberOfUpdateUnion<UpdateAnthropicCompatibleRuntimeProfileRequest>
+  | MemberOfUpdateUnion<UpdateGoogleGenAIRuntimeProfileRequest>;
 
 export type CreateAgentRuntimeRequest = CreateAgentRuntimeProfileRequest;
 export type UpdateAgentRuntimeRequest = UpdateAgentRuntimeProfileRequest;

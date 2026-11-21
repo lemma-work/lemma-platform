@@ -249,6 +249,12 @@ def system_lemma_profile() -> AgentRuntimeProfile | None:
     ).strip()
     if model_type == "anthropic_compat":
         return _system_lemma_anthropic_profile()
+    if model_type == "google_genai":
+        from app.modules.agent.services.google_system_profile import (
+            system_lemma_google_profile,
+        )
+
+        return system_lemma_google_profile()
     return _system_lemma_openai_profile()
 
 
@@ -382,9 +388,11 @@ _SERVER_NO_MODEL_MESSAGE = (
 #: failed: they cannot set an environment variable, and a sentence naming one
 #: reads as a fault in the app.
 SERVER_NO_MODEL_OPERATOR_HINT = (
-    "Set LEMMA_OPENAI_API_KEY (plus LEMMA_OPENAI_BASE_URL if not OpenAI) or "
-    "LEMMA_ANTHROPIC_API_KEY with LEMMA_DEFAULT_MODEL_TYPE=anthropic_compat to "
-    "give this deployment a model of its own."
+    "Set LEMMA_OPENAI_API_KEY (plus LEMMA_OPENAI_BASE_URL if not OpenAI), "
+    "LEMMA_ANTHROPIC_API_KEY with LEMMA_DEFAULT_MODEL_TYPE=anthropic_compat, or "
+    "LEMMA_GOOGLE_VERTEX_PROJECT (or LEMMA_GOOGLE_API_KEY) with "
+    "LEMMA_DEFAULT_MODEL_TYPE=google_genai to give this deployment a model of "
+    "its own."
 )
 
 

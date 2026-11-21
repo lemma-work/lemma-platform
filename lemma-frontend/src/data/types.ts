@@ -14,6 +14,19 @@ import type { ScheduleDraft, ScheduleRun, ServerEvent, StandingJob, TargetChoice
 /** The shapes the app renders. Both sources produce exactly these, so which
  *  one is in front of you is a configuration detail rather than a rewrite. */
 
+/** A Google provider: the Gemini API with an API key, or Vertex AI as a
+ *  service account (its downloaded key file). Image models draw for the
+ *  agents' generate_image tool and are never a chat model. */
+export interface GoogleProviderKey {
+    backend: "GEMINI_API" | "VERTEX_AI";
+    serviceAccountJson?: string;
+    /** Empty uses the key file's own project. */
+    vertexProject?: string;
+    vertexLocation?: string;
+    /** Absent offers Google's current image model; empty offers none. */
+    imageModels?: string[];
+}
+
 export type MemberKind = "person" | "teammate";
 
 export interface Member {
@@ -678,11 +691,15 @@ export interface PodSource {
     listComputers(): Promise<Computer[]>;
     /** Buy-your-own: a base URL and a key, and the models it serves. */
     addProviderKey(orgId: string, key: {
-        protocol: "openai" | "anthropic";
+        protocol: "openai" | "anthropic" | "google";
         name: string;
         baseUrl: string;
+        /** The Gemini API's key; empty for Vertex AI, which signs in with
+         *  `google.serviceAccountJson` instead. */
         apiKey: string;
         models: string[];
+        /** Google only: which host, and for Vertex AI how it signs in. */
+        google?: GoogleProviderKey;
         /** The models on an OpenAI-compatible route that read images. Its
          *  `/models` list rarely says, and without this the backend treats
          *  every one as text-only. Ignored for Anthropic, whose models all

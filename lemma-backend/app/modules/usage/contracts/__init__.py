@@ -18,6 +18,9 @@ class ModelPricing(NamedTuple):
     unit_usd: float = 0.0
     cached_input_per_million_usd: float | None = None
     cache_write_per_million_usd: float | None = None
+    #: An image model's rate for the image tokens it draws. Unset, a request
+    #: that asks for images cannot be priced on this card.
+    output_image_per_million_usd: float | None = None
 
 
 class AgentRunUsage(BaseModel):

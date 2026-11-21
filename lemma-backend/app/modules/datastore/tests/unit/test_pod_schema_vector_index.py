@@ -53,10 +53,14 @@ async def _run_v1(caplog, failure: str | None) -> tuple[list[dict], _Connection]
     connection = _Connection(failure)
     with caplog.at_level(logging.DEBUG):
         await pod_schema_migrations._v1_chunks(connection, "pod_test_schema")  # type: ignore[arg-type]
+    # Only the datastore's own: a background task another test left running
+    # on this worker (a call discovering its agents) may warn meanwhile.
     warnings = [
         record.msg
         for record in caplog.records
-        if record.levelno >= logging.WARNING and isinstance(record.msg, dict)
+        if record.levelno >= logging.WARNING
+        and isinstance(record.msg, dict)
+        and str(record.msg.get("event", "")).startswith("datastore.")
     ]
     return warnings, connection
 

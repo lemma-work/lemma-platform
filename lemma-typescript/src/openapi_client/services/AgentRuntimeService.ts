@@ -9,10 +9,12 @@ import type { AgentRuntimeProfileResponse } from '../models/AgentRuntimeProfileR
 import type { AgentRuntimeProfileTestResponse } from '../models/AgentRuntimeProfileTestResponse.js';
 import type { CreateAgentHostRuntimeProfileRequest } from '../models/CreateAgentHostRuntimeProfileRequest.js';
 import type { CreateAnthropicCompatibleRuntimeProfileRequest } from '../models/CreateAnthropicCompatibleRuntimeProfileRequest.js';
+import type { CreateGoogleGenAIRuntimeProfileRequest } from '../models/CreateGoogleGenAIRuntimeProfileRequest.js';
 import type { CreateOpenAICompatibleRuntimeProfileRequest } from '../models/CreateOpenAICompatibleRuntimeProfileRequest.js';
 import type { SetOrganizationDefaultRuntimeRequest } from '../models/SetOrganizationDefaultRuntimeRequest.js';
 import type { UpdateAgentHostRuntimeProfileRequest } from '../models/UpdateAgentHostRuntimeProfileRequest.js';
 import type { UpdateAnthropicCompatibleRuntimeProfileRequest } from '../models/UpdateAnthropicCompatibleRuntimeProfileRequest.js';
+import type { UpdateGoogleGenAIRuntimeProfileRequest } from '../models/UpdateGoogleGenAIRuntimeProfileRequest.js';
 import type { UpdateOpenAICompatibleRuntimeProfileRequest } from '../models/UpdateOpenAICompatibleRuntimeProfileRequest.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
@@ -96,7 +98,7 @@ export class AgentRuntimeService {
      */
     public static agentRuntimeProfilesCreate(
         organizationId: string,
-        requestBody: (CreateAgentHostRuntimeProfileRequest | CreateOpenAICompatibleRuntimeProfileRequest | CreateAnthropicCompatibleRuntimeProfileRequest),
+        requestBody: (CreateAgentHostRuntimeProfileRequest | CreateOpenAICompatibleRuntimeProfileRequest | CreateAnthropicCompatibleRuntimeProfileRequest | CreateGoogleGenAIRuntimeProfileRequest),
     ): CancelablePromise<AgentRuntimeProfileResponse> {
         return __request(OpenAPI, {
             method: 'POST',
@@ -168,7 +170,7 @@ export class AgentRuntimeService {
     public static agentRuntimeProfilesUpdate(
         organizationId: string,
         profileId: string,
-        requestBody: (UpdateAgentHostRuntimeProfileRequest | UpdateOpenAICompatibleRuntimeProfileRequest | UpdateAnthropicCompatibleRuntimeProfileRequest),
+        requestBody: (UpdateAgentHostRuntimeProfileRequest | UpdateOpenAICompatibleRuntimeProfileRequest | UpdateAnthropicCompatibleRuntimeProfileRequest | UpdateGoogleGenAIRuntimeProfileRequest),
     ): CancelablePromise<AgentRuntimeProfileResponse> {
         return __request(OpenAPI, {
             method: 'PATCH',

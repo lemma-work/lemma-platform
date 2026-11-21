@@ -7589,6 +7589,127 @@
         "title": "CreateFunctionRequest",
         "type": "object"
       },
+      "CreateGoogleGenAIRuntimeProfileRequest": {
+        "description": "A Google provider: the Gemini API with an API key, or Vertex AI with a\nservice account key file. Never the server's own Google identity.",
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "backend": {
+            "$ref": "#/components/schemas/GoogleGenAIBackend",
+            "default": "GEMINI_API"
+          },
+          "default_model_name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "image_model_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Model Names"
+          },
+          "model_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Model Names",
+            "type": "array"
+          },
+          "model_settings": {
+            "additionalProperties": true,
+            "title": "Model Settings",
+            "type": "object"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "service_account_json": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Account Json"
+          },
+          "source": {
+            "const": "GOOGLE_GENAI",
+            "default": "GOOGLE_GENAI",
+            "title": "Source",
+            "type": "string"
+          },
+          "vertex_location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vertex Location"
+          },
+          "vertex_project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vertex Project"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "CreateGoogleGenAIRuntimeProfileRequest",
+        "type": "object"
+      },
       "CreateOpenAICompatibleRuntimeProfileRequest": {
         "properties": {
           "api_key": {
@@ -12411,6 +12532,15 @@
         },
         "title": "GenerationSettings",
         "type": "object"
+      },
+      "GoogleGenAIBackend": {
+        "description": "Which host answers the Google Gen AI API, and so how it is signed in to.\n\n``GEMINI_API`` takes an API key. ``VERTEX_AI`` takes a service account --\na stored key file, or for the deployment's own profile, the identity the\nserver already runs as (Application Default Credentials).",
+        "enum": [
+          "GEMINI_API",
+          "VERTEX_AI"
+        ],
+        "title": "GoogleGenAIBackend",
+        "type": "string"
       },
       "GranteeRef": {
         "properties": {
@@ -21633,7 +21763,8 @@
           "TEXT",
           "TOOLS",
           "VISION",
-          "REASONING"
+          "REASONING",
+          "IMAGE_OUTPUT"
         ],
         "title": "RuntimeModelCapability",
         "type": "string"
@@ -21710,6 +21841,7 @@
         "enum": [
           "OPENAI_COMPATIBLE",
           "ANTHROPIC_COMPATIBLE",
+          "GOOGLE_GENAI",
           "AGENT_HOST"
         ],
         "title": "RuntimeProfileProtocol",
@@ -26785,6 +26917,143 @@
           }
         },
         "title": "UpdateFunctionRequest",
+        "type": "object"
+      },
+      "UpdateGoogleGenAIRuntimeProfileRequest": {
+        "description": "Omitted keeps a field. The host (``backend``) is not editable: moving\nbetween the Gemini API and Vertex AI is a new provider.",
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "default_model_name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "image_model_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Model Names"
+          },
+          "model_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Names"
+          },
+          "model_settings": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Settings"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "service_account_json": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Account Json"
+          },
+          "source": {
+            "const": "GOOGLE_GENAI",
+            "default": "GOOGLE_GENAI",
+            "title": "Source",
+            "type": "string"
+          },
+          "vertex_location": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vertex Location"
+          },
+          "vertex_project": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vertex Project"
+          }
+        },
+        "title": "UpdateGoogleGenAIRuntimeProfileRequest",
         "type": "object"
       },
       "UpdateMemberRoleRequest": {
@@ -34509,6 +34778,7 @@
                   "mapping": {
                     "AGENT_HOST": "#/components/schemas/CreateAgentHostRuntimeProfileRequest",
                     "ANTHROPIC_COMPATIBLE": "#/components/schemas/CreateAnthropicCompatibleRuntimeProfileRequest",
+                    "GOOGLE_GENAI": "#/components/schemas/CreateGoogleGenAIRuntimeProfileRequest",
                     "OPENAI_COMPATIBLE": "#/components/schemas/CreateOpenAICompatibleRuntimeProfileRequest"
                   },
                   "propertyName": "source"
@@ -34522,6 +34792,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/CreateAnthropicCompatibleRuntimeProfileRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CreateGoogleGenAIRuntimeProfileRequest"
                   }
                 ],
                 "title": "Data"
@@ -34710,6 +34983,7 @@
                   "mapping": {
                     "AGENT_HOST": "#/components/schemas/UpdateAgentHostRuntimeProfileRequest",
                     "ANTHROPIC_COMPATIBLE": "#/components/schemas/UpdateAnthropicCompatibleRuntimeProfileRequest",
+                    "GOOGLE_GENAI": "#/components/schemas/UpdateGoogleGenAIRuntimeProfileRequest",
                     "OPENAI_COMPATIBLE": "#/components/schemas/UpdateOpenAICompatibleRuntimeProfileRequest"
                   },
                   "propertyName": "source"
@@ -34723,6 +34997,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/UpdateAnthropicCompatibleRuntimeProfileRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/UpdateGoogleGenAIRuntimeProfileRequest"
                   }
                 ],
                 "title": "Data"

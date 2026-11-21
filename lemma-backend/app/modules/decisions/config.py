@@ -16,12 +16,15 @@ class DecisionsSettings(BaseSettings):
         extra="ignore",
     )
 
-    decision_provider: Literal["model", "typesafe"] = Field(
-        default="model",
+    decision_provider: Literal["gemini", "model", "typesafe"] = Field(
+        default="gemini",
         description=(
-            "Which provider answers decisions. `model` asks the deployment's "
-            "language model (the system model, else the workspace's); "
-            "`typesafe` asks Typesafe System One and needs TYPESAFE_API_KEY."
+            "Which provider answers decisions. `gemini` asks Google's "
+            "Decisions API and needs LEMMA_GOOGLE_API_KEY; `model` asks the "
+            "deployment's language model (the system model, else the "
+            "workspace's); `typesafe` asks Typesafe System One and needs "
+            "TYPESAFE_API_KEY. A provider chosen without its key falls back "
+            "to `model`."
         ),
     )
     decision_model: str | None = Field(
@@ -29,6 +32,31 @@ class DecisionsSettings(BaseSettings):
         description=(
             "The model the `model` provider asks, by public name. Empty uses "
             "the system profile's default model."
+        ),
+    )
+    lemma_google_api_key: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Gemini API key for the `gemini` provider -- the same one the "
+            "Google model profile takes. Google serves decisions on the Gemini "
+            "API only, which refuses service accounts, so this is needed even "
+            "where models run on Vertex AI."
+        ),
+    )
+    gemini_decision_base_url: str = Field(
+        default="https://generativelanguage.googleapis.com/v1beta",
+        description="Gemini API base URL; requests go to `{base}/decisions`.",
+    )
+    gemini_decision_model: str = Field(
+        default="gemini-decision-1", description="The Gemini decision model to ask."
+    )
+    gemini_decision_price_per_million_input_tokens_usd: float | None = Field(
+        default=0.10,
+        ge=0,
+        description=(
+            "What Google charges per million input tokens for decisions (output "
+            "is free). Unset, decisions are recorded unpriced and follow "
+            "USAGE_UNPRICED_LIMIT_POLICY."
         ),
     )
     typesafe_api_key: SecretStr | None = Field(

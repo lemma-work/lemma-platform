@@ -115,6 +115,32 @@ async def read_workspace_file_bytes(
     return content, mime
 
 
+async def write_workspace_file_bytes(
+    deps: ToolContext, path: str, content: bytes
+) -> None:
+    """Write ``content`` where ``read_workspace_file_bytes`` reads ``path``.
+
+    The same split: on a host-execution run a relative path is the Mac's, so
+    a file made there is one the run's commands and ``view_image`` can find.
+    Raises ``FileNotFoundError`` when the folder does not exist.
+    """
+    if not _on_the_host(deps, path):
+        await deps.file_manager.write_file(path, content)
+        return
+    from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
+        get_workspace_session,
+    )
+
+    from sandbox_runtime.errors import SandboxPathNotFound
+
+    session = await get_workspace_session(deps, session_id=None, close_on_exit=True)
+    async with session:
+        try:
+            await session.write_file(path, content)
+        except SandboxPathNotFound as exc:
+            raise FileNotFoundError(path) from exc
+
+
 def _on_the_host(deps: ToolContext, path: str) -> bool:
     """On a host-execution run, whether ``path`` names a file on the Mac.
 

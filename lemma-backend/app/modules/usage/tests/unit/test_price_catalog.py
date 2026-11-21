@@ -252,3 +252,53 @@ def test_an_operator_stating_input_and_output_prices_has_priced_images() -> None
     )
     assert card.priceable
     assert card.prices_images_as_text
+
+
+def test_a_drawn_image_is_billed_at_the_image_rate_not_as_text() -> None:
+    """One 1K image from an image model is ~1120 output tokens. Billed at the
+    text output rate it would cost a twentieth of what Google charges."""
+    card = resolve_rate_card(
+        {
+            "provider_model_name": "gemini-3.1-flash-lite-image",
+            "protocol": "GOOGLE_GENAI",
+            "config": {"backend": "VERTEX_AI", "vertex_project": "p"},
+        },
+        {},
+        datetime(2026, 11, 20, tzinfo=timezone.utc),
+    )
+
+    assert card.enforceable
+    assert card.prices_image_output
+    drawn = card.price(
+        TokenCounts(input_tokens=11, output_tokens=1120, output_image_tokens=1120)
+    )
+    as_text = card.price(TokenCounts(input_tokens=11, output_tokens=1120))
+    assert drawn is not None and as_text is not None
+    assert drawn == Decimal("0.03360275")
+    assert drawn > as_text * 10
+
+
+def test_a_gemini_api_profile_prices_by_googles_own_card() -> None:
+    card = resolve_rate_card(
+        {"provider_model_name": "gemini-4-hydrogen", "protocol": "GOOGLE_GENAI"},
+        {},
+        datetime(2026, 11, 20, tzinfo=timezone.utc),
+    )
+    assert card.enforceable and card.priceable
+    assert not card.prices_image_output
+
+
+def test_an_operator_can_price_image_output_on_a_model_the_catalog_lacks() -> None:
+    card = resolve_rate_card(
+        {"model_name": "house-image-model"},
+        {
+            "house-image-model": ModelPricing(
+                1.0, 2.0, output_image_per_million_usd=40.0
+            )
+        },
+        datetime(2026, 11, 20, tzinfo=timezone.utc),
+    )
+    assert card.prices_image_output
+    assert card.price(
+        TokenCounts(output_tokens=1000, output_image_tokens=1000)
+    ) == Decimal("0.04")
