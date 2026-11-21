@@ -522,9 +522,12 @@ init:
 # ~2s and browser tools timing out against their 90s budget. So the workspace
 # image is checked for the architecture it will actually run on. The function
 # image is deliberately amd64 everywhere (see SANDBOX_FUNCTION_PLATFORM), so it
-# is only checked for presence.
+# is only checked for presence. The machine's architecture is asked the way
+# SANDBOX_PLATFORM asks it, podman's `.Host.Arch` second: were the two to
+# disagree, every `make dev` would see a mismatch and rebuild.
 _ensure-sandbox-images:
-	@host_arch="$$(docker version --format '{{.Server.Arch}}' 2>/dev/null || echo amd64)"; \
+	@host_arch="$$(docker version --format '{{.Server.Arch}}' 2>/dev/null \
+		|| docker info --format '{{.Host.Arch}}' 2>/dev/null || echo amd64)"; \
 	workspace_arch="$$(docker image inspect --format '{{.Architecture}}' "$(DEV_WORKSPACE_IMAGE)" 2>/dev/null || true)"; \
 	if [ "$$workspace_arch" = "$$host_arch" ] \
 		&& docker image inspect "$(DEV_FUNCTION_IMAGE)" >/dev/null 2>&1; then \

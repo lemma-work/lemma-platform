@@ -801,7 +801,13 @@ SANDBOX_TAG       ?= dev
 # Evaluated lazily, so `make` targets that build nothing never shell out to
 # docker, and falling back to amd64 keeps a machine with no daemon running
 # building the same image it built before.
-SANDBOX_PLATFORM  ?= linux/$(or $(shell docker version --format '{{.Server.Arch}}' 2>/dev/null),amd64)
+#
+# Podman behind a `docker` shim has no `.Server.Arch` -- the query fails, and
+# an Apple Silicon machine was quietly back to an emulated image. Its `info`
+# names the daemon's architecture as `.Host.Arch`, in the same words, so that
+# is asked second. The root Makefile's `_ensure-sandbox-images` asks the same
+# two questions; the two must agree or `make dev` rebuilds on every run.
+SANDBOX_PLATFORM  ?= linux/$(or $(shell docker version --format '{{.Server.Arch}}' 2>/dev/null),$(shell docker info --format '{{.Host.Arch}}' 2>/dev/null),amd64)
 SANDBOX_PLATFORMS ?= linux/amd64,linux/arm64
 # Function artifacts target the canonical x86-64 runtime ABI. Do not publish an
 # arm64 function image until the artifact builder emits an arm64 ABI -- and for
