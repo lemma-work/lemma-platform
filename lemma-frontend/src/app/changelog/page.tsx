@@ -113,7 +113,7 @@ function Entry({
             </div>
             <div className="log-entry__body">
                 <h2>
-                    <a href={"#" + entry.slug}>{entry.heading}</a>
+                    <a href={"#" + encodeURIComponent(entry.slug)}>{entry.heading}</a>
                 </h2>
                 <p className="log-sum">{entry.description}</p>
                 {inside && (
