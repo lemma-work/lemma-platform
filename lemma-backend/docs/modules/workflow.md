@@ -109,6 +109,7 @@ exactly as one did before they existed.
 | At most one FAILURE edge per node | One place for a failure to go |
 | None from an END | Nothing runs after it |
 | Not back to its own source | A retry with no limit |
+| FAILURE edges alone never lead back to where they started (`a` → `b` → `a`) | The same retry, spread over steps |
 | FAILURE edges do not count as branching, and are never a decision's default edge or a loop's one outgoing edge | They are not a way on from a node that finished |
 
 What counts as a node failing: its executor raising (a required input that

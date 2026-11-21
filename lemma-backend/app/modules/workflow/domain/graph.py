@@ -86,6 +86,7 @@ class WorkflowGraphValidator:
             # when a node finishes; a failure edge is not one of its ways on.
             issues.extend(cls._node_issues(node, node_by_id, next_edges))
             issues.extend(cls._failure_edge_issues(node, failure_edges))
+        issues.extend(cls._failure_cycle_issues(edges))
 
         entry_candidates = cls._entry_candidates(nodes, edges)
         if len(entry_candidates) == 0:
@@ -188,6 +189,35 @@ class WorkflowGraphValidator:
         # dispatched again on every failure, for as long as it keeps failing.
         if any(edge.target == node.id for edge in failure_edges):
             issues.append(f"node '{node.id}' failure edge cannot target itself")
+        return issues
+
+    @staticmethod
+    def _failure_cycle_issues(edges: List[WorkflowEdge]) -> list[str]:
+        """Failure edges that lead back to where they started.
+
+        The same unlimited retry as a failure edge to itself, spread over two
+        or more steps: when each fails, the run goes round until the step cap,
+        dispatching every step again on each lap.
+        """
+        failure_target: dict[str, str] = {}
+        for edge in edges:
+            if edge.kind is WorkflowEdgeKind.FAILURE:
+                failure_target.setdefault(edge.source, edge.target)
+        issues: list[str] = []
+        done: set[str] = set()
+        for start in failure_target:
+            path: list[str] = []
+            node: str | None = start
+            while node is not None and node not in done and node not in path:
+                path.append(node)
+                node = failure_target.get(node)
+            done.update(path)
+            if node is None or node not in path:
+                continue
+            cycle = path[path.index(node) :]
+            if len(cycle) > 1:  # one node is reported as targeting itself
+                route = " -> ".join(f"'{n}'" for n in [*cycle, node])
+                issues.append(f"failure edges loop back on themselves: {route}")
         return issues
 
     @classmethod

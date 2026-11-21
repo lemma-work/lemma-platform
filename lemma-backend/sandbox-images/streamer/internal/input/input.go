@@ -88,17 +88,17 @@ func Parse(raw []byte, screen Screen) (Command, error) {
 	if !utf8.Valid(raw) {
 		return Command{}, reject("not utf-8")
 	}
+	// One JSON value and nothing after it but whitespace. The decoder alone
+	// cannot say this: a stray `}` or `]` after the object makes Token() fail,
+	// which reads the same as "nothing left".
+	if !json.Valid(raw) {
+		return Command{}, reject("not one JSON value")
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	var w wire
 	if err := dec.Decode(&w); err != nil {
 		return Command{}, reject("not a known object")
-	}
-	if dec.More() {
-		return Command{}, reject("trailing data")
-	}
-	if _, err := dec.Token(); err == nil {
-		return Command{}, reject("trailing data")
 	}
 	if w.T == nil {
 		return Command{}, reject("no type")

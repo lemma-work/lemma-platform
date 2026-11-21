@@ -179,6 +179,36 @@ def test_a_failure_edge_does_not_retry_its_own_node():
     assert "node 'save' failure edge cannot target itself" in _issues(nodes, edges)
 
 
+def test_failure_edges_do_not_retry_each_other():
+    # Two steps that each fail into the other would go round until the step
+    # cap, running both again on every lap.
+    nodes = [_fn("begin"), _fn("a"), _fn("b"), _fn("c"), EndNode(id="end")]
+    edges = [
+        _edge("begin", "a"),
+        _edge("a", "end"),
+        _edge("b", "end"),
+        _edge("c", "end"),
+        _on_failure("a", "b"),
+        _on_failure("b", "c"),
+        _on_failure("c", "a"),
+    ]
+    issues = _issues(nodes, edges)
+    assert "failure edges loop back on themselves: 'a' -> 'b' -> 'c' -> 'a'" in issues
+    assert len([i for i in issues if "loop back" in i]) == 1
+
+
+def test_a_failure_chain_that_ends_is_accepted():
+    nodes = [_fn("begin"), _fn("a"), _fn("b"), EndNode(id="end")]
+    edges = [
+        _edge("begin", "a"),
+        _edge("a", "end"),
+        _edge("b", "end"),
+        _on_failure("a", "b"),
+        _on_failure("begin", "b"),
+    ]
+    assert WorkflowGraphValidator.validate(nodes, edges) == "begin"
+
+
 def test_a_loop_keeps_one_next_edge_beside_its_failure_edge():
     nodes = [
         _fn("load"),
