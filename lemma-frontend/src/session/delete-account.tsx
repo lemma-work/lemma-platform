@@ -99,8 +99,9 @@ export function DeleteAccountForm({ email, onCancel, onBusyChange }: {
 }
 
 /** The last thing in Account settings, apart from Signing out so neither is
- *  mistaken for the other. A dialog, because the explanation is the point
- *  and should have the screen to itself. */
+ *  mistaken for the other: a red-inked button and what it does, said once.
+ *  The dialog it opens has the screen to itself, because the explanation is
+ *  the point. */
 export function DeleteAccountEntry({ email }: { email: string }) {
     const [open, setOpen] = useState(false);
     /* Sticky while the request is out: closing the dialog then would unmount
@@ -108,12 +109,13 @@ export function DeleteAccountEntry({ email }: { email: string }) {
        would have nowhere to be read. */
     const [busy, setBusy] = useState(false);
     return (
-        <div className="settings-delete">
-            <div>
-                <strong>Delete account</strong>
-                <p>Erase your profile and leave every {ORG}. Work you shared stays with the people you shared it with.</p>
+        <div className="kset-stack">
+            <div className="kset-acts">
+                <button type="button" className="b b--s b--secondary b--red" onClick={() => setOpen(true)}>Delete my account</button>
             </div>
-            <button type="button" className="btn" onClick={() => setOpen(true)}>Delete account…</button>
+            <p className="kset-note">
+                Erases your profile and takes you out of every {ORG}. What you shared stays with the people you shared it with.
+            </p>
             {open && (
                 <Modal title="Delete your account" subtitle="This cannot be undone." narrow sticky={busy} onClose={() => setOpen(false)}>
                     <DeleteAccountForm email={email} onCancel={() => setOpen(false)} onBusyChange={setBusy} />

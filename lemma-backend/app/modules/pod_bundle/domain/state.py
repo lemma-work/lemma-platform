@@ -305,6 +305,18 @@ class _BundleJobState(BaseModel):
         self.updated_at = _utcnow()
 
 
+class InstallSlot(BaseModel):
+    """An import's place in a plugin install: several bundles one request
+    queued for one pod, which the server works through in order with the
+    install page's defaults (``application/install_use_cases``)."""
+
+    install_id: UUID
+    position: int
+    #: The question the bundle's install page would ask, when the install
+    #: withdrew the import rather than guess the answer. Nothing was applied.
+    asks: str | None = None
+
+
 class ImportState(_BundleJobState):
     import_id: UUID
     source: BundleSource
@@ -327,6 +339,9 @@ class ImportState(_BundleJobState):
     #: it writes to is the import's own -- across a crash, a failed step, and a
     #: replan, which plans afresh against a pod already holding them.
     created: list[str] = Field(default_factory=list)
+    #: Set when a plugin install queued this import; ``None`` for one a person
+    #: started and applies themselves.
+    install: InstallSlot | None = None
 
     @property
     def is_terminal(self) -> bool:

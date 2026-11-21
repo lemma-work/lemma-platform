@@ -120,12 +120,15 @@ export function JsonLd({ schema }: { schema: Record<string, unknown> }) {
     );
 }
 
-export function SiteHeader() {
+/** `tools` sits between the logo and the links: the docs put their search
+ *  there. Every other page passes nothing and the header is unchanged. */
+export function SiteHeader({ tools }: { tools?: ReactNode }) {
     return (
         <header className="site-header">
             <Link href="/" aria-label="Lemma home">
                 <LemmaLogo />
             </Link>
+            {tools && <div className="site-header__tools">{tools}</div>}
             <nav aria-label="Main navigation">
                 <Link href="/templates">Plugins</Link>
                 <Link href="/docs">Docs</Link>

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { friendlyError, thisMac, type ThisMacSnapshot } from "./this-mac";
-import { SettingRow } from "./this-mac-settings";
+import { SettingRow, Switch } from "./this-mac-settings";
 
 /** Diagnostics: where Lemma keeps its state, its addresses, the last of each
  *  log, and the install-health switch. The Advanced part of Server setup;
@@ -13,6 +13,8 @@ import { SettingRow } from "./this-mac-settings";
 
 const LOG_POLL_MS = 2_000;
 
+/** The last of each log, a tab per log, read again every two seconds while
+ *  it is open. Text, never markup. */
 function Logs() {
     const [source, setSource] = useState<string | null>(null);
     const [body, setBody] = useState("");
@@ -45,21 +47,22 @@ function Logs() {
     }, [source]);
 
     return (
-        <div className="thismac-logs">
-            <div className="theme__modes" role="tablist" aria-label="Log">
+        <div className="kset-block">
+            <div className="kset-range" role="tablist" aria-label="Log">
                 {sources.map((one) => (
-                    <button key={one.id} type="button" role="tab" className="theme__mode"
+                    <button key={one.id} type="button" role="tab" className="kchip"
                         aria-selected={(source ?? sources[0]?.id) === one.id} aria-pressed={(source ?? sources[0]?.id) === one.id}
                         onClick={() => setSource(one.id)}>{one.label}</button>
                 ))}
             </div>
             {/* Text, never markup: these lines carry error strings, URLs and
                 tool output the app did not write. Redacted by the shell. */}
-            <pre className="thismac-log" tabIndex={0}>{problem ?? (body.trim() || "No entries yet.")}</pre>
+            <pre className="kset-log" tabIndex={0}>{problem ?? (body.trim() || "No entries yet.")}</pre>
         </div>
     );
 }
 
+/** Whether this installation tells Lemma it started, as a switch. */
 function Telemetry() {
     const status = useQuery({ queryKey: ["this-mac-telemetry"], queryFn: () => thisMac.telemetryStatus(), retry: 0 });
     const queryClient = useQueryClient();
@@ -75,28 +78,33 @@ function Telemetry() {
             name="Anonymous install health"
             consequence={`Whether Lemma started and its runtime installed, sent to ${status.data.host ?? "Lemma"} under a random id for this installation. Nothing about your pods, files or account.`}
         >
-            <input type="checkbox" role="switch" className="thismac-switch" aria-label="Send anonymous install health"
-                checked={Boolean(status.data.enabled)} disabled={change.isPending}
-                onChange={(event) => change.mutate(event.target.checked)} />
-            {change.isError && <span className="thismac-said thismac-said--bad" role="alert">{friendlyError(change.error)}</span>}
+            {change.isError && <span className="kset-said kset-said--bad" role="alert">{friendlyError(change.error)}</span>}
+            <Switch
+                label="Send anonymous install health"
+                checked={Boolean(status.data.enabled)}
+                disabled={change.isPending}
+                onChange={(next) => change.mutate(next)}
+            />
         </SettingRow>
     );
 }
 
+/** Server setup's Advanced rows: where state is kept, the addresses, the
+ *  logs and install health. Drawn inside the caller's `.klist`. */
 export function ThisMacDiagnostics({ snapshot }: { snapshot: ThisMacSnapshot }) {
     const [showLogs, setShowLogs] = useState(false);
     return (
         <>
             {snapshot.paths && (
                 <SettingRow name="Where Lemma keeps its state" consequence={snapshot.paths.locald}>
-                    <button className="linkish" onClick={() => void thisMac.openLogs()}>Open logs folder</button>
+                    <button type="button" className="b b--s b--quiet" onClick={() => void thisMac.openLogs()}>Open logs folder</button>
                 </SettingRow>
             )}
             {snapshot.state.url && (
                 <SettingRow name="Addresses" consequence={`Workspace ${snapshot.state.url} · API ${snapshot.state.api_url}`} />
             )}
             <SettingRow name="Logs" consequence="The last of each log, redacted, refreshed while open.">
-                <button className="btn" aria-expanded={showLogs} onClick={() => setShowLogs((was) => !was)}>{showLogs ? "Hide" : "Show"}</button>
+                <button type="button" className="b b--s b--secondary" aria-expanded={showLogs} onClick={() => setShowLogs((was) => !was)}>{showLogs ? "Hide" : "Show"}</button>
             </SettingRow>
             {showLogs && <Logs />}
             <Telemetry />

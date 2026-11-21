@@ -1,4 +1,5 @@
 import { connectLinkLabel, failureOf } from "@/data/pod-connectors";
+import { Problem } from "@/outcomes/calm";
 
 /** A failed call, said, with the link that fixes it when the server gave one.
  *
@@ -26,5 +27,22 @@ export function ProblemLine({ error, fallback, className, as = "p" }: {
                 </>
             )}
         </Tag>
+    );
+}
+
+/** The same, as the kit says a failure where it happened (`Problem`): under
+ *  the field or above the button that sent it. */
+export function ProblemHere({ error, fallback }: { error: unknown; fallback: string }) {
+    const said = failureOf(error, fallback);
+    return (
+        <Problem>
+            {said.message}
+            {said.connectUrl && (
+                <>
+                    {" "}
+                    <a className="linkish" href={said.connectUrl}>{connectLinkLabel(said.code)}</a>
+                </>
+            )}
+        </Problem>
     );
 }

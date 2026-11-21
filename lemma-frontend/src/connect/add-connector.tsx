@@ -6,7 +6,9 @@ import { source } from "@/data";
 import { completionPath, hereWith, openAuthorization } from "./round-trip";
 import { consentLabel } from "./consent";
 import { SignInLink } from "./sign-in-link";
-import { Fields, NOT_A_LOGIN } from "./fields";
+import { Problem } from "@/outcomes/calm";
+import { NOT_A_LOGIN } from "@/ui/form";
+import { SchemaFields } from "./fields";
 import {
     useConnector, useConnectorRefresh, useCreateAccount, useCreateInstall, useDeleteInstall, useRefreshOperations,
 } from "./queries";
@@ -144,7 +146,7 @@ function AddOne({ orgId, kind, entry, onBack, onClose, onDone }: {
         const problem = { ...problems(list, ready), ...problems(secrets, readyCreds) };
         setShown(problem);
         if (Object.keys(problem).length > 0) return;
-        if (!name.trim()) { setShown({ ...problem, __name: "" }); setFailure("Give it a name you will recognise later."); return; }
+        if (!name.trim()) { setShown({ ...problem, __name: "Give it a name you will recognise later." }); return; }
         try {
             const made = await make.mutateAsync({
                 connectorId: entry.id,
@@ -165,7 +167,9 @@ function AddOne({ orgId, kind, entry, onBack, onClose, onDone }: {
                 setStarting(true);
                 try {
                     url = (await source.startAccount(
-                        orgId, entry.id, made.id, completionPath(hereWith({ settings: "connectors" })),
+                        /* Back to the page this was added from: the
+                           Connectors place, which finishes the round trip. */
+                        orgId, entry.id, made.id, completionPath(hereWith()),
                     )).authorizeUrl || null;
                 } catch {
                     url = null;
@@ -207,13 +211,21 @@ function AddOne({ orgId, kind, entry, onBack, onClose, onDone }: {
         }
     };
 
+    const mark = <span className="kmark" aria-hidden="true"><Glyph kind={kind} /></span>;
+
     if (found !== null) {
         const bad = /refused|could not/.test(found);
         /* The address-or-token advice is for discovery failing, not for a
            sign-in that has yet to happen. */
         const unreadable = bad && !found.startsWith("Added");
         return (
-            <Modal title={name || look?.title || entry.title} subtitle="Added" narrow onClose={onDone}>
+            <Modal title={name || look?.title || entry.title} subtitle="Added" mark={mark} onClose={onDone}
+                footer={signIn ? <>
+                    <button type="button" className="b b--l b--secondary" onClick={onDone}>Done</button>
+                    <button type="button" className="b b--l b--primary" onClick={() => { openAuthorization(signIn, entry.title); onDone(); }}>
+                        {consentLabel(signIn, name || entry.title)} <ExternalIcon size={13} />
+                    </button>
+                </> : <button type="button" className="b b--l b--primary" onClick={onDone}>Done</button>}>
                 <div className="connect-form">
                     <p className={"connect-result" + (bad ? " connect-result--warn" : "")} role="status">
                         {bad ? <WarningIcon size={18} /> : <CheckCircleIcon size={18} />} {found}
@@ -227,48 +239,45 @@ function AddOne({ orgId, kind, entry, onBack, onClose, onDone }: {
                         <p className="connect-lead">This server signs in through a browser. Nobody can use it until someone does.</p>
                     )}
                     {signIn && <SignInLink url={signIn} app={name || entry.title} opened={null} />}
-                    <div className="record-form__actions">
-                        {signIn && (
-                            <button className="btn btn--primary" onClick={() => { openAuthorization(signIn, entry.title); onDone(); }}>
-                                {consentLabel(signIn, name || entry.title)} <ExternalIcon size={13} />
-                            </button>
-                        )}
-                        <button className={"btn" + (signIn ? "" : " btn--primary")} onClick={onDone}>Done</button>
-                    </div>
                 </div>
             </Modal>
         );
     }
 
+    /* The install's settings and the account's credential, asked as one
+       form: one More settings at its foot, not one in the middle. */
+    const asked = [...list, ...secrets];
+    const secretNames = new Set(secrets.map((field) => field.name));
     return (
-        <Modal title={look?.title ?? entry.title} subtitle={look?.blurb} narrow onClose={onClose}>
+        <Modal title={look?.title ?? entry.title} subtitle={look?.blurb} mark={mark} onClose={onClose}
+            footer={detail.isLoading ? (
+                <button type="button" className="b b--l b--secondary" onClick={onBack}>Back</button>
+            ) : <>
+                <button type="button" className="b b--l b--secondary" disabled={busy} onClick={onBack}>Back</button>
+                <button type="button" className="b b--l b--primary" disabled={busy} onClick={() => void submit()}>
+                    {make.isPending || connect.isPending || starting ? "Adding…"
+                        : discover.isPending ? "Reading its operations…" : "Add connection"}
+                </button>
+            </>}>
             <div className="connect-form">
                 {detail.isLoading ? <p className="connect-lead"><LoadingIndicator inline label="Reading what this needs" /></p> : (
                     <>
                         {look?.signIn && <p className="connect-lead">{look.signIn}</p>}
-                        <div className="record-form">
-                            <div className="record-form__field">
-                                <label htmlFor="connect-name">Name<i aria-hidden="true"> *</i></label>
-                                <small>Choose a name so your team can recognize this connection.</small>
-                                <input id="connect-name" value={name} disabled={busy} placeholder="Sentry, Postgres (staging)…" autoComplete="off" {...NOT_A_LOGIN}
+                        <div className="kform">
+                            <div className="kfield">
+                                <label htmlFor="connect-name">Name</label>
+                                <input id="connect-name" className="kinput" value={name} disabled={busy} placeholder="Sentry, Postgres (staging)…" autoComplete="off" {...NOT_A_LOGIN}
+                                    aria-describedby="connect-name-help" aria-invalid={Boolean(shown.__name) || undefined}
                                     onChange={(event) => setName(event.target.value)} />
+                                {shown.__name && <Problem>{shown.__name}</Problem>}
+                                <small id="connect-name-help">What your team will know this connection by.</small>
                             </div>
+                            <SchemaFields list={asked} values={{ ...ready, ...readyCreds }} problems={shown} disabled={busy}
+                                onChange={(field, value) => (secretNames.has(field)
+                                    ? setCreds({ ...readyCreds, [field]: value })
+                                    : setValues({ ...ready, [field]: value }))} />
                         </div>
-                        <Fields list={list} values={ready} problems={shown} disabled={busy}
-                            onChange={(field, value) => setValues({ ...ready, [field]: value })} />
-                        {secrets.length > 0 && (
-                            <Fields list={secrets} values={readyCreds} problems={shown} disabled={busy}
-                                onChange={(field, value) => setCreds({ ...readyCreds, [field]: value })} />
-                        )}
-                        {failure && <p className="library-problem" role="alert">{failure}</p>}
-                        <div className="record-form__actions">
-                            <button className="btn btn--primary" disabled={busy} onClick={() => void submit()}>
-                                {make.isPending || connect.isPending || starting
-                                    ? <LoadingIndicator inline label="Adding" />
-                                    : discover.isPending ? <><LoadingIndicator inline label="Reading its operations" /> Reading its operations</> : "Add connection"}
-                            </button>
-                            <button className="btn" disabled={busy} onClick={onBack}>Back</button>
-                        </div>
+                        {failure && <Problem>{failure}</Problem>}
                     </>
                 )}
             </div>

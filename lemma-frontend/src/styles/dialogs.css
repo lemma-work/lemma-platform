@@ -1,0 +1,240 @@
+/* dialogs.css: what the dialogs, the reach sheet and the Settings page need
+   beyond the kit (kit.css). Every class here starts `kd-`. The dialog itself
+   is `shell/modal.tsx` and its CSS in shell.css; a yes-or-no is
+   `shell/confirm-dialog.tsx`. Tokens only, so both themes come for free. */
+
+/* ── inside any dialog ────────────────────────────────────────────────
+   A column 22px apart, rows on a wash, one plain line, and a refusal said
+   in red where it happened. */
+
+.kd-stack {
+    display: grid;
+    gap: 22px;
+}
+
+.kd-line {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 14.5px;
+    line-height: 1.5;
+    text-wrap: pretty;
+}
+
+.kd-small {
+    margin: 0;
+    color: var(--ink-3);
+    font-size: 12.5px;
+    line-height: 1.5;
+}
+
+.kd-small--warn {
+    color: var(--warn);
+}
+
+.kd-problem {
+    margin: 0;
+    color: var(--bad);
+    font-size: 13.5px;
+    line-height: 1.45;
+}
+
+.kd-problem .b {
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
+.kd-confirm {
+    display: grid;
+    gap: 12px;
+}
+
+.kd-confirm:empty {
+    display: none;
+}
+
+/* What else stops, under a delete's question. */
+.kd-warn {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 10px;
+    color: var(--ink-2);
+    font-size: 13.5px;
+}
+
+.kd-warn svg {
+    flex: none;
+    margin-top: 2px;
+    color: var(--warn);
+}
+
+/* A row: a mark, its words, its buttons. The words give way first, then
+   the buttons wrap under them, so nothing runs off a phone. */
+.kd-rows {
+    display: grid;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.kd-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 14px;
+    min-width: 0;
+    padding: 14px 16px;
+    border-radius: 16px;
+    background: var(--wash-a);
+}
+
+.kd-row__glyph {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 30px;
+    color: var(--ink-2);
+}
+
+.kd-row__words {
+    display: grid;
+    flex: 1 1 150px;
+    gap: 1px;
+    min-width: 0;
+}
+
+.kd-row__words b,
+.kd-row__words a {
+    overflow: hidden;
+    color: var(--ink);
+    font-size: 15px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kd-row__words small {
+    overflow: hidden;
+    color: var(--ink-2);
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kd-row__acts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+/* People, as initials in circles, overlapping. */
+.kd-faces {
+    display: flex;
+    flex: none;
+}
+
+.kd-face {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    margin-right: -6px;
+    border-radius: 50%;
+    background: var(--paper);
+    box-shadow: 0 0 0 2px var(--wash-a);
+    color: var(--ink-2);
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.kd-face:last-child {
+    margin-right: 0;
+}
+
+/* A choice card that cannot be picked here: still shown, with why in its
+   own words, and no hover that says it could be. */
+.kd-opt--off {
+    cursor: default;
+}
+
+.kd-opt--off:hover {
+    box-shadow: inset 0 0 0 1px transparent;
+}
+
+.kd-opt--off .kopt__t,
+.kd-opt--off .kopt__dot {
+    opacity: 0.45;
+}
+
+/* What deleting takes with it. */
+.kd-gone {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 14px 18px;
+    border-radius: 14px;
+    background: var(--kit-bad-soft);
+    color: var(--ink-2);
+    font-size: 14px;
+    line-height: 1.45;
+    list-style: none;
+}
+
+.kd-gone li {
+    display: flex;
+    gap: 8px;
+}
+
+.kd-gone li::before {
+    content: "–";
+    flex: none;
+    color: var(--bad);
+}
+
+.kd-name {
+    color: var(--ink);
+    font-weight: 500;
+}
+
+/* A quiet choice that sits at the start of a column, not across it. */
+.kd-start {
+    align-self: flex-start;
+    justify-self: start;
+}
+
+/* ── where to reach a Lemma ───────────────────────────────────────────
+   The rows are the way in's (`.arp`, arrival.css), so a place looks the
+   same there and here; these are the surfaces they are drawn on. */
+
+.kd-reach {
+    --ar-page: var(--paper);
+    --ar-well: var(--wash-a);
+    display: grid;
+    gap: 16px;
+}
+
+.kd-place__more:empty {
+    display: none;
+}
+
+.kd-place__acts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+@media (pointer: coarse) {
+    .kd-copy {
+        width: 44px;
+        height: 44px;
+    }
+}
+
+/* With reduced motion, a place turning on says so in words; its spinner
+   stands still. */
+@media (prefers-reduced-motion: reduce) {
+    .kd-reach .arp__spin {
+        animation: none;
+    }
+}

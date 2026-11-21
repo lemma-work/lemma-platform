@@ -12,6 +12,7 @@ from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.pod_bundle.application.export_use_cases import ExportUseCases
 from app.modules.pod_bundle.application.import_use_cases import ImportUseCases
+from app.modules.pod_bundle.application.install_use_cases import InstallUseCases
 from app.modules.pod_bundle.application.publish_use_cases import PublishUseCases
 
 
@@ -41,6 +42,15 @@ def get_import_use_cases(
 
 
 ImportUseCasesDep = Annotated[ImportUseCases, Depends(get_import_use_cases)]
+
+
+def get_install_use_cases(
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+) -> InstallUseCases:
+    return InstallUseCases(uow_factory)
+
+
+InstallUseCasesDep = Annotated[InstallUseCases, Depends(get_install_use_cases)]
 
 
 def build_publish_use_cases(uow_factory: UnitOfWorkFactory) -> PublishUseCases:

@@ -17,38 +17,3 @@
     min-height: 16em;
     resize: vertical;
 }
-
-.agents-confirm {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    margin: 4px 0 8px;
-    padding: 14px 42px 14px 16px;
-    border: 1px solid var(--bad);
-    border-radius: var(--r-md);
-    background: var(--paper);
-}
-.agents-confirm p { margin: 0; font-size: 13px; line-height: 1.55; color: var(--ink-2); }
-.agents-confirm strong { color: var(--ink); font-weight: 500; }
-.agents-confirm__breaks {
-    display: flex;
-    align-items: flex-start;
-    gap: 2px;
-    color: var(--bad) !important;
-    font-size: 12.5px;
-}
-.agents-confirm__breaks svg { flex: none; margin-top: 2px; }
-.agents-confirm__close {
-    position: absolute;
-    top: 10px;
-    right: 10px;
-    display: grid;
-    place-items: center;
-    width: 26px;
-    height: 26px;
-    border-radius: 7px;
-    color: var(--ink-3);
-}
-.agents-confirm__close:hover { background: var(--chrome); color: var(--ink); }
-.agents-confirm .record-form__actions { margin-top: 2px; }

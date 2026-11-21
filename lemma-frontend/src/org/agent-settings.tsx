@@ -14,6 +14,7 @@ import {
     type Runtime,
 } from "@/data";
 import { Modal } from "@/shell/modal";
+import { Problem } from "@/outcomes/calm";
 
 /** A coding agent's model and options, as a form.
  *
@@ -47,10 +48,10 @@ export function AgentSettingsFields({
     return (
         <>
             {agent.models.length > 0 && (
-                <div className="field">
-                    <label htmlFor="agent-model">Model</label>
+                <label className="kfield">
+                    <span>Model</span>
                     <select
-                        id="agent-model"
+                        className="kinput"
                         value={settings.model}
                         onChange={(event) => pick(event.target.value)}
                     >
@@ -59,15 +60,15 @@ export function AgentSettingsFields({
                             <option key={one.name} value={one.name}>{one.label}</option>
                         ))}
                     </select>
-                </div>
+                </label>
             )}
             {options.map((option) => {
                 const now = option.choices.find((choice) => choice.value === option.current)?.label;
                 return (
-                    <div className="field" key={option.key}>
-                        <label htmlFor={"agent-option-" + option.key}>{option.label}</label>
+                    <label className="kfield" key={option.key}>
+                        <span>{option.label}</span>
                         <select
-                            id={"agent-option-" + option.key}
+                            className="kinput"
                             value={settings.selections[option.key] ?? ""}
                             onChange={(event) => choose(option.key, event.target.value)}
                         >
@@ -76,8 +77,8 @@ export function AgentSettingsFields({
                                 <option key={choice.value} value={choice.value}>{choice.label}</option>
                             ))}
                         </select>
-                        {option.description && <span>{option.description}</span>}
-                    </div>
+                        {option.description && <small>{option.description}</small>}
+                    </label>
                 );
             })}
         </>
@@ -90,7 +91,8 @@ function optionsOf(agent: LocalAgent, model: string): AgentOption[] {
 }
 
 /** Change what an added agent runs with. Offered only while its computer is
- *  awake: the backend checks every change against the live agent. */
+ *  awake: the backend checks every change against the live agent. Its two
+ *  buttons sit at the dialog's foot. */
 export function EditAgentSettings({
     agent,
     computer,
@@ -123,17 +125,23 @@ export function EditAgentSettings({
     });
 
     return (
-        <Modal title={runtime.name} subtitle={"on " + computer.name} narrow onClose={onClose}>
-            <AgentSettingsFields agent={agent} computer={computer} settings={settings} onChange={setSettings} />
-            {agent.models.length === 0 && optionsOf(agent, settings.model).length === 0 && (
-                <p className="empty-row">This agent publishes nothing to choose.</p>
-            )}
-            {save.isError && <p className="reachrow__error" role="alert">{saidAbout(save.error, "That could not be saved.")}</p>}
-            <div className="modal__acts">
-                <button className="linkish" onClick={onClose}>Cancel</button>
-                <button className="btn btn--primary" disabled={save.isPending || !dirty} onClick={() => save.mutate()}>
+        <Modal
+            title={runtime.name}
+            subtitle={"on " + computer.name}
+            onClose={onClose}
+            footer={<>
+                <button type="button" className="b b--l b--secondary" onClick={onClose}>Cancel</button>
+                <button type="button" className="b b--l b--primary" disabled={save.isPending || !dirty} onClick={() => save.mutate()}>
                     {save.isPending ? "Saving…" : "Save"}
                 </button>
+            </>}
+        >
+            <div className="kset-form">
+                <AgentSettingsFields agent={agent} computer={computer} settings={settings} onChange={setSettings} />
+                {agent.models.length === 0 && optionsOf(agent, settings.model).length === 0 && (
+                    <p className="kset-note">This agent publishes nothing to choose.</p>
+                )}
+                {save.isError && <Problem>{saidAbout(save.error, "That could not be saved.")}</Problem>}
             </div>
         </Modal>
     );

@@ -1,64 +1,117 @@
 import { useState } from "react";
+import { Problem } from "@/outcomes/calm";
+import { MoreSettings, NOT_A_LOGIN, SecretInput } from "@/ui/form";
 import { CloseIcon, PlusIcon } from "@/ui/icons";
 import { REDACTED, unchangedSecret, type Field, type Values } from "./schema";
 
-/** What every field here tells a browser and a password manager: this is
- *  not a sign-in to Lemma.
+/** A server-described form, drawn the one way every form here is drawn.
  *
- *  It is a service's settings, but a password box with a text box above it
- *  is a login form to Chrome, which filled a database's name and password
- *  with the person's own email and saved Lemma password. `off` on a text
- *  field and `new-password` on a secret are the two values Chrome does not
- *  fill a saved login into (it may offer to generate a password instead,
- *  which is harmless); the data attributes are the opt-outs 1Password,
- *  LastPass, Bitwarden and Dashlane read. */
-export const NOT_A_LOGIN = {
-    "data-1p-ignore": "true",
-    "data-lpignore": "true",
-    "data-bwignore": "true",
-    "data-form-type": "other",
-} as const;
-
-/** A server-described form, drawn.
+ *  Every credential and setting a connector or a place asks for comes from a
+ *  schema the server owns — a connection's credentials, an install's
+ *  address, an organization's own app — so this renders what it describes
+ *  rather than a form per connector. The rules live here once (kit.css,
+ *  "forms"): a label above each field in plain words, the schema's own
+ *  description under it where it has one, "(optional)" on the fields that
+ *  are rather than a star on the ones that are not, secrets hidden with Show
+ *  beside them, and the plumbing — an API address, a webhook's check token,
+ *  a port — folded under More settings.
  *
- *  Borrows the record editor's shape, because it is the same thing wearing a
- *  different schema: a field list the server owns, rendered rather than
- *  hand-written per connector.
+ *  What it draws changes nothing about what is sent: values go back through
+ *  `onChange` keyed by the schema's own names, and `payload` builds the body.
  */
-export function Fields({ list, values, problems, onChange, disabled }: {
+export function SchemaFields({ list, values, problems, onChange, disabled }: {
     list: Field[];
     values: Values;
     problems: Record<string, string>;
     onChange: (name: string, value: unknown) => void;
     disabled?: boolean;
 }) {
+    const main = list.filter((field) => !field.more);
+    const more = list.filter((field) => field.more);
+    /* Closed, unless one of them already holds something of its own — an
+       install being edited that was pointed somewhere on purpose. */
+    const [opened] = useState(() => more.some((field) => setOnPurpose(field, values[field.name])));
+    const one = (field: Field) => (
+        <OneField key={field.name} field={field} value={values[field.name]} problem={problems[field.name]}
+            disabled={disabled} onChange={onChange} />
+    );
     return (
-        <div className="record-form">
-            {list.map((field) => (
-                <div className="record-form__field" key={field.name}>
-                    {/* A checkbox carries its own label, so a second one above
-                        it just prints the name twice. */}
-                    {field.kind !== "boolean" && (
-                        <label htmlFor={"f-" + field.name}>
-                            {field.label}{field.required && <i aria-hidden="true"> *</i>}
-                        </label>
-                    )}
-                    <One field={field} value={values[field.name]} disabled={disabled} onChange={onChange} />
-                    {/* Under the box rather than between it and its label:
-                        a connector's help runs to three lines, and above the
-                        input it pushed the label a paragraph away from the
-                        thing it names. */}
-                    {problems[field.name] && <em role="alert">{problems[field.name]}</em>}
-                    {field.description && <small id={"f-" + field.name + "-help"}>{field.description}</small>}
-                </div>
-            ))}
+        <div className="kform">
+            {main.map(one)}
+            {more.length > 0 && <MoreSettings open={opened}>{more.map(one)}</MoreSettings>}
         </div>
     );
 }
 
-function One({ field, value, disabled, onChange }: {
+/** A value somebody chose, rather than the schema's default or nothing. */
+function setOnPurpose(field: Field, value: unknown): boolean {
+    if (value === undefined || value === null || value === "" || value === false) return false;
+    if (typeof value === "object" && Object.keys(value as object).length === 0) return false;
+    return JSON.stringify(value) !== JSON.stringify(field.initial);
+}
+
+/** The schema's description, as the line under a field. "Optional." is
+ *  already said beside the label, so it is not said twice. */
+function helpFor(field: Field): string | null {
+    const said = (field.description ?? "").replace(/^\s*optional\.\s*/i, "").trim();
+    return said || null;
+}
+
+function OneField({ field, value, problem, disabled, onChange }: {
     field: Field;
     value: unknown;
+    problem?: string;
+    disabled?: boolean;
+    onChange: (name: string, value: unknown) => void;
+}) {
+    const id = "f-" + field.name;
+    const help = helpFor(field);
+    const helpId = help ? id + "-help" : undefined;
+    if (field.kind === "boolean") {
+        /* A tick box carries its own label, so a second one above it would
+           only print the name twice. */
+        return (
+            <div className="kfield">
+                <label className="kset-check">
+                    <input
+                        id={id}
+                        type="checkbox"
+                        checked={Boolean(value)}
+                        disabled={disabled}
+                        aria-describedby={helpId}
+                        onChange={(event) => onChange(field.name, event.target.checked)}
+                    />
+                    <span>
+                        {field.label}
+                        {help && <em id={helpId}>{help}</em>}
+                    </span>
+                </label>
+                {problem && <Problem>{problem}</Problem>}
+            </div>
+        );
+    }
+    return (
+        <div className="kfield">
+            <label htmlFor={field.kind === "headers" ? undefined : id}>
+                {field.label}
+                {!field.required && <span className="kfield__opt"> (optional)</span>}
+            </label>
+            <Control field={field} id={id} helpId={helpId} value={value} invalid={Boolean(problem)} disabled={disabled} onChange={onChange} />
+            {/* Under the box rather than between it and its label: some help
+                runs to three lines, and above the input it pushed the label a
+                paragraph away from the thing it names. */}
+            {problem && <Problem>{problem}</Problem>}
+            {help && <small id={helpId}>{help}</small>}
+        </div>
+    );
+}
+
+function Control({ field, id, helpId, value, invalid, disabled, onChange }: {
+    field: Field;
+    id: string;
+    helpId?: string;
+    value: unknown;
+    invalid: boolean;
     disabled?: boolean;
     onChange: (name: string, value: unknown) => void;
 }) {
@@ -68,23 +121,10 @@ function One({ field, value, disabled, onChange }: {
        required field — which passed the required check, was dropped from the
        payload as untouched, and reached the server as no token at all. */
     const [stored] = useState(() => unchangedSecret(value));
-    if (field.kind === "boolean") {
-        return (
-            <label className="connect-check">
-                <input
-                    id={"f-" + field.name}
-                    type="checkbox"
-                    checked={Boolean(value)}
-                    disabled={disabled}
-                    onChange={(event) => onChange(field.name, event.target.checked)}
-                />
-                <span>{field.label}</span>
-            </label>
-        );
-    }
     if (field.kind === "choice") {
         return (
-            <select id={"f-" + field.name} value={String(value ?? "")} disabled={disabled}
+            <select id={id} className="kinput" value={String(value ?? "")} disabled={disabled}
+                aria-describedby={helpId} aria-invalid={invalid || undefined}
                 onChange={(event) => onChange(field.name, event.target.value)}>
                 <option value="">Choose…</option>
                 {(field.options ?? []).map((option) => <option key={option} value={option}>{option}</option>)}
@@ -97,20 +137,35 @@ function One({ field, value, disabled, onChange }: {
        left for them to select and delete. Editing around the mask is how a
        credential ends up with asterisks in the middle of it. */
     const masked = unchangedSecret(value);
+    const shared = {
+        id,
+        value: String(value ?? ""),
+        disabled,
+        "aria-describedby": helpId,
+        "aria-invalid": invalid || undefined,
+        onChange: (event: { target: { value: string } }) => onChange(field.name, event.target.value),
+    };
+    if (field.kind === "secret") {
+        return (
+            <SecretInput
+                {...shared}
+                label={field.label}
+                masked={masked}
+                placeholder={masked ? "" : field.placeholder}
+                onFocus={() => { if (masked) onChange(field.name, ""); }}
+                onBlur={(event) => { if (stored && !event.target.value) onChange(field.name, REDACTED); }}
+            />
+        );
+    }
     return (
         <input
-            id={"f-" + field.name}
-            aria-describedby={field.description ? "f-" + field.name + "-help" : undefined}
-            type={field.kind === "secret" && !masked ? "password" : field.kind === "number" ? "number" : "text"}
-            value={String(value ?? "")}
+            {...shared}
+            className="kinput"
+            type={field.kind === "number" ? "number" : "text"}
             placeholder={masked ? "" : field.placeholder}
-            disabled={disabled}
-            autoComplete={field.kind === "secret" ? "new-password" : "off"}
+            autoComplete="off"
             {...NOT_A_LOGIN}
-            spellCheck={field.kind === "secret" ? false : undefined}
             onFocus={() => { if (masked) onChange(field.name, ""); }}
-            onBlur={(event) => { if (stored && field.kind === "secret" && !event.target.value) onChange(field.name, REDACTED); }}
-            onChange={(event) => onChange(field.name, event.target.value)}
         />
     );
 }
@@ -142,6 +197,7 @@ function Headers({ field, value, disabled, onChange }: {
             {pairs.map(([key, held], at) => (
                 <div className="connect-pair" key={at}>
                     <input
+                        className="kinput kset-input"
                         aria-label="Header name"
                         placeholder="X-Example"
                         autoComplete="off"
@@ -154,6 +210,7 @@ function Headers({ field, value, disabled, onChange }: {
                         onChange={(event) => write(pairs.map((pair, i) => (i === at ? [event.target.value, unchangedSecret(pair[1]) ? "" : pair[1]] : pair)))}
                     />
                     <input
+                        className="kinput kset-input"
                         aria-label={"Value for " + (key || "this header")}
                         type={unchangedSecret(held) ? "text" : "password"}
                         autoComplete="new-password"
@@ -164,14 +221,14 @@ function Headers({ field, value, disabled, onChange }: {
                         onBlur={(event) => { if (!event.target.value && stored.has(key)) write(pairs.map((pair, i) => (i === at ? [pair[0], REDACTED] : pair))); }}
                         onChange={(event) => write(pairs.map((pair, i) => (i === at ? [pair[0], event.target.value] : pair)))}
                     />
-                    <button type="button" aria-label={"Remove " + (key || "this header")} disabled={disabled}
+                    <button type="button" className="b b--s b--quiet b--icon" aria-label={"Remove " + (key || "this header")} disabled={disabled}
                         onClick={() => write(pairs.filter((_, i) => i !== at))}>
-                        <CloseIcon size={13} />
+                        <CloseIcon size={14} />
                     </button>
                 </div>
             ))}
-            <button type="button" className="connect-add" disabled={disabled} onClick={() => write([...pairs, ["", ""]])}>
-                <PlusIcon size={13} /> Add a header
+            <button type="button" className="b b--s b--secondary connect-add" disabled={disabled} onClick={() => write([...pairs, ["", ""]])}>
+                <PlusIcon size={14} /> Add a header
             </button>
         </div>
     );

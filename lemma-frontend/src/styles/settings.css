@@ -1,0 +1,754 @@
+/* settings.css: Settings as a page, and its sections, on the kit.
+
+   The page is a list of sections down the left, grouped by who owns them,
+   and the chosen section beside it. Every section is its heading and one
+   line, then rows on hairlines (kit.css: .ksec, .klist, .krow): what it is,
+   what it says, what you can do. Nothing boxed, no colour in the corners,
+   no capitals. Forms keep to reading width; lists take the row.
+
+   Only what the kit does not already say lives here, under `kset-`. See
+   settings/settings-page.tsx. */
+
+/* ── the page ─────────────────────────────────────────────────────────── */
+
+.kset {
+    display: grid;
+    grid-template-columns: 200px minmax(0, 1fr);
+    align-items: start;
+    gap: 40px;
+}
+
+.kset__nav {
+    position: sticky;
+    top: 28px;
+    display: grid;
+    align-content: start;
+    gap: 2px;
+    min-width: 0;
+    margin-top: -14px;
+}
+
+/* A group's name: plain small words, never capitals. */
+.kset__group {
+    margin: 14px 0 4px;
+    padding: 0 10px;
+    color: var(--ink-3);
+    font-size: 12.5px;
+}
+
+.kset__item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    height: 34px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 9px;
+    background: none;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 13.5px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.kset__item:hover {
+    background: var(--wash-b);
+    color: var(--ink);
+}
+
+.kset__item[aria-current="page"] {
+    background: var(--wash-a);
+    color: var(--ink);
+}
+
+.kset__item:focus-visible,
+.kset__org select:focus-visible {
+    outline: 2px solid var(--info);
+    outline-offset: 1px;
+}
+
+/* Something in this section waits on the reader. */
+.kset__dot {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    margin-left: auto;
+    border-radius: 50%;
+    background: var(--warn);
+}
+
+/* The organization's name heads its group, as a plain row that changes it. */
+.kset__org {
+    position: relative;
+    display: flex;
+    align-items: center;
+    margin-top: 10px;
+}
+
+.kset__org select {
+    width: 100%;
+    height: 34px;
+    padding: 0 28px 0 10px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 9px;
+    appearance: none;
+    background: none;
+    color: var(--ink-3);
+    font: inherit;
+    font-size: 12.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.kset__org select:hover {
+    background: var(--wash-b);
+    color: var(--ink);
+}
+
+.kset__org svg {
+    position: absolute;
+    right: 10px;
+    color: var(--ink-3);
+    pointer-events: none;
+}
+
+/* The chosen section: forms at reading width, lists across the row. */
+.kset__pane {
+    max-width: var(--w-read);
+}
+
+.kset__pane--wide {
+    max-width: none;
+}
+
+@media (pointer: coarse) {
+    .kset__item,
+    .kset__org select {
+        min-height: 44px;
+    }
+}
+
+@media (max-width: 760px) {
+    .kset {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 20px;
+    }
+
+    .kset__nav {
+        position: static;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        margin: 0 calc(-1 * var(--page-gutter));
+        padding: 0 var(--page-gutter) 8px;
+        overflow-x: auto;
+        border-bottom: 1px solid var(--line);
+        scrollbar-width: none;
+    }
+
+    .kset__item {
+        flex: none;
+        width: auto;
+        white-space: nowrap;
+    }
+
+    .kset__group {
+        flex: none;
+        margin: 0 2px 0 12px;
+        padding: 0;
+        white-space: nowrap;
+    }
+
+    .kset__group:first-child {
+        margin-left: 0;
+    }
+
+    /* Help's one section is called Help; in a row the pair would stutter. */
+    .kset__group--help {
+        display: none;
+    }
+
+    .kset__group--help + .kset__item {
+        margin-left: 12px;
+    }
+
+    .kset__org {
+        flex: none;
+        margin: 0 0 0 8px;
+    }
+
+    .kset__org select {
+        max-width: 160px;
+    }
+}
+
+/* ── inside a section ─────────────────────────────────────────────────── */
+
+/* A section's own parts, one under another at the section's spacing. */
+.kset-stack {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+    gap: 18px;
+    min-width: 0;
+}
+
+/* A quiet sentence under a list, or in place of one. */
+.kset-note {
+    margin: 0;
+    color: var(--ink-3);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+/* What the last thing asked found. */
+.kset-said {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 13.5px;
+    line-height: 1.45;
+}
+
+.kset-said--bad {
+    color: var(--bad);
+}
+
+.kset-said .b {
+    margin-left: 6px;
+    vertical-align: middle;
+}
+
+/* A row whose words are a sentence, not a label: they wrap rather than
+   end in an ellipsis. */
+.kset-wrap > b,
+.kset-wrap > span {
+    overflow: visible;
+    white-space: normal;
+    line-height: 1.45;
+}
+
+.kset-wrap code,
+.kset-note code,
+.kset-said code {
+    padding: 1px 5px;
+    border-radius: 5px;
+    background: var(--wash-a);
+    font-size: 12.5px;
+}
+
+/* A row whose thing is not there now: still listed, said quietly. */
+.kset-quiet .krow__lead,
+.kset-quiet > .krow__v {
+    opacity: 0.6;
+}
+
+/* A row with something under its words: a switch, a field. */
+.kset-under {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+}
+
+/* Buttons that act on the section, under it. */
+.kset-acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+/* A row that is a link to a page outside the app, opened in a tab of its
+   own: words in ink, the mark that says where it goes at its end. */
+.kset-out {
+    color: inherit;
+    text-decoration: none;
+}
+
+.kset-out .krow__end {
+    color: var(--ink-3);
+}
+
+.kset-out:hover .krow__end {
+    color: var(--ink);
+}
+
+.kset-out:focus-visible {
+    outline: 2px solid var(--info);
+    outline-offset: -2px;
+}
+
+/* A logo in the kit's circle. */
+.kset-logo {
+    width: 20px;
+    height: 20px;
+    object-fit: contain;
+}
+
+/* Figures in a row: money and counts line up. */
+.kset-fig {
+    min-width: 64px;
+    color: var(--ink);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+/* A row's share of the largest, beside its figure. */
+.kset-bar {
+    width: 120px;
+    height: 6px;
+    overflow: hidden;
+    border-radius: 3px;
+    background: var(--wash-a);
+}
+
+.kset-bar > i {
+    display: block;
+    height: 100%;
+    background: var(--ink-3);
+}
+
+/* A figure's figures: the smaller totals under the big one. */
+.kset-figures {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 22px;
+    margin: -8px 0 0;
+    color: var(--ink-2);
+    font-size: 13.5px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* One bar a day, scaled to the busiest. */
+.kset-days {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 56px;
+}
+
+.kset-days > i {
+    flex: 1;
+    min-width: 2px;
+    border-radius: 2px 2px 0 0;
+    background: var(--ink-3);
+    opacity: 0.55;
+}
+
+/* The ranges over a total: chips from the kit. */
+.kset-range {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+/* A form, at reading width. */
+.kset-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+    max-width: var(--w-read);
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+}
+
+.kset-pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+}
+
+.kset-form .kfield > em,
+.kset-form .kfield > span + span {
+    color: var(--ink-3);
+    font-size: 12.5px;
+    font-style: normal;
+}
+
+.kset-form .kfield > .kset-said--bad {
+    color: var(--bad);
+}
+
+/* A field inside a row, or anywhere the kit's tall field is too much. */
+.kset-input {
+    height: 40px;
+    padding: 0 12px;
+    border-radius: 11px;
+    font-size: 14.5px;
+}
+
+/* A tick box and its words. */
+.kset-check {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    color: var(--ink);
+    font-size: 14px;
+    line-height: 1.45;
+    cursor: pointer;
+}
+
+.kset-check input {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    margin: 2px 0 0;
+    accent-color: var(--ink);
+}
+
+.kset-check em {
+    display: block;
+    color: var(--ink-3);
+    font-size: 12.5px;
+    font-style: normal;
+}
+
+/* A row that opens to a form beneath it, on the same hairline. */
+.kset-fold {
+    border-bottom: 1px solid var(--line);
+}
+
+.kset-fold > summary {
+    list-style: none;
+    border-bottom: 0;
+    cursor: pointer;
+}
+
+.kset-fold > summary::-webkit-details-marker {
+    display: none;
+}
+
+.kset-fold > summary:hover {
+    background: var(--wash-b);
+}
+
+.kset-fold > summary:focus-visible {
+    outline: 2px solid var(--info);
+    outline-offset: -2px;
+}
+
+.kset-fold__body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+    padding: 4px 0 24px;
+}
+
+/* Choices in a row of cards (kit .kopts), as many as fit. */
+.kset-opts {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.kset-opts--small {
+    grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+    gap: 8px;
+}
+
+.kset-opts .kopt__t {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* An accent's colour, in its card. */
+.kset-swatch {
+    flex: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+}
+
+/* Corners, drawn: the card's own corner at each setting. */
+.kset-corner {
+    flex: none;
+    width: 14px;
+    height: 14px;
+    border-top: 1.5px solid currentColor;
+    border-left: 1.5px solid currentColor;
+}
+
+.kset-corner--soft {
+    border-top-left-radius: 4px;
+}
+
+.kset-corner--round {
+    border-top-left-radius: 9px;
+}
+
+/* How chat text reads at the chosen size. */
+.kset-preview {
+    display: grid;
+    gap: 6px;
+    padding: 4px 0 0 14px;
+    border-left: 2px solid var(--line-2);
+}
+
+.kset-preview > span {
+    color: var(--ink-3);
+    font-size: 12.5px;
+}
+
+.kset-preview > p {
+    margin: 0;
+    font-size: var(--chat-text-size, 15px);
+    line-height: 1.6;
+}
+
+/* Plans, side by side, the price under the name. */
+.kset-plans {
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.kset-price {
+    grid-column: 1;
+    margin-top: 6px;
+    font-size: 18px;
+    font-variant-numeric: tabular-nums;
+}
+
+.kset-plan-has {
+    display: grid;
+    grid-column: 1 / -1;
+    gap: 4px;
+    margin: 8px 0 0;
+    padding: 0;
+    list-style: none;
+    color: var(--ink-2);
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.kset-plan-has > span {
+    display: flex;
+    gap: 6px;
+}
+
+.kset-plan-has svg {
+    flex: none;
+    margin-top: 2px;
+    color: var(--ink-3);
+}
+
+/* A command to type, and its Copy. */
+.kset-command {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-size: 13.5px;
+}
+
+.kset-command code {
+    max-width: 100%;
+    padding: 6px 10px;
+    overflow-x: auto;
+    border-radius: 8px;
+    background: var(--wash-a);
+    font-size: 12.5px;
+    white-space: pre;
+}
+
+/* The last of a log, as text. */
+.kset-log {
+    max-height: 320px;
+    margin: 0;
+    padding: 12px 14px;
+    overflow: auto;
+    border-radius: 12px;
+    background: var(--wash-a);
+    color: var(--ink-2);
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* Scanned by a camera, so it sits on paper with a margin round it. */
+.kset-qr {
+    justify-self: start;
+    width: 160px;
+    height: 160px;
+    padding: 8px;
+    border-radius: 12px;
+    background: var(--paper);
+    box-shadow: inset 0 0 0 1px var(--line);
+}
+
+@media (max-width: 640px) {
+    .kset-bar {
+        display: none;
+    }
+
+    /* On a phone a row's tools go under its words, so a row with several
+       never squeezes what it is out of sight. */
+    .kset__pane .krow {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .kset__pane .krow__end {
+        justify-content: flex-start;
+    }
+
+    .kset-pair {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .krow__end:has(> .kswitch:only-child) {
+        align-self: start;
+    }
+}
+
+@media (pointer: coarse) {
+    .kset-fold > summary {
+        min-height: 58px;
+    }
+
+    .kset-check {
+        min-height: 44px;
+        align-items: center;
+    }
+
+    .kset-check input {
+        margin-top: 0;
+    }
+
+    /* The switch keeps its size; a finger gets a 44px target around it. */
+    .kset .kswitch::before {
+        content: "";
+        position: absolute;
+        inset: -11px -4px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .kset .spin {
+        animation: none;
+    }
+}
+
+/* A form's own small parts: an aside in a label, a suggestion under a
+   field, set at the field's start rather than stretched across it. */
+.kfield > span:first-child em {
+    color: var(--ink-3);
+    font-size: 12.5px;
+    font-style: normal;
+}
+
+.kset-form .kfield > .b,
+.kset-form .kfield > .kstatus {
+    justify-self: start;
+}
+
+/* A field inside a row's words, under what it says now. */
+.krow__v > .kset-input {
+    max-width: 260px;
+    margin-top: 6px;
+}
+
+/* Paragraphs in a section take their space from the section's gap. Low
+   specificity, so the kit's own margins (.ksub) still hold. */
+:where(.kset-stack, .kset-form, .kset-fold__body) > p {
+    margin: 0;
+}
+
+/* A list drawn as a list. */
+ul.klist {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+/* A row's longer words — a fix to type, what a test found — wrap. */
+.krow__v > .kset-long {
+    overflow: visible;
+    white-space: normal;
+    line-height: 1.45;
+}
+
+/* A group's state, at the far end of its subheading. */
+.ksub > .kstatus {
+    margin-left: auto;
+}
+
+/* A state said as a sentence: the kit's dot, beside words that wrap. */
+.kstatus.kset-state {
+    align-items: flex-start;
+    color: var(--ink);
+    font-size: 14px;
+    line-height: 1.45;
+    white-space: normal;
+}
+
+.kstatus.kset-state::before {
+    margin-top: 6px;
+}
+
+/* A switch and what it does, under a row's words. */
+.kset-toggle {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    color: var(--ink-2);
+    font-size: 13px;
+    line-height: 1.45;
+    white-space: normal;
+}
+
+.kset-toggle > .kswitch {
+    margin-top: 1px;
+}
+
+/* A link inside a sentence that does something here rather than going
+   somewhere: words in ink, underlined. */
+.kset-link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--line-2);
+    text-underline-offset: 3px;
+    cursor: pointer;
+}
+
+.kset-link:hover {
+    text-decoration-color: currentColor;
+}
+
+/* A status of several words, at a row's end: it wraps on a narrow screen
+   rather than pushing the row wider than the page. */
+.kstatus.kset-wraps {
+    max-width: 220px;
+    white-space: normal;
+}
+
+/* A field's label as its own element, said like the kit's. */
+.kfield > label:first-child {
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+/* A part of a list that is not a row: a few lines and a field, on the
+   list's hairline. */
+.kset-block {
+    display: grid;
+    gap: 12px;
+    padding: 14px 0 18px;
+    border-bottom: 1px solid var(--line);
+}
+
+.kset-block > p {
+    margin: 0;
+}
+
+.kset-grow {
+    flex: 1;
+    min-width: 0;
+}

@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { Session, startAuth } from "./supertokens";
 import { screenFor } from "./which";
 import { Callback, Reset, SignInUp } from "./screens";
+import { Screen } from "./frame";
 import { Verify } from "./verification-screen";
 import { CliLogin } from "./cli-login-screen";
 import { McpConsent } from "./mcp-consent-screen";
@@ -47,14 +48,12 @@ export function Portal({ path }: { path?: string[] }) {
         /* Nothing to sign in against. The one screen that must never be blank
            is the one somebody reaches when the app is misconfigured. */
         return (
-            <div className="screen"><div className="screen__inner auth">
-                <h2>This one is not set up yet</h2>
-                <p>
-                    There is no API address here, so there is nothing to sign in to. Whoever
-                    deployed this needs to give it one.
-                </p>
-                <p className="screen__footnote"><code>NEXT_PUBLIC_API_URL</code></p>
-            </div></div>
+            <Screen
+                icon={{ glyph: "warn", tone: "warn" }}
+                title="This one isn’t set up yet"
+                lead="There is no API address here, so there is nothing to sign in to. Whoever deployed this needs to give it one."
+                footer={<code className="auth-cmd">NEXT_PUBLIC_API_URL</code>}
+            />
         );
     }
 
@@ -74,18 +73,20 @@ export function Portal({ path }: { path?: string[] }) {
         case "desktop": return <DesktopReturn />;
         case "reset": return <Reset />;
         case "verify": return <Verify />;
-        case "callback": return <Callback />;
+        case "callback": return <Callback provider={path?.[1]} />;
         case "cli": return <CliLogin />;
         case "authorize": return <McpConsent />;
         default:
             return (
-                <div className="screen"><div className="screen__inner auth">
-                    <h2>Nothing lives at this address</h2>
-                    <p>That link does not name a page we have. Check it, or start from the front.</p>
-                    <div className="screen__actions">
-                        <a className="btn btn--primary" href={PORTAL_PATH}>Go to sign in</a>
+                <Screen
+                    icon={{ glyph: "warn", tone: "warn" }}
+                    title="Nothing lives at this address"
+                    lead="That link doesn’t name a page Lemma has. Check it, or start from the front."
+                >
+                    <div className="auth-row">
+                        <a className="b b--l b--primary" href={PORTAL_PATH}>Go to sign in</a>
                     </div>
-                </div></div>
+                </Screen>
             );
     }
 }
