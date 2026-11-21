@@ -446,6 +446,7 @@ _NAME_TO_MODULE = {
     'MyMembershipUpdateNotifyViaType0Item': 'my_membership_update_notify_via_type_0_item',
     'MyUsageLimitsResponse': 'my_usage_limits_response',
     'MyUsageLimitsResponsePlanTypeType0': 'my_usage_limits_response_plan_type_type_0',
+    'NamedPodResponse': 'named_pod_response',
     'NavigateCommand': 'navigate_command',
     'NavigateRequest': 'navigate_request',
     'NavigateResponse': 'navigate_response',
@@ -1310,6 +1311,7 @@ if TYPE_CHECKING:
     from .my_membership_update_notify_via_type_0_item import MyMembershipUpdateNotifyViaType0Item
     from .my_usage_limits_response import MyUsageLimitsResponse
     from .my_usage_limits_response_plan_type_type_0 import MyUsageLimitsResponsePlanTypeType0
+    from .named_pod_response import NamedPodResponse
     from .navigate_command import NavigateCommand
     from .navigate_request import NavigateRequest
     from .navigate_response import NavigateResponse
@@ -2187,6 +2189,7 @@ __all__ = [
     'MyMembershipUpdateNotifyViaType0Item',
     'MyUsageLimitsResponse',
     'MyUsageLimitsResponsePlanTypeType0',
+    'NamedPodResponse',
     'NavigateCommand',
     'NavigateRequest',
     'NavigateResponse',

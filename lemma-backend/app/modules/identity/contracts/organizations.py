@@ -30,11 +30,16 @@ pay for it.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import select
 
-from app.modules.identity.domain.organization_entities import OrganizationRole
+from app.modules.identity.domain.organization_entities import (
+    OrganizationJoinPolicy,
+    OrganizationRole,
+    may_self_join,
+)
 from app.modules.identity.infrastructure.adapters.email_adapter import (
     SmtpIdentityEmailAdapter,
 )
@@ -42,6 +47,7 @@ from app.modules.identity.infrastructure.models.organization_models import (
     Organization,
     OrganizationMember,
 )
+from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.infrastructure.organization_repositories import (
     OrganizationRepository,
 )
@@ -100,6 +106,82 @@ async def organization_name(uow, organization_id: UUID) -> str | None:
     ).scalar_one_or_none()
 
 
+@dataclass(frozen=True)
+class OrganizationAtHandle:
+    """The organization a handle names, and where one person stands with it."""
+
+    organization_id: UUID
+    #: Their membership row, or ``None`` when they are not in it.
+    member_id: UUID | None
+    role: OrganizationRole | None
+    #: Whether they could join it without being asked in. True for a member.
+    may_join: bool
+
+
+async def organization_at_handle(
+    uow, *, handle: str, user_id: UUID
+) -> OrganizationAtHandle | None:
+    """The organization whose handle this is, as this person stands with it.
+
+    ``None`` when no organization has the handle. Whether that may be told
+    apart from one the person cannot reach is the caller's policy: this says
+    what is true, for a caller about to decide what to reveal.
+    """
+    organization = (
+        await uow.session.execute(
+            select(
+                Organization.id, Organization.join_policy, Organization.email_domain
+            ).where(Organization.slug == handle)
+        )
+    ).one_or_none()
+    if organization is None:
+        return None
+    member = (
+        await uow.session.execute(
+            select(OrganizationMember.id, OrganizationMember.role).where(
+                OrganizationMember.user_id == user_id,
+                OrganizationMember.organization_id == organization.id,
+            )
+        )
+    ).one_or_none()
+    if member is not None:
+        return OrganizationAtHandle(
+            organization_id=organization.id,
+            member_id=member.id,
+            role=OrganizationRole(member.role),
+            may_join=True,
+        )
+    person = (
+        await uow.session.execute(
+            select(User.email, User.is_verified).where(User.id == user_id)
+        )
+    ).one_or_none()
+    return OrganizationAtHandle(
+        organization_id=organization.id,
+        member_id=None,
+        role=None,
+        may_join=person is not None
+        and may_self_join(
+            join_policy=OrganizationJoinPolicy(organization.join_policy),
+            email_domain=organization.email_domain,
+            user_email=person.email,
+            user_verified=person.is_verified,
+        ),
+    )
+
+
+class OrganizationsByHandle:
+    """``organization_at_handle`` as an object a consumer's port can name."""
+
+    def __init__(self, uow) -> None:
+        self._uow = uow
+
+    async def at_handle(
+        self, handle: str, user_id: UUID
+    ) -> OrganizationAtHandle | None:
+        return await organization_at_handle(self._uow, handle=handle, user_id=user_id)
+
+
 async def organization_member_role(
     uow, *, user_id: UUID, organization_id: UUID
 ) -> OrganizationRole | None:
@@ -132,9 +214,12 @@ async def organization_member_role(
 
 
 __all__ = [
+    "OrganizationAtHandle",
+    "OrganizationsByHandle",
     "build_identity_email_sender",
     "build_organization_membership",
     "build_user_directory",
+    "organization_at_handle",
     "organization_exists",
     "organization_member_count",
     "organization_member_role",

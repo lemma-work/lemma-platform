@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from harness.run import a_name_for, must_be_traceable
@@ -25,6 +26,12 @@ def _member_id(member: JSON) -> str:
             f"this does not look like a pod membership row: {sorted(member)}"
         )
     return str(identifier)
+
+
+def _address_in_names(organization: JSON, pod: JSON) -> dict[str, str]:
+    """The two words a link spells a pod with, as the web app writes them."""
+    word = re.sub(r"[^a-z0-9]+", "-", str(pod["name"]).lower()).strip("-")
+    return {"organization": str(organization["slug"]), "pod": word}
 
 
 class PodSteps:
@@ -202,6 +209,32 @@ class PodSteps:
                 f"{self.label} was expected to be refused the pods open in "
                 f"{organization.get('name')!r}, but was shown them "
                 f"({response.status_code})"
+            )
+        return response.status_code
+
+    async def finds_pod_by_its_link(self, organization: JSON, pod: JSON) -> str:
+        """The pod id an address in names (`/l/{handle}/{name}`) means to them."""
+        found = await self.api.get(
+            "/pods/by-name",
+            params=_address_in_names(organization, pod),
+            what=f"{self.label} following a link to {pod.get('name')!r}",
+        )
+        if set(found) != {"pod_id"}:
+            raise AssertionError(
+                f"finding {pod.get('name')!r} by name told {self.label} more "
+                f"than its id: {sorted(found)}"
+            )
+        return str(found["pod_id"])
+
+    async def is_told_of_no_pod_at(self, organization: JSON, pod: JSON) -> int:
+        """Follow a link in names and be told it names nothing; the status."""
+        response = await self.api.call(
+            "GET", "/pods/by-name", params=_address_in_names(organization, pod)
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be told no pod is called "
+                f"{pod.get('name')!r}, but was given {response.text}"
             )
         return response.status_code
 

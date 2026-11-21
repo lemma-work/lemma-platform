@@ -305,6 +305,44 @@ class TestLettingPeopleAskToJoin:
             "a pod they are in is still offered to them"
         )
 
+    @scenario("A link in names finds its pod for whoever could walk in, and no one else")
+    @proves("PS-POD-025")
+    @covers("pod.create", "pod.update", "pod.find_by_name", "pod.delete")
+    async def test_a_link_in_names_finds_its_pod_for_whoever_could_walk_in(
+        self, world, run
+    ):
+        alice = await world.person("priya")
+        organization = alice.organization
+        open_pod = await alice.creates_a_pod(named=run.name("open"))
+        await alice.opens_pod_to(open_pod, who="ORG_MEMBERS")
+        closed_pod = await alice.creates_a_pod(named=run.name("closed"))
+        nowhere = {"name": run.name("nowhere")}
+        bob = await world.person("sofia")
+        # From another organization, which is invite-only.
+        outsider = await world.person("hannah")
+
+        # In the organization: the pod open to it, by its link, as the id.
+        assert await bob.finds_pod_by_its_link(organization, open_pod) == str(
+            open_pod["id"]
+        )
+        # The owner reaches every pod, so is told every name.
+        assert await alice.finds_pod_by_its_link(organization, closed_pod) == str(
+            closed_pod["id"]
+        )
+
+        # An invite-only pod they are not in, a pod open to an organization
+        # they may not join, and a name nobody has: one answer for all three.
+        refusals = {
+            await bob.is_told_of_no_pod_at(organization, closed_pod),
+            await outsider.is_told_of_no_pod_at(organization, open_pod),
+            await outsider.is_told_of_no_pod_at(organization, nowhere),
+        }
+        assert refusals == {404}, f"names not told were answered {refusals}"
+
+        # Nobody joins them, so they would be found on every run after.
+        await alice.deletes_pod(open_pod)
+        await alice.deletes_pod(closed_pod)
+
     @scenario("An owner is offered no pod to join, and an outsider is refused")
     @proves("PS-POD-023")
     @covers("pod.create", "pod.update", "pod.list_joinable", "pod.delete")
