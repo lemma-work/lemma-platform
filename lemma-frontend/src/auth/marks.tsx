@@ -25,6 +25,32 @@ export function GoogleMark({ size = 17 }: { size?: number }) {
     );
 }
 
+/** The few drawings the sign-in screens use: a problem, a tick, the
+ *  arrow on "Then on to", the envelope on "Check your email", a terminal for
+ *  the CLI. One stroke weight, in whatever ink the text around them has. */
+const GLYPHS = {
+    warn: "M12 4 21 19.5H3zM12 10v4.5M12 17h.01",
+    check: "M5 12.5l4.5 4.5L19 7.5",
+    x: "M6 6l12 12M18 6 6 18",
+    arrow: "M5 12h14M13 6l6 6-6 6",
+    back: "M15 5l-7 7 7 7",
+    mail: "M3.5 6.5A2.5 2.5 0 0 1 6 4h12a2.5 2.5 0 0 1 2.5 2.5v11A2.5 2.5 0 0 1 18 20H6a2.5 2.5 0 0 1-2.5-2.5zM4.5 7l7.5 6 7.5-6",
+    term: "M4 5h16v14H4zM7.5 9.5 10.5 12l-3 2.5M12.5 15h4",
+    lock: "M7 11V8a5 5 0 0 1 10 0v3M5.5 11h13v9h-13z",
+    minus: "M6 12h12",
+} as const;
+
+export type GlyphName = keyof typeof GLYPHS;
+
+export function Glyph({ name, size = 16, weight = 1.8 }: { name: GlyphName; size?: number; weight?: number }) {
+    return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={weight}
+            strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+            <path d={GLYPHS[name]} />
+        </svg>
+    );
+}
+
 /** Microsoft's four squares. A gap of one unit, which is the mark — closed up
  *  it reads as a window. */
 export function MicrosoftMark({ size = 16 }: { size?: number }) {
