@@ -284,3 +284,45 @@ def test_a_new_key_file_brings_its_own_project_unless_one_is_named() -> None:
     assert replaced.config.vertex_project == "project-b"
     assert replaced.asks_google_differently
     assert named.config.vertex_project == "project-a"
+
+
+@pytest.mark.parametrize(
+    ("retryable", "rejected"),
+    [
+        pytest.param(False, True, id="key-revoked"),
+        pytest.param(True, False, id="token-endpoint-hiccup"),
+    ],
+)
+async def test_only_a_sign_in_that_cannot_succeed_rejects_the_key(
+    monkeypatch: pytest.MonkeyPatch, retryable: bool, rejected: bool
+) -> None:
+    """A revoked or disabled account is the owner's to fix and blocks the
+    save; Google's token endpoint having a moment is not, and does not."""
+    from google.auth.exceptions import RefreshError
+    from google.oauth2 import service_account
+
+    from app.modules.agent.infrastructure.providers.discovery import (
+        ProviderKeyRejectedError,
+    )
+    from app.modules.agent.infrastructure.providers.google_genai_model import (
+        verify_google_genai_access,
+    )
+
+    def refuse(self: object, request: object) -> None:
+        raise RefreshError("token refresh failed", retryable=retryable)
+
+    monkeypatch.setattr(service_account.Credentials, "refresh", refuse)
+
+    async def verify() -> None:
+        await verify_google_genai_access(
+            config=VERTEX,
+            credentials={"service_account_json": _service_account_json()},
+            scope="ORGANIZATION",
+            model_name="gemini-4-hydrogen",
+        )
+
+    if rejected:
+        with pytest.raises(ProviderKeyRejectedError):
+            await verify()
+    else:
+        await verify()
