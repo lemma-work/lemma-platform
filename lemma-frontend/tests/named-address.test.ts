@@ -99,10 +99,14 @@ test("an id address, and an old one, are not taken for names", () => {
     for (const path of ["/l/other-org/sales/apps/people", "/l/acme-inc/nobody/apps/people", "/l/acme-inc/ops/apps/people", "/l/acme-inc/chats"]) {
         assert.equal(unnamed(path, ACME), null, path);
     }
-    /* So a Lemma called by one of those words keeps its id, as one called by
-       a section's name does. */
+    /* Only after an id: a Lemma called by one of those words keeps its name,
+       written and read. */
     const LIBRARY: Names = { org: "Acme Inc.", lemmas: [{ id: SALES, name: "Library" }] };
-    assert.equal(named("/l/" + SALES, LIBRARY), "/l/" + SALES);
+    assert.equal(named("/l/" + SALES, LIBRARY), "/l/acme-inc/library");
+    assert.equal(named("/l/" + SALES + "/apps/people", LIBRARY), "/l/acme-inc/library/apps/people");
+    assert.ok(looksNamed("/l/acme-inc/library"));
+    assert.equal(unnamed("/l/acme-inc/library", LIBRARY), "/l/" + SALES);
+    assert.equal(unnamed("/l/acme-inc/library/apps/people", LIBRARY), "/l/" + SALES + "/apps/people");
 });
 
 test("what a named address says after the Lemma is what it is, without whose", () => {
@@ -194,6 +198,9 @@ test("a word one of theirs is only called by is asked of the server before the n
     /* The handle had a Lemma by that name: that is the one the link means,
        even with one of theirs called the same. */
     assert.deepEqual(readNamed("/l/fjord-demo/sales", { ...mine, found: { podId: STRANGER, org: "fjord-demo" } }), { kind: "plain", path: "/l/" + STRANGER, asked: true });
+    /* A lookup that failed says nothing of whose the word is, so the name
+       does not choose on its strength. */
+    assert.deepEqual(readNamed("/l/fjord-demo/sales", { ...mine, found: { podId: null, org: null, failed: true } }), { kind: "nowhere" });
     /* Nobody's handle: the name of theirs it is, as links written before
        handles carried it. */
     assert.deepEqual(readNamed("/l/fjord-demo/sales", { ...mine, found: { podId: null, org: null } }), { kind: "plain", path: "/l/" + SALES, asked: false });

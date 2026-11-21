@@ -208,7 +208,7 @@ export function OutcomesShell() {
     });
     /* A lookup that failed outright opens nothing, as one that found nothing
        does: there is no id to show a door for. */
-    const found = useMemo(() => lookup.data ?? (lookup.isError ? { podId: null, org: null } : undefined), [lookup.data, lookup.isError]);
+    const found = useMemo(() => lookup.data ?? (lookup.isError ? { podId: null, org: null, failed: true } : undefined), [lookup.data, lookup.isError]);
     const reading = useMemo(
         () => readNamed(path, { orgs: orgs.data ?? null, orgId, names, found }),
         [path, orgs.data, orgId, names, found],
@@ -891,7 +891,7 @@ export function OutcomesShell() {
                     <span className="ox-topbar__org">{org?.name ?? "Lemma"}</span>
                     <button type="button" className="ox-topbar__find" aria-label="Ask or find" onClick={() => openPalette(podOfView(view))}><Icon name="search" size={16} /></button>
                 </header>
-                <main className={"ox-main" + (fills(view) ? " ox-main--fill" : "") + (calling ? " ox-main--calling" : "")}>
+                <main className={"ox-main" + (fills(view) && !nowhere ? " ox-main--fill" : "") + (calling ? " ox-main--calling" : "")}>
                     {/* A page that throws while drawing takes down itself and
                         nothing else; the next address draws again. Each kept
                         app has its own, so one breaking leaves the rest. */}
@@ -902,7 +902,9 @@ export function OutcomesShell() {
                     {kept.map((one) => {
                         const keptPod = withPeople.find((candidate) => candidate.id === one.podId) ?? one.pod;
                         if (!keptPod) return null;
-                        const shown = Boolean(pod) && view.name === "app" && view.podId === one.podId && view.app === one.app;
+                        /* A link that opens nothing keeps the last view but
+                           shows only what it says. */
+                        const shown = !nowhere && Boolean(pod) && view.name === "app" && view.podId === one.podId && view.app === one.app;
                         return (
                             <div key={one.podId + "/" + one.app} className="ox-keep" hidden={!shown}>
                                 <PageBoundary at={shown ? path : "away"}>

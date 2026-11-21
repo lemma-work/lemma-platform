@@ -150,3 +150,16 @@ async def test_a_word_two_pods_make_names_neither(
     assert await _find(authenticated_client, handle, f"field-ops-{tag}") == 404
     # A deleted pod's name names nothing.
     assert await _find(authenticated_client, handle, f"gone-{tag}") == 404
+
+
+async def test_a_name_is_ascii_so_sql_makes_the_word_the_app_writes(
+    authenticated_client: AsyncClient, fixed_test_org
+):
+    # The app folds an accent away (`slug`), as `lemma_word` does; the SQL in
+    # `named_pods` cannot. That is sound only while no pod name has one: if
+    # this starts passing, the lookup has to fold as well.
+    response = await authenticated_client.post(
+        "/pods",
+        json={"organization_id": fixed_test_org["id"], "name": "Café Nord"},
+    )
+    assert response.status_code == 400, response.text

@@ -2,8 +2,10 @@
 
 The word is made in SQL the way ``domain.pod_addresses.lemma_word`` makes it,
 so the organization's pods are not read into memory to find one. Pod names
-are letters, digits, spaces, hyphens and underscores (``pod_names``), so the
-Unicode folding the Python rule adds has nothing to fold here.
+are ASCII letters, digits, spaces, hyphens and underscores: ``pod_names``
+holds every create and rename to that (``PodService._normalize_name``). So the
+Unicode folding the Python rule adds has nothing to fold here. Allow anything
+wider and this has to fold too; ``test_pod_by_name_e2e`` fails first.
 """
 
 from __future__ import annotations
