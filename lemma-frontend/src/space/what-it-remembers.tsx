@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { source, type LibraryItem, type Pod } from "@/data";
 import { listStamp } from "@/data/stamp";
 import { isForbidden, isMissing } from "@/session/auth-state";
-import { changedLately, listIfThere, MEMORY_FOLDERS, notesFrom } from "@/thread/memory-notes";
+import { changedLately, listIfThere, MEMORY_FOLDERS, notesFrom, type MemoryNote } from "@/thread/memory-notes";
 
 /** The datastore's answer for a folder that is not there: a 400 with this
  *  sentence, not a 404. */
@@ -15,9 +15,15 @@ function isNoSuchFolder(problem: unknown): boolean {
 }
 
 /** The notes themselves, shared by the section and the line about it on
- *  About's overview, so drawing both costs one walk of the folders. */
-export function useMemoryNotes(pod: Pod) {
+ *  About's overview, so drawing both costs one walk of the folders.
+ *
+ *  `poll` reads them again on an interval, for a page waiting on the Lemma
+ *  to write down something it was just told; as a function it is asked
+ *  after each read, so the waiting stops once the note is there. */
+export function useMemoryNotes(pod: Pod, options: { poll?: number | false | ((notes: MemoryNote[] | undefined) => number | false) } = {}) {
+    const { poll = false } = options;
     return useQuery({
+        refetchInterval: typeof poll === "function" ? (query) => poll(query.state.data) : poll,
         queryKey: ["memory-notes", pod.id],
         queryFn: async () => {
             /* One listing per folder per query, however many of the walks

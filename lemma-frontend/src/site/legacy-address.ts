@@ -15,6 +15,7 @@ export const SETTINGS: readonly SettingsSection[] = [
     "this-mac-sharing",
     "this-mac-updates",
     "this-mac-advanced",
+    "help",
 ];
 export function settingsFromQuery(
     value: string | null,

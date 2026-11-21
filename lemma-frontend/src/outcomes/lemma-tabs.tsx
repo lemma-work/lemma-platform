@@ -4,7 +4,6 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { source, type Pod } from "@/data";
 import { PAGE_TEMPLATES, makePage } from "@/docpages/templates";
-import { Library } from "@/library/library";
 import { readableName } from "@/library/reading";
 import { sinceShort } from "@/channels/model";
 import { AddPeople } from "@/shell/add-people";
@@ -14,6 +13,9 @@ import { closeMenu } from "./lemma-bar";
 import { useLemmaPages, useLemmaTables } from "./lemma-head";
 import { pageTitle, type Go } from "./model";
 import { Empty, Icon, to } from "./parts";
+import { Calm, Problem } from "./calm";
+import { TryAgain, codeOf } from "./read-again";
+import { SkeletonRows } from "@/ui/skeleton";
 
 /** A page made and opened with the caret in it, named the way a person
  *  would -- Untitled, then Untitled 2 -- against what /pages already holds.
@@ -21,10 +23,11 @@ import { Empty, Icon, to } from "./parts";
 export function useNewPage(pod: Pod, go: Go) {
     const cache = useQueryClient();
     const [making, setMaking] = useState<string | null>(null);
-    const [failed, setFailed] = useState(false);
+    /* The page that couldn't be made, to try again with. */
+    const [failed, setFailed] = useState<{ id: string; base: string; text: string } | null>(null);
     const make = async (id: string, base: string, text: string) => {
         setMaking(id);
-        setFailed(false);
+        setFailed(null);
         try {
             /* With no listing, names are found by trying. */
             const taken = await source.listLibrary(pod.id, "files", "/pages")
@@ -35,7 +38,7 @@ export function useNewPage(pod: Pod, go: Go) {
             void cache.invalidateQueries({ queryKey: ["lemma-pages", pod.id] });
             go({ name: "file", podId: pod.id, path });
         } catch {
-            setFailed(true);
+            setFailed({ id, base, text });
         } finally {
             setMaking(null);
         }
@@ -49,7 +52,11 @@ function NewPageMenu({ pod, go }: { pod: Pod; go: Go }) {
     const mate = pod.teammate?.name || pod.name;
     return (
         <div className="ox-make">
-            {failed && <span className="ox-make__note" role="alert">That page couldn’t be made. Try again.</span>}
+            {failed && (
+                <div className="ox-make__note">
+                    <Problem retrying={Boolean(making)} onRetry={() => void make(failed.id, failed.base, failed.text)}>Couldn’t make that page.</Problem>
+                </div>
+            )}
             <details className="ox-more">
                 <summary className="ox-btn ox-btn--small" aria-label="New page">{making ? "Making…" : "New page"}<Icon name="chevron" size={14} /></summary>
                 <div className="ox-more__menu" role="menu">
@@ -75,8 +82,12 @@ export function PagesTab({ pod, go, actions }: { pod: Pod; go: Go; actions: Fram
                 <span className="ox-vs">{pages.isSuccess ? `${list.length} ${list.length === 1 ? "page" : "pages"}` : ""}</span>
                 <NewPageMenu pod={pod} go={go} />
             </div>
-            {pages.isPending ? <p className="ox-loading">Reading its pages…</p>
-                : pages.isError ? <Empty title="Couldn’t read its pages."><button type="button" className="ox-btn" onClick={() => void pages.refetch()}>Try again</button></Empty>
+            {pages.isPending ? <SkeletonRows label={`Reading ${pod.name}’s pages`} rows={5} slow={`Still reading ${pod.name}’s pages. It’s slower than usual.`} />
+                : pages.isError ? (
+                    <Calm tone="warn" title={`Couldn’t read ${pod.name}’s pages`} note={codeOf(pages.error)} actions={<TryAgain busy={pages.isFetching} onClick={() => void pages.refetch()} />}>
+                        Nothing in them changed. You can still make a new page.
+                    </Calm>
+                )
                 : list.length === 0 ? (
                     <Empty title="No pages yet.">
                         <p>Write one, bring your Notion pages in, or ask {pod.name} to write one.</p>
@@ -110,8 +121,12 @@ export function TablesTab({ pod, go, actions }: { pod: Pod; go: Go; actions: Fra
                 <span className="ox-vs">{tables.isSuccess ? `${list.length} ${list.length === 1 ? "table" : "tables"}` : ""}</span>
                 <button type="button" className="ox-btn ox-btn--small" onClick={() => actions.prompt(pod.id, "Set up a table to track ")}>New table</button>
             </div>
-            {tables.isPending ? <p className="ox-loading">Reading its tables…</p>
-                : tables.isError ? <Empty title="Couldn’t read its tables."><button type="button" className="ox-btn" onClick={() => void tables.refetch()}>Try again</button></Empty>
+            {tables.isPending ? <SkeletonRows label={`Reading ${pod.name}’s tables`} rows={5} slow={`Still reading ${pod.name}’s tables. It’s slower than usual.`} />
+                : tables.isError ? (
+                    <Calm tone="warn" title={`Couldn’t read ${pod.name}’s tables`} note={codeOf(tables.error)} actions={<TryAgain busy={tables.isFetching} onClick={() => void tables.refetch()} />}>
+                        Nothing in them changed. The list of them didn’t come through just now.
+                    </Calm>
+                )
                 : list.length === 0 ? (
                     <Empty title="No tables yet.">
                         <p>Bring one in from Airtable or a sheet, or ask {pod.name} to make one.</p>
@@ -132,19 +147,6 @@ export function TablesTab({ pod, go, actions }: { pod: Pod; go: Go; actions: Fra
                     </ul>
                 )}
         </div>
-    );
-}
-
-/** Its files, as a drive holds them: the workspace's own file list, without
- *  a title of its own or the tables the Tables tab has. */
-export function FilesTab({ pod, go }: { pod: Pod; go: Go }) {
-    return (
-        <Library
-            podId={pod.id}
-            bare
-            onFile={(path) => go({ name: "file", podId: pod.id, path })}
-            onTable={(name) => go({ name: "table", podId: pod.id, table: name })}
-        />
     );
 }
 

@@ -83,67 +83,57 @@ button {
     color: var(--accent);
 }
 
+/* The older button, kept for the many places that use it, now drawn as the
+   kit's small button (kit.css): 32px, outlined; primary is ink, danger is
+   red and only ever the last step. */
 .btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    font-size: 12.5px;
-    border-radius: 9px;
-    padding: 8px 14px;
-    cursor: pointer;
+    gap: 7px;
+    min-height: 32px;
+    padding: 0 12px;
     border: 1px solid var(--line-2);
+    border-radius: 9px;
     background: var(--paper);
     color: var(--ink);
-    box-shadow: var(--depth-rest), var(--edge-lit);
-    transition: border-color 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 140ms, border-color 140ms, opacity 140ms;
 }
 .btn > svg {
     flex-shrink: 0;
 }
-.btn:hover {
-    border-color: var(--ink-3);
-    box-shadow: var(--depth-raise), var(--edge-lit);
+.btn:hover:not(:disabled) {
+    background: var(--wash-b);
 }
-/* Pressed means pressed: it goes down and loses its shadow. */
-.btn:active {
-    transform: translateY(1px);
-    box-shadow: var(--depth-well);
+.btn:disabled {
+    opacity: 0.35;
+    cursor: default;
 }
-/* Inside a pod the primary action is printed in that teammate's own field, so
-   the button, the header band and the badge are one colour. Outside one — org
-   settings, the hiring floor before a pick, any dialog that belongs to the app
-   rather than to somebody — `--field` is the press tone and `.screen` sets
-   aubergine.
-
-   **`--field` and `--field-ink` are a pair and are always set together.**
-   `tokens.css` defines both on `:root`; every override — `.screen`,
-   `.newface`, the rail and profile styles in `shell.tsx`, `hiring.tsx` and
-   `profile.tsx` — sets both. Nothing here falls back to `var(--accent)` with
-   white on it, and that is not tidiness: white on `--accent` measures 2.7:1
-   on violet in dark and 1.21:1 on ink, so a fallback that fired would be an
-   invisible button rather than an off-brand one. Filling with an accent means
-   taking its paired ink with it. */
 .btn--primary {
-    background: var(--field);
-    border-color: var(--field);
-    color: var(--field-ink);
-    box-shadow: var(--depth-rest), var(--edge-dark);
+    border-color: transparent;
+    background: var(--ink);
+    color: var(--paper);
 }
 .btn--primary:hover:not(:disabled) {
-    filter: brightness(1.06);
-    box-shadow: var(--depth-raise), var(--edge-dark);
+    background: var(--ink);
+    opacity: 0.88;
 }
-/* The only irreversible act in the app so far. It is filled rather than
-   outlined because it is the confirming button in a pair, and an outlined one
-   beside "Keep it" leaves the pair with no answer to which is which. */
 .btn--danger {
+    border-color: transparent;
     background: var(--bad);
-    border-color: var(--bad);
     color: var(--on-bad);
 }
-.btn--danger:hover {
-    filter: brightness(1.06);
+.btn--danger:hover:not(:disabled) {
+    background: var(--bad);
+    opacity: 0.88;
+}
+.btn--quiet {
+    border-color: transparent;
+    background: transparent;
+    color: var(--ink-2);
 }
 
 table {

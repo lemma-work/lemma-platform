@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ChevronDownIcon, ChevronRightIcon, GlobeIcon, LockIcon } from "@/ui/icons";
 import { useForgetWebLogin, useWebLogins, type WebLogin } from "./queries";
 import { groupSites, loginNote, saidSoFor } from "./logins";
+import { ConfirmDialog } from "@/shell/confirm-dialog";
 
 /** The sites your teammate's browser is signed in to.
  *
@@ -130,25 +131,23 @@ function Row({ login, forgetting, busy, onAsk, onKeep, onForget }: {
     onKeep: () => void;
     onForget: () => void;
 }) {
-    if (forgetting) {
-        /* Named, and with what it means said out loud, rather than "are you
-           sure?" — which is a question nobody has ever read. A teammate
-           mid-run on this site is the case worth warning about. */
-        return (
-            <div className="logins__row logins__row--asking" role="alertdialog" aria-label={"Sign out of " + login.site}>
-                <p>
-                    Sign the browser out of <strong>{login.site}</strong>? Any work there will ask for you
-                    again.
-                </p>
-                <div className="logins__actions">
-                    <button className="btn btn--danger" disabled={busy} onClick={onForget}>
-                        {busy ? "Signing out…" : "Sign out"}
-                    </button>
-                    <button className="btn" disabled={busy} onClick={onKeep}>Keep it</button>
-                </div>
-            </div>
-        );
-    }
+    /* Named, and with what it means said out loud, rather than "are you
+       sure?" — which is a question nobody has ever read. A teammate mid-run
+       on this site is the case worth warning about. The row stays in place
+       under the question, so what is being asked about is still in view. */
+    const asking = forgetting && (
+        <ConfirmDialog
+            title={"Sign out of " + login.site + "?"}
+            line="Any work there will ask for you again."
+            confirm="Sign out"
+            cancel="Keep it"
+            working="Signing out…"
+            danger
+            busy={busy}
+            onConfirm={onForget}
+            onClose={onKeep}
+        />
+    );
 
     return (
         <div className="logins__row">
@@ -158,6 +157,7 @@ function Row({ login, forgetting, busy, onAsk, onKeep, onForget }: {
                 <small>{loginNote(login, new Date())}</small>
             </span>
             <button className="computer-inline" onClick={onAsk}>Sign out</button>
+            {asking}
         </div>
     );
 }

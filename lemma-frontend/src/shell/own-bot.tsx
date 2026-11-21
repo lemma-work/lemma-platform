@@ -5,6 +5,8 @@ import type { AccountConnect, Connectable, Pod, SlackAppWorkspace } from "@/data
 import { CheckIcon, CopyIcon, ExternalIcon, RefreshIcon } from "@/ui/icons";
 import { completionPath, hereWith, openAuthorization } from "@/connect/round-trip";
 import { copyText } from "@/desktop/clipboard";
+import { Problem } from "@/outcomes/calm";
+import { NOT_A_LOGIN, SecretInput } from "@/ui/form";
 
 /** Giving a teammate a bot of its own.
  *
@@ -27,7 +29,8 @@ function Copyable({ text, label }: { text: string; label: string }) {
     const [copied, setCopied] = useState(false);
     return (
         <button
-            className="btn"
+            type="button"
+            className="b b--s b--secondary"
             onClick={() => {
                 copyText(text)
                     .then(() => {
@@ -61,7 +64,7 @@ export function OwnBot({
         queryKey: ["slack-app-workspaces", pod.id],
         queryFn: () => source.slackAppWorkspaces(pod.id),
     });
-    const handIt = <button className="linkish" onClick={() => setByHand(true)}>Make the app by hand instead</button>;
+    const handIt = <button type="button" className="b b--s b--quiet" onClick={() => setByHand(true)}>Make the app by hand instead</button>;
 
     if (byHand || workspaces.isError) return <ByHand entry={entry} pod={pod} onDone={onDone} />;
     if (workspaces.isPending) {
@@ -118,10 +121,10 @@ function LetLemmaMakeApps({
     return (
         <div className="ownbot">
             {expired && (
-                <p className="approval__error">
+                <Problem>
                     Slack no longer accepts the token saved for {expired.teamName || expired.teamId}. Generate a
                     new one and paste its refresh token.
-                </p>
+                </Problem>
             )}
             <p>
                 Let Lemma make Slack apps in your workspace, and {pod.teammate.name}&rsquo;s bot is one click. On
@@ -129,31 +132,30 @@ function LetLemmaMakeApps({
                 pick the workspace, and paste the refresh token here. You do this once per workspace. The token is
                 yours: Slack makes every app as you, so its owners include you.
             </p>
-            <div className="ownbot__fields">
-                <label>
-                    <span>Refresh token</span>
-                    <input
-                        type="password"
-                        value={refreshToken}
-                        autoComplete="off"
-                        placeholder="xoxe-1-…"
-                        onChange={(event) => setRefreshToken(event.target.value)}
-                    />
-                </label>
+            <div className="kfield">
+                <label htmlFor="ownbot-refresh-token">Refresh token</label>
+                <SecretInput
+                    id="ownbot-refresh-token"
+                    label="refresh token"
+                    value={refreshToken}
+                    placeholder="xoxe-1-…"
+                    onChange={(event) => setRefreshToken(event.target.value)}
+                />
             </div>
+            {save.isError && <Problem>{save.error.message}</Problem>}
             <div className="ownbot__acts">
-                <a className="btn" href={SLACK_APPS} target="_blank" rel="noreferrer">
-                    Open Slack apps <ExternalIcon size={13} />
-                </a>
                 <button
-                    className="btn btn--primary"
+                    type="button"
+                    className="b b--m b--primary"
                     disabled={!refreshToken.trim() || save.isPending}
                     onClick={() => save.mutate()}
                 >
                     {save.isPending ? "Checking with Slack…" : "Save"}
                 </button>
+                <a className="b b--m b--secondary" href={SLACK_APPS} target="_blank" rel="noreferrer">
+                    Open Slack apps <ExternalIcon size={13} />
+                </a>
             </div>
-            {save.isError && <p className="approval__error">{save.error.message}</p>}
         </div>
     );
 }
@@ -209,12 +211,13 @@ function MadeByLemma({
                     {!made && (
                         <div className="ownbot__acts">
                             {workspaces.length > 1 && (
-                                <select value={teamId} onChange={(event) => setTeamId(event.target.value)}>
+                                <select className="kinput kset-input" aria-label="Slack workspace" value={teamId} onChange={(event) => setTeamId(event.target.value)}>
                                     {workspaces.map((one) => <option key={one.teamId} value={one.teamId}>{where(one)}</option>)}
                                 </select>
                             )}
                             <button
-                                className="btn btn--primary"
+                                type="button"
+                                className="b b--s b--primary"
                                 disabled={create.isPending}
                                 onClick={() => { setError(null); create.mutate(); }}
                             >
@@ -245,7 +248,7 @@ function MadeByLemma({
                     )}
                 </li>
             </ol>
-            {error && <p className="approval__error">{error}</p>}
+            {error && <Problem>{error}</Problem>}
         </div>
     );
 }
@@ -276,14 +279,15 @@ function Authorise({
     return (
         <div className="ownbot__acts">
             <button
-                className="btn btn--primary"
+                type="button"
+                className="b b--s b--primary"
                 /* With an opener, so the finished tab reports
                    back and closes instead of reloading the app. */
                 onClick={() => openAuthorization(authorization.authorizeUrl, entry.title)}
             >
                 Authorise <ExternalIcon size={13} />
             </button>
-            <button className="btn" disabled={finish.isPending} onClick={() => finish.mutate()}>
+            <button type="button" className="b b--s b--secondary" disabled={finish.isPending} onClick={() => finish.mutate()}>
                 <RefreshIcon size={13} /> {finish.isPending ? "Connecting…" : "Finish connection"}
             </button>
         </div>
@@ -351,9 +355,9 @@ function ByHand({
                     {step === 0 && (
                         <div className="ownbot__acts">
                             {manifest.isPending && <span className="guided__wait"><RefreshIcon size={13} /> Fetching…</span>}
-                            {manifest.isError && <span className="reachrow__error">The manifest could not be read.</span>}
+                            {manifest.isError && <Problem onRetry={() => void manifest.refetch()}>Couldn’t read the manifest.</Problem>}
                             {text && <Copyable text={text} label="Copy manifest" />}
-                            <button className="btn btn--primary" disabled={!text} onClick={() => setStep(1)}>
+                            <button type="button" className="b b--s b--primary" disabled={!text} onClick={() => setStep(1)}>
                                 Next
                             </button>
                         </div>
@@ -368,10 +372,10 @@ function ByHand({
                     </p>
                     {step === 1 && (
                         <div className="ownbot__acts">
-                            <a className="btn btn--primary" href={SLACK_APPS} target="_blank" rel="noreferrer">
+                            <a className="b b--s b--primary" href={SLACK_APPS} target="_blank" rel="noreferrer">
                                 Open Slack apps <ExternalIcon size={13} />
                             </a>
-                            <button className="linkish" onClick={() => setStep(2)}>Done that</button>
+                            <button type="button" className="b b--s b--secondary" onClick={() => setStep(2)}>Done that</button>
                         </div>
                     )}
                 </li>
@@ -384,32 +388,44 @@ function ByHand({
                     </p>
                     {step === 2 && (
                         <>
-                            <div className="ownbot__fields">
-                                <label>
-                                    <span>Client ID</span>
+                            <div className="kform ownbot__fields">
+                                <div className="kfield">
+                                    <label htmlFor="ownbot-client-id">Client ID</label>
                                     <input
+                                        id="ownbot-client-id"
+                                        className="kinput kset-input"
                                         value={clientId}
                                         autoComplete="off"
+                                        {...NOT_A_LOGIN}
+                                        spellCheck={false}
                                         onChange={(event) => setClientId(event.target.value)}
                                     />
-                                </label>
-                                <label>
-                                    <span>Client secret</span>
-                                    <input
-                                        type="password"
+                                </div>
+                                <div className="kfield">
+                                    <label htmlFor="ownbot-client-secret">Client secret</label>
+                                    <SecretInput
+                                        id="ownbot-client-secret"
+                                        className="kset-input"
+                                        label="client secret"
                                         value={secret}
-                                        autoComplete="off"
                                         onChange={(event) => setSecret(event.target.value)}
                                     />
-                                </label>
-                                <label>
-                                    <span>Signing secret</span>
-                                    <input type="password" autoComplete="off" value={signingSecret} onChange={event => setSigningSecret(event.target.value)} />
-                                </label>
+                                </div>
+                                <div className="kfield">
+                                    <label htmlFor="ownbot-signing-secret">Signing secret</label>
+                                    <SecretInput
+                                        id="ownbot-signing-secret"
+                                        className="kset-input"
+                                        label="signing secret"
+                                        value={signingSecret}
+                                        onChange={(event) => setSigningSecret(event.target.value)}
+                                    />
+                                </div>
                             </div>
                             <div className="ownbot__acts">
                                 <button
-                                    className="btn btn--primary"
+                                    type="button"
+                                    className="b b--s b--primary"
                                     disabled={(!installId && (!clientId.trim() || !secret.trim() || !signingSecret.trim())) || register.isPending}
                                     onClick={() => {
                                         setError(null);
@@ -432,7 +448,7 @@ function ByHand({
                 </li>
             </ol>
 
-            {error && <p className="approval__error">{error}</p>}
+            {error && <Problem>{error}</Problem>}
         </div>
     );
 }

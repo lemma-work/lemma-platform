@@ -456,6 +456,7 @@ export function MakeOne({
                 disabled={busy || !ready}
                 onClick={() => onMake(kind === "team" ? teamWanted() : {
                     name: personalName,
+                    personal: true,
                     /* A name nobody typed. `resolve_name_conflicts` exists for
                        exactly this: a second Alice should get a workspace, not
                        a 409 about a name she never chose. */

@@ -78,7 +78,7 @@ async function fixture(t, { signedIn = false, verified = false } = {}) {
             assert.equal(body.challenge_id, state.challengeId);
             state.codeVerifies++;
             if (state.verifyError) return json(state.verifyError, 403);
-            if (body.code !== '123456') return json({ message: 'The code did not match; try again' }, 400);
+            if (body.code !== '123456') return json({ code: 'EMAIL_CODE_INVALID', message: 'The code did not match; try again' }, 400);
             state.signedIn = true;
             state.verified = true;
             if (state.failAfterCode) state.blockedAccess = true;
@@ -118,9 +118,13 @@ async function fixture(t, { signedIn = false, verified = false } = {}) {
 }
 
 const start = '/auth?redirect_uri=' + encodeURIComponent('/destination?view=files#section');
+// "Your email", "Your work email", "The email on your account": the label says
+// which address it wants, so the tests find it by what it is.
+const emailField = page => page.getByLabel(/^(Your( work)? email|The email)/);
+const codeBox = page => page.getByLabel('Digit 1', { exact: true });
 async function submit(page, label = 'Make my account') {
     if (!(await page.getByLabel('Password', { exact: true }).isVisible())) await page.getByRole('button', { name: 'Use a password instead' }).click();
-    await page.getByLabel('Email', { exact: true }).fill('person@example.test');
+    await emailField(page).fill('person@example.test');
     await page.getByLabel('Password', { exact: true }).fill('ExamplePassword123!');
     await page.getByRole('button', { name: label, exact: true }).click();
 }
@@ -152,8 +156,8 @@ test('password reset preserves the destination through the emailed link in the s
     const { page, state } = await fixture(t, { verified: true });
     await page.goto(origin + start);
     await page.getByRole('button', { name: 'Use a password instead' }).click();
-    await page.getByRole('link', { name: 'Forgotten your password?' }).click();
-    await page.getByLabel('Email', { exact: true }).fill('person@example.test');
+    await page.getByRole('link', { name: 'Forgot your password?' }).click();
+    await emailField(page).fill('person@example.test');
     await page.getByRole('button', { name: 'Email me a link' }).click();
     await page.getByRole('heading', { name: 'Check your email', exact: true }).waitFor();
     await page.goto(origin + '/auth/reset-password?token=example-token');
@@ -168,7 +172,7 @@ test('password reset preserves the destination through the emailed link in the s
 test('legacy signup links show account creation', async t => {
     const { page } = await fixture(t);
     await page.goto(origin + '/auth?show=signup');
-    await page.getByRole('heading', { name: 'Make an account', exact: true }).waitFor();
+    await page.getByRole('heading', { name: 'Make your account', exact: true }).waitFor();
 });
 
 test('unverified sessions resume verification', async t => {
@@ -204,14 +208,14 @@ for (const path of ['/auth', '/auth/signup']) {
     test(`email code from ${path} verifies and returns without a password or verification email`, async t => {
         const { page, state } = await fixture(t);
         await page.goto(origin + path + '?redirect_uri=%2Fdestination%3Fview%3Dfiles%23section');
-        await page.getByLabel('Email', { exact: true }).fill('person@example.test');
+        await emailField(page).fill('person@example.test');
         assert.equal(await page.getByLabel('Password', { exact: true }).count(), 0);
-        await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
-        await page.getByLabel('Verification code').fill('000000');
-        await page.getByRole('button', { name: 'Verify and continue' }).click();
-        await page.getByRole('alert').filter({ hasText: 'did not match' }).waitFor();
-        await page.getByLabel('Verification code').fill('123456');
-        await page.getByRole('button', { name: 'Verify and continue' }).click();
+        await page.getByRole('button', { name: 'Continue', exact: true }).click();
+        // Six boxes, sent as soon as the sixth digit is in; a whole code typed
+        // or pasted into the first spreads across them.
+        await codeBox(page).fill('000000');
+        await page.getByRole('alert').filter({ hasText: /didn.t match/ }).waitFor();
+        await codeBox(page).fill('123456');
         await page.waitForURL(origin + '/destination?view=files#section');
         assert.equal(state.nonceRequests, 1);
         assert.equal(state.codeSends, 1);
@@ -225,15 +229,16 @@ test('resending replaces the challenge and keeps the browser binding', async t =
     const { page, state } = await fixture(t);
     await page.clock.install();
     await page.goto(origin + start);
-    await page.getByLabel('Email', { exact: true }).fill('person@example.test');
-    await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
-    await page.getByLabel('Verification code').waitFor();
-    assert.equal(await page.getByRole('button', { name: /Resend in/ }).isEnabled(), false);
+    await emailField(page).fill('person@example.test');
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await codeBox(page).waitFor();
+    await page.getByText(/Send a new code in/).waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Send a new code', exact: true }).count(), 0);
     await page.clock.fastForward(61_000);
-    await page.getByRole('button', { name: 'Resend code', exact: true }).click();
-    await page.getByRole('button', { name: /Resend in/ }).waitFor();
-    await page.getByLabel('Verification code').fill('123456');
-    await page.getByRole('button', { name: 'Verify and continue' }).click();
+    await page.getByRole('button', { name: 'Send a new code', exact: true }).click();
+    await page.getByRole('status').filter({ hasText: 'New code sent' }).waitFor();
+    await page.getByText(/Send a new code in/).waitFor();
+    await codeBox(page).fill('123456');
     await page.waitForURL(origin + '/destination?view=files#section');
     assert.equal(state.nonceRequests, 1);
     assert.equal(state.codeSends, 2);
@@ -243,10 +248,9 @@ test('a failed post-code account check retries completion without consuming the 
     const { page, state } = await fixture(t);
     state.failAfterCode = true;
     await page.goto(origin + start);
-    await page.getByLabel('Email', { exact: true }).fill('person@example.test');
-    await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
-    await page.getByLabel('Verification code').fill('123456');
-    await page.getByRole('button', { name: 'Verify and continue' }).click();
+    await emailField(page).fill('person@example.test');
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await codeBox(page).fill('123456');
     await page.getByRole('alert').filter({ hasText: 'check your account' }).waitFor();
     state.blockedAccess = false;
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
@@ -259,8 +263,8 @@ for (const provider of ["google", "active-directory"]) {
         const { page, state } = await fixture(t, { verified: true });
         state.method = "thirdparty"; state.provider = provider;
         await page.goto(origin + start);
-        await page.getByLabel('Email', { exact: true }).fill('person@example.test');
-        await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
+        await emailField(page).fill('person@example.test');
+        await page.getByRole('button', { name: 'Continue', exact: true }).click();
         await page.getByText(/This email signs in with/).waitFor();
         const name = provider === "google" ? "Google" : "Microsoft";
         await page.locator('form').getByRole('button', { name: 'Continue with ' + name }).click();
@@ -274,10 +278,11 @@ test('existing password account on signup signs in instead of creating a duplica
     const { page, state } = await fixture(t, { verified: true });
     state.method = 'password';
     await page.goto(origin + '/auth/signup?redirect_uri=%2Fdestination');
-    await page.getByLabel('Email', { exact: true }).fill('person@example.test');
-    await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
+    await emailField(page).fill('person@example.test');
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
     await page.getByLabel('Password', { exact: true }).fill('ExamplePassword123!');
-    assert.equal(await page.getByLabel('Email', { exact: true }).inputValue(), 'person@example.test');
+    // The address it was typed as, in the chip over the password.
+    await page.getByText('person@example.test', { exact: true }).waitFor();
     await page.getByRole('button', { name: 'Sign in', exact: true }).click();
     await page.waitForURL(origin + '/destination');
     assert.equal(state.signups, 0); assert.equal(state.codeSends, 0);
@@ -286,40 +291,38 @@ test('existing password account on signup signs in instead of creating a duplica
 test('correcting an email abandons its challenge without waiting for resend cooldown', async t => {
     const { page, state } = await fixture(t);
     await page.goto(origin + start);
-    await page.getByLabel('Email', { exact: true }).fill('typo@example.test');
-    await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
-    await page.getByRole('button', { name: 'Change email', exact: true }).click();
-    await page.getByLabel('Email', { exact: true }).fill('correct@example.test');
-    await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
-    await page.getByLabel('Verification code').waitFor();
+    await emailField(page).fill('typo@example.test');
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await page.getByRole('button', { name: 'Use another email', exact: true }).click();
+    await emailField(page).fill('correct@example.test');
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await codeBox(page).waitFor();
     assert.equal(state.abandoned, 'first-challenge'); assert.equal(state.codeSends, 2);
 });
 
 test('expired browser binding restarts email entry and mints a fresh nonce', async t => {
     const { page, state } = await fixture(t);
     await page.goto(origin + start);
-    await page.getByLabel('Email', { exact: true }).fill('person@example.test');
-    await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
+    await emailField(page).fill('person@example.test');
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
     state.verifyError = { code: 'EMAIL_LOGIN_EXPIRED', message: 'Login expired; start again in this browser.' };
-    await page.getByLabel('Verification code').fill('123456');
-    await page.getByRole('button', { name: 'Verify and continue' }).click();
+    await codeBox(page).fill('123456');
     await page.getByRole('alert').filter({ hasText: 'Login expired' }).waitFor();
-    assert.equal(await page.getByLabel('Email', { exact: true }).inputValue(), 'person@example.test');
+    assert.equal(await emailField(page).inputValue(), 'person@example.test');
     state.verifyError = null;
-    await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
-    await page.getByLabel('Verification code').waitFor();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await codeBox(page).waitFor();
     assert.equal(state.nonceRequests, 2);
 });
 
 test('a configuration refusal preserves the challenge instead of restarting on every 403', async t => {
     const { page, state } = await fixture(t);
     await page.goto(origin + start);
-    await page.getByLabel('Email', { exact: true }).fill('person@example.test');
-    await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
+    await emailField(page).fill('person@example.test');
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
     state.verifyError = { code: 'EMAIL_LOGIN_ORIGIN_NOT_ALLOWED', message: 'This email sign-in page is not configured for this service.' };
-    await page.getByLabel('Verification code').fill('123456');
-    await page.getByRole('button', { name: 'Verify and continue' }).click();
+    await codeBox(page).fill('123456');
     await page.getByRole('alert').filter({ hasText: 'not configured' }).waitFor();
-    assert.equal(await page.getByLabel('Verification code').count(), 1);
+    assert.equal(await codeBox(page).count(), 1);
     assert.equal(state.nonceRequests, 1);
 });

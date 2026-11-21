@@ -144,11 +144,11 @@ function FirstWorkspace({ title, onMade }: { title: string; onMade: () => void }
         }
     }
     return (
-        <ArrivalShell inline steps={["workspace"]} at="workspace" label="Your organization">
+        <ArrivalShell inline steps={[]} at={null} label="Your organization">
             <p className="ar__model">{LEMMA_IS}</p>
             <ul className="ar__rows">
                 <ArrivalRow mark={<OrgMark />} name="Your organization" line="Made for you, or your company’s if it’s already here." />
-                <ArrivalRow mark={<LemmaMark id={title} name={title} />} name="Its first Lemma" tag="Everyone" line={`${title} can go in here, or into a new Lemma.`} />
+                <ArrivalRow mark={<LemmaMark id={title} name={title} />} name="Its first Lemma" line={`${title} can go in here, or into a new Lemma.`} />
             </ul>
             <div className="ar__acts">
                 <button type="button" className="ar__btn ar__btn--primary" disabled={busy} onClick={() => void make()}>

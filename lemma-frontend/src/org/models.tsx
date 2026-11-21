@@ -42,15 +42,15 @@ import {
 } from "./provider-draft";
 import { AgentSettingsFields, EditAgentSettings } from "./agent-settings";
 import {
-    ComputerIcon,
     DownloadIcon,
     KeyIcon,
     PlusIcon,
     RefreshIcon,
     LemmaMark,
     TerminalIcon,
-    WarningIcon,
 } from "@/ui/icons";
+import { Problem } from "@/outcomes/calm";
+import { MoreSettings, NOT_A_LOGIN, SecretInput } from "@/ui/form";
 
 /** Everything a teammate in this organization can be run on.
  *
@@ -109,12 +109,19 @@ function computerPoll(computers: Computer[] | undefined): number {
     return unsettled ? 30_000 : 20_000;
 }
 
+/** What a row's thing is, in the kit's circle: its maker's logo where it
+ *  has one, Lemma's mark for the built-in models, else a terminal or a key. */
 function Mark({ runtime }: { runtime: { harness: string; kind: "key" | "agent"; scope?: string } }) {
     const logo = agentLogo(runtime.harness);
-    if (logo) return <img className="mrow__logo" src={logo} alt="" aria-hidden="true" />;
-    if (runtime.scope === "system") return <span className="mrow__mark"><LemmaMark size={14} /></span>;
-    if (runtime.kind === "agent") return <span className="mrow__mark"><TerminalIcon size={15} /></span>;
-    return <span className="mrow__mark"><KeyIcon size={15} /></span>;
+    if (logo) return <span className="kmark" aria-hidden="true"><img src={logo} alt="" /></span>;
+    if (runtime.scope === "system") return <span className="kmark" aria-hidden="true"><LemmaMark size={16} /></span>;
+    if (runtime.kind === "agent") return <span className="kmark" aria-hidden="true"><TerminalIcon /></span>;
+    return <span className="kmark" aria-hidden="true"><KeyIcon /></span>;
+}
+
+/** A tone, as the kit's status: a dot and a word. */
+function statusClass(tone: "ok" | "warn" | "muted"): string {
+    return tone === "ok" ? "kstatus" : tone === "warn" ? "kstatus kstatus--warn" : "kstatus kstatus--off";
 }
 
 /** One row, whatever fills it.
@@ -122,7 +129,8 @@ function Mark({ runtime }: { runtime: { harness: string; kind: "key" | "agent"; 
  *  A bought key, a coding agent on a laptop and an agent nobody has added yet
  *  are one row on purpose: the question the reader is asking is the same for
  *  all three — can a conversation pick this now — so they answer it in the
- *  same place, in the same words. */
+ *  same place, in the same words: what it is at the left, what it says in
+ *  the middle, what can be done and how it stands at the right. */
 function Row({
     mark,
     name,
@@ -149,25 +157,24 @@ function Row({
     result?: { ok: boolean; message: string } | null;
 }) {
     return (
-        <li className={"mrow" + (quiet ? " mrow--quiet" : "")}>
-            {mark}
-            <span className="mrow__body">
-                <span className="mrow__line">
-                    <span className="mrow__name">{name}</span>
-                    {detail && <span className="mrow__detail">{detail}</span>}
-                    {tag && <span className="pill">{tag}</span>}
+        <li className={"krow" + (quiet ? " kset-quiet" : "")}>
+            <span className="krow__lead">
+                {mark}
+                <span className="krow__v">
+                    <b>{name}</b>
+                    {detail && <span>{detail}</span>}
+                    {note && <span className="kset-under kset-long">{note}</span>}
+                    {result && (
+                        <span role="status" className={"kset-long" + (result.ok ? "" : " kset-said--bad")}>
+                            {result.message}
+                        </span>
+                    )}
                 </span>
-                {note && <span className="mrow__note">{note}</span>}
-                {result && (
-                    <span role="status" className={"mrow__note" + (result.ok ? "" : " reachrow__error")}>
-                        {result.message}
-                    </span>
-                )}
             </span>
-            {action}
-            <span className={"mrow__state mrow__state--" + tone}>
-                <i aria-hidden="true" />
-                {state}
+            <span className="krow__end">
+                {tag && <span className="ktag">{tag}</span>}
+                {action}
+                <span className={statusClass(tone)}>{state}</span>
             </span>
         </li>
     );
@@ -249,7 +256,7 @@ function RuntimeRow({
                almost everything lands, so labelling it would put an
                identical chip on every row and crowd out the one that says
                something: this one is yours alone. */
-            tag={isDefault ? "Default" : runtime.scope === "personal" ? "yours" : undefined}
+            tag={isDefault ? "Default" : runtime.scope === "personal" ? "Yours" : undefined}
             note={!runtime.archived && answering === false
                 ? "Nothing is answering at this address. Start the model server on this computer, then check again."
                 : undefined}
@@ -259,30 +266,33 @@ function RuntimeRow({
             result={result}
             action={
                 runtime.scope === "system" ? undefined : runtime.archived ? (
-                    <button className="linkish" disabled={restore.isPending} onClick={() => restore.mutate()}>
+                    <button type="button" className="b b--s b--secondary" disabled={restore.isPending} onClick={() => restore.mutate()}>
                         {restore.isPending ? "Bringing back…" : "Bring back"}
                     </button>
                 ) : confirming ? (
-                    <span className="mrow__confirm">
-                        <button className="btn" disabled={archive.isPending} onClick={() => archive.mutate()}>
+                    /* Red ink only once it has been asked for: a retired
+                       key can be brought back, so this is not the danger
+                       button. */
+                    <>
+                        <button type="button" className="b b--s b--secondary b--red" disabled={archive.isPending} onClick={() => archive.mutate()}>
                             {archive.isPending ? "Retiring…" : "Retire"}
                         </button>
-                        <button className="linkish" onClick={() => setConfirming(false)}>Keep</button>
-                    </span>
+                        <button type="button" className="b b--s b--quiet" onClick={() => setConfirming(false)}>Keep</button>
+                    </>
                 ) : (
-                    <span className="mrow__confirm">
+                    <>
                         {testable && (
-                            <button className="linkish" disabled={check.isPending} onClick={() => check.mutate()}>
+                            <button type="button" className="b b--s b--quiet" disabled={check.isPending} onClick={() => check.mutate()}>
                                 {check.isPending ? "Testing…" : "Test"}
                             </button>
                         )}
                         {canBeDefault && (
-                            <button className="linkish" disabled={makeDefault.isPending} onClick={() => makeDefault.mutate()}>
+                            <button type="button" className="b b--s b--quiet" disabled={makeDefault.isPending} onClick={() => makeDefault.mutate()}>
                                 {makeDefault.isPending ? "Saving…" : "Make default"}
                             </button>
                         )}
-                        <button className="linkish mrow__quiet" onClick={() => setConfirming(true)}>Retire</button>
-                    </span>
+                        <button type="button" className="b b--s b--quiet" onClick={() => setConfirming(true)}>Retire</button>
+                    </>
                 )
             }
         />
@@ -347,7 +357,7 @@ function AgentRow({
                     saved && saved.name !== agent.name ? agent.name : null,
                     modelCount(agent.models.length),
                 ].filter(Boolean).join(" · ")}
-                tag={saved?.scope === "personal" ? "yours" : saved?.scope === "org" ? "shared" : undefined}
+                tag={saved?.scope === "personal" ? "Yours" : saved?.scope === "org" ? "Shared" : undefined}
                 /* Said only when the computer itself is reachable. When it is
                    not, its own heading already said so, and repeating it under
                    every agent is the same sentence three times. */
@@ -365,19 +375,19 @@ function AgentRow({
                 quiet={!computer.online}
                 action={
                     saved?.archived ? (
-                        <button className="linkish" disabled={restore.isPending} onClick={() => restore.mutate()}>
+                        <button type="button" className="b b--s b--secondary" disabled={restore.isPending} onClick={() => restore.mutate()}>
                             {restore.isPending ? "Bringing back…" : "Bring back"}
                         </button>
                     ) : added && usable ? (
-                        <button className="linkish" onClick={() => setEditing(true)}>Settings</button>
+                        <button type="button" className="b b--s b--quiet" onClick={() => setEditing(true)}>Settings</button>
                     ) : added || !usable ? undefined : (
                         /* Offered only while that computer can actually take
                            it. Adding binds the runtime to the live agent — the
                            backend asks the machine what it offers — so a
                            sleeping laptop would mean filling in a dialog and
                            then failing on save. */
-                        <button className="btn mrow__add" onClick={() => setAdding(true)}>
-                            <PlusIcon size={13} /> Add
+                        <button type="button" className="b b--s b--secondary" onClick={() => setAdding(true)}>
+                            <PlusIcon /> Add
                         </button>
                     )
                 }
@@ -399,6 +409,8 @@ function AgentRow({
     );
 }
 
+/** Adding a coding agent a computer found, so Lemmas can pick it: its name,
+ *  its model and options, and whether anyone else here may use it. */
 function AddAgent({
     agent,
     computer,
@@ -432,31 +444,38 @@ function AddAgent({
     });
 
     return (
-        <Modal title={"Add " + agent.name} subtitle={"on " + computer.name} narrow onClose={onClose}>
-            <div className="field">
-                <label htmlFor="agent-name">Name</label>
-                <input id="agent-name" value={name} onChange={(event) => setName(event.target.value)} />
-            </div>
-            <AgentSettingsFields agent={agent} computer={computer} settings={settings} onChange={setSettings} />
-            <label className="check">
-                <input type="checkbox" checked={shared} onChange={(event) => setShared(event.target.checked)} />
-                <span>
-                    Let everyone in this organization pick it
-                    {/* The one setting here that hands your machine to other
-                        people, so it is off until it is read. */}
-                    <em>Runs on {computer.name}, signed in as you, with your files in reach.</em>
-                </span>
-            </label>
-            {error && <p className="reachrow__error">{error}</p>}
-            <div className="modal__acts">
-                <button className="linkish" onClick={onClose}>Cancel</button>
+        <Modal
+            title={"Add " + agent.name}
+            subtitle={"on " + computer.name}
+            onClose={onClose}
+            footer={<>
+                <button type="button" className="b b--l b--secondary" onClick={onClose}>Cancel</button>
                 <button
-                    className="btn btn--primary"
+                    type="button"
+                    className="b b--l b--primary"
                     disabled={add.isPending || !name.trim()}
                     onClick={() => { setError(""); add.mutate(); }}
                 >
                     {add.isPending ? "Adding…" : "Add"}
                 </button>
+            </>}
+        >
+            <div className="kset-form">
+                <label className="kfield">
+                    <span>Name</span>
+                    <input className="kinput" value={name} onChange={(event) => setName(event.target.value)} />
+                </label>
+                <AgentSettingsFields agent={agent} computer={computer} settings={settings} onChange={setSettings} />
+                <label className="kset-check">
+                    <input type="checkbox" checked={shared} onChange={(event) => setShared(event.target.checked)} />
+                    <span>
+                        Let everyone in this organization pick it
+                        {/* The one setting here that hands your machine to
+                            other people, so it is off until it is read. */}
+                        <em>Runs on {computer.name}, signed in as you, with your files in reach.</em>
+                    </span>
+                </label>
+                {error && <Problem>{error}</Problem>}
             </div>
         </Modal>
     );
@@ -465,6 +484,9 @@ function AddAgent({
 /** What a Test found: the route answered with these models, or it did not. */
 type Tested = { ok: true; models: string[] } | { ok: false; message: string };
 
+/** Connecting a provider's key: pick the provider, and the address fills in;
+ *  the key, and optionally which models and which of them read images. One
+ *  dialog, its two buttons at the foot. */
 function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => void; onAdded: () => void }) {
     const [preset, setPreset] = useState(PRESETS[0]);
     const [name, setName] = useState(PRESETS[0].name);
@@ -566,172 +588,197 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
     const toggleVision = (model: string) =>
         setVision((was) => (was.includes(model) ? was.filter((one) => one !== model) : [...was, model]));
 
+    const address = (
+        <div className="kfield">
+            <label htmlFor="add-key-address">API address</label>
+            <input
+                id="add-key-address"
+                className="kinput"
+                value={baseUrl}
+                placeholder="https://…"
+                spellCheck={false}
+                autoComplete="off"
+                {...NOT_A_LOGIN}
+                onChange={(event) => { setBaseUrl(event.target.value); setTested(null); }}
+            />
+            <small>Where {preset.name}&rsquo;s API answers. Filled in for you.</small>
+        </div>
+    );
+
     return (
-        <Modal title="Connect a key" subtitle="Billed to you, shared across this organization" narrow onClose={onClose}>
-            <div className="presets" role="group" aria-label="Provider">
-                {presets.map((one) => (
-                    <button
-                        key={one.id}
-                        className={"preset" + (one.id === preset.id ? " preset--on" : "")}
-                        aria-pressed={one.id === preset.id}
-                        onClick={() => pick(one)}
-                    >
-                        {one.name}
-                    </button>
-                ))}
-            </div>
-            <div className="field">
-                <label htmlFor="key-name">Name</label>
-                <input id="key-name" value={name} onChange={(event) => setName(event.target.value)} />
-            </div>
-            {google && (
-                <div className="field" role="group" aria-labelledby="google-signin">
-                    <label id="google-signin">Signs in with</label>
-                    <label className="check">
-                        <input type="radio" name="google-signin" checked={signIn === "VERTEX_AI"} onChange={() => setSignIn("VERTEX_AI")} />
-                        <span>A service account, on Vertex AI</span>
-                    </label>
-                    <label className="check">
-                        <input type="radio" name="google-signin" checked={signIn === "GEMINI_API"} onChange={() => setSignIn("GEMINI_API")} />
-                        <span>An API key, on the Gemini API</span>
-                    </label>
-                </div>
-            )}
-            {google && signIn === "VERTEX_AI" && (
-                <>
-                    <div className="field">
-                        <label htmlFor="google-keyfile">Service account key file</label>
-                        <input
-                            id="google-keyfile"
-                            type="file"
-                            accept="application/json,.json"
-                            onChange={(event) => void readKeyFile(event.target.files?.[0])}
-                        />
-                        <span>
-                            {readingKeyFile
-                                ? "Reading the key file…"
-                                : keyFile
-                                ? "Key file loaded. It is stored encrypted and never shown again."
-                                : "The JSON key of a service account with the Vertex AI User role."}
-                        </span>
-                    </div>
-                    <div className="field">
-                        <label htmlFor="google-project">Project <em>optional</em></label>
-                        <input id="google-project" value={project} placeholder="The key file's own" onChange={(event) => setProject(event.target.value)} />
-                    </div>
-                    <div className="field">
-                        <label htmlFor="google-location">Location</label>
-                        <input id="google-location" value={location} onChange={(event) => setLocation(event.target.value)} />
-                    </div>
-                </>
-            )}
-            {!google && (
-            <div className="field">
-                <label htmlFor="key-url">API base URL</label>
-                <input
-                    id="key-url"
-                    value={baseUrl}
-                    placeholder="https://…"
-                    onChange={(event) => { setBaseUrl(event.target.value); setTested(null); }}
-                />
-            </div>
-            )}
-            {(!google || signIn === "GEMINI_API") && (
-            <div className="field">
-                <label htmlFor="key-secret">API key{isLocalRoute(baseUrl) && <em> not needed on this computer</em>}</label>
-                <input
-                    id="key-secret"
-                    type="password"
-                    value={apiKey}
-                    autoComplete="off"
-                    onChange={(event) => { setApiKey(event.target.value); setTested(null); }}
-                />
-            </div>
-            )}
-            <div className="field">
-                <label htmlFor="key-models">Models <em>optional</em></label>
-                <input
-                    id="key-models"
-                    value={models}
-                    placeholder={google ? "gemini-4-hydrogen, gemini-4-argon" : "gpt-5, o3-mini"}
-                    onChange={(event) => setModels(event.target.value)}
-                />
-                <span>
-                    {google
-                        ? <>Comma separated. Left empty, Google&rsquo;s current Gemini models are offered.</>
-                        : <>Comma separated. Left empty, the provider&rsquo;s own list is used.</>}
-                </span>
-            </div>
-            {google && (
-                <div className="field">
-                    <label className="check">
-                        <input type="checkbox" checked={draws} onChange={(event) => setDraws(event.target.checked)} />
-                        <span>Agents can make images with this provider</span>
-                    </label>
-                    {draws && (
-                        <>
-                            <label htmlFor="google-image-models">Image models <em>optional</em></label>
-                            <input
-                                id="google-image-models"
-                                value={imageModels}
-                                placeholder="gemini-3.1-flash-image"
-                                onChange={(event) => setImageModels(event.target.value)}
-                            />
-                            <span>What agents draw with, billed per picture. Left empty, Google&rsquo;s current image model.</span>
-                        </>
-                    )}
-                </div>
-            )}
-            {canTest && (
-                <div className="field">
-                    <button
-                        className="linkish"
-                        disabled={test.isPending || !baseUrl.trim()}
-                        onClick={() => test.mutate()}
-                    >
-                        {test.isPending ? "Testing…" : "Test this key"}
-                    </button>
-                    {tested && (
-                        <span role="status" className={tested.ok ? undefined : "reachrow__error"}>
-                            {tested.ok
-                                ? "Connected. It lists " + tested.models.length + (tested.models.length === 1 ? " model." : " models.")
-                                : tested.message}
-                        </span>
-                    )}
-                </div>
-            )}
-            {/* Asked only where the route cannot say: an OpenAI-style model
-                list carries no modalities, and handing an image to a model
-                that cannot read one breaks the conversation. */}
-            {asksAboutImages(preset.protocol) && candidates.length > 0 && (
-                <div className="field" role="group" aria-labelledby="key-vision">
-                    <label id="key-vision">Reads images <em>optional</em></label>
-                    {candidates.map((model) => (
-                        <label className="check" key={model}>
-                            <input type="checkbox" checked={vision.includes(model)} onChange={() => toggleVision(model)} />
-                            <span>{model}</span>
-                        </label>
-                    ))}
-                    <span>Ticked models are handed pictures and PDF pages directly. The rest are never sent one.</span>
-                </div>
-            )}
-            {error && <p className="reachrow__error">{error}</p>}
-            {keyFileError && <p className="reachrow__error">{keyFileError}</p>}
-            {google && googleProblem && (keyFile || apiKey) && <p className="reachrow__error">{googleProblem}</p>}
-            <div className="modal__acts">
-                <button className="linkish" onClick={onClose}>Cancel</button>
+        <Modal
+            title="Connect a key"
+            subtitle="Billed to you, shared across this organization"
+            onClose={onClose}
+            footer={<>
+                <button type="button" className="b b--l b--secondary" onClick={onClose}>Cancel</button>
                 <button
-                    className="btn btn--primary"
+                    type="button"
+                    className="b b--l b--primary"
                     disabled={add.isPending || !name.trim() || !ready}
                     onClick={() => { setError(""); add.mutate(); }}
                 >
                     {add.isPending ? "Saving…" : "Connect"}
                 </button>
+            </>}
+        >
+            <div className="kset-form">
+                <div className="kset-range" role="group" aria-label="Provider">
+                    {presets.map((one) => (
+                        <button
+                            key={one.id}
+                            type="button"
+                            className="kchip"
+                            aria-pressed={one.id === preset.id}
+                            onClick={() => pick(one)}
+                        >
+                            {one.name}
+                        </button>
+                    ))}
+                </div>
+                <label className="kfield">
+                    <span>Name</span>
+                    <input className="kinput" value={name} onChange={(event) => setName(event.target.value)} />
+                </label>
+                {google && (
+                    <div className="kfield" role="group" aria-label="Signs in with">
+                        <span>Signs in with</span>
+                        <label className="kset-check">
+                            <input type="radio" name="google-signin" checked={signIn === "VERTEX_AI"} onChange={() => setSignIn("VERTEX_AI")} />
+                            <span>A service account, on Vertex AI</span>
+                        </label>
+                        <label className="kset-check">
+                            <input type="radio" name="google-signin" checked={signIn === "GEMINI_API"} onChange={() => setSignIn("GEMINI_API")} />
+                            <span>An API key, on the Gemini API</span>
+                        </label>
+                    </div>
+                )}
+                {google && signIn === "VERTEX_AI" && (
+                    <>
+                        <div className="kfield">
+                            <label htmlFor="google-keyfile">Service account key file</label>
+                            <input
+                                id="google-keyfile"
+                                type="file"
+                                accept="application/json,.json"
+                                onChange={(event) => void readKeyFile(event.target.files?.[0])}
+                            />
+                            <small>
+                                {readingKeyFile
+                                    ? "Reading the key file…"
+                                    : keyFile
+                                    ? "Key file loaded. It is stored encrypted and never shown again."
+                                    : "The JSON key of a service account with the Vertex AI User role."}
+                            </small>
+                        </div>
+                        <label className="kfield">
+                            <span>Project <span className="kfield__opt">(optional)</span></span>
+                            <input className="kinput" value={project} placeholder="The key file's own" onChange={(event) => setProject(event.target.value)} />
+                        </label>
+                        <label className="kfield">
+                            <span>Location</span>
+                            <input className="kinput" value={location} onChange={(event) => setLocation(event.target.value)} />
+                        </label>
+                    </>
+                )}
+                {!google && !preset.baseUrl && address}
+                {(!google || signIn === "GEMINI_API") && (
+                    <div className="kfield">
+                        <label htmlFor="add-key-secret">
+                            API key{isLocalRoute(baseUrl) && <span className="kfield__opt"> (not needed on this computer)</span>}
+                        </label>
+                        <SecretInput
+                            id="add-key-secret"
+                            label="API key"
+                            value={apiKey}
+                            onChange={(event) => { setApiKey(event.target.value); setTested(null); }}
+                        />
+                    </div>
+                )}
+                <label className="kfield">
+                    <span>Models <span className="kfield__opt">(optional)</span></span>
+                    <input
+                        className="kinput"
+                        value={models}
+                        placeholder={google ? "gemini-4-hydrogen, gemini-4-argon" : "gpt-5, o3-mini"}
+                        onChange={(event) => setModels(event.target.value)}
+                    />
+                    <small>
+                        {google
+                            ? <>Comma separated. Left empty, Google&rsquo;s current Gemini models are offered.</>
+                            : <>Comma separated. Left empty, the provider&rsquo;s own list is used.</>}
+                    </small>
+                </label>
+                {google && (
+                    <div className="kfield">
+                        <label className="kset-check">
+                            <input type="checkbox" checked={draws} onChange={(event) => setDraws(event.target.checked)} />
+                            <span>Agents can make images with this provider</span>
+                        </label>
+                        {draws && (
+                            <>
+                                <label htmlFor="google-image-models">Image models <span className="kfield__opt">(optional)</span></label>
+                                <input
+                                    id="google-image-models"
+                                    className="kinput"
+                                    value={imageModels}
+                                    placeholder="gemini-3.1-flash-image"
+                                    onChange={(event) => setImageModels(event.target.value)}
+                                />
+                                <small>What agents draw with, billed per picture. Left empty, Google&rsquo;s current image model.</small>
+                            </>
+                        )}
+                    </div>
+                )}
+                {/* Each provider's address is filled in by picking it, so
+                    it is changed only for a proxy or a self-hosted route. */}
+                {!google && preset.baseUrl && <MoreSettings key={preset.id}>{address}</MoreSettings>}
+                {canTest && (
+                    <div className="kset-acts">
+                        <button
+                            type="button"
+                            className="b b--s b--secondary"
+                            disabled={test.isPending || !baseUrl.trim()}
+                            onClick={() => test.mutate()}
+                        >
+                            {test.isPending ? "Testing…" : "Test this key"}
+                        </button>
+                        {tested && (
+                            <span role="status" className={"kset-said" + (tested.ok ? "" : " kset-said--bad")}>
+                                {tested.ok
+                                    ? "Connected. It lists " + tested.models.length + (tested.models.length === 1 ? " model." : " models.")
+                                    : tested.message}
+                            </span>
+                        )}
+                    </div>
+                )}
+                {/* Asked only where the route cannot say: an OpenAI-style model
+                    list carries no modalities, and handing an image to a model
+                    that cannot read one breaks the conversation. */}
+                {asksAboutImages(preset.protocol) && candidates.length > 0 && (
+                    <div className="kfield" role="group" aria-label="Reads images">
+                        <span>Reads images <span className="kfield__opt">(optional)</span></span>
+                        {candidates.map((model) => (
+                            <label className="kset-check" key={model}>
+                                <input type="checkbox" checked={vision.includes(model)} onChange={() => toggleVision(model)} />
+                                <span>{model}</span>
+                            </label>
+                        ))}
+                        <small>Ticked models are handed pictures and PDF pages directly. The rest are never sent one.</small>
+                    </div>
+                )}
+                {error && <Problem>{error}</Problem>}
+                {keyFileError && <Problem>{keyFileError}</Problem>}
+                {google && googleProblem && (keyFile || apiKey) && <Problem>{googleProblem}</Problem>}
             </div>
         </Modal>
     );
 }
 
+/** Settings → Models: the keys and built-in models first, as rows with their
+ *  standing and what can be done to each; then each computer, under its own
+ *  subheading, with the coding agents it found. The buttons that act on the
+ *  whole list sit above it. */
 export function ModelsSection({ orgId }: { orgId: string }) {
     const queryClient = useQueryClient();
     const [showRetired, setShowRetired] = useState(false);
@@ -819,68 +866,91 @@ export function ModelsSection({ orgId }: { orgId: string }) {
     const mine = machines.find((computer) => computer.id === thisHostId) ?? null;
     const others = machines.filter((computer) => computer !== mine);
 
-    /* One computer's agents, drawn the same way wherever the computer is.
-       Only this one can be told to look again, and only it is somewhere the
-       reader can type a command right now, so only it says so. */
+    /* One computer's agents as rows, drawn the same way wherever the computer
+       is. Only this one can be told to look again, and only it is somewhere
+       the reader can type a command right now, so only it says so. */
     const agentsOf = (computer: Computer) => {
         const here = computer === mine ? noun : null;
         if (stillLooking(computer)) {
             return (
-                <p className="mgroup__empty">
-                    <LoadingIndicator label="Finding coding agents" />
-                </p>
+                <li className="krow">
+                    <span className="krow__v"><span><LoadingIndicator label="Finding coding agents" /></span></span>
+                </li>
             );
         }
         if (computer.agents.length === 0) {
             return (
-                <div className="mgroup__empty">
-                    {!computer.online
-                        ? "Nothing published. It reports what it finds when it is next awake."
-                        : here
-                            ? <>No coding agents found. Install Claude Code, Codex, Cursor or OpenCode on {here}, then press Check again. <CheckAgainButton /></>
-                            : "No coding agents found. Install Claude Code, Codex, Cursor or OpenCode on that computer and it shows up here."}
-                </div>
+                <li className="krow">
+                    <span className="krow__v kset-wrap">
+                        <span>
+                            {!computer.online
+                                ? "Nothing published. It reports what it finds when it is next awake."
+                                : here
+                                    ? <>No coding agents found. Install Claude Code, Codex, Cursor or OpenCode on {here}, then check again.</>
+                                    : "No coding agents found. Install Claude Code, Codex, Cursor or OpenCode on that computer and it shows up here."}
+                        </span>
+                    </span>
+                    <span className="krow__end">{here && computer.online && <CheckAgainButton />}</span>
+                </li>
             );
         }
         return (
             <>
-                <ul className="mlist">
-                    {computer.agents.map((agent) => (
-                        <AgentRow
-                            key={agent.id}
-                            agent={agent}
-                            computer={computer}
-                            here={here}
-                            saved={savedByAgent.get(agent.id) ?? null}
-                            orgId={orgId}
-                            onChanged={refresh}
-                        />
-                    ))}
-                </ul>
+                {computer.agents.map((agent) => (
+                    <AgentRow
+                        key={agent.id}
+                        agent={agent}
+                        computer={computer}
+                        here={here}
+                        saved={savedByAgent.get(agent.id) ?? null}
+                        orgId={orgId}
+                        onChanged={refresh}
+                    />
+                ))}
                 {here && computer.online && computer.agents.some((agent) => !agent.ready) && (
-                    <div className="mgroup__empty"><CheckAgainButton /></div>
+                    <li className="krow">
+                        <span className="krow__v kset-wrap"><span>Signed in or updated one of these? Look again now instead of waiting.</span></span>
+                        <span className="krow__end"><CheckAgainButton /></span>
+                    </li>
                 )}
             </>
         );
     };
 
-    return (
-        <div className="section">
-            {/* No heading here: the settings pane names this section and
-                carries the lead as its subtitle. What is left is the count,
-                which the pane cannot know because it does not do the
-                reading. */}
-            <p className="section__meta">
-                {runtimes.isSuccess
-                    ? (available || "Nothing") + " to pick from" + (troubled ? " · " + troubled + " needing attention" : "")
-                    : ""}
-            </p>
+    const fetching = runtimes.isFetching || computers.isFetching;
 
-            {reading && <p className="empty-row">Reading…</p>}
+    return (
+        <div className="kset-stack">
+            {/* Outside the success gate: a listing that failed is exactly
+                when "Connect a key" and "Refresh" are needed. */}
+            <div className="kset-acts">
+                <button type="button" className="b b--s b--secondary" onClick={() => setAddingKey(true)}>
+                    <PlusIcon /> Connect a key
+                </button>
+                <button type="button" className="b b--s b--quiet" onClick={refresh} disabled={fetching}>
+                    <RefreshIcon className={fetching ? "spin" : undefined} /> Refresh
+                </button>
+                {/* Offered only when there is something behind it. A
+                    permanent toggle is an invitation to look at nothing. */}
+                {retired > 0 && (
+                    <button type="button" className="b b--s b--quiet" onClick={() => setShowRetired((was) => !was)}>
+                        {showRetired ? "Hide retired" : "Show retired (" + retired + ")"}
+                    </button>
+                )}
+                {/* The count, which the heading cannot know because it does
+                    not do the reading. */}
+                {runtimes.isSuccess && (
+                    <span className="kset-note">
+                        {(available || "Nothing") + " to pick from" + (troubled ? " · " + troubled + " needing attention" : "")}
+                    </span>
+                )}
+            </div>
+
+            {reading && <p className="kset-note" role="status">Reading the models…</p>}
             {runtimes.isError && (
-                <p className="empty-row" role="alert">
-                    {saidAbout(runtimes.error, "Couldn’t load models.")}{" "}
-                    <button className="linkish" onClick={refresh} disabled={runtimes.isFetching}>Retry</button>
+                <p className="kset-said kset-said--bad" role="alert">
+                    {saidAbout(runtimes.error, "Couldn’t load models.")}
+                    <button type="button" className="b b--s b--secondary" onClick={refresh} disabled={runtimes.isFetching}>Try again</button>
                 </p>
             )}
 
@@ -888,55 +958,63 @@ export function ModelsSection({ orgId }: { orgId: string }) {
                 <>
                     {available === 0 && (
                         /* The one state where this page is the blocker: every
-                           teammate in the organization is waiting on it. */
-                        <div className="getapp" role="status">
-                            <span className="getapp__mark"><KeyIcon size={18} /></span>
-                            <span className="getapp__body">
-                                <b>Add a model to get answers</b>
-                                <span>
-                                    Until one is added here, every message comes back unanswered.
-                                    Connect a provider&rsquo;s API key, or run a model yourself with{" "}
-                                    <a href="https://ollama.com/download" target="_blank" rel="noreferrer">Ollama</a> or{" "}
-                                    <a href="https://lmstudio.ai" target="_blank" rel="noreferrer">LM Studio</a>
-                                    {onThisMac ? " — once it is running on this computer it shows up below." : " on the computer Lemma runs on."}
+                           Lemma in the organization is waiting on it. */
+                        <div className="kneed" role="status">
+                            <div className="krow">
+                                <span className="krow__lead">
+                                    <span className="kmark" aria-hidden="true"><KeyIcon /></span>
+                                    <span className="krow__v kset-wrap">
+                                        <b>Add a model to get answers</b>
+                                        <span>
+                                            Until one is added here, every message comes back unanswered.
+                                            Connect a provider&rsquo;s API key, or run a model yourself with{" "}
+                                            <a href="https://ollama.com/download" target="_blank" rel="noreferrer">Ollama</a> or{" "}
+                                            <a href="https://lmstudio.ai" target="_blank" rel="noreferrer">LM Studio</a>
+                                            {onThisMac ? " — once it is running on this computer it shows up below." : " on the computer Lemma runs on."}
+                                        </span>
+                                    </span>
                                 </span>
-                            </span>
-                            {onThisMac && (
-                                <button className="btn" onClick={refresh} disabled={localServers.isFetching}>
-                                    <RefreshIcon size={13} className={localServers.isFetching ? "spin" : undefined} /> Check again
-                                </button>
-                            )}
+                                <span className="krow__end">
+                                    {onThisMac && (
+                                        <button type="button" className="b b--s b--secondary" onClick={refresh} disabled={localServers.isFetching}>
+                                            <RefreshIcon className={localServers.isFetching ? "spin" : undefined} /> Check again
+                                        </button>
+                                    )}
+                                </span>
+                            </div>
                         </div>
                     )}
 
                     {offer && (
                         /* The first key is what makes this organization able
                            to answer at all; saying so once, right after it
-                           lands, beats leaving every teammate on a guess. */
-                        <div className="getapp" role="status">
-                            <span className="getapp__mark"><KeyIcon size={18} /></span>
-                            <span className="getapp__body">
-                                <b>Use {offer.name} as the default?</b>
-                                <span>
-                                    Anything that doesn&rsquo;t name a model will run on it. You can change this on any key.
-                                </span>
-                                {useOffer.isError && (
-                                    <span className="reachrow__error">
-                                        {saidAbout(useOffer.error, "That could not be made the default.")}
+                           lands, beats leaving every Lemma on a guess. */
+                        <div className="kneed" role="status">
+                            <div className="krow">
+                                <span className="krow__lead">
+                                    <span className="kmark" aria-hidden="true"><KeyIcon /></span>
+                                    <span className="krow__v kset-wrap">
+                                        <b>Use {offer.name} as the default?</b>
+                                        <span>Anything that doesn&rsquo;t name a model will run on it. You can change this on any key.</span>
+                                        {useOffer.isError && (
+                                            <span className="kset-said--bad" role="alert">
+                                                {saidAbout(useOffer.error, "That could not be made the default.")}
+                                            </span>
+                                        )}
                                     </span>
-                                )}
-                            </span>
-                            <span className="mrow__confirm">
-                                <button className="btn" disabled={useOffer.isPending} onClick={() => useOffer.mutate(offer)}>
-                                    {useOffer.isPending ? "Saving…" : "Use it"}
-                                </button>
-                                <button className="linkish" onClick={() => setAddedTo(null)}>Not now</button>
-                            </span>
+                                </span>
+                                <span className="krow__end">
+                                    <button type="button" className="b b--s b--secondary" disabled={useOffer.isPending} onClick={() => useOffer.mutate(offer)}>
+                                        {useOffer.isPending ? "Saving…" : "Use it"}
+                                    </button>
+                                    <button type="button" className="b b--s b--quiet" onClick={() => setAddedTo(null)}>Not now</button>
+                                </span>
+                            </div>
                         </div>
                     )}
 
                     {rows.length > 0 && (
-                        <ul className="mlist">
+                        <ul className="klist">
                             {rows.map((runtime) => (
                                 <RuntimeRow
                                     key={runtime.id}
@@ -963,24 +1041,20 @@ export function ModelsSection({ orgId }: { orgId: string }) {
                     )}
 
                     {others.map((computer) => (
-                        <section className="mgroup" key={computer.id}>
-                            <div className="mgroup__head">
-                                <ComputerIcon size={14} />
-                                <span className="mgroup__name">{computer.name}</span>
-                                <span className="mgroup__meta">
-                                    {computer.release && "Lemma app " + computer.release}
-                                    {computer.online
-                                        ? ""
-                                        : computer.lastSeen
-                                            ? " · last seen " + new Date(computer.lastSeen).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                                            : ""}
+                        <section className="kset-stack" key={computer.id} aria-label={computer.name}>
+                            <p className="ksub">
+                                {computer.name}
+                                <span>
+                                    {[
+                                        computer.release ? "Lemma app " + computer.release : null,
+                                        !computer.online && computer.lastSeen
+                                            ? "last seen " + new Date(computer.lastSeen).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                                            : null,
+                                    ].filter(Boolean).join(" · ")}
                                 </span>
-                                <span className={"mrow__state mrow__state--" + (computer.online ? "ok" : "muted")}>
-                                    <i aria-hidden="true" />
-                                    {computer.status}
-                                </span>
-                            </div>
-                            {agentsOf(computer)}
+                                <span className={statusClass(computer.online ? "ok" : "muted")}>{computer.status}</span>
+                            </p>
+                            <ul className="klist">{agentsOf(computer)}</ul>
                         </section>
                     ))}
 
@@ -988,54 +1062,47 @@ export function ModelsSection({ orgId }: { orgId: string }) {
                         /* A browser has no computer to offer: Agent Host ships
                            inside the desktop app and is supervised by it, so
                            this is a handoff rather than a wizard. */
-                        <div className="getapp">
-                            <span className="getapp__mark"><TerminalIcon size={18} /></span>
-                            <span className="getapp__body">
-                                <b>Run on Claude Code or Codex</b>
-                                <span>
-                                    They already live on your machine. Install the Lemma app there and sign in —
-                                    it connects itself, and the agents it finds appear here.
-                                </span>
-                            </span>
-                            {downloadUrl() && (
-                                <a className="btn" href={downloadUrl()} target="_blank" rel="noreferrer">
-                                    <DownloadIcon size={13} /> Get the app
-                                </a>
-                            )}
-                        </div>
+                        <>
+                            <p className="ksub">On your computers <span>Coding agents that run where they’re signed in</span></p>
+                            <ul className="klist">
+                                <li className="krow">
+                                    <span className="krow__lead">
+                                        <span className="kmark" aria-hidden="true"><TerminalIcon /></span>
+                                        <span className="krow__v kset-wrap">
+                                            <b>Run on Claude Code or Codex</b>
+                                            <span>
+                                                They already live on your machine. Install the Lemma app there and sign in —
+                                                it connects itself, and the agents it finds appear here.
+                                            </span>
+                                        </span>
+                                    </span>
+                                    <span className="krow__end">
+                                        {downloadUrl() && (
+                                            <a className="b b--s b--secondary" href={downloadUrl()} target="_blank" rel="noreferrer">
+                                                <DownloadIcon /> Get the app
+                                            </a>
+                                        )}
+                                    </span>
+                                </li>
+                            </ul>
+                        </>
                     )}
 
                     {computers.isError && (
-                        <p className="empty-row">Couldn’t load your computers.</p>
+                        <p className="kset-said kset-said--bad" role="alert">
+                            Couldn’t load your computers.
+                            <button type="button" className="b b--s b--secondary" onClick={() => void computers.refetch()}>Try again</button>
+                        </p>
                     )}
 
                     {troubled > 0 && (
-                        <p className="connectors__note">
-                            <WarningIcon size={13} /> Anything pinned to something unavailable stops answering
+                        <p className="kset-note">
+                            Anything pinned to something unavailable stops answering
                             until that computer is back or you point it somewhere else.
                         </p>
                     )}
                 </>
             )}
-
-            {/* Outside the success gate: a listing that failed is exactly
-                when "Connect a key" and "Refresh" are needed. */}
-            <div className="models__acts">
-                <button className="btn" onClick={() => setAddingKey(true)}>
-                    <PlusIcon size={13} /> Connect a key
-                </button>
-                <button className="linkish" onClick={refresh} disabled={runtimes.isFetching || computers.isFetching}>
-                    <RefreshIcon size={13} className={runtimes.isFetching || computers.isFetching ? "spin" : undefined} /> Refresh
-                </button>
-                {/* Offered only when there is something behind it. A
-                    permanent toggle is an invitation to look at
-                    nothing. */}
-                {retired > 0 && (
-                    <button className="linkish" onClick={() => setShowRetired((was) => !was)}>
-                        {showRetired ? "Hide retired" : "Show retired (" + retired + ")"}
-                    </button>
-                )}
-            </div>
 
             {addingKey && (
                 <AddKey

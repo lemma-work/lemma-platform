@@ -1,0 +1,1176 @@
+/* The kit: the few things every page and dialog is built from, so they read
+   as one app. Agreed 2026-11-21 on the "Lemma People and Dialogs" mock.
+
+   Widths: a page is 1080px, words and forms inside it 720px, a dialog 560px
+   (460px for a yes-or-no), a sheet from the right edge 480px.
+   Buttons: one button, three sizes, four kinds.
+   Headers: one page header, with the way back above it inside a Lemma.
+   Choices: cards, the whole card the target, a pick a blue tint and edge.
+   Moving: see `outcomes.css` (pages) and `shell.css` (dialogs). */
+
+:root {
+    --w-page: 1080px;
+    --w-read: 720px;
+    --w-dialog: 560px;
+    --w-dialog-small: 460px;
+    --w-sheet: 480px;
+    --page-gutter: 32px;
+    --kit-pick: var(--select, var(--accent-soft));
+    --kit-bad-soft: color-mix(in srgb, var(--bad) 9%, transparent);
+}
+
+@media (max-width: 760px) {
+    :root {
+        --page-gutter: 16px;
+    }
+}
+
+/* ── buttons ──────────────────────────────────────────────────────────
+   Small in rows, tables and toolbars; medium in page headers and sheets;
+   large at the foot of a dialog and on the way in. Primary is the one thing
+   a screen is for, secondary everything else, quiet a tool in a row, danger
+   only the last step of removing something. Removing starts as secondary in
+   red ink (`b--red`). The older `.btn` and `.ox-btn` follow the same rules
+   (base.css, outcomes.css). */
+
+.b {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    border: 1px solid transparent;
+    font: inherit;
+    font-weight: 500;
+    white-space: nowrap;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background 140ms, border-color 140ms, opacity 140ms, color 140ms;
+}
+
+.b svg {
+    flex: none;
+    width: 16px;
+    height: 16px;
+}
+
+.b:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+.b--s {
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 9px;
+    font-size: 13px;
+}
+
+.b--m {
+    height: 40px;
+    padding: 0 16px;
+    border-radius: 11px;
+    font-size: 14px;
+}
+
+.b--l {
+    height: 52px;
+    padding: 0 22px;
+    border-radius: 14px;
+    font-size: 16px;
+}
+
+.b--s svg {
+    width: 15px;
+    height: 15px;
+}
+
+.b--l svg {
+    width: 17px;
+    height: 17px;
+}
+
+.b--icon.b--s {
+    width: 32px;
+    padding: 0;
+}
+
+.b--icon.b--m {
+    width: 40px;
+    padding: 0;
+}
+
+.b--primary {
+    background: var(--ink);
+    color: var(--paper);
+}
+
+.b--primary:not(:disabled):hover {
+    opacity: 0.88;
+}
+
+.b--secondary {
+    border-color: var(--line-2);
+    background: var(--paper);
+    color: var(--ink);
+}
+
+.b--secondary:not(:disabled):hover {
+    background: var(--wash-b);
+}
+
+.b--quiet {
+    background: transparent;
+    color: var(--ink-2);
+}
+
+.b--quiet:not(:disabled):hover {
+    background: var(--wash-b);
+    color: var(--ink);
+}
+
+.b--danger {
+    background: var(--bad);
+    color: var(--on-bad);
+}
+
+.b--danger:not(:disabled):hover {
+    opacity: 0.88;
+}
+
+.b--red {
+    border-color: color-mix(in srgb, var(--bad) 28%, transparent);
+    color: var(--bad);
+}
+
+.b--red:not(:disabled):hover {
+    background: var(--kit-bad-soft);
+}
+
+/* On touch, every button is at least a finger's height. */
+@media (pointer: coarse) {
+    .b--s,
+    .b--m {
+        min-height: 44px;
+    }
+
+    .b--icon.b--s,
+    .b--icon.b--m {
+        min-width: 44px;
+    }
+}
+
+/* ── the page header ──────────────────────────────────────────────────
+   Its title, one line under it, the page's buttons at the right, level
+   with the two. Inside a Lemma, the way back sits above the title. A
+   notice comes next, then the page's tools (filters at the left, search at
+   the right). A Lemma's own page has none: the Lemma is its header. */
+
+.ph {
+    display: grid;
+    gap: 10px;
+}
+
+.ph__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 16px;
+}
+
+.ph__words {
+    display: grid;
+    flex: 1;
+    gap: 4px;
+    min-width: min(220px, 100%);
+}
+
+.ph__back {
+    display: inline-flex;
+    align-items: center;
+    justify-self: start;
+    gap: 8px;
+    height: 30px;
+    margin-left: -8px;
+    padding: 0 10px 0 6px;
+    border: 0;
+    border-radius: 9px;
+    background: none;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 13.5px;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.ph__back:hover {
+    background: var(--wash-b);
+    color: var(--ink);
+}
+
+.ph__t {
+    margin: 0;
+    font-size: 28px;
+    font-weight: 500;
+    line-height: 1.15;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+}
+
+.ph__line {
+    margin: 0;
+    max-width: var(--w-read);
+    color: var(--ink-2);
+    font-size: 14.5px;
+    line-height: 1.45;
+    text-wrap: pretty;
+}
+
+.ph__acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Where a page's own buttons join the header's (outcomes/page-acts.tsx):
+   no box of its own, so they sit in the row like the rest. */
+.ph__slot {
+    display: contents;
+}
+
+.ph__tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.ph__tools .ph__grow {
+    flex: 1;
+}
+
+/* A page in the frame: the one column, its header 28px down. */
+.kpage {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 22px;
+    width: min(var(--w-page), 100%);
+    margin: 0 auto;
+    padding: 28px var(--page-gutter) 96px;
+}
+
+/* ── fields and choices ───────────────────────────────────────────────
+   A label above every field. Choices are cards: the whole card is the
+   target, and a pick is a blue tint, a blue edge and a filled dot. */
+
+.kfield {
+    position: relative;
+    display: grid;
+    gap: 8px;
+}
+
+.kfield > span:first-child {
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.kfield small {
+    color: var(--ink-3);
+    font-size: 12.5px;
+}
+
+.kinput {
+    width: 100%;
+    height: 52px;
+    padding: 0 16px;
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 16px;
+    outline: none;
+    transition: border-color 160ms, box-shadow 160ms;
+}
+
+.kinput:focus {
+    border-color: var(--info);
+    box-shadow: 0 0 0 3px var(--kit-pick);
+}
+
+select.kinput {
+    appearance: none;
+    cursor: pointer;
+}
+
+/* ── forms ────────────────────────────────────────────────────────────
+   One way to ask for something, wherever it is asked (ui/form.tsx,
+   connect/fields.tsx): left-aligned and as wide as the column it is in, a
+   label above each field in plain words, a short line under it on what it
+   is, "(optional)" on the few that are, and the plumbing folded under More
+   settings. A secret is hidden as it is typed, with Show beside it. */
+
+.kform {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+    min-width: 0;
+}
+
+.kfield > label:first-child {
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.kfield__opt {
+    color: var(--ink-3);
+}
+
+.kfield small {
+    line-height: 1.45;
+}
+
+.kform__acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
+.ksecret {
+    position: relative;
+    display: block;
+    min-width: 0;
+}
+
+.ksecret .kinput {
+    padding-right: 76px;
+}
+
+.ksecret .kset-input {
+    padding-right: 72px;
+}
+
+.ksecret__show {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    transform: translateY(-50%);
+}
+
+.kmore {
+    border-top: 1px solid var(--line);
+}
+
+.kmore > summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    color: var(--ink-2);
+    font-size: 14px;
+    list-style: none;
+    cursor: pointer;
+}
+
+.kmore > summary::-webkit-details-marker {
+    display: none;
+}
+
+.kmore > summary::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(-45deg);
+    transition: transform 160ms;
+}
+
+.kmore[open] > summary::before {
+    transform: rotate(45deg);
+}
+
+.kmore > summary:hover {
+    color: var(--ink);
+}
+
+.kmore > summary:focus-visible {
+    outline: 2px solid var(--info);
+    outline-offset: 2px;
+    border-radius: 6px;
+}
+
+.kmore__body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+    padding: 6px 0 4px;
+}
+
+/* One step inside a sheet or a dialog: the way back, then the service's
+   mark beside what the step is and what doing it does. */
+.kstep {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+    min-width: 0;
+}
+
+.kstep > p {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 14px;
+    line-height: 1.55;
+}
+
+.kstep > .b,
+.kstep > .btn {
+    justify-self: start;
+}
+
+.kstep__head {
+    display: grid;
+    justify-items: start;
+    gap: 10px;
+}
+
+.kstep__back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+    margin: -10px 0 -6px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink-3);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.kstep__back:hover {
+    color: var(--ink);
+}
+
+.kstep__title {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    min-width: 0;
+}
+
+.kstep__title > div {
+    min-width: 0;
+}
+
+.kstep__title h3 {
+    margin: 0;
+    font-size: 19px;
+    font-weight: 500;
+    line-height: 1.3;
+    letter-spacing: -0.01em;
+    overflow-wrap: anywhere;
+}
+
+.kstep__title p {
+    margin: 4px 0 0;
+    color: var(--ink-2);
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.kopts {
+    display: grid;
+    gap: 12px;
+}
+
+.kopt {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 16px;
+    padding: 18px 20px;
+    border-radius: 16px;
+    background: var(--wash-a);
+    box-shadow: inset 0 0 0 1px transparent;
+    cursor: pointer;
+    transition: background 160ms, box-shadow 160ms;
+}
+
+.kopt:hover {
+    box-shadow: inset 0 0 0 1px var(--line-2);
+}
+
+.kopt input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.kopt:focus-within {
+    outline: 2px solid var(--info);
+    outline-offset: 2px;
+}
+
+.kopt__t {
+    font-size: 16px;
+    font-weight: 500;
+}
+
+.kopt__d {
+    grid-column: 1;
+    color: var(--ink-2);
+    font-size: 14px;
+    line-height: 1.45;
+}
+
+.kopt__dot {
+    display: grid;
+    grid-row: 1 / span 2;
+    grid-column: 2;
+    place-items: center;
+    align-self: start;
+    width: 22px;
+    height: 22px;
+    margin-top: 1px;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 1.5px var(--ink-3);
+}
+
+.kopt:has(input:checked) {
+    background: var(--kit-pick);
+    box-shadow: inset 0 0 0 1.5px var(--info);
+}
+
+.kopt:has(input:checked) .kopt__dot {
+    background: var(--info);
+    box-shadow: none;
+}
+
+.kopt:has(input:checked) .kopt__dot::after {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--paper);
+}
+
+.kopt--compact {
+    padding: 14px 16px;
+}
+
+.kopt--compact .kopt__t {
+    font-size: 14.5px;
+}
+
+.kopt--compact .kopt__d {
+    font-size: 13px;
+}
+
+/* ── the sheet from the right edge ────────────────────────────────────
+   Over a light veil; the page stays put. */
+
+.ksheet-veil {
+    position: fixed;
+    inset: 0;
+    z-index: 190;
+    background: rgb(22 21 27 / 0.22);
+    animation: ksheet-veil 260ms ease both;
+}
+
+.ksheet {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 191;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    width: min(var(--w-sheet), 100%);
+    background: var(--paper);
+    box-shadow: -24px 0 60px rgb(0 0 0 / 0.14), -1px 0 0 var(--line);
+    outline: none;
+    animation: ksheet-in 340ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+
+.ksheet__head {
+    position: relative;
+    display: grid;
+    justify-items: start;
+    gap: 8px;
+    padding: 26px 72px 14px 28px;
+}
+
+.ksheet__head h2 {
+    margin: 0;
+    font-size: 23px;
+    font-weight: 500;
+    line-height: 1.2;
+}
+
+.ksheet__head p {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.ksheet__x {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+}
+
+.ksheet__body {
+    display: grid;
+    align-content: start;
+    gap: 22px;
+    overflow-y: auto;
+    padding: 6px 28px 24px;
+}
+
+.ksheet__foot {
+    padding: 16px 28px 24px;
+    border-top: 1px solid var(--line);
+}
+
+@keyframes ksheet-in {
+    from {
+        transform: translateX(calc(100% + 60px));
+    }
+}
+
+@keyframes ksheet-veil {
+    from {
+        opacity: 0;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ksheet,
+    .ksheet-veil {
+        animation: none;
+    }
+}
+
+/* ── lists, status, switches ──────────────────────────────────────────
+   Settings and Connectors read as rows on hairlines: what it is at the
+   left, what it says in the middle, what can be done at the right. Nothing
+   boxed, no capitals, no colour in the corners. Status is a dot and a word. */
+
+.ksec {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+    gap: 18px;
+    min-width: 0;
+}
+
+.ksec__h {
+    display: grid;
+    gap: 4px;
+}
+
+.ksec__h h2 {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+}
+
+.ksec__h p {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 14px;
+    line-height: 1.45;
+}
+
+.ksec__acts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+/* A subheading inside a section: a group of rows, with a quiet note. */
+.ksub {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 10px;
+    margin: 10px 0 -8px;
+    font-size: 14.5px;
+    font-weight: 500;
+}
+
+.ksub span {
+    color: var(--ink-3);
+    font-size: 13px;
+    font-weight: 400;
+}
+
+.klist {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    border-top: 1px solid var(--line);
+}
+
+.krow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px 16px;
+    min-height: 58px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
+}
+
+/* A setting: its name, what it is now, and the way to change it. */
+.krow--kv {
+    grid-template-columns: 170px minmax(0, 1fr) auto;
+}
+
+/* A row that opens something: it lights under the pointer, edge to edge. */
+.krow--open {
+    margin: 0 -10px;
+    padding: 10px;
+    cursor: pointer;
+}
+
+.krow--open:hover {
+    background: var(--wash-b);
+}
+
+.krow__k {
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.krow__lead {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+.krow__v {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+
+.krow__v > b,
+.krow__t {
+    overflow: hidden;
+    font-size: 14.5px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.krow__v > span,
+.krow__s {
+    overflow: hidden;
+    color: var(--ink-3);
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.krow__end {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px 10px;
+}
+
+@media (max-width: 640px) {
+    .krow--kv {
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .krow--kv > .krow__k {
+        grid-column: 1 / -1;
+    }
+}
+
+/* Status: a dot and a word. Working is green, waiting on someone is warm,
+   off is grey; a failure is red. */
+.kstatus {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--ink-2);
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.kstatus::before {
+    content: "";
+    flex: none;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--ok);
+}
+
+.kstatus--off::before {
+    background: var(--line-2);
+}
+
+.kstatus--warn {
+    color: var(--warn);
+}
+
+.kstatus--warn::before {
+    background: var(--warn);
+}
+
+.kstatus--bad {
+    color: var(--bad);
+}
+
+.kstatus--bad::before {
+    background: var(--bad);
+}
+
+/* A short word beside something: Default, Yours, Shared. */
+.ktag {
+    padding: 1px 7px;
+    border-radius: 6px;
+    background: var(--wash-a);
+    color: var(--ink-2);
+    font-size: 11.5px;
+    white-space: nowrap;
+}
+
+/* A mark in a circle: a service's logo or a machine. */
+.kmark {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    overflow: hidden;
+    border-radius: 50%;
+    background: var(--wash-a);
+    color: var(--ink-2);
+}
+
+.kmark img,
+.kmark svg {
+    width: 20px;
+    height: 20px;
+    object-fit: contain;
+}
+
+.kmark--lg {
+    width: 48px;
+    height: 48px;
+}
+
+.kmark--lg img,
+.kmark--lg svg {
+    width: 26px;
+    height: 26px;
+}
+
+/* A big figure, and the bar under it. */
+.kfigure {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 10px;
+}
+
+.kfigure b {
+    font-family: var(--ui), var(--font-ui), system-ui;
+    font-size: 34px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+}
+
+.kfigure span {
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.kmeter {
+    height: 8px;
+    overflow: hidden;
+    border-radius: 4px;
+    background: var(--wash-a);
+}
+
+.kmeter > i {
+    display: block;
+    height: 100%;
+    border-radius: 4px;
+    background: var(--ink);
+}
+
+/* A notice that something needs the reader: warm, with its fix beside it. */
+.kneed {
+    display: grid;
+    padding: 6px 18px;
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--warn) 8%, var(--paper));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 20%, transparent);
+}
+
+.kneed__t {
+    padding-top: 8px;
+    color: var(--warn);
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.kneed .krow {
+    min-height: 54px;
+    border-bottom-color: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+
+.kneed .krow:last-child {
+    border-bottom: 0;
+}
+
+/* An on/off switch: ink when on. */
+.kswitch {
+    position: relative;
+    flex: none;
+    width: 38px;
+    height: 22px;
+    padding: 0;
+    border: 0;
+    border-radius: 11px;
+    background: var(--line-2);
+    cursor: pointer;
+    transition: background 160ms;
+}
+
+.kswitch::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--paper);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
+    transition: transform 200ms cubic-bezier(0.34, 1.4, 0.55, 1);
+}
+
+.kswitch[aria-checked="true"] {
+    background: var(--ink);
+}
+
+.kswitch[aria-checked="true"]::after {
+    transform: translateX(16px);
+}
+
+.kswitch:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+/* Filter chips over a list: the one in use is ink. */
+.kchip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 13px;
+    border: 1px solid var(--line-2);
+    border-radius: 999px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.kchip[aria-pressed="true"] {
+    border-color: var(--ink);
+    background: var(--ink);
+    color: var(--paper);
+}
+
+.kchip span {
+    opacity: 0.7;
+    font-variant-numeric: tabular-nums;
+}
+
+.ksearch {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: min(240px, 100%);
+    height: 34px;
+    padding: 0 12px;
+    border: 1px solid var(--line-2);
+    border-radius: 11px;
+    background: var(--paper);
+    color: var(--ink-3);
+}
+
+.ksearch input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    outline: none;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 13.5px;
+}
+
+/* What a page says in place of what it holds (outcomes/calm.tsx): nothing
+   here yet, or something wrong. Centred under the page's own header. */
+.kcalm {
+    display: grid;
+    justify-items: center;
+    gap: 10px;
+    padding: 56px 16px 40px;
+    text-align: center;
+}
+
+.kcalm__i {
+    display: grid;
+    place-items: center;
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: var(--wash-a);
+    color: var(--ink-2);
+}
+
+.kcalm__i[data-tone="warn"] {
+    background: color-mix(in srgb, var(--warn) 12%, var(--paper));
+    color: var(--warn);
+}
+
+.kcalm__t {
+    margin: 8px 0 0;
+    font-size: 20px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+}
+
+.kcalm__line {
+    max-width: 440px;
+    color: var(--ink-2);
+    font-size: 14.5px;
+    line-height: 1.5;
+    text-wrap: pretty;
+}
+
+.kcalm__line p {
+    margin: 0;
+}
+
+.kcalm__acts {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.kcalm__note {
+    margin: 0;
+    color: var(--ink-3);
+    font-size: 12.5px;
+}
+
+/* A failure said where it happened, with Try again beside it. */
+.kproblem {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    margin: 0;
+    color: var(--bad);
+    font-size: 13.5px;
+    line-height: 1.4;
+}
+
+.kproblem > svg {
+    flex: none;
+}
+
+/* Loading (ui/skeleton.tsx): the shape of what is coming, quietly. */
+/* A shape is a faint film of ink over whatever it sits on -- the page's
+   paper, a sidebar's tint, a card, dark or light -- never a fixed grey that
+   reads as a hole in a coloured ground. Its sheen is the same film, lighter. */
+.ksk {
+    --ksk: color-mix(in srgb, var(--ink) 7%, transparent);
+    --ksk-sheen: color-mix(in srgb, var(--ink) 3%, transparent);
+    display: block;
+    height: 12px;
+    border-radius: 6px;
+    background: linear-gradient(90deg, var(--ksk) 0, var(--ksk-sheen) 50%, var(--ksk) 100%) 0 0 / 200% 100%;
+    animation: ksk 1.5s ease-in-out infinite;
+}
+
+@keyframes ksk {
+    to {
+        background-position: -200% 0;
+    }
+}
+
+.kskrows {
+    display: grid;
+}
+
+.kskrows__row {
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr) 56px;
+    align-items: center;
+    gap: 14px;
+    min-height: 58px;
+    border-bottom: 1px solid var(--line);
+}
+
+.kskrows__words {
+    display: grid;
+    gap: 8px;
+}
+
+.kskcards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 26px 18px;
+}
+
+.kskcards__card {
+    display: grid;
+    gap: 12px;
+}
+
+.kslow {
+    margin: 18px 0 0;
+    color: var(--ink-3);
+    font-size: 13.5px;
+}
+
+@media (max-width: 760px) {
+    .kskcards {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 20px 12px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .kswitch,
+    .kswitch::after {
+        transition: none;
+    }
+
+    .ksk {
+        animation: none;
+    }
+}

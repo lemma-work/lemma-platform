@@ -404,6 +404,12 @@ export type { PendingInteractionResponse } from './models/PendingInteractionResp
 export type { PendingSignInResponse } from './models/PendingSignInResponse.js';
 export type { PersonRef } from './models/PersonRef.js';
 export type { PlanStepResponse } from './models/PlanStepResponse.js';
+export type { PluginInstallItemResponse } from './models/PluginInstallItemResponse.js';
+export type { PluginInstallRequest } from './models/PluginInstallRequest.js';
+export type { PluginInstallResponse } from './models/PluginInstallResponse.js';
+export { PluginInstallState } from './models/PluginInstallState.js';
+export type { PluginInstallStepResponse } from './models/PluginInstallStepResponse.js';
+export type { PluginSourceRequest } from './models/PluginSourceRequest.js';
 export type { PodAccountCreateRequest } from './models/PodAccountCreateRequest.js';
 export type { PodAccountListResponse } from './models/PodAccountListResponse.js';
 export type { PodAccountResponse } from './models/PodAccountResponse.js';

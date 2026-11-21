@@ -16,6 +16,16 @@ from .apply_fields import (
     read_bundle_connector,
     MACHINE_APPLY_FIELDS,
 )
+from .app_build import (
+    APP_DIST_ARCHIVE,
+    APP_DIST_SOURCE_DIGEST,
+    APP_SOURCE_EXCLUDE_DIRS,
+    app_source_digest,
+    app_source_files,
+    prebuilt_dist,
+    read_dist_source_digest,
+    write_dist_source_digest,
+)
 from .archive import extract_bundle, pack_bundle
 from .diff import TableDiff, diff_table_columns
 from .jsonc import loads_jsonc, strip_jsonc
@@ -49,6 +59,9 @@ from .normalize import (
 )
 
 __all__ = [
+    "APP_DIST_ARCHIVE",
+    "APP_DIST_SOURCE_DIGEST",
+    "APP_SOURCE_EXCLUDE_DIRS",
     "APP_MANIFEST_ALIAS",
     "EXPORTABLE_RESOURCE_DIRS",
     "FILES_MANIFEST",
@@ -70,6 +83,8 @@ __all__ = [
     "BundleConnector",
     "BundleValidationIssue",
     "TableDiff",
+    "app_source_digest",
+    "app_source_files",
     "bundle_format_version",
     "check_format_version",
     "schedules_sharing_a_global_workflow",
@@ -78,6 +93,9 @@ __all__ = [
     "global_workflows_scheduled_twice",
     "load_bundle_connectors",
     "load_resource_payload",
+    "prebuilt_dist",
+    "read_dist_source_digest",
+    "write_dist_source_digest",
     "loads_jsonc",
     "normalize_resource_dir_name",
     "pack_bundle",

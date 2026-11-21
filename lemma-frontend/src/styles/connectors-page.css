@@ -1,0 +1,479 @@
+/* connectors-page.css: the Connectors place and its sheet. See
+   outcomes/connectors.tsx and outcomes/connector-sheet.tsx.
+
+   Built from the kit (kit.css): the page header, rows on hairlines, a dot
+   and a word for status, the warm band, chips, the search box, the sheet
+   and its switches. What is here is only what the kit does not say: a row
+   with the Lemmas that use a service in its middle, the cards for what can
+   still be connected, and the sheet's parts. Nothing moves here; the kit's
+   sheet and switch already still themselves under reduced motion. */
+
+.kconn {
+    padding-bottom: 96px;
+}
+
+.kconn__body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 22px;
+}
+
+.kconn-quiet {
+    margin: 0;
+    color: var(--ink-3);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.kconn-empty {
+    margin: 0;
+    padding: 22px 0;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.kconn-link {
+    color: var(--info);
+    text-decoration: none;
+}
+
+.kconn-link:hover {
+    text-decoration: underline;
+}
+
+/* How a sign-in came back, and one still out at the provider. */
+.kconn-heard {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    margin: 0;
+    padding: 8px 8px 8px 16px;
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--ok) 9%, var(--paper));
+    color: var(--ink);
+    font-size: 14px;
+}
+
+.kconn-heard > svg {
+    flex: none;
+    color: var(--ok);
+}
+
+.kconn-heard > span {
+    flex: 1;
+    min-width: 0;
+}
+
+.kconn-heard--bad {
+    background: var(--kit-bad-soft);
+}
+
+.kconn-heard--bad > svg {
+    color: var(--bad);
+}
+
+.kconn-note {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+    padding: 12px 16px;
+    border-radius: 14px;
+    background: var(--wash-a);
+}
+
+.kconn-note__t {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    margin: 0;
+    color: var(--ink);
+    font-size: 14px;
+    line-height: 1.45;
+}
+
+.kconn-note--bad {
+    background: var(--kit-bad-soft);
+}
+
+.kconn-note--bad .kconn-note__t {
+    color: var(--bad);
+}
+
+/* In the band, what is wrong may take two lines rather than lose its end. */
+.kconn-need .krow__v > span {
+    white-space: normal;
+}
+
+/* ── the list ─────────────────────────────────────────────────────────── */
+
+.kconn-tools .ksearch {
+    width: min(240px, 100%);
+}
+
+/* A row is one button: its mark and name, the Lemmas that use it, its
+   status and a chevron. */
+.klist > .kconn-row {
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto;
+    width: calc(100% + 20px);
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    border-radius: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+}
+
+.klist > .kconn-row:hover {
+    background: var(--wash-b);
+}
+
+.klist > .kconn-row:focus-visible {
+    outline: 2px solid var(--info);
+    outline-offset: -2px;
+}
+
+.kconn-uses {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+}
+
+.kconn-faces {
+    display: flex;
+    flex: none;
+}
+
+.kconn-face {
+    margin-right: -4px;
+    box-shadow: 0 0 0 2px var(--paper);
+}
+
+.kconn-names {
+    min-width: 0;
+    margin-left: 12px;
+    overflow: hidden;
+    color: var(--ink-3);
+    font-size: 12.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kconn-names:first-child {
+    margin-left: 0;
+}
+
+.kconn-chev {
+    flex: none;
+    color: var(--ink-3);
+}
+
+/* A mark with no logo: the first letter of the name. */
+.kconn-initial {
+    color: var(--ink-2);
+    font-size: 15px;
+    font-weight: 500;
+}
+
+.kmark--lg .kconn-initial {
+    font-size: 20px;
+}
+
+@media (max-width: 640px) {
+    .klist > .kconn-row {
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    /* The Lemmas go under the name, lined up with it. */
+    .kconn-uses {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        padding-left: 48px;
+    }
+
+    .kconn-tools .ph__grow {
+        display: none;
+    }
+
+    .kconn-tools .ksearch {
+        flex: 1 1 100%;
+        width: 100%;
+    }
+}
+
+/* ── your own, and more you can connect ───────────────────────────────── */
+
+.kconn-sec {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+    margin-top: 14px;
+}
+
+.kconn-sec__h {
+    display: grid;
+    gap: 4px;
+}
+
+.kconn-sec__h h2 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+}
+
+.kconn-sec__h p {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 14px;
+    line-height: 1.45;
+}
+
+.kconn-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(230px, 100%), 1fr));
+    gap: 12px;
+}
+
+.kconn-card {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto 1fr;
+    align-items: center;
+    gap: 4px 12px;
+    min-width: 0;
+    padding: 14px 16px;
+    border-radius: 16px;
+    background: var(--wash-a);
+}
+
+.kconn-card > .kmark {
+    grid-row: 1 / span 2;
+    grid-column: 1;
+    background: var(--paper);
+}
+
+.kconn-card > b {
+    grid-row: 1;
+    grid-column: 2;
+    align-self: end;
+    overflow: hidden;
+    font-size: 14.5px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kconn-card > span:not(.kmark, .kconn-card__acts) {
+    display: -webkit-box;
+    grid-row: 2;
+    grid-column: 2;
+    align-self: start;
+    overflow: hidden;
+    color: var(--ink-3);
+    font-size: 12.5px;
+    line-height: 1.4;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+.kconn-card__acts {
+    display: flex;
+    flex-wrap: wrap;
+    grid-row: 3;
+    grid-column: 1 / -1;
+    align-items: center;
+    align-self: end;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.kconn-ownapp {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+}
+
+/* ── the sheet ────────────────────────────────────────────────────────── */
+
+.kconn-sheet .ksheet__body {
+    gap: 26px;
+}
+
+.kconn-part {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    min-width: 0;
+}
+
+.kconn-part__h {
+    margin: 0;
+    color: var(--ink);
+    font-size: 14.5px;
+    font-weight: 500;
+}
+
+.kconn-inner > .krow {
+    min-height: 52px;
+    padding: 6px 0;
+}
+
+.kconn-usage {
+    display: grid;
+    grid-column: 1 / -1;
+    gap: 4px;
+    margin: 0;
+    padding: 0 0 6px;
+    color: var(--ink-2);
+    font-size: 13px;
+    line-height: 1.45;
+    list-style: none;
+}
+
+.kconn-impact {
+    display: grid;
+    gap: 6px;
+}
+
+.kconn-impact > span {
+    display: block;
+}
+
+.kconn-can {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    color: var(--ink-2);
+    font-size: 14px;
+    line-height: 1.45;
+    list-style: none;
+}
+
+.kconn-can li {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.kconn-can li::before {
+    content: "";
+    flex: none;
+    width: 6px;
+    height: 6px;
+    margin-top: 8px;
+    border-radius: 50%;
+    background: var(--ink-3);
+}
+
+.kconn-acts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+/* A row's ⋯, and what it opens: the acts that are not the row's one thing. */
+.kconn-more {
+    position: relative;
+}
+
+.kconn-more > summary {
+    list-style: none;
+}
+
+.kconn-more > summary::-webkit-details-marker {
+    display: none;
+}
+
+.kconn-more[open] > summary {
+    background: var(--wash-b);
+    color: var(--ink);
+}
+
+.kconn-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    min-width: 200px;
+    padding: 6px;
+    border-radius: 12px;
+    background: var(--paper);
+    box-shadow: var(--depth-raise);
+}
+
+.kconn-menu > button {
+    display: flex;
+    align-items: center;
+    height: 36px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 13.5px;
+    text-align: left;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.kconn-menu > button:hover,
+.kconn-menu > button:focus-visible {
+    background: var(--wash-b);
+}
+
+.kconn-menu > .kconn-menu__bad {
+    color: var(--bad);
+}
+
+/* ── touch ────────────────────────────────────────────────────────────── */
+
+@media (pointer: coarse) {
+    .kconn .kchip,
+    .kconn-find {
+        min-height: 44px;
+    }
+
+    .kconn-menu > button {
+        height: 44px;
+    }
+
+    /* The switch stays its size; a finger's worth of target around it. */
+    .kconn-sheet .kswitch::before {
+        content: "";
+        position: absolute;
+        inset: -11px -4px;
+    }
+
+    .kconn-link {
+        display: inline-block;
+        margin: -12px 0;
+        padding: 12px 0;
+    }
+}
+
+/* The picker's search, in a dialog: the dialog's width. */
+.connect-form .kconn-find {
+    width: 100%;
+}
+
+/* A service this person cannot connect, in the picker: still listed, with
+   why in its row, and not a target. */
+.connect-picks .connect-pick:disabled {
+    border-color: var(--line);
+    background: var(--paper);
+    opacity: 0.6;
+    cursor: default;
+}

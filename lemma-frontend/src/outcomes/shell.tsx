@@ -1,14 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type Org, type Pod } from "@/data";
 import { lemma } from "@/session/client";
 import { key } from "@/session/storage";
 import { readAddress } from "@/shell/address";
+import { directionOf, heroOf, move } from "./move";
 import { NotYours } from "@/shell/not-yours";
-import { isForbidden } from "@/session/auth-state";
+import { isForbidden, isMissing } from "@/session/auth-state";
 import { useAnalyticsIdentity } from "@/site/analytics/identity";
 import { settingsFromQuery } from "@/site/legacy-address";
 import { isAboutSection, settingsSectionOf } from "@/space/about-sections";
@@ -18,13 +19,11 @@ import { useConversationAsks } from "@/thread/use-conversation-asks";
 import { byAge, CONVERSATION_ASKS } from "@/thread/waiting-on-you";
 import { channelTitle, type Channel } from "@/channels/model";
 import { listStamp } from "@/data/stamp";
-import { SettingsModal, type SettingsSection } from "@/settings/settings-modal";
+import { type SettingsSection } from "@/settings/settings-modal";
+import { SettingsPage } from "@/settings/settings-page";
 import { NewOrgDialog } from "@/org/new-org-dialog";
 import { ReachSheet } from "@/shell/reach";
 import { ShareSheet, type ShareSubject } from "@/space/share-sheet";
-import { AddPeople } from "@/shell/add-people";
-import { AtTheDoor } from "@/shell/at-the-door";
-import { Modal } from "@/shell/modal";
 import { ReconnectStrip } from "@/shell/reconnect-strip";
 import { DesktopNotices } from "@/desktop/desktop-notices";
 import { FirstProfileStep } from "@/session/first-profile-step";
@@ -36,13 +35,17 @@ import {
 } from "./model";
 import { useNeedsYou, usePodActivity, usePodDetails, useRecents } from "./data";
 import { looksNamed, named, slug, unnamed, type Names } from "./named-address";
-import { appName as nameOfApp, appsOf } from "./lemma-apps";
 import { FrameArrival } from "./arrival";
 import { firstLemma } from "./first-lemma";
 import { ArrivalFlow, type ArrivalStart, type Landing } from "@/arrival/flow";
 import { asksWorkOn, stillAsksWork } from "@/arrival/work";
-import { NewLemmaDialog } from "./new-lemma";
-import { Bars, Icon, Empty } from "./parts";
+import { StartLemma } from "./start-lemma";
+import { AddPeopleDialog } from "./invite-dialog";
+import { FittingApps } from "./add-app";
+import { Bars, Icon } from "./parts";
+import { Calm } from "./calm";
+import { StartPage, StartScreen, startingDone } from "./start-screen";
+import { PageBoundary } from "./page-boundary";
 import { Sidebar } from "./sidebar";
 import { Today } from "./today";
 import { AppsPage } from "./apps";
@@ -66,9 +69,6 @@ const ORG_KEY = key("org");
 const NO_PODS: readonly Pod[] = [];
 /** Whether the reader put the sidebar away: theirs, on this browser. */
 const SIDE_KEY = key("outcomes-side-closed");
-/** The Lemma the page arrived at, before the reader has gone anywhere: a
- *  word no Lemma's id is. */
-const ARRIVAL = "arrival";
 
 function storedSideClosed(): boolean {
     try {
@@ -123,6 +123,21 @@ export interface Me {
  *  already carried that state would skip the router's sync. */
 function step(): number {
     return (window.history.state as { oxStep?: number } | null)?.oxStep ?? 0;
+}
+
+/** The status a failed read came back with, if it came back at all. */
+function statusOf(error: unknown): number | null {
+    if (!error || typeof error !== "object") return null;
+    const said = (error as { statusCode?: unknown; status?: unknown }).statusCode ?? (error as { status?: unknown }).status;
+    return typeof said === "number" ? said : null;
+}
+
+/** What is still true when a read failed, with its code where it has one. */
+function failedLine(error: unknown): string {
+    const status = statusOf(error);
+    return status
+        ? `The server had a problem answering (${status}). Only reading it failed; the Lemma itself is as it was.`
+        : `The server didn’t answer. Only reading it failed; the Lemma itself is as it was.`;
 }
 
 export function nameOf(me: Me | undefined): string {
@@ -183,6 +198,16 @@ export function OutcomesShell() {
         return readView(plain) ?? readTrialView(plain) ?? viewOfLink(plain, arrival) ?? last.current;
     }, [plain, arrival, unread]);
     useEffect(() => { last.current = view; }, [view]);
+    /* Where the frame is, for a move to know where it is going from; and,
+       while a page change is moving, the way to say the new page is on
+       screen -- once the address it pushed has been drawn. */
+    const viewNow = useRef(view);
+    viewNow.current = view;
+    const landed = useRef<(() => void) | null>(null);
+    useLayoutEffect(() => {
+        landed.current?.();
+        landed.current = null;
+    }, [view]);
     useEffect(() => {
         if (unread) return;
         const search = window.location.search + window.location.hash;
@@ -211,10 +236,6 @@ export function OutcomesShell() {
        as they are when it is called. */
     const spelling = useRef<Names | null>(null);
     useEffect(() => { spelling.current = names; }, [names]);
-    /* Which Lemma was asked for as itself, to open on its first app: the one
-       the page arrived at, until the reader goes anywhere; then whichever
-       one a list's name was followed to. */
-    const [landing, setLanding] = useState<string | null>(ARRIVAL);
 
     /* Words on their way to a chat: what Home or ⌘K asked, or what an app put
        in the box. Both belong to the navigation that carried them, and any
@@ -239,18 +260,23 @@ export function OutcomesShell() {
     }, [toggleSide]);
     const go = useCallback<Go>((next, options = {}) => {
         const url = spelling.current ? named(writeView(next), spelling.current) : writeView(next);
-        setLanding(options.landing && next.name === "outcome" && next.tab === "home" ? next.podId : null);
         if (options.replace) {
             window.history.replaceState({ oxStep: step() }, "", url);
             if (options.handoff) setHandoff(options.handoff);
             if (options.fill) setFill(options.fill);
             return;
         }
-        window.history.pushState({ oxStep: step() + 1 }, "", url);
-        setHandoff(options.handoff ?? null);
-        setFill(options.fill ?? null);
-        setNavOpen(false);
-        if (!fills(next)) document.querySelector(".ox-main")?.scrollTo({ top: 0 });
+        const from = viewNow.current;
+        move(directionOf(from, next), heroOf(from, next), () => new Promise<void>((done) => {
+            landed.current = done;
+            window.history.pushState({ oxStep: step() + 1 }, "", url);
+            setHandoff(options.handoff ?? null);
+            setFill(options.fill ?? null);
+            setNavOpen(false);
+            if (!fills(next)) document.querySelector(".ox-main")?.scrollTo({ top: 0 });
+            /* An address that draws nothing new is still a change made. */
+            window.setTimeout(done, 300);
+        }));
     }, []);
     const back = useCallback((fallback: View) => {
         if (step() > 0) {
@@ -386,26 +412,8 @@ export function OutcomesShell() {
         else go(chatView({ kind: "chat", podId, id: NEW_CHAT }), { fill: words });
     }, [go, view]);
 
-    /* A Lemma asked for as itself opens on an app, where it has one: the one
-       somebody chose for it, else its first. Its apps are how people use
-       it, and Home is a list of them. A Lemma with none stays on Home, which
-       says how to start it. */
-    const landingPod = view.name === "outcome" && view.tab === "home" && (landing === ARRIVAL || landing === view.podId) ? view.podId : null;
-    const landed = useQuery({
-        queryKey: ["outcome-apps", landingPod],
-        queryFn: () => source.listTabs(landingPod as string),
-        enabled: Boolean(landingPod),
-        staleTime: 5 * 60_000,
-    });
-    const landingHome = list.find((one) => one.id === landingPod)?.homeApp;
-    useEffect(() => {
-        /* The list says which app was chosen: landing before it is read
-           would open the first app and then stay there. */
-        if (!landingPod || !landed.data || !pods.data) return;
-        const first = appsOf(landed.data, landingHome)[0];
-        if (first) go({ name: "app", podId: landingPod, app: nameOfApp(first) }, { replace: true });
-        else setLanding(null);
-    }, [landingPod, landed.data, pods.data, landingHome, go]);
+    /* A Lemma asked for as itself opens on its page: itself, the box to ask
+       it, and its apps and everything else it holds, one click away. */
 
     /* Where the app in front says it is, and the app it asks for. Either is a
        step the address takes, so Back undoes it and the app is told. */
@@ -451,14 +459,21 @@ export function OutcomesShell() {
         return () => window.removeEventListener("message", listen);
     }, [view, prompt]);
 
-    /* The workspace's own dialogs, opened from anywhere in the frame. */
-    const [settings, setSettings] = useState<{ section: SettingsSection; focus: string | null; request: number } | null>(() => {
-        /* `?connect=` is a connector's round trip coming home, and the panel
-           that reads it has to be open; an old `?section=` naming a part of
-           the organization opens Settings there. */
-        const section = settingsFromQuery(arrival.get("settings")) ?? (arrival.get("connect") ? "connectors" : null) ?? settingsSectionOf(arrival.get("section"));
-        return section ? { section, focus: null, request: 1 } : null;
-    });
+    /* Settings is a page (`/settings/<section>`). A link that asks for it
+       the old way -- `?settings=`, a connector's round trip coming home with
+       `?connect=`, an old `?section=` naming a part of the organization --
+       lands on that page, the query kept for the panel that reads it. */
+    const [settingsFocus, setSettingsFocus] = useState<string | null>(null);
+    useEffect(() => {
+        const section = settingsFromQuery(arrival.get("settings")) ?? settingsSectionOf(arrival.get("section"));
+        /* Connectors is a place of its own, and a connector's round trip
+           comes home to it. */
+        if (arrival.get("connect") || section === "connectors") {
+            window.history.replaceState(window.history.state, "", writeView({ name: "connectors" }) + window.location.search);
+            return;
+        }
+        if (section) window.history.replaceState(window.history.state, "", writeView({ name: "settings", section }) + window.location.search);
+    }, [arrival]);
     const [makingOrg, setMakingOrg] = useState(false);
     /* The way in, held open while it runs: making somebody's organization
        fills the list of organizations, and the frame must not take over in
@@ -497,9 +512,14 @@ export function OutcomesShell() {
     const [shared, setShared] = useState<{ podId: string; subject: ShareSubject } | null>(null);
     const sharing = shared?.podId ?? null;
     const [addingPeople, setAddingPeople] = useState<string | null>(null);
+    useEffect(() => {
+        if (view.name === "people") go({ name: "settings", section: "people" }, { replace: true });
+        if (view.name === "settings" && view.section === "connectors") go({ name: "connectors" }, { replace: true });
+    }, [view, go]);
     const openSettings = useCallback((section: SettingsSection = "account", focus: string | null = null) => {
-        setSettings((was) => ({ section, focus, request: (was?.request ?? 0) + 1 }));
-    }, []);
+        setSettingsFocus(focus);
+        go(section === "connectors" ? { name: "connectors" } : { name: "settings", section });
+    }, [go]);
     useOpenSettingsEvent(openSettings);
     const actions = useMemo<FrameActions>(() => ({
         openSettings: (section) => openSettings(section),
@@ -558,13 +578,26 @@ export function OutcomesShell() {
             go({ name: "hire" });
             return;
         }
-        /* Only the job question: they were somewhere already, and stay. */
-        if (was && was !== "first" && was.kind === "work") return;
+        /* Only the job question: they were somewhere already, and stay --
+           unless it ended on an app it added or a first thing to ask. */
+        if (was && was !== "first" && was.kind === "work" && !landing.app && !landing.ask) return;
         /* Already at the Lemma they came for: stay on the exact address,
            section and all, rather than its summary. */
+        /* An app the way in just added: open on it, already working, rather
+           than on the Lemma with the app one click further in. */
+        /* One of the first things the way in offered to ask: a chat with
+           the Lemma, asking it. */
+        if (landing.podId && landing.ask) {
+            ask(landing.podId, landing.ask);
+            return;
+        }
+        if (landing.podId && landing.app) {
+            go({ name: "app", podId: landing.podId, app: landing.app });
+            return;
+        }
         if (landing.podId && landing.podId === scoped) return;
         go(landing.podId ? outcomeView(landing.podId) : { name: landing.orgId ? "today" : "outcomes" });
-    }, [arriving, queryClient, go, scoped]);
+    }, [arriving, queryClient, go, scoped, ask]);
     /* Who is in a Lemma costs two reads apiece, so it is asked only for the
        pods something on screen reads it for: every one on People and the
        Lemmas board, which list rosters and owners; otherwise the one in view
@@ -611,6 +644,24 @@ export function OutcomesShell() {
     }, [elsewhere]);
     const stranger = unlisted && linked.isError && isForbidden(linked.error) ? unlisted : null;
 
+    /* Starting up: until the organization and its Lemmas are first read, the
+       frame is the start-up screen the gate and the device cache drew before
+       it, so opening the app is one screen filling in. Once the frame has
+       been drawn, a later wait -- another organization picked -- loads inside
+       it instead. */
+    const firstDraw = useRef(true);
+    const orgsFailed = orgs.isError && !org;
+    const podsFailed = pods.isError && !pods.data;
+    const reading = !orgsFailed && !podsFailed && (!org || pods.isPending);
+    const booting = firstDraw.current && reading;
+    useEffect(() => {
+        /* The way in, when it shows, is a screen of its own: a start-up
+           screen after it counts its two seconds afresh. */
+        if (booting && !showingArrival) return;
+        if (!booting) firstDraw.current = false;
+        startingDone();
+    }, [booting, showingArrival]);
+
     /* The way in, one look on every door: somebody who belongs nowhere yet
        (an invitation accepted, their company's organization joined, or one
        made with a Lemma everyone in it shares), an invitation just accepted
@@ -621,10 +672,11 @@ export function OutcomesShell() {
     if (showingArrival) {
         return <ArrivalFlow start={showingArrival} asksWork={asksWork} asksName={asksName} onEntered={enterFrom} />;
     }
+    if (booting) {
+        return <StartScreen words={org ? "Opening " + org.name : "Opening Lemma"} />;
+    }
 
     let page;
-    const orgsFailed = orgs.isError && !org;
-    const podsFailed = pods.isError && !pods.data;
     if (orgsFailed || podsFailed) {
         /* Asks again for whichever read put this here: an org list that
            failed in the background with its data still cached is not one. */
@@ -632,47 +684,111 @@ export function OutcomesShell() {
             if (orgsFailed) void orgs.refetch();
             if (podsFailed) void pods.refetch();
         };
+        const failure = orgsFailed ? orgs.error : pods.error;
         page = (
             <div className="ox-page">
-                <Empty title="Couldn’t load your workspace.">
-                    <button type="button" className="ox-btn" onClick={retry}>Try again</button>
-                </Empty>
+                <Calm
+                    tone="warn"
+                    title="Couldn’t read your workspace"
+                    actions={(
+                        <button type="button" className="b b--m b--primary" disabled={orgs.isFetching || pods.isFetching} onClick={retry}>
+                            <Icon name="refresh" size={16} />Try again
+                        </button>
+                    )}
+                >
+                    <p>{failedLine(failure)}</p>
+                </Calm>
             </div>
         );
     } else if (!org || pods.isPending) {
-        page = <p className="ox-loading">Loading {org?.name ?? "your organization"}…</p>;
+        page = <StartPage words={org ? "Opening " + org.name : "Opening Lemma"} />;
     } else if (view.name === "today") {
         page = <Today org={org} pods={withPeople} activity={activity} channels={sideChannels} queue={queue} queueFailed={queueFailed} onRetryQueue={retryQueue} me={myName} go={go} onAsk={ask} onJoined={(invite) => setArriving({ kind: "joined", orgId: invite.orgId, orgName: invite.orgName, podId: invite.podId })} />;
     } else if (view.name === "apps") {
         page = <AppsPage pods={withPeople} go={go} />;
     } else if (view.name === "connectors") {
         page = <ConnectorsPage org={org} />;
+    } else if (view.name === "settings") {
+        page = (
+            <SettingsPage
+                orgs={orgs.data ?? []}
+                activeOrgId={orgId}
+                section={(view.section ?? "account") as SettingsSection}
+                focus={settingsFocus}
+                onSection={(section) => { setSettingsFocus(null); go({ name: "settings", section }, { replace: true }); }}
+                onPickOrg={pickOrg}
+                onNewOrg={() => setMakingOrg(true)}
+                people={<People org={org} pods={withPeople} go={go} actions={actions} embedded />}
+            />
+        );
     } else if (view.name === "outcomes" || view.name === "hire") {
         page = <OutcomesList org={org} pods={withPeople} activity={activity} days={days} queue={queue} go={go} actions={actions} />;
     } else if (view.name === "needs") {
-        page = <NeedsYou pods={withPeople} queue={queue} loading={queueLoading} failed={queueFailed} onRetry={retryQueue} go={go} />;
+        page = <NeedsYou pods={withPeople} queue={queue} loading={queueLoading} failed={queueFailed} onRetry={retryQueue} retrying={!sampled && needs.isFetching} go={go} />;
     } else if (view.name === "people") {
-        page = <People pods={withPeople} go={go} />;
+        /* People is a section of Settings now; its old address lands there. */
+        page = null;
     } else if (view.name === "history") {
         page = <History org={org} pods={withPeople} podId={view.podId} go={go} />;
     } else if (stranger) {
+        /* Three answers for a Lemma the list does not have: not yours (403),
+           not there (404), and the read failing (anything else). */
         page = (
-            <div className="ox-hire">
-                <NotYours podId={stranger} onArrived={() => { void pods.refetch(); void linked.refetch(); }} />
+            <div className="ox-page">
+                <NotYours podId={stranger} onArrived={() => { void pods.refetch(); void linked.refetch(); }} onHome={() => go({ name: "today" })} />
+            </div>
+        );
+    } else if (unlisted && linked.isError && isMissing(linked.error)) {
+        page = (
+            <div className="ox-page">
+                <Calm
+                    icon="search"
+                    title="This Lemma isn’t here"
+                    actions={<button type="button" className="b b--m b--primary" onClick={() => go({ name: "today" })}>Home</button>}
+                >
+                    <p>It was deleted, or the link came from somewhere else.</p>
+                </Calm>
+            </div>
+        );
+    } else if (unlisted && linked.isError) {
+        page = (
+            <div className="ox-page">
+                <Calm
+                    tone="warn"
+                    title="Couldn’t open this Lemma"
+                    actions={(
+                        <button type="button" className="b b--m b--primary" disabled={linked.isFetching} onClick={() => void linked.refetch()}>
+                            <Icon name="refresh" size={16} />Try again
+                        </button>
+                    )}
+                >
+                    <p>{failedLine(linked.error)}</p>
+                </Calm>
             </div>
         );
     } else if (unlisted && (linked.isPending || elsewhere)) {
-        page = <p className="ox-loading">Opening…</p>;
+        page = <StartPage words="Opening this Lemma" />;
     } else if (view.name === "chats") {
         page = <ChatPane pods={withPeople} open={view.open} activity={activity} go={go} actions={actions} calls={calls} handoff={handoff} onHandoffSent={sentHandoff} fill={fill} onFilled={filled} />;
     } else if (!pod) {
-        page = <div className="ox-page"><Empty title="This Lemma isn’t one you can open."><p>It may have been removed, or you were never added to it.</p></Empty></div>;
+        /* Read, but in no list of the reader's: asked again, lists and all. */
+        page = (
+            <div className="ox-page">
+                <Calm
+                    tone="warn"
+                    title="Couldn’t open this Lemma"
+                    actions={(
+                        <button type="button" className="b b--m b--primary" disabled={pods.isFetching || linked.isFetching} onClick={() => { void pods.refetch(); void linked.refetch(); }}>
+                            <Icon name="refresh" size={16} />Try again
+                        </button>
+                    )}
+                >
+                    <p>It isn’t in {org.name}’s list of Lemmas yet. If it was only just made, trying again usually finds it.</p>
+                </Calm>
+            </div>
+        );
     } else if (view.name === "outcome" && view.tab === "settings") {
         page = <SettingsView key={pod.id} pod={pod} org={org} section={view.section ?? null} go={go} actions={actions} />;
-    } else if (view.name === "outcome" && landingPod === pod.id && landed.isPending) {
-        /* About to open on its first app, or on Home if it has none: not
-           Home for a moment and then the app. */
-        page = <p className="ox-loading">Opening {pod.name}…</p>;
     } else if (view.name === "outcome") {
         page = <OutcomePage pod={pod} pods={list} orgName={org.name} tab={view.tab} section={view.section ?? null} activity={activity.get(pod.id) ?? []} queue={queue.filter((item) => item.podId === pod.id)} me={myName} go={go} onAsk={ask} actions={actions} />;
     } else if (view.name === "run") {
@@ -714,7 +830,6 @@ export function OutcomesShell() {
                 onPlan={() => openSettings("plan")}
                 onNewOrg={() => setMakingOrg(true)}
                 onNewLemma={() => setMakingLemma(true)}
-                onAddApp={(podId) => prompt(podId, "Build an app that ")}
                 open={navOpen}
                 closed={sideClosed}
                 onToggle={toggleSide}
@@ -728,15 +843,22 @@ export function OutcomesShell() {
                     <button type="button" className="ox-topbar__find" aria-label="Ask or find" onClick={() => openPalette(podOfView(view))}><Icon name="search" size={16} /></button>
                 </header>
                 <main className={"ox-main" + (fills(view) ? " ox-main--fill" : "") + (calling ? " ox-main--calling" : "")}>
-                    {calling && <CallStage huddle={huddle} go={go} />}
-                    {page}
+                    {/* A page that throws while drawing takes down itself and
+                        nothing else; the next address draws again. Each kept
+                        app has its own, so one breaking leaves the rest. */}
+                    <PageBoundary at={path}>
+                        {calling && <CallStage huddle={huddle} go={go} />}
+                        {page}
+                    </PageBoundary>
                     {kept.map((one) => {
                         const keptPod = withPeople.find((candidate) => candidate.id === one.podId) ?? one.pod;
                         if (!keptPod) return null;
                         const shown = Boolean(pod) && view.name === "app" && view.podId === one.podId && view.app === one.app;
                         return (
                             <div key={one.podId + "/" + one.app} className="ox-keep" hidden={!shown}>
-                                <AppView pod={keptPod} app={one.app} at={shown && view.name === "app" ? view.at ?? "/" : "/"} go={go} actions={actions} shown={shown} onMove={moveApp} />
+                                <PageBoundary at={shown ? path : "away"}>
+                                    <AppView pod={keptPod} app={one.app} at={shown && view.name === "app" ? view.at ?? "/" : "/"} go={go} actions={actions} shown={shown} onMove={moveApp} />
+                                </PageBoundary>
                             </div>
                         );
                     })}
@@ -748,45 +870,34 @@ export function OutcomesShell() {
             <DesktopNotices orgId={orgId} />
             <ReconnectStrip />
             <FirstProfileStep />
-            {settings && (
-                <SettingsModal
-                    key={settings.request}
-                    orgs={orgs.data ?? []}
-                    activeOrgId={orgId}
-                    onPickOrg={(id) => { setSettings(null); pickOrg(id); }}
-                    onNewOrg={() => setMakingOrg(true)}
-                    initial={settings.section}
-                    initialFocus={settings.focus}
-                    onClose={() => setSettings(null)}
-                />
-            )}
             {makingLemma && org && (
-                <NewLemmaDialog
+                <StartLemma
                     org={org}
                     pods={withPeople}
+                    me={myName}
                     onClose={() => { setMakingLemma(false); if (view.name === "hire") go({ name: "outcomes" }); }}
-                    onCreated={(podId, missed) => {
+                    onMade={(podId, missed) => {
                         setMakingLemma(false);
-                        /* It opens on its home, which says how to start it:
-                           ask it, bring things in, or add a template. */
+                        /* It opens on its page: its face, the box to ask it,
+                           and the way to add apps. */
                         go(outcomeView(podId));
                         /* Someone could not be added: who has access opens,
                            to try again, rather than a line nobody reads. */
                         if (missed > 0) setAddingPeople(podId);
                     }}
+                    apps={(made) => <FittingApps podId={made.id} purpose={made.purpose} name={made.name} />}
                 />
             )}
             {makingOrg && (
                 <NewOrgDialog
                     taken={(orgs.data ?? []).map((one) => one.name)}
                     onClose={() => setMakingOrg(false)}
-                    onCreated={(made) => {
+                    onCreated={(made, personal) => {
                         setMakingOrg(false);
-                        setSettings(null);
                         pickOrg(made.id);
                         /* A new organization opens in its own Lemma, as the
                            first one does, not on an empty list. */
-                        void firstLemma(made.id, made.name).then((podId) => {
+                        void firstLemma(made.id, made.name, { personal }).then((podId) => {
                             if (!podId) return;
                             void queryClient.invalidateQueries({ queryKey: ["pods", made.id] });
                             go(outcomeView(podId));
@@ -795,12 +906,11 @@ export function OutcomesShell() {
                 />
             )}
             {reaching && withPeople.some((one) => one.id === reaching) && <ReachSheet pod={withPeople.find((one) => one.id === reaching)!} onClose={() => setReaching(null)} />}
-            {shared && withPeople.some((one) => one.id === shared.podId) && <ShareSheet pod={withPeople.find((one) => one.id === shared.podId)!} orgId={orgId} subject={shared.subject} onClose={() => setShared(null)} />}
-            {addingPeople && withPeople.some((one) => one.id === addingPeople) && (
-                <Modal title={"People with access to " + withPeople.find((one) => one.id === addingPeople)!.name} onClose={() => setAddingPeople(null)}>
-                    <AtTheDoor podId={addingPeople} teammate={withPeople.find((one) => one.id === addingPeople)!.name} />
-                    <AddPeople pod={withPeople.find((one) => one.id === addingPeople)!} orgId={orgId} />
-                </Modal>
+            {shared && withPeople.some((one) => one.id === shared.podId) && <ShareSheet pod={withPeople.find((one) => one.id === shared.podId)!} orgId={orgId} subject={shared.subject} onClose={() => setShared(null)} onAddPeople={() => { const podId = shared.podId; setShared(null); setAddingPeople(podId); }} />}
+            {/* Adding people to a Lemma: who, and what they can do in it. Who
+                is in it already, and who asked to join, are on its People. */}
+            {addingPeople && org && withPeople.some((one) => one.id === addingPeople) && (
+                <AddPeopleDialog pod={withPeople.find((one) => one.id === addingPeople)!} org={org} onClose={() => setAddingPeople(null)} />
             )}
             {palette.open && org && (
                 <Palette

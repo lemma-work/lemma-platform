@@ -66,6 +66,15 @@ export const CLIENT_CATALOG = {
     "onboarding.work_answered": { properties: ["jobs", "other", "skipped"] },
     /** A Lemma joined from the way in, after an invitation or a domain join. */
     "onboarding.lemma_joined": { properties: [] },
+    /** A plugin added from the way in, by its slug: which suggestion people
+     *  take, never who took it. */
+    "onboarding.plugin_added": { properties: ["plugin"] },
+    /** A place to reach the new Lemma from, turned on in the way in:
+     *  `whatsapp`, `telegram`. Which places people take, never the handle. */
+    "onboarding.place_on": { properties: ["place"] },
+    /** The first message to the new Lemma heard from outside Lemma, by
+     *  place: whether the way in's last step did what it is for. */
+    "onboarding.first_hello": { properties: ["place"] },
 
     // --- hiring a teammate ----------------------------------------------------
 

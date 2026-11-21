@@ -46,15 +46,18 @@ async function emailLink(email, path) {
     assert.equal(new URL(link).origin, origin);
     return link;
 }
+// "Your email", "Your work email", "The email on your account".
+const emailField = page => page.getByLabel(/^(Your( work)? email|The email)/);
+const codeBox = page => page.getByLabel('Digit 1', { exact: true });
 async function enterEmail(page, email, path = '/auth/signup') {
     await page.goto(origin + path);
-    await page.getByLabel('Email', { exact: true }).fill(email);
-    await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
+    await emailField(page).fill(email);
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
 }
+// The boxes send the code as soon as all six are in.
 async function verifyCode(page, code) {
-    await page.getByLabel('Verification code').fill(code);
     const response = page.waitForResponse(r => r.url().endsWith('/email-code/verify'));
-    await page.getByRole('button', { name: 'Verify and continue', exact: true }).click();
+    await codeBox(page).fill(code);
     return (await response).json();
 }
 async function account(page) {
@@ -68,14 +71,14 @@ test('real OTP signup, wrong-code recovery and returning sign-in preserve one ac
     const email = address('otp');
     const signup = await pageFor(t);
     await enterEmail(signup, email);
-    await signup.getByLabel('Verification code').waitFor();
+    await signup.getByLabel('Digit 1', { exact: true }).waitFor();
     const code = await codeFor(email);
     assert.equal((await verifyCode(signup, code === '000000' ? '111111' : '000000')).code, 'EMAIL_CODE_INVALID');
     await verifyCode(signup, code);
     const created = await account(signup);
     const signin = await pageFor(t);
     await enterEmail(signin, email, '/auth');
-    await signin.getByLabel('Verification code').waitFor();
+    await signin.getByLabel('Digit 1', { exact: true }).waitFor();
     await verifyCode(signin, await codeFor(email));
     assert.equal((await account(signin)).id, created.id);
 });
@@ -83,11 +86,11 @@ test('real OTP signup, wrong-code recovery and returning sign-in preserve one ac
 test('real email correction abandons the old challenge immediately', options, async t => {
     const page = await pageFor(t);
     await enterEmail(page, address('typo'));
-    await page.getByRole('button', { name: 'Change email', exact: true }).click();
+    await page.getByRole('button', { name: 'Use another email', exact: true }).click();
     const corrected = address('corrected');
-    await page.getByLabel('Email', { exact: true }).fill(corrected);
-    await page.getByRole('button', { name: 'Continue with email', exact: true }).click();
-    await page.getByLabel('Verification code').waitFor();
+    await emailField(page).fill(corrected);
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await page.getByLabel('Digit 1', { exact: true }).waitFor();
     await verifyCode(page, await codeFor(corrected));
     await account(page);
 });
@@ -97,7 +100,7 @@ test('real password signup, verification, lookup from signup, and reset', option
     const page = await pageFor(t);
     await page.goto(origin + '/auth/signup');
     await page.getByRole('button', { name: 'Use a password instead' }).click();
-    await page.getByLabel('Email', { exact: true }).fill(email);
+    await emailField(page).fill(email);
     await page.getByLabel('Password', { exact: true }).fill(password);
     await page.getByRole('button', { name: 'Make my account' }).click();
     await page.getByRole('heading', { name: 'Check your email', exact: true }).waitFor();
@@ -110,19 +113,19 @@ test('real password signup, verification, lookup from signup, and reset', option
     await enterEmail(signin, email);
     await signin.getByLabel('Password', { exact: true }).fill('wrong-password');
     await signin.getByRole('button', { name: 'Sign in', exact: true }).click();
-    await signin.getByRole('alert').filter({ hasText: 'do not go together' }).waitFor();
+    await signin.getByRole('alert').filter({ hasText: /don.t go together/ }).waitFor();
     await signin.getByLabel('Password', { exact: true }).fill(password);
     await signin.getByRole('button', { name: 'Sign in', exact: true }).click();
     assert.equal((await account(signin)).id, created.id);
     const reset = await pageFor(t);
     await reset.goto(origin + '/auth/reset-password');
-    await reset.getByLabel('Email', { exact: true }).fill(email);
+    await emailField(reset).fill(email);
     await reset.getByRole('button', { name: 'Email me a link' }).click();
     await reset.getByRole('heading', { name: 'Check your email', exact: true }).waitFor();
     await reset.goto(await emailLink(email, 'reset-password'));
     await reset.getByLabel('New password', { exact: true }).fill(replacement);
     await reset.getByRole('button', { name: 'Save password' }).click();
-    await reset.getByRole('heading', { name: 'Password updated.' }).waitFor();
+    await reset.getByRole('heading', { name: 'Password changed' }).waitFor();
     await enterEmail(reset, email, '/auth');
     await reset.getByLabel('Password', { exact: true }).fill(replacement);
     await reset.getByRole('button', { name: 'Sign in', exact: true }).click();
@@ -132,16 +135,16 @@ test('real password signup, verification, lookup from signup, and reset', option
 test('real attempt limit and timed resend reject the old code and accept its replacement', options, async t => {
     const email = address('resend'), page = await pageFor(t);
     await enterEmail(page, email);
-    await page.getByLabel('Verification code').waitFor();
+    await page.getByLabel('Digit 1', { exact: true }).waitFor();
     const old = await codeFor(email), wrong = old === '000000' ? '111111' : '000000';
     for (let attempt = 0; attempt < 4; attempt++) {
         assert.equal((await verifyCode(page, wrong)).code, attempt < 3 ? 'EMAIL_CODE_INVALID' : 'EMAIL_CODE_EXPIRED');
     }
-    await page.getByText('This code can no longer be used. Request a new code below.').waitFor();
-    assert.equal(await page.getByRole('button', { name: 'Verify and continue' }).isEnabled(), false);
-    await page.getByRole('button', { name: 'Resend code', exact: true }).waitFor({ timeout: 70_000 });
-    await page.getByRole('button', { name: 'Resend code', exact: true }).click();
-    await page.getByRole('button', { name: /Resend in/ }).waitFor();
+    await page.getByRole('alert').filter({ hasText: 'That code has expired.' }).waitFor();
+    assert.equal(await codeBox(page).isDisabled(), true);
+    await page.getByRole('button', { name: 'Send a new code', exact: true }).waitFor({ timeout: 70_000 });
+    await page.getByRole('button', { name: 'Send a new code', exact: true }).click();
+    await page.getByText(/Send a new code in/).waitFor();
     const replacement = await codeFor(email);
     if (old !== replacement) assert.equal((await verifyCode(page, old)).code, 'EMAIL_CODE_INVALID');
     await verifyCode(page, replacement);

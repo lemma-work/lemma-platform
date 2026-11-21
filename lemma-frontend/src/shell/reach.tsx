@@ -1,5 +1,5 @@
 import { fields } from "@/connect/schema";
-import { sayReachedOtherWays, surfaceStatus, surfacesForAgent } from "@/data/surface-settings";
+import { surfaceStatus, surfacesForAgent } from "@/data/surface-settings";
 import { SurfaceCredentials } from "./surface-credentials";
 import { SetUpOnThisMac } from "@/desktop/set-up-on-this-mac";
 import { credentialFormForChannel, oauthFormForConnector } from "@/desktop/this-mac";
@@ -7,19 +7,23 @@ import { useThisMacAvailability } from "@/desktop/this-mac-settings";
 import { useThisComputer } from "@/desktop/this-computer";
 import { openSettings } from "@/desktop/open-settings";
 import { SurfaceManage } from "./surface-manage";
-import { LoadingIndicator } from "@/ui/loading";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import QRCode from "react-qr-code";
 import { source } from "@/data";
 import { blurbOf, connectionsPath, connectorsFor, isCredentialConflict, needsSharing, statusNote, unavailableNote } from "@/data";
 import type { AccountConnect, Connectable, GuidedSetup, Pod, PodConnector, Surface } from "@/data";
-import { ProblemLine } from "@/connect/connection-problem";
-import { BackIcon, CheckIcon, CopyIcon, ExternalIcon, RefreshIcon } from "@/ui/icons";
+import { failureOf } from "@/data/pod-connectors";
+import { ProblemHere, ProblemLine } from "@/connect/connection-problem";
+import { Problem } from "@/outcomes/calm";
+import { StepHead } from "@/ui/form";
+import { CheckIcon, CloseIcon, CopyIcon, ExternalIcon, RefreshIcon, WarningIcon } from "@/ui/icons";
 import { KnownSender } from "@/session/mobile-verification";
+import { helloLink, placeKeyOf } from "@/arrival/reach";
 import { OwnBot } from "./own-bot";
 import { ChannelIcon, channelKey, channelName } from "./channels";
-import { Modal } from "./modal";
-import { Mark } from "./mark";
+import { ConfirmDialog } from "./confirm-dialog";
 import { completionPath, hereWith, openAuthorization, useConnectOutcome } from "@/connect/round-trip";
 import { connectorProblem, type ConfigSource } from "@/connect/install";
 import { copyText } from "@/desktop/clipboard";
@@ -45,45 +49,42 @@ import { copyText } from "@/desktop/clipboard";
  *  once rather than spelled as a condition in three. */
 const OWN_BOT = new Set(["SLACK"]);
 
-/** Where a person goes to actually say something. */
-function sayHi(surface: Surface): string | null {
-    const key = channelKey(surface.platform);
-    const handle = surface.handle.trim();
-    if (!handle) return null;
-    if (key === "TELEGRAM") return "https://t.me/" + handle.replace(/^@/, "");
-    if (key === "WHATSAPP") return "https://wa.me/" + handle.replace(/[^\d]/g, "");
-    if (key === "EMAIL") return "mailto:" + (surface.email || handle).trim().replace(/^(mailto:)+/i, "").replace(/\\@/g, "@");
-    return null;
-}
+/** Statuses that say a connected place is not answering yet. */
+const NOT_ANSWERING = new Set(["PENDING_ADMIN_CONSENT", "NEEDS_SETUP", "ERROR", "INACTIVE"]);
 
-function Handle({ surface }: { surface: Surface }) {
+/** The address, large, in figures, with a copy button beside it: the thing
+ *  the whole sheet is for. */
+function Handle({ text }: { text: string }) {
     const [copied, setCopied] = useState(false);
     const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
     useEffect(() => () => clearTimeout(timer.current), []);
     return (
-        <button
-            className="reachrow__handle"
-            title="Copy"
-            onClick={() => {
-                clearTimeout(timer.current);
-                copyText(surface.email ?? surface.handle)
-                    .then(() => {
-                        setCopied(true);
-                        timer.current = setTimeout(() => setCopied(false), 1600);
-                    })
-                    .catch(() => undefined);
-            }}
-        >
-            <span>{surface.handle}</span>
-            {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+        <span className="arp__handle">
+            <span>{text}</span>
+            <button
+                type="button"
+                className="arp__copy kd-copy"
+                aria-label={copied ? "Copied" : "Copy " + text}
+                onClick={() => {
+                    clearTimeout(timer.current);
+                    copyText(text)
+                        .then(() => {
+                            setCopied(true);
+                            timer.current = setTimeout(() => setCopied(false), 1600);
+                        })
+                        .catch(() => undefined);
+                }}
+            >
+                {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+            </button>
             <span className="sr-only" role="status">{copied ? "Copied" : ""}</span>
-        </button>
+        </span>
     );
 }
 
 /** What this will cost, in words, before anything is clicked. */
 const COST: Record<string, string> = {
-    instant: "Ready now",
+    instant: "One tap",
     guided: "About a minute",
     account: "Needs your account",
     unavailable: "Not available",
@@ -111,57 +112,98 @@ function useFixableHere(): string | null {
 function Unblock({ entry, machine }: { entry: Connectable; machine: string | null }) {
     if (!needsSharing(entry)) return <SetUpOnThisMac form={credentialFormForChannel(entry.platform)} force />;
     if (!machine) return null;
-    return <button className="btn" onClick={() => openSettings("this-mac-sharing")}>Open Sharing</button>;
+    return <button type="button" className="b b--s b--secondary" onClick={() => openSettings("this-mac-sharing")}>Open Sharing</button>;
 }
 
-function ConnectedRow({ surface, pod, onDrop, onManage }: { surface: Surface; pod: Pod; onDrop: (name: string) => void; onManage: () => void }) {
-    const [confirming, setConfirming] = useState(false);
-    const open = sayHi(surface);
+/** A place it answers now, drawn as the way in draws one (`arp`, from
+ *  `arrival/reach-step.tsx`), so a place looks the same the first time and
+ *  every time after: its logo, its name, whether it is on, and under that the
+ *  address, large and copyable. Where the app can open a chat with a hello
+ *  already typed (WhatsApp, Telegram), "Say hi" does, with a QR code beside
+ *  it for the phone in your pocket. Disconnecting asks first. */
+function ConnectedRow({ surface, pod, dropping, dropError, onDrop, onManage }: {
+    surface: Surface;
+    pod: Pod;
+    dropping: boolean;
+    dropError: string | null;
+    onDrop: (name: string) => Promise<unknown>;
+    onManage: () => void;
+}) {
+    const [asking, setAsking] = useState(false);
+    const name = channelName(surface.platform);
+    const key = channelKey(surface.platform);
+    const address = (key === "EMAIL" ? surface.email || surface.handle : surface.handle).trim();
+    const answering = surface.active && !NOT_ANSWERING.has(surface.status ?? "");
+    const place = placeKeyOf(surface.platform);
+    const link = answering && surface.mine && place && place !== "EMAIL" ? helloLink(place, address, pod.name) : null;
+    const hint = key === "EMAIL" ? " · nothing to turn on" : key === "SLACK" ? " · @mention " + pod.name : link ? " · say hi to start" : "";
     return (
-        <li className="reachrow reachrow--on">
-            <span className="reachrow__mark"><ChannelIcon platform={surface.platform} size={20} /></span>
-            <div className="reachrow__body">
-                <b>{channelName(surface.platform)}</b>
-                {surface.handle && <Handle surface={surface} />}
-                <span className="reachrow__note">{surfaceStatus(surface.status, surface.active)}</span>
-                {!surface.mine && (
-                    /* A surface on this pod that answers as a different agent.
-                       Drawn like the pod's own, it says "Marketing is on
-                       Telegram" about a bot that is not Marketing. */
-                    <span className="reachrow__note">{surface.agentName ? "answers as " + surface.agentName : "answers under another name"}</span>
-                )}
+        <li className="arp__place" data-state={answering ? "on" : "off"}>
+            <div className="arp__row">
+                <span className="arp__logo"><ChannelIcon platform={surface.platform} size={22} /></span>
+                <span className="arp__said">
+                    <span className="arp__name">{name}</span>
+                    <span className="arp__line">
+                        {answering
+                            ? <><span className="arp__on"><i />On</span>{hint}</>
+                            : <span className="arp__missing"><WarningIcon size={13} aria-hidden="true" />{surfaceStatus(surface.status, surface.active)}</span>}
+                        {/* A surface on this pod that answers as a different
+                            agent. Drawn like the pod's own, it says "Marketing
+                            is on Telegram" about a bot that is not Marketing. */}
+                        {!surface.mine && " · " + (surface.agentName ? "answers as " + surface.agentName : "answers under another name")}
+                    </span>
+                </span>
+                <button type="button" className="b b--s b--secondary" onClick={onManage}>Manage</button>
             </div>
-            <div className="reachrow__acts">
-                <button className="btn" onClick={onManage}>Manage</button>
-                {open && surface.active && (
-                    <a className="btn" href={open} target={open.startsWith("mailto:") ? undefined : "_blank"} rel="noreferrer">
-                        Say hi <ExternalIcon size={13} />
-                    </a>
-                )}
-                {confirming ? (
-                        <>
-                            <button className="btn reachrow__drop" onClick={() => onDrop(surface.name)}>
-                                Disconnect
-                            </button>
-                            <button className="linkish" onClick={() => setConfirming(false)}>Keep</button>
-                        </>
-                    ) : (
+            <div className="arp__body" data-qr={link ? "" : undefined}>
+                <div className="arp__left">
+                    {address && <Handle text={address} />}
+                    {link && (
+                        <span className="arp__acts">
+                            <a className="b b--m b--primary" href={link} target="_blank" rel="noreferrer">Say hi on {name}</a>
+                        </span>
+                    )}
+                    {key === "EMAIL" && surface.mine && (
+                        <span className="kd-small">Write from the address you signed in with and I’ll answer. Mail from anyone else waits for you to see.</span>
+                    )}
+                    {/* The address above is only half of a working channel. On
+                        WhatsApp the sender's number is the only identity a
+                        message carries, so a member with no number on their
+                        profile writes to the Lemma they were just given and is
+                        answered by a sign-up link. Said here, under the
+                        address, rather than discovered there. */}
+                    {surface.mine && key === "WHATSAPP" && <KnownSender />}
+                    <span className="kd-place__acts">
                         <button
-                            className="linkish reachrow__quiet"
-                            onClick={() => setConfirming(true)}
-                            aria-label={"Disconnect " + channelName(surface.platform) + " from " + pod.name}
+                            type="button"
+                            className="b b--s b--secondary b--red"
+                            onClick={() => setAsking(true)}
+                            aria-label={"Disconnect " + name + " from " + pod.name}
                         >
                             Disconnect
                         </button>
-                    )}
+                    </span>
+                </div>
+                {link && (
+                    <span className="arp__qr">
+                        <span className="verify__qr-paper"><QRCode value={link} size={104} bgColor="#ffffff" fgColor="#111111" /></span>
+                        <span>Or scan with your phone</span>
+                    </span>
+                )}
             </div>
-            {/* The address above is only half of a working channel. On
-                WhatsApp the sender's number is the only identity a message
-                carries, so a member with no number on their profile writes to
-                the teammate they were just given and is answered by a sign-up
-                link. Said here, under the address, rather than discovered
-                there. */}
-            {surface.mine && channelKey(surface.platform) === "WHATSAPP" && <KnownSender />}
+            {asking && (
+                <ConfirmDialog
+                    title={"Disconnect " + name + "?"}
+                    line={"People who write to " + (address || name) + " stop reaching " + pod.name + "."}
+                    confirm="Disconnect"
+                    working="Disconnecting…"
+                    danger
+                    busy={dropping}
+                    problem={dropError}
+                    onConfirm={() => { onDrop(surface.name).then(() => setAsking(false), () => undefined); }}
+                    onClose={() => setAsking(false)}
+                />
+            )}
         </li>
     );
 }
@@ -233,28 +275,38 @@ function Guided({ pod, onDone }: { pod: Pod; onDone: () => void }) {
 
     if (!setup) {
         return (
-            <button
-                className="btn"
-                disabled={starting}
-                onClick={() => {
-                    setStarting(true);
-                    setError(null);
-                    source
-                        .startGuided(pod.id, "TELEGRAM")
-                        .then(next => { setSetup(next); if (next.status === "COMPLETE" || next.status === "READY") onDone(); })
-                        .catch((problem) =>
-                            setError(connectorProblem(problem, "That could not be started.")),
-                        )
-                        .finally(() => setStarting(false));
-                }}
-            >
-                {starting ? "Starting…" : "Make a bot of its own"}
-                {error && <span role="alert">{error}</span>}
-            </button>
+            <div className="guided">
+                <button
+                    type="button"
+                    className="b b--m b--primary"
+                    disabled={starting}
+                    onClick={() => {
+                        setStarting(true);
+                        setError(null);
+                        source
+                            .startGuided(pod.id, "TELEGRAM")
+                            .then(next => { setSetup(next); if (next.status === "COMPLETE" || next.status === "READY") onDone(); })
+                            .catch((problem) =>
+                                setError(connectorProblem(problem, "That could not be started.")),
+                            )
+                            .finally(() => setStarting(false));
+                    }}
+                >
+                    {starting ? "Starting…" : "Make a bot of its own"}
+                </button>
+                {error && <Problem>{error}</Problem>}
+            </div>
         );
     }
 
-    if (failed) return <div role="alert"><p>{setup.error || "This setup expired or failed."}</p><button className="btn" onClick={() => { setSetup(null); setError(null); }}>Start again</button></div>;
+    if (failed) {
+        return (
+            <div className="guided">
+                <Problem>{setup.error || "This setup expired or failed."}</Problem>
+                <button type="button" className="b b--m b--secondary" onClick={() => { setSetup(null); setError(null); }}>Start again</button>
+            </div>
+        );
+    }
 
     if (ready) {
         return (
@@ -266,14 +318,14 @@ function Guided({ pod, onDone }: { pod: Pod; onDone: () => void }) {
 
     return (
         <div className="guided">
-            <a className="btn btn--primary" href={setup.launchUrl} target="_blank" rel="noreferrer">
+            <a className="b b--m b--primary" href={setup.launchUrl} target="_blank" rel="noreferrer">
                 Open Telegram <ExternalIcon size={14} />
             </a>
             <p>
                 {setup.managerBot} will ask you for a name, then make the bot. This page notices when it is done —
                 you can leave it open.
             </p>
-            {error && <p role="alert">{error}</p>}
+            {error && <Problem>{error}</Problem>}
             <span className="guided__wait">
                 <RefreshIcon size={13} /> Waiting for Telegram…
             </span>
@@ -411,8 +463,8 @@ function Account({
     }, [link, stage, named, pod.orgId, pod.id, entry.connectorId, entry.platform, onDone]);
 
     if (pendingAccount && stage !== "binding") return <div className="guided">
-        <p role="alert">{error}</p>
-        <button className="btn" onClick={async () => {
+        {error && <Problem>{error}</Problem>}
+        <button type="button" className="b b--m b--secondary" onClick={async () => {
             setStage("binding"); setError(null);
             try { await attach(pendingAccount); onDone(); }
             catch (problem) { setStage("idle"); setError(problem instanceof Error ? problem.message : "Could not connect."); }
@@ -433,7 +485,7 @@ function Account({
                 {/* A button, not a `noreferrer` link: the finished tab reports
                     back to its opener and closes, rather than loading the app
                     a second time inside itself. */}
-                <button className="btn btn--primary" onClick={() => openAuthorization(link.authorizeUrl, name)}>
+                <button type="button" className="b b--m b--primary" onClick={() => openAuthorization(link.authorizeUrl, name)}>
                     Authorise {name} <ExternalIcon size={14} />
                 </button>
                 <p>{name} asks whether Lemma may act for you. This page notices when you are done.</p>
@@ -443,9 +495,10 @@ function Account({
     }
 
     return (
-        <>
+        <div className="guided">
             <button
-                className="btn"
+                type="button"
+                className="b b--m b--primary"
                 disabled={stage === "starting"}
                 onClick={() => {
                     setStage("starting");
@@ -476,13 +529,18 @@ function Account({
                 {/* Just "Connect": the row's own heading already says which
                     platform, and "Connect Microsoft Teams" was wide enough to
                     squeeze the description into a three-line column. */}
-                {stage === "starting" ? <LoadingIndicator inline label="Loading" /> : "Connect"}
+                {stage === "starting" ? "Connecting…" : "Connect"}
             </button>
-            {error && <span className="reachrow__error">{error}</span>}
-        </>
+            {error && <Problem>{error}</Problem>}
+        </div>
     );
 }
 
+/** A place it could answer, as the same row a connected one is: its logo,
+ *  what it would take in a few words, and the one button that starts it.
+ *  One tap turns a shared number or address on in place; anything needing
+ *  more opens its own steps in the sheet. Where this server cannot do it, the
+ *  row stays, dimmed, saying why and who can fix it. */
 function ConnectRow({
     entry,
     busy,
@@ -523,59 +581,60 @@ function ConnectRow({
     const blocked = unavailableNote(entry, machine);
     const note = blocked ?? why(entry);
 
+    const cost = ready ? COST.instant : elsewhere && held ? "Already in use" : costOf(entry);
+    const action = blocked ? null
+        : busy ? <span className="arp__spin" role="status" aria-label={entry.effort === "instant" ? "Turning on" : "Connecting"} />
+            : guiding ? <button type="button" className="b b--s b--secondary" onClick={() => onFocus(entry)}>Set up</button>
+                : entry.effort === "instant" ? <button type="button" className="b b--s b--secondary" onClick={() => onConnect(entry.platform)}>Turn on</button>
+                    : ready ? <button type="button" className="b b--s b--secondary" onClick={() => onUseConnector(entry, ready.slug)}>Connect</button>
+                        : entry.effort === "account" || entry.effort === "unavailable"
+                            ? <button type="button" className="b b--s b--secondary" onClick={() => onFocus(entry)}>{elsewhere && held ? "Give it its own" : "Set up"}</button>
+                            : null;
+    /* A choice, not only a fallback: a bot carrying this teammate's own name
+       is a different — often better — outcome than sharing one. Offered
+       wherever it is possible, which is the guided platforms and Slack; on
+       Slack it is also the ONLY way for a second teammate, since a connected
+       account is claimable once per organization. Not when the row's own
+       button already says exactly this. */
+    const ownWay = (entry.guided || OWN_BOT.has(entry.platform) || fields(entry.credentialSchema).length > 0) && !guiding && !(elsewhere && held) && !blocked;
+
+    /* Not here: said in the row, plainly, with what can be done about it —
+       and the place still shown, so nobody has to guess it exists. */
     return (
-        <li className="reachrow" data-effort={entry.effort}>
-            <span className="reachrow__mark"><ChannelIcon platform={entry.platform} size={20} /></span>
-            <div className="reachrow__body">
-                <b>{name}</b>
-                {note && <span className="reachrow__note">{note}</span>}
+        <li className="arp__place" data-state={blocked ? "missing" : "off"}>
+            <div className="arp__row">
+                <span className="arp__logo"><ChannelIcon platform={entry.platform} size={22} /></span>
+                <span className="arp__said">
+                    <span className="arp__name">{name}</span>
+                    <span className="arp__line">
+                        {blocked
+                            ? <span className="arp__missing"><WarningIcon size={13} aria-hidden="true" />{blocked}</span>
+                            : busy
+                                ? entry.effort === "instant" ? "Turning on…" : "Connecting…"
+                                : [cost, note].filter(Boolean).join(" · ")}
+                    </span>
+                </span>
+                {action}
+            </div>
+            <div className="arp__body kd-place__more">
                 {ready && !guiding && (
-                    <span className="reachrow__note">
+                    <span className="kd-small">
                         Using {ready.slug}{ready.sharedAccount ? " (" + ready.sharedAccount + ")" : ""}, already shared in this space.
                     </span>
                 )}
                 {elsewhere && held && !guiding && (
-                    <span className="reachrow__note">
+                    <span className="kd-small">
                         {name} is already in use elsewhere in this organization, so this one needs an identity of its own.
                     </span>
                 )}
-                {/* A choice, not only a fallback: a bot carrying this
-                    teammate's own name is a different — often better —
-                    outcome than sharing one. Offered wherever it is possible,
-                    which is the guided platforms and Slack; on Slack it is
-                    also the ONLY way for a second teammate, since a connected
-                    account is claimable once per organization. */}
-                {/* Not when the row's own button already says exactly this. */}
-                {(entry.guided || OWN_BOT.has(entry.platform) || fields(entry.credentialSchema).length > 0) && !guiding && !(elsewhere && held) && !blocked && (
-                    <button className="linkish reachrow__alt" onClick={() => onFocus(entry)}>
-                        Use your own account or bot
-                    </button>
+                {ownWay && (
+                    <span className="kd-place__acts">
+                        <button type="button" className="b b--s b--quiet" onClick={() => onFocus(entry)}>
+                            Use your own account
+                        </button>
+                    </span>
                 )}
-            </div>
-            <div className="reachrow__acts">
-                <span className="reachrow__cost" data-effort={ready ? "instant" : entry.effort}>
-                    {ready ? COST.instant : elsewhere && held ? "Already in use" : costOf(entry)}
-                </span>
-                {blocked ? (
-                    <Unblock entry={entry} machine={machine} />
-                ) : guiding ? (
-                    <button className="btn" onClick={() => onFocus(entry)}>Set up</button>
-                ) : entry.effort === "instant" ? (
-                    <button className="btn btn--primary" disabled={busy} onClick={() => onConnect(entry.platform)}>
-                        {busy ? "Connecting…" : "Connect"}
-                    </button>
-                ) : ready ? (
-                    <button className="btn btn--primary" disabled={busy} onClick={() => onUseConnector(entry, ready.slug)}>
-                        {busy ? "Connecting…" : "Connect"}
-                    </button>
-                ) : entry.effort === "account" || entry.effort === "unavailable" ? (
-                    <button
-                        className={"btn" + (elsewhere && held ? " btn--primary" : "")}
-                        onClick={() => onFocus(entry)}
-                    >
-                        {elsewhere && held ? "Give it its own" : "Set up"}
-                    </button>
-                ) : null}
+                {blocked && <Unblock entry={entry} machine={machine} />}
             </div>
         </li>
     );
@@ -586,9 +645,12 @@ function ConnectRow({
  *  The list answers "where could this teammate be?"; it is the wrong shape for
  *  "and how do I set this one up", which is a few sentences and a single
  *  action. So picking a channel that needs real work replaces the list rather
- *  than nesting a second dialog inside it — the focused treatment from the
- *  original connect modal, which read better than a row ever will, without
- *  that modal's habit of sending you somewhere else to do the work. */
+ *  than nesting a second dialog inside it, without that old modal's habit of
+ *  sending you somewhere else to do the work.
+ *
+ *  Drawn as every step in a sheet is (`StepHead`): the way back on the left,
+ *  then the channel's mark beside what this step is and what doing it does,
+ *  and under that the form, left-aligned and as wide as the sheet. */
 function Focused({
     entry,
     pod,
@@ -611,87 +673,83 @@ function Focused({
     const machine = useFixableHere();
     /* The connector's sign-in app, where it would come from this computer. */
     const appForm = oauthFormForConnector(entry.connectorId) ?? credentialFormForChannel(entry.platform);
+    const mark = <span className="kmark" aria-hidden="true"><ChannelIcon platform={entry.platform} size={20} /></span>;
+    const head = (title: string, line?: ReactNode) => <StepHead onBack={onBack} mark={mark} title={title} line={line} />;
 
+    /* No setup guide here any more: the one the API serves is written for
+       whoever calls it — name a pod connector, POST the surface — and was
+       shown to people deciding where a colleague should answer. */
+    if ((custom || !entry.guided) && hasCredentials) {
+        return (
+            <div className="kstep">
+                {entry.platform === "TELEGRAM"
+                    ? head("Use a bot you already made", "Paste the token @BotFather gave you when you made it. Send it /token to see it again.")
+                    : head("Connect your " + name + " account", pod.name + " answers what people send to this account.")}
+                <SurfaceCredentials pod={pod} entry={entry} onDone={onDone} />
+                {entry.guided && <button type="button" className="b b--s b--quiet" onClick={() => setCustom(false)}>Make a new bot instead</button>}
+            </div>
+        );
+    }
+    if (ownBot && canOwn) {
+        return (
+            <div className="kstep">
+                {head(
+                    "Give " + pod.name + " a Slack bot of its own",
+                    taken
+                        ? "That Slack account already answers under another name here, and one Slack app is one bot, so " + pod.name + " needs an app of its own."
+                        : "One Slack app is one bot, so " + pod.name + " needs an app under its own name.",
+                )}
+                <OwnBot entry={entry} pod={pod} onDone={onDone} />
+            </div>
+        );
+    }
+    if (entry.platform === "SLACK" && entry.account) {
+        return <SlackManagerStep entry={entry} pod={pod} head={head} onReady={() => setOwnBot(true)} />;
+    }
+    if (entry.guided) {
+        return (
+            <div className="kstep">
+                {head("Give " + pod.name + " a bot of its own", "Lemma’s setup bot makes it for you and names it after " + pod.name + ". You won’t need to touch BotFather.")}
+                <Guided pod={pod} onDone={onDone} />
+                {hasCredentials && <button type="button" className="b b--s b--quiet" onClick={() => setCustom(true)}>Use a bot you already made</button>}
+            </div>
+        );
+    }
     return (
-        <div className="focused">
-            <button className="focused__back" onClick={onBack}>
-                <BackIcon size={15} /> Back
-            </button>
-
-            <span className="focused__logo"><ChannelIcon platform={entry.platform} size={38} /></span>
-
-            {/* No setup guide here any more: the one the API serves is written
-                for whoever calls it — name a pod connector, POST the surface —
-                and was shown to people deciding where a colleague should
-                answer. */}
-            {((custom || !entry.guided) && hasCredentials) ? (
-                <>
-                    <h3>{entry.platform === "TELEGRAM" ? "Use a bot you already made" : "Connect your " + name + " account"}</h3>
-                    {entry.platform === "TELEGRAM" && (
-                        <p>Paste the token @BotFather gave you when you made the bot. Send it /token to see it again.</p>
-                    )}
-                    <SurfaceCredentials pod={pod} entry={entry} onDone={onDone} />
-                    {entry.guided && <button className="linkish" onClick={() => setCustom(false)}>Create a new bot instead</button>}
-                </>
-            ) : ownBot && canOwn ? (
-                <>
-                    <h3>Give {pod.name} a Slack bot of its own</h3>
-                    <p>
-                        {taken
-                            ? "That Slack account already answers under another name in this organization. One account answers under one name, and one Slack app is one bot user — so this one needs an app of its own."
-                            : "One Slack app is one bot user, so " + pod.name + " needs an app under its own name."}
-                    </p>
-                    <OwnBot entry={entry} pod={pod} onDone={onDone} />
-                </>
-            ) : entry.platform === "SLACK" && entry.account ? (
-                <SlackManagerStep entry={entry} pod={pod} onReady={() => setOwnBot(true)} />
-            ) : entry.guided ? (
-                <>
-                    <h3>Give {pod.name} a bot of its own</h3>
-                    <p>
-                        Lemma&rsquo;s setup bot makes it for you and names it after {pod.name}. You will not need
-                        to touch BotFather.
-                    </p>
-                    <Guided pod={pod} onDone={onDone} />
-                    {hasCredentials && <button className="linkish" onClick={() => setCustom(true)}>Use an existing bot</button>}
-                </>
-            ) : (
-                <>
-                    <h3>Connect {name} to {pod.name}</h3>
-                    <p>
-                        {/* Only a Lemma-supplied app is certain to reach a
-                            consent page; without one the sign-in needs an app
-                            registered first, and promising the page was how
-                            "needs setting up by an admin" arrived as a surprise. */}
-                        {entry.hostedOAuth
-                            ? name + " will ask whether Lemma may act for you. "
-                            : name + " signs in through an app registered for this organization. "}
-                        Nothing is sent anywhere until you say so — this only gives {pod.name} somewhere to answer.
-                    </p>
-                    {!entry.hostedOAuth && (
-                        <SetUpOnThisMac
-                            form={appForm}
-                            force
-                            lead={"Lemma has no " + name + " app on {machine} yet. Add one once and everyone here can connect."}
-                        />
-                    )}
-                    <SharedConnectors entry={entry} pod={pod} onDone={onDone} />
-                    {entry.account ? <Account entry={entry} pod={pod} onDone={onDone} /> : (
-                        machine ? (
-                            /* On a local install the administrator is the
-                               person reading, and the bot credentials are
-                               this computer's to set. */
-                            <SetUpOnThisMac form={credentialFormForChannel(entry.platform)} force lead={name + " isn’t set up on {machine} yet."} />
-                        ) : (
-                            <p>{name} isn’t set up on this server yet. Whoever runs it can add it.</p>
-                        )
-                    )}
-                    {canOwn && (
-                        <button className="linkish focused__alt" onClick={() => setOwnBot(true)}>
-                            Or give {pod.name} a Slack bot of its own
-                        </button>
-                    )}
-                </>
+        <div className="kstep">
+            {head(
+                "Connect " + name + " to " + pod.name,
+                /* Only a Lemma-supplied app is certain to reach a consent
+                   page; without one the sign-in needs an app registered
+                   first, and promising the page was how "needs setting up by
+                   an admin" arrived as a surprise. */
+                (entry.hostedOAuth
+                    ? name + " will ask whether Lemma may act for you. "
+                    : name + " signs in through an app registered for this organization. ")
+                + "Nothing is sent anywhere until you say so.",
+            )}
+            {!entry.hostedOAuth && (
+                <SetUpOnThisMac
+                    form={appForm}
+                    force
+                    lead={"Lemma has no " + name + " app on {machine} yet. Add one once and everyone here can connect."}
+                />
+            )}
+            <SharedConnectors entry={entry} pod={pod} onDone={onDone} />
+            {entry.account ? <Account entry={entry} pod={pod} onDone={onDone} /> : (
+                machine ? (
+                    /* On a local install the administrator is the person
+                       reading, and the bot credentials are this computer's
+                       to set. */
+                    <SetUpOnThisMac form={credentialFormForChannel(entry.platform)} force lead={name + " isn’t set up on {machine} yet."} />
+                ) : (
+                    <p>{name} isn’t set up on this server yet. Whoever runs it can add it.</p>
+                )
+            )}
+            {canOwn && (
+                <button type="button" className="b b--s b--quiet" onClick={() => setOwnBot(true)}>
+                    Or give {pod.name} a Slack bot of its own
+                </button>
             )}
         </div>
     );
@@ -721,15 +779,14 @@ function SharedConnectors({ entry, pod, onDone }: { entry: Connectable; pod: Pod
     if (connectors.isPending) return <p className="guided__wait" role="status"><RefreshIcon size={13} /> Looking for this space’s {name} connectors…</p>;
     if (connectors.isError) {
         return (
-            <p role="alert">
-                This space’s connectors could not be read.{" "}
-                <button className="linkish" onClick={() => void connectors.refetch()}>Try again</button>
-            </p>
+            <Problem onRetry={() => void connectors.refetch()} retrying={connectors.isFetching}>
+                Couldn’t read this space’s {name} connectors.
+            </Problem>
         );
     }
     if (shared.length === 0) {
         return (
-            <p className="reachrow__note">
+            <p>
                 This space has no shared {name} connector yet.{" "}
                 <a className="linkish" href={connectionsPath(pod.id)}>Set one up in connections</a>
                 {entry.account ? ", or connect an account of your own here." : "."}
@@ -749,17 +806,17 @@ function SharedConnectors({ entry, pod, onDone }: { entry: Connectable; pod: Pod
                         </div>
                         <div className="reachrow__acts">
                             {one.status === "READY" ? (
-                                <button className="btn btn--primary" disabled={use.isPending} onClick={() => use.mutate(one.slug)}>
+                                <button type="button" className="b b--s b--secondary" disabled={use.isPending} onClick={() => use.mutate(one.slug)}>
                                     {use.isPending && use.variables === one.slug ? "Connecting…" : "Use"}
                                 </button>
                             ) : (
-                                <a className="btn" href={connectionsPath(pod.id, one.slug)}>Fix in connections</a>
+                                <a className="b b--s b--secondary" href={connectionsPath(pod.id, one.slug)}>Fix in connections</a>
                             )}
                         </div>
                     </li>
                 ))}
             </ul>
-            {use.isError && <ProblemLine className="reachrow__error" error={use.error} fallback="That connector could not be used." />}
+            {use.isError && <ProblemHere error={use.error} fallback="That connector could not be used." />}
         </>
     );
 }
@@ -770,7 +827,12 @@ function SharedConnectors({ entry, pod, onDone }: { entry: Connectable; pod: Pod
  *  them, add one, and hand one a channel -- and answers nobody. So connecting
  *  Slack is two steps the first time and one after: add Lemma to the
  *  workspace, then give this teammate an app of its own. */
-function SlackManagerStep({ entry, pod, onReady }: { entry: Connectable; pod: Pod; onReady: () => void }) {
+function SlackManagerStep({ entry, pod, head, onReady }: {
+    entry: Connectable;
+    pod: Pod;
+    head: (title: string, line?: ReactNode) => ReactNode;
+    onReady: () => void;
+}) {
     const managed = useQuery({
         queryKey: ["slack-managers", pod.id],
         queryFn: () => source.slackManagedWorkspaces(pod.id),
@@ -779,15 +841,19 @@ function SlackManagerStep({ entry, pod, onReady }: { entry: Connectable; pod: Po
         if (managed.data?.length) onReady();
     }, [managed.data, onReady]);
     if (managed.isPending || managed.data?.length) {
-        return <p className="guided__wait" role="status"><RefreshIcon size={13} /> Checking your Slack workspace…</p>;
+        return (
+            <div className="kstep">
+                {head("Connect Slack")}
+                <p className="guided__wait" role="status"><RefreshIcon size={13} /> Checking your Slack workspace…</p>
+            </div>
+        );
     }
     return (
-        <>
-            <h3>Add Lemma to your Slack workspace</h3>
-            <p>
-                Lemma&rsquo;s app is where your workspace sees its teammates, adds them and gives them channels.
-                It answers nobody itself. Then {pod.teammate.name} gets a Slack bot of its own.
-            </p>
+        <div className="kstep">
+            {head(
+                "Add Lemma to your Slack workspace",
+                "Lemma’s app is where your workspace sees its Lemmas and adds them. It answers nobody itself. Then " + pod.teammate.name + " gets a Slack bot of its own.",
+            )}
             <Account
                 entry={entry}
                 pod={pod}
@@ -797,29 +863,106 @@ function SlackManagerStep({ entry, pod, onReady }: { entry: Connectable; pod: Po
                    installs of the same connector, and the manager refuses them. */
                 configSource="SYSTEM_DEFAULT"
             />
-            <button className="linkish focused__alt" onClick={onReady}>
+            <button type="button" className="b b--s b--quiet" onClick={onReady}>
                 Skip this, and give {pod.teammate.name} its bot now
             </button>
-        </>
+        </div>
     );
 }
 
+/** Where to reach a Lemma, as the kit's sheet from the right edge.
+ *
+ *  It was a dialog in the middle of the screen, which hid the Lemma it was
+ *  about. A sheet keeps the page in view while the places are turned on, and
+ *  the page stays put: it slides in over a light veil and goes the same way.
+ *  The Lemma says it, in the first person: these are the places you can reach
+ *  it, and it answers where you write. */
 export function ReachSheet({ pod, onClose }: { pod: Pod; onClose: () => void }) {
     return (
-        <Modal
-            title={"Where can you reach " + pod.name + "?"}
-            subtitle={"Pick one and " + pod.name + " answers there, under its own name."}
+        <Sheet
+            label={"Where to reach " + pod.name}
+            title="Where you can reach me"
+            line={"Nobody has to open Lemma to talk to " + pod.name + ". I answer right where you write."}
             onClose={onClose}
         >
             <ReachPanel pod={pod} onLeave={onClose} />
-        </Modal>
+        </Sheet>
+    );
+}
+
+/** The kit's sheet (`.ksheet`): a heading, a close button, and a body that
+ *  scrolls. Escape, a click on the veil and the close button all close it;
+ *  Tab stays inside while it is open, and focus goes back where it was.
+ *
+ *  A dialog opened over it — Disconnect's question — owns the keyboard: the
+ *  shared `Modal` stops Escape before it gets here, and a key pressed with
+ *  focus outside the sheet is not the sheet's. */
+function Sheet({ label, title, line, onClose, children }: {
+    label: string;
+    title: string;
+    line?: string;
+    onClose: () => void;
+    children: ReactNode;
+}) {
+    const panel = useRef<HTMLElement>(null);
+    const close = useRef(onClose);
+    close.current = onClose;
+    const [mounted, setMounted] = useState(false);
+    useEffect(() => setMounted(true), []);
+    useEffect(() => {
+        if (!mounted) return;
+        const previous = document.activeElement as HTMLElement | null;
+        panel.current?.focus();
+        const onKey = (event: KeyboardEvent) => {
+            const target = event.target as Node | null;
+            if (target && target !== document.body && !panel.current?.contains(target)) return;
+            if (event.key === "Escape") {
+                event.preventDefault();
+                close.current();
+                return;
+            }
+            if (event.key !== "Tab") return;
+            const focusable = Array.from(panel.current?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select, textarea, [tabindex="0"]') ?? [])
+                .filter((element) => element.getClientRects().length > 0);
+            const first = focusable[0];
+            const last = focusable.at(-1);
+            if (!first) { event.preventDefault(); return; }
+            if (event.shiftKey && (document.activeElement === first || document.activeElement === panel.current)) { event.preventDefault(); last?.focus(); }
+            else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+        };
+        document.addEventListener("keydown", onKey);
+        return () => {
+            document.removeEventListener("keydown", onKey);
+            if (previous?.isConnected) previous.focus();
+        };
+    }, [mounted]);
+    if (!mounted) return null;
+    return createPortal(
+        <>
+            <div className="ksheet-veil" aria-hidden="true" onMouseDown={() => close.current()} />
+            <aside className="ksheet" role="dialog" aria-modal="true" aria-label={label} tabIndex={-1} ref={panel}>
+                <header className="ksheet__head">
+                    <h2>{title}</h2>
+                    {line && <p>{line}</p>}
+                    <button type="button" className="ksheet__x b b--m b--quiet b--icon" onClick={() => close.current()} aria-label="Close">
+                        <CloseIcon size={19} />
+                    </button>
+                </header>
+                <div className="ksheet__body">{children}</div>
+            </aside>
+        </>,
+        document.body,
     );
 }
 
 /** What the sheet holds — the channels it answers on, and the ones it could —
  *  without the sheet. Channels on About is a page of its own, and this is that
- *  page; the strip elsewhere opens the same thing in a sheet. `inline` drops
- *  the count at the top, which the page's own heading already says. */
+ *  page; the strip elsewhere opens the same thing in a sheet.
+ *
+ *  One list, every place in it: those it answers on first, then the ones one
+ *  tap or a little setup away, then the ones this server cannot do yet, each
+ *  saying why in its own row. `inline` is the page's copy, which has its own
+ *  heading over it. */
 export function ReachPanel({ pod, onLeave, inline = false }: { pod: Pod; onLeave?: () => void; inline?: boolean }) {
     const queryClient = useQueryClient();
     const [managing, setManaging] = useState<Surface | null>(null);
@@ -871,9 +1014,16 @@ export function ReachPanel({ pod, onLeave, inline = false }: { pod: Pod; onLeave
         } catch { setCompletionError("Connection saved, but setup could not be loaded. Refresh to continue."); }
     };
 
+    /* One tap turns a place on where it is: the row becomes its address,
+       with the way to say hi, rather than sending the person into its
+       settings before they have written to it once. Into the list now, so the
+       row does not offer "Turn on" again while the list is read back. */
     const connect = useMutation({
         mutationFn: (platform: string) => source.connectSystem(pod.id, platform),
-        onSuccess: (surface) => { refresh(); setManaging(surface); },
+        onSuccess: (surface) => {
+            queryClient.setQueryData<Surface[]>(["surfaces", 2, pod.id], (was) => was ? [...was.filter((one) => one.id !== surface.id), surface] : was);
+            refresh();
+        },
     });
     const [taken, setTaken] = useState<string | undefined>(undefined);
     const useConnector = useMutation({
@@ -903,7 +1053,11 @@ export function ReachPanel({ pod, onLeave, inline = false }: { pod: Pod; onLeave
         () => new Set(on.map((surface) => channelKey(surface.platform))),
         [on],
     );
-    const offer = (surfaces.isSuccess ? catalog.data ?? [] : []).filter((entry) => !already.has(channelKey(entry.platform)));
+    /* What can be had here first; what this server cannot do yet after it,
+       in the same order, as the way in lists them. */
+    const machine = useFixableHere();
+    const offered = (surfaces.isSuccess ? catalog.data ?? [] : []).filter((entry) => !already.has(channelKey(entry.platform)));
+    const offer = [...offered.filter((entry) => !unavailableNote(entry, machine)), ...offered.filter((entry) => unavailableNote(entry, machine))];
 
     const heldElsewhere = useMemo(
         () =>
@@ -916,7 +1070,7 @@ export function ReachPanel({ pod, onLeave, inline = false }: { pod: Pod; onLeave
         [mine.data, pod.id],
     );
 
-    const failed = connect.error ?? drop.error ?? (isCredentialConflict(useConnector.error) ? null : useConnector.error);
+    const failed = connect.error ?? (isCredentialConflict(useConnector.error) ? null : useConnector.error);
 
     return (
         <>
@@ -932,54 +1086,62 @@ export function ReachPanel({ pod, onLeave, inline = false }: { pod: Pod; onLeave
                     onDone={() => { void finish(focus.platform); }}
                 />
             ) : (
-            <div className={inline ? "reachsheet reachsheet--inline" : "reachsheet"}>
-                {!inline && <div className="reachsheet__who">
-                    <Mark seed={pod.id} name={pod.name} icon={pod.iconUrl} size={40} />
-                    <p>{sayReachedOtherWays(pod.name, on)}</p>
-                </div>}
+            <div className={inline ? "kd-reach kd-reach--inline" : "kd-reach"}>
+                {(catalog.isPending || surfaces.isPending) && <p className="kd-small" role="status">Finding where you can reach {pod.name}…</p>}
 
-                {on.length > 0 && (
-                    <ul className="reachrows">
+                {(on.length > 0 || offer.length > 0) && (
+                    <ul className="arp" aria-label={"Where to reach " + pod.name}>
                         {on.map((surface) => (
-                            <ConnectedRow key={surface.id} surface={surface} pod={pod} onDrop={(name) => drop.mutate(name)} onManage={() => setManaging(surface)} />
+                            <ConnectedRow
+                                key={surface.id}
+                                surface={surface}
+                                pod={pod}
+                                dropping={drop.isPending && drop.variables === surface.name}
+                                dropError={drop.isError && drop.variables === surface.name ? failureOf(drop.error, "Couldn’t disconnect it.").message : null}
+                                onDrop={(name) => drop.mutateAsync(name)}
+                                onManage={() => setManaging(surface)}
+                            />
+                        ))}
+                        {offer.map((entry) => (
+                            <ConnectRow
+                                key={entry.platform}
+                                entry={entry}
+                                busy={
+                                    (connect.isPending && connect.variables === entry.platform) ||
+                                    (useConnector.isPending && useConnector.variables?.entry.platform === entry.platform)
+                                }
+                                onConnect={(platform) => connect.mutate(platform)}
+                                onUseConnector={(chosen, podConnector) => useConnector.mutate({ entry: chosen, podConnector })}
+                                onFocus={setFocus}
+                                elsewhere={heldElsewhere.has(channelKey(entry.platform))}
+                                connectors={connectors.data ?? []}
+                            />
                         ))}
                     </ul>
                 )}
 
-                {(catalog.isPending || surfaces.isPending) && <p className="empty-row">Reading where it answers…</p>}
-
+                {surfaces.isSuccess && catalog.isSuccess && on.length === 0 && offer.length === 0 && (
+                    <p className="kd-small">There is nowhere to reach {pod.name} on this server yet. Talk to it inside Lemma.</p>
+                )}
                 {catalog.isError && (
-                    <button className="btn" onClick={() => void catalog.refetch()}>
-                        <RefreshIcon size={15} /> Retry
-                    </button>
+                    <p className="kd-problem" role="alert">
+                        Couldn’t read where else it could answer.{" "}
+                        <button type="button" className="b b--s b--secondary" onClick={() => void catalog.refetch()}><RefreshIcon size={15} /> Try again</button>
+                    </p>
                 )}
-
-                {offer.length > 0 && (
-                    <>
-                        <h3 className="reachsheet__more">{on.length > 0 ? "Somewhere else" : "Pick one"}</h3>
-                        <ul className="reachrows">
-                            {offer.map((entry) => (
-                                <ConnectRow
-                                    key={entry.platform}
-                                    entry={entry}
-                                    busy={
-                                        (connect.isPending && connect.variables === entry.platform) ||
-                                        (useConnector.isPending && useConnector.variables?.entry.platform === entry.platform)
-                                    }
-                                    onConnect={(platform) => connect.mutate(platform)}
-                                    onUseConnector={(chosen, podConnector) => useConnector.mutate({ entry: chosen, podConnector })}
-                                    onFocus={setFocus}
-                                    elsewhere={heldElsewhere.has(channelKey(entry.platform))}
-                                    connectors={connectors.data ?? []}
-                                />
-                            ))}
-                        </ul>
-                    </>
+                {surfaces.isError && (
+                    <p className="kd-problem" role="alert">
+                        Couldn’t read where it answers now.{" "}
+                        <button type="button" className="b b--s b--secondary" onClick={() => void surfaces.refetch()}><RefreshIcon size={15} /> Try again</button>
+                    </p>
                 )}
-
-                {completionError && <p role="alert">{completionError} <button className="btn" onClick={() => { refresh(); setCompletionError(null); }}>Refresh</button></p>}
-                {surfaces.isError && <p role="alert">Could not read where it answers now. <button className="btn" onClick={() => void surfaces.refetch()}>Retry</button></p>}
-                {failed && <ProblemLine className="approval__error" error={failed} fallback="Couldn’t update this." />}
+                {completionError && (
+                    <p className="kd-problem" role="alert">
+                        {completionError}{" "}
+                        <button type="button" className="b b--s b--secondary" onClick={() => { refresh(); setCompletionError(null); }}>Refresh</button>
+                    </p>
+                )}
+                {failed && <ProblemLine className="kd-problem" error={failed} fallback="Couldn’t update this." />}
             </div>
             )}
         </>

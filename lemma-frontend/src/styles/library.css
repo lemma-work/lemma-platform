@@ -31,15 +31,9 @@
 .library-row--failed{flex-wrap:wrap}
 .library-row--failed .library-row-actions{opacity:1;top:37px}
 .library-row-why{flex-basis:100%;margin:0;padding:10px 12px 14px 62px;border-bottom:1px solid var(--line);color:var(--ink-2);font-size:12.5px;line-height:1.5;overflow-wrap:anywhere}
-/* Named, and in front of the row it is about, so there is no question which
-   thing the confirmation belongs to. */
-.library-confirm{position:absolute;inset:0;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:10px 12px;background:var(--paper);border:1px solid var(--bad);border-radius:8px;font-size:13px}
-.library-confirm p{margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis}
-.library-confirm__actions{display:flex;gap:8px;flex-shrink:0}
 @media(max-width:600px){
   .library-heading{flex-wrap:wrap}
   .library-row-actions{opacity:1;position:static;transform:none;align-items:center}
-  .library-confirm{position:static;flex-wrap:wrap}
   .library-row-why{padding-left:8px}
 }
 

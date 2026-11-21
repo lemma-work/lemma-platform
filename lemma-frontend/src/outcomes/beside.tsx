@@ -13,10 +13,13 @@ import { DocSpace, isDoc } from "@/docs/doc-space";
 import { docTitle } from "@/library/doc-title";
 import { readableName } from "@/library/reading";
 import { registerFrame } from "@/thread/compose-bridge";
-import { chatView, type Go, type View } from "./model";
+import { chatView, outcomeView, type Go, type View } from "./model";
 import type { FrameActions } from "./actions";
-import { Empty, Icon, to } from "./parts";
-import { HeldActions } from "./stage";
+import { Icon, to } from "./parts";
+import { AppOpening, HeldActions, appTrouble } from "./stage";
+import { TryAgain, codeOf } from "./read-again";
+import { AppMark } from "./app-mark";
+import { Calm } from "./calm";
 
 /** What a chat has open beside it: a page or file, a table, an app, or the
  *  machine it works on. */
@@ -132,9 +135,32 @@ export function BesidePane({ pod, conversationId, beside, onOpen, onClose, go, a
                     </div>
                 )}
                 {beside.kind === "app" && (apps.isPending
-                    ? <p className="ox-loading">Opening the app…</p>
-                    : app ? <BesideApp key={app.id + ":" + reloads} url={app.url} />
-                    : <div className="ox-stage__none"><Empty title="This app isn’t here."><p>It may have been removed or renamed.</p></Empty></div>)}
+                    ? <div className="app-veil"><AppOpening name={beside.name} label={title} lemma={pod.name} /></div>
+                    : app ? (
+                        <BesideApp
+                            key={app.id + ":" + reloads}
+                            url={app.url}
+                            name={beside.name}
+                            label={title}
+                            lemma={pod.name}
+                            onAsk={() => actions.ask(pod.id, appTrouble(title))}
+                            onRetry={() => setReloads((n) => n + 1)}
+                        />
+                    )
+                    : apps.isError ? (
+                        <div className="ox-stage__none">
+                            <Calm tone="warn" title={`Couldn’t read ${pod.name}’s apps`} note={codeOf(apps.error)} actions={<TryAgain busy={apps.isFetching} onClick={() => void apps.refetch()} />}>
+                                Nothing in them changed. The list of them didn’t come through just now.
+                            </Calm>
+                        </div>
+                    )
+                    : (
+                        <div className="ox-stage__none">
+                            <Calm icon="search" title="This app isn’t here" actions={<a className="b b--m b--primary" {...to(outcomeView(pod.id), go)}>Go to {pod.name}</a>}>
+                                It may have been removed or renamed.
+                            </Calm>
+                        </div>
+                    ))}
                 {beside.kind === "computer" && (
                     <div className="pane library-pane">
                         <ComputerView
@@ -160,9 +186,26 @@ export function BesidePane({ pod, conversationId, beside, onOpen, onClose, go, a
 
 const NOTHING = () => undefined;
 
-/** An app beside a chat, trusted to put words in its box while it is here. */
-function BesideApp({ url }: { url: string }) {
+/** An app beside a chat, trusted to put words in its box while it is here,
+ *  and drawn opening until it answers. Its Reload and Try again draw it
+ *  afresh. */
+function BesideApp({ url, name, label, lemma, onAsk, onRetry }: {
+    url: string;
+    name: string;
+    label: string;
+    lemma: string;
+    onAsk: () => void;
+    onRetry: () => void;
+}) {
     const [loaded, setLoaded] = useState<Window | null>(null);
     useEffect(() => registerFrame(loaded), [loaded]);
-    return <AppFrameView url={url} frameRef={NOTHING} onFrameLoad={setLoaded} />;
+    return (
+        <AppFrameView
+            url={url}
+            frameRef={NOTHING}
+            onFrameLoad={setLoaded}
+            mark={<AppMark name={name} label={label} size={64} className="app-open__app" />}
+            cover={<AppOpening name={name} label={label} lemma={lemma} url={url} onAsk={onAsk} onRetry={onRetry} />}
+        />
+    );
 }

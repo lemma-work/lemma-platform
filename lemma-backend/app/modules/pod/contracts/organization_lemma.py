@@ -53,8 +53,15 @@ async def create_organization_lemma(
     organization_id: UUID,
     owner_user_id: UUID,
     name: str,
+    shared: bool = True,
 ) -> OrganizationLemma | None:
-    """Make the organization's own Lemma, its maker as its admin.
+    """Make the first Lemma of a new organization, its maker as its admin.
+
+    A team's is ``shared``: open to every member and joined by everyone who
+    arrives later -- the organization's own Lemma. A workspace of one gets a
+    Lemma of that person's alone, private like any other: somebody invited
+    into the workspace later is not put into another person's own Lemma, and
+    it is never the one a newcomer lands in.
 
     ``None`` when the maker's plan has no room for another pod: the
     organization stands without one, and its list of Lemmas offers to make one.
@@ -66,9 +73,13 @@ async def create_organization_lemma(
                 organization_id=organization_id,
                 name=name,
                 icon_url=ORGANIZATION_LEMMA_ICON_URL,
-                config=PodConfig(
-                    join_policy=PodJoinPolicy.ORG_MEMBERS,
-                    auto_join_new_members=True,
+                config=(
+                    PodConfig(
+                        join_policy=PodJoinPolicy.ORG_MEMBERS,
+                        auto_join_new_members=True,
+                    )
+                    if shared
+                    else PodConfig()
                 ),
             ),
             owner_user_id,
