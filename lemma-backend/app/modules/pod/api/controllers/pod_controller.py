@@ -9,6 +9,7 @@ from app.core.authorization.dependencies import PodContextDep
 from app.core.authorization.service import AuthorizationDataService
 from app.modules.identity.contracts import OrganizationRole
 from app.modules.pod.api.dependencies import (
+    PodAddressServiceDep,
     PodServiceDep,
     PodJoinRequestServiceDep,
     PodViewerDep,
@@ -18,6 +19,7 @@ from app.modules.pod.api.dependencies import (
 from app.modules.pod.api.schemas.pod_schemas import (
     JoinablePodListResponse,
     JoinablePodResponse,
+    NamedPodResponse,
     PodCreateRequest,
     PodUpdateRequest,
     PodResponse,
@@ -67,6 +69,35 @@ async def create_pod(
 
     pod = await pod_service.create_pod(entity, user.id)
     return PodResponse.model_validate(pod)
+
+
+@router.get(
+    "/by-name",
+    status_code=status.HTTP_200_OK,
+    operation_id="pod.find_by_name",
+    summary="Find a Pod by Name",
+    description=(
+        "Which pod a web address spelled in names means "
+        "(`/l/{organization}/{pod}/...`): `organization` is the organization's "
+        "handle, `pod` the pod's name as one word of an address -- lower case, "
+        "letters and digits, a hyphen for every other run. Answers only for a "
+        "pod the caller could already see by name or walk into without asking: "
+        "one they are in, any pod for the organization's owner, a pod open to "
+        "everyone, and a pod open to the organization for anyone in it or free "
+        "to join it. Every other name, an unknown handle, and a word two pods "
+        "share are one 404. Open the pod, or ask to join it, by the id."
+    ),
+    response_model=NamedPodResponse,
+)
+async def find_pod_by_name(
+    pod_address_service: PodAddressServiceDep,
+    user: CurrentUser,
+    organization: str = Query(min_length=1, max_length=255),
+    pod: str = Query(min_length=1, max_length=255),
+) -> NamedPodResponse:
+    """Find the pod an address in names means."""
+    pod_id = await pod_address_service.find(organization, pod, user.id)
+    return NamedPodResponse(pod_id=pod_id)
 
 
 @router.get(

@@ -8,6 +8,7 @@ import { SAMPLE_WORKFLOWS } from "./preview-fixtures";
 import { readSchedules } from "@/schedule/schedules";
 import { byEffort } from "@/data/connectable";
 import type { Conversation, Member, PodSource, Tab } from "@/data/types";
+import { slug } from "@/outcomes/named-address";
 
 const added = new Map<string, Member[]>();
 export const previewCandidates = [
@@ -168,8 +169,12 @@ function kitConversation() {
 /** Isolated fictional work; production and general QA fixtures stay separate. */
 export const previewSource: PodSource = {
     ...fixtureSource,
-    async listOrgs() { return [{ id: "acme", name: "Acme" }]; },
+    async listOrgs() { return [{ id: "acme", name: "Acme", handle: "acme" }]; },
     async getPod(podId) { return (await previewSource.listPods("acme")).find(pod => pod.id === podId) ?? null; },
+    async findPodByName(orgHandle, word) {
+        const called = orgHandle === "acme" ? (await previewSource.listPods("acme")).filter(pod => slug(pod.name) === word) : [];
+        return called.length === 1 ? called[0].id : null;
+    },
     async listPods(orgId) {
         return orgId === "acme" ? teammates.map(person => ({ id: person.id, orgId, name: person.name, iconUrl: faceOf(person), description: person.role, teammate: persona(person.id), subtitle: person.role, members: members(person.id), waiting: person.waiting })) : [];
     },

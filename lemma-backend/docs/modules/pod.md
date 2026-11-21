@@ -33,6 +33,7 @@ permission bundles use the shared authorization repositories.
 | --- | --- |
 | `/pods` and `/pods/{pod_id}` | Create/read/update/soft-delete pods and list by organization. `PATCH /pods/{pod_id}` (`pod.update`) changes only the fields sent -- a rename is `{"name": ...}`; `PUT` still answers the same way for clients built against it, outside the schema |
 | `/organizations/{organization_id}/pods/joinable` | The organization's pods the caller may join and is not in |
+| `/pods/by-name` | Which pod an address in names (`/l/{handle}/{pod}`) means, to a caller who could see or walk into it |
 | `/pods/{pod_id}/members` | Add, find, list, re-role, and remove members |
 | `/pods/{pod_id}/roles` | CRUD custom roles and replace their permission bundles |
 | `/pods/{pod_id}/permissions/*` | Permission catalog and current user's effective permissions |
@@ -90,6 +91,17 @@ pod still open to members. Owners are skipped, someone gone again before it
 runs is a no-op, and a pod they are already in is never offered, so a rerun
 adds nothing. People in the organization before a pod became a default one are
 not added; they find it in the joinable list.
+
+`GET /pods/by-name?organization={handle}&pod={word}` turns the web app's
+addresses spelled in names back into a pod id for somebody whose own lists do
+not have the pod -- a new account, a member of another organization, or a
+member not in it. A name can be guessed where an id cannot, so it answers only
+for a pod the caller could already see by name or walk into without asking
+(PS-POD-025): theirs, any for the organization's owner, a `PUBLIC` one, and an
+`ORG_MEMBERS` one for anyone in the organization or free to join it. Everything
+else, a word two pods' names make, and an unknown handle are one 404. The word
+rule and the disclosure rule are in `domain/pod_addresses.py`; the SQL that
+makes the word from the name is in `infrastructure/named_pods.py`.
 
 ## What a pod owns
 

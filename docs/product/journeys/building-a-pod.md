@@ -267,6 +267,27 @@ Existing apps shall remain reachable in their own tabs.
 
 **Contracts:** `pod.create`, `pod.update`
 
+### PS-POD-025 — A link in names finds its pod for whoever could walk in
+**Status:** covered
+
+- When a signed-in person asks which pod an address in names means -- the
+  organization's handle and the pod's name as one word of an address -- the
+  system shall answer with that pod's id, and nothing else about it, where they
+  could already see the pod by name or walk into it without asking: a pod they
+  are in, any pod for the organization's owner, a pod open to everyone, and a
+  pod open to the organization for anyone in it or free to join it.
+- The system shall answer every other name exactly as it answers a name no pod
+  has: an invite-only pod they are not in, a pod open to an organization they
+  may not join, a handle no organization has, and a word two pods' names share.
+
+> A name can be guessed and an id cannot, so finding a pod by its name says
+> more than knowing its id (PS-POD-021's exception) does. It is told only to
+> people who could already learn it -- from their own lists, or one step
+> inside the organization -- and the rest are told nothing (PS-ACCESS-031).
+> An invite-only pod's door is still reached by its id link.
+
+**Contracts:** `pod.find_by_name`
+
 ---
 
 ## Capability: See the pods you have

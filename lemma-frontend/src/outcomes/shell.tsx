@@ -34,7 +34,7 @@ import {
     type AskWith, type ContactWaiting, type Fill, type Go, type Handoff, type KeptApp, type View,
 } from "./model";
 import { useNeedsYou, usePodActivity, usePodDetails, useRecents } from "./data";
-import { looksNamed, named, slug, unnamed, type Names } from "./named-address";
+import { named, readNamed, type Names } from "./named-address";
 import { FrameArrival } from "./arrival";
 import { firstLemma } from "./first-lemma";
 import { ArrivalFlow, type ArrivalStart, type Landing } from "@/arrival/flow";
@@ -181,22 +181,53 @@ export function OutcomesShell() {
     const list = useMemo(() => pods.data ?? [], [pods.data]);
 
     const names = useMemo<Names | null>(
-        () => (org && pods.isSuccess ? { org: org.name, lemmas: list.map((one) => ({ id: one.id, name: one.name })) } : null),
+        () => (org && pods.isSuccess ? { org: org.name, handle: org.handle, lemmas: list.map((one) => ({ id: one.id, name: one.storedName ?? one.name })) } : null),
         [org, pods.isSuccess, list],
     );
     const path = pathname ?? HOME;
-    /* An address spelled in names says nothing until the names are read. It
-       waits where it is rather than being taken for an old link and
-       rewritten as one. */
-    const unread = !names && looksNamed(path);
-    const plain = useMemo(() => (names ? unnamed(path, names) ?? path : path), [names, path]);
+    /* An address spelled in names says nothing until the names are read: the
+       reader's own, or -- for a Lemma none of their lists has, one they are
+       not in -- the server's word on which Lemma it is. It waits where it is
+       rather than being taken for an old link and rewritten as one. */
+    const asking = useMemo(() => {
+        const question = readNamed(path, { orgs: orgs.data ?? null, orgId, names });
+        return question.kind === "ask" ? question : null;
+    }, [path, orgs.data, orgId, names]);
+    const lookup = useQuery({
+        queryKey: ["named-lemma", asking?.lemma, ...(asking?.orgs ?? [])],
+        /* Each handle in turn, until one of them has a Lemma by that name. */
+        queryFn: async () => {
+            for (const org of asking?.orgs ?? []) {
+                const podId = await source.findPodByName(org, asking?.lemma ?? "");
+                if (podId) return { podId, org };
+            }
+            return { podId: null, org: null };
+        },
+        enabled: Boolean(asking),
+        staleTime: 5 * 60_000,
+    });
+    /* A lookup that failed outright opens nothing, as one that found nothing
+       does: there is no id to show a door for. */
+    const found = useMemo(() => lookup.data ?? (lookup.isError ? { podId: null, org: null, failed: true } : undefined), [lookup.data, lookup.isError]);
+    const reading = useMemo(
+        () => readNamed(path, { orgs: orgs.data ?? null, orgId, names, found }),
+        [path, orgs.data, orgId, names, found],
+    );
+    const unread = reading.kind === "wait" || reading.kind === "ask" || reading.kind === "elsewhere";
+    /* Names nothing the reader may open: said as much, at the address they
+       followed, never read as an id it is not. */
+    const nowhere = reading.kind === "nowhere";
+    const plain = reading.kind === "plain" ? reading.path : path;
+    /* The server said which Lemma it is: the reader is not in it, and the
+       address keeps the names it came with. */
+    const notTheirs = reading.kind === "plain" && reading.asked;
     /* The app's own address first; then the frame's first one (`/t/outcome/…`)
        and the workspace's (`/l/{pod}/conversation/…`), which links written
        before the app moved still carry. */
     const view = useMemo<View>(() => {
-        if (unread) return last.current;
+        if (unread || nowhere) return last.current;
         return readView(plain) ?? readTrialView(plain) ?? viewOfLink(plain, arrival) ?? last.current;
-    }, [plain, arrival, unread]);
+    }, [plain, arrival, unread, nowhere]);
     useEffect(() => { last.current = view; }, [view]);
     /* Where the frame is, for a move to know where it is going from; and,
        while a page change is moving, the way to say the new page is on
@@ -209,10 +240,11 @@ export function OutcomesShell() {
         landed.current = null;
     }, [view]);
     useEffect(() => {
-        if (unread) return;
+        if (unread || nowhere) return;
         const search = window.location.search + window.location.hash;
         if (readView(plain)) {
             /* The app's own address, written back in names where it has them. */
+            if (notTheirs) return;
             const spelled = names ? named(plain, names) : path;
             if (spelled !== path) window.history.replaceState(window.history.state, "", spelled + search);
             return;
@@ -222,16 +254,20 @@ export function OutcomesShell() {
            that names nowhere it knows opens Home. */
         const here = readTrialView(plain) ?? viewOfLink(plain, arrival) ?? { name: "today" };
         window.history.replaceState(window.history.state, "", (names ? named(writeView(here), names) : writeView(here)) + search);
-    }, [plain, path, arrival, unread, names]);
+    }, [plain, path, arrival, unread, nowhere, notTheirs, names]);
     /* A named address in another of the reader's organizations: the frame
        moves there, as it does for a link that names a Lemma by its id. */
+    const otherOrg = reading.kind === "elsewhere" ? reading.orgId : null;
     useEffect(() => {
-        if (!org || !orgs.data || !looksNamed(path)) return;
-        const word = path.split("/").filter(Boolean)[1];
-        if (slug(org.name) === word) return;
-        const other = orgs.data.find((one) => slug(one.name) === word);
-        if (other) setChosen(other.id);
-    }, [org, orgs.data, path]);
+        if (otherOrg) setChosen(otherOrg);
+    }, [otherOrg]);
+    /* The way in for somebody new settles once which Lemma their link came
+       for (`FrameArrival`), so it opens only after a link in names has been
+       read; once open, it stays, whatever the address reads as later. */
+    const [linkRead, setLinkRead] = useState(!unread);
+    useEffect(() => {
+        if (!unread) setLinkRead(true);
+    }, [unread]);
     /* `go` is one function for the life of the frame, so it reads the names
        as they are when it is called. */
     const spelling = useRef<Names | null>(null);
@@ -427,10 +463,11 @@ export function OutcomesShell() {
     /* Two arrivals that start something rather than open a place, answered
        once: `?hire=1`, from the old create-a-pod door, and `?remixSource=`,
        an app somebody chose to rebuild, which lands on the Lemma they picked
-       with the ask waiting in a new chat's box. */
+       with the ask waiting in a new chat's box. A link in names is read
+       first: until then the view is the last one, not the Lemma it names. */
     const arrived = useRef(false);
     useEffect(() => {
-        if (arrived.current) return;
+        if (arrived.current || unread) return;
         arrived.current = true;
         if (arrival.get("hire") === "1") {
             go({ name: "hire" }, { replace: true });
@@ -441,7 +478,7 @@ export function OutcomesShell() {
         if (!remix || !podId) return;
         asks.current += 1;
         go(chatView({ kind: "chat", podId, id: NEW_CHAT }), { replace: true, fill: { text: "Help me rebuild or adapt this app for our workspace: " + remix, id: asks.current, podId } });
-    }, [arrival, go, view]);
+    }, [arrival, go, view, unread]);
 
     /* The one door from a framed app or widget into a chat: it fills a box
        and brings it forward, and the reader decides. A request from a frame
@@ -496,7 +533,7 @@ export function OutcomesShell() {
     /* Read off the address itself, not the view: while a named address waits
        for its names, and while an old link is being rewritten, the view
        stands at Home without the reader being there. */
-    const workHere = !unread && asksWorkOn(readView(plain)?.name ?? "");
+    const workHere = !unread && !nowhere && asksWorkOn(readView(plain)?.name ?? "");
     useEffect(() => {
         if (asksWork && workHere && !workSettled && orgs.isSuccess && orgs.data.length > 0) setArriving((was) => was ?? { kind: "work" });
     }, [asksWork, workHere, workSettled, orgs.isSuccess, orgs.data]);
@@ -652,8 +689,8 @@ export function OutcomesShell() {
     const firstDraw = useRef(true);
     const orgsFailed = orgs.isError && !org;
     const podsFailed = pods.isError && !pods.data;
-    const reading = !orgsFailed && !podsFailed && (!org || pods.isPending);
-    const booting = firstDraw.current && reading;
+    const stillReading = !orgsFailed && !podsFailed && (!org || pods.isPending);
+    const booting = firstDraw.current && stillReading;
     useEffect(() => {
         /* The way in, when it shows, is a screen of its own: a start-up
            screen after it counts its two seconds afresh. */
@@ -667,6 +704,7 @@ export function OutcomesShell() {
        made with a Lemma everyone in it shares), an invitation just accepted
        from Home, or the job question somebody has not been asked. */
     if (showingArrival === "first") {
+        if (!linkRead) return <StartScreen words={org ? "Opening " + org.name : "Opening Lemma"} />;
         return <FrameArrival linkedPodId={scoped} asksWork={asksWork} asksName={asksName} onEntered={enterFrom} />;
     }
     if (showingArrival) {
@@ -702,6 +740,18 @@ export function OutcomesShell() {
         );
     } else if (!org || pods.isPending) {
         page = <StartPage words={org ? "Opening " + org.name : "Opening Lemma"} />;
+    } else if (nowhere) {
+        page = (
+            <div className="ox-page">
+                <Calm
+                    icon="search"
+                    title="This link doesn’t open a Lemma you can reach"
+                    actions={<button type="button" className="b b--m b--primary" onClick={() => go({ name: "today" })}>Home</button>}
+                >
+                    <p>It may have been renamed, or you haven’t been added to it. Ask whoever sent it to invite you.</p>
+                </Calm>
+            </div>
+        );
     } else if (view.name === "today") {
         page = <Today org={org} pods={withPeople} activity={activity} channels={sideChannels} queue={queue} queueFailed={queueFailed} onRetryQueue={retryQueue} me={myName} go={go} onAsk={ask} onJoined={(invite) => setArriving({ kind: "joined", orgId: invite.orgId, orgName: invite.orgName, podId: invite.podId })} />;
     } else if (view.name === "apps") {
@@ -842,7 +892,7 @@ export function OutcomesShell() {
                     <span className="ox-topbar__org">{org?.name ?? "Lemma"}</span>
                     <button type="button" className="ox-topbar__find" aria-label="Ask or find" onClick={() => openPalette(podOfView(view))}><Icon name="search" size={16} /></button>
                 </header>
-                <main className={"ox-main" + (fills(view) ? " ox-main--fill" : "") + (calling ? " ox-main--calling" : "")}>
+                <main className={"ox-main" + (fills(view) && !nowhere ? " ox-main--fill" : "") + (calling ? " ox-main--calling" : "")}>
                     {/* A page that throws while drawing takes down itself and
                         nothing else; the next address draws again. Each kept
                         app has its own, so one breaking leaves the rest. */}
@@ -853,7 +903,9 @@ export function OutcomesShell() {
                     {kept.map((one) => {
                         const keptPod = withPeople.find((candidate) => candidate.id === one.podId) ?? one.pod;
                         if (!keptPod) return null;
-                        const shown = Boolean(pod) && view.name === "app" && view.podId === one.podId && view.app === one.app;
+                        /* A link that opens nothing keeps the last view but
+                           shows only what it says. */
+                        const shown = !nowhere && Boolean(pod) && view.name === "app" && view.podId === one.podId && view.app === one.app;
                         return (
                             <div key={one.podId + "/" + one.app} className="ox-keep" hidden={!shown}>
                                 <PageBoundary at={shown ? path : "away"}>

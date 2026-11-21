@@ -57,6 +57,15 @@ class PodListResponse(BaseSchema):
     next_page_token: Optional[str] = None
 
 
+class NamedPodResponse(BaseSchema):
+    """Which pod an address in names means: its id, and nothing else.
+
+    Somebody not in it learns no more than an id link would have told them.
+    """
+
+    pod_id: UUID
+
+
 class JoinablePodResponse(BaseSchema):
     """A pod the caller may join and is not in: what to show before they do."""
 

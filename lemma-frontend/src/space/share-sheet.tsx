@@ -7,6 +7,7 @@ import { Modal } from "@/shell/modal";
 import { useCanManageMembers } from "@/shell/add-people";
 import { ShareDialog } from "@/thread/share-dialog";
 import { copyText } from "@/desktop/clipboard";
+import { idAddress } from "@/outcomes/named-address";
 import { listed } from "@/site/plugins/catalog";
 import { CheckIcon, CopyIcon, GlobeIcon, LinkIcon } from "@/ui/icons";
 
@@ -201,12 +202,18 @@ export function ShareSheet({ pod, orgId, subject, onAddPeople, onClose }: {
     const people = pod.members.filter(member => member.kind === "person");
     const known = useKnownAccess(pod.id, subject);
     const isPublic = (known.visibility ?? "").toUpperCase() === "PUBLIC";
-    const [here, setHere] = useState("");
-    useEffect(() => setHere(window.location.href), []);
+    /* By id, not by name: the link is for people not in it yet too, and
+       "anyone else is asked to join first" needs a door to show them. The
+       sheet shows the same link it copies. */
+    const [link, setLink] = useState("");
+    useEffect(() => {
+        const { origin, pathname, search, hash } = window.location;
+        setLink(origin + idAddress(pathname, { id: pod.id, name: pod.storedName ?? pod.name }) + search + hash);
+    }, [pod.id, pod.storedName, pod.name]);
 
     const copy = async () => {
         try {
-            await copyText(window.location.href);
+            await copyText(link || window.location.href);
             setCopied(true);
             setTimeout(() => setCopied(false), 1600);
         } catch {
@@ -237,7 +244,7 @@ export function ShareSheet({ pod, orgId, subject, onAddPeople, onClose }: {
                 <div className="kd-row">
                     <span className="kd-row__glyph" aria-hidden="true"><LinkIcon size={18} /></span>
                     <span className="kd-row__words">
-                        <b>{here.replace(/^https?:\/\//, "") || "This page"}</b>
+                        <b>{link.replace(/^https?:\/\//, "") || "This page"}</b>
                         <small>The link to {name}</small>
                     </span>
                     <button type="button" className="b b--s b--secondary" onClick={() => void copy()}>

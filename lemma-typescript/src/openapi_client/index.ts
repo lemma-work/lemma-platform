@@ -339,6 +339,7 @@ export type { MoveRequest } from './models/MoveRequest.js';
 export type { MyMembershipResponse } from './models/MyMembershipResponse.js';
 export type { MyMembershipUpdate } from './models/MyMembershipUpdate.js';
 export type { MyUsageLimitsResponse } from './models/MyUsageLimitsResponse.js';
+export type { NamedPodResponse } from './models/NamedPodResponse.js';
 export type { NavigateCommand } from './models/NavigateCommand.js';
 export type { NavigateRequest } from './models/NavigateRequest.js';
 export type { NavigateResponse } from './models/NavigateResponse.js';

@@ -54,6 +54,16 @@ export class PodsNamespace {
   }
 
   /**
+   * The id of the pod an address in names means (`/l/{organization}/{pod}`):
+   * the organization's handle, and the pod's name as one word of an address.
+   * Answered only for a pod you could already see by name or walk into
+   * without asking; every other name is a 404, as a name nobody has is.
+   */
+  findByName(organization: string, pod: string) {
+    return this.client.request(() => PodsService.podFindByName(organization, pod));
+  }
+
+  /**
    * Make a pod. `config.join_policy` says who may join it (invite-only unless
    * set); `config.auto_join_new_members` makes everyone who joins the
    * organization from now on a member, and needs `ORG_MEMBERS` or `PUBLIC`.

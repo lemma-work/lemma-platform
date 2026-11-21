@@ -64,6 +64,10 @@ export const NEW_CONVERSATION = "new";
 export interface Org {
     id: string;
     name: string;
+    /** Its handle: one word, never renamed and never shared with another
+     *  organization, which a link spelled in names starts with. Absent where
+     *  the organization was only just made and not read back yet. */
+    handle?: string;
 }
 
 /** An invitation addressed to the person signed in.
@@ -235,6 +239,10 @@ export interface Pod {
     id: string;
     orgId: string;
     name: string;
+    /** The name as the server keeps it, which its address in names is
+     *  spelled from; `name` is the same made readable ("SalesCRM" shows as
+     *  "Sales CRM", and is still `salescrm` in a link). */
+    storedName?: string;
     /** A pod may carry its own icon; without one it wears a generated orb. */
     iconUrl: string | null;
     /** What the teammate is for, in one line: the job it was hired with. The
@@ -579,6 +587,10 @@ export interface PodSource {
     connectPod(podId: string, askingPodId: string, shares: LinkShare[]): Promise<void>;
     disconnectPod(podId: string, askingPodId: string): Promise<void>;
     getPod(podId: string): Promise<Pod | null>;
+    /** The id of the Lemma a link spelled in names means (`/l/{handle}/{word}`),
+     *  or null where it names none the reader may learn of. The server tells
+     *  a name only to somebody who could already see that Lemma or walk in. */
+    findPodByName(orgHandle: string, word: string): Promise<string | null>;
     listTabs(podId: string): Promise<Tab[]>;
     createPod(orgId: string, name: string, description?: string): Promise<Pod>;
     /** Set (or clear) a teammate's face. An emoji, a URL, or the
