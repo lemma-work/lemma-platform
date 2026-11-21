@@ -78,6 +78,17 @@ def _images_in(response: ModelResponse) -> int:
     )
 
 
+def _drew_without_measure(counts: TokenCounts | None) -> bool:
+    """Pictures came back but no image-token count with them.
+
+    Some adapters report no modality split. Pricing those output tokens at
+    the text rate would bill a picture at a fraction of its cost and record it
+    as priced, so the request is left unpriced instead, to follow
+    `USAGE_UNPRICED_LIMIT_POLICY` like any cost this server cannot state.
+    """
+    return bool(counts and counts.output_images and not counts.output_image_tokens)
+
+
 def _counts(usage: RequestUsage, *, images: int = 0) -> TokenCounts | None:
     # Adapters normalize an absent provider receipt to all-zero usage. A complete
     # response alone cannot prove that a model request consumed no paid tokens.
@@ -306,10 +317,16 @@ class Dispatch:
             else None
         )
         cost = (
-            Decimal(0) if self.rejected else _price_receipt(pricing, counts, priceable)
+            Decimal(0)
+            if self.rejected
+            else None
+            if _drew_without_measure(counts)
+            else _price_receipt(pricing, counts, priceable)
         )
         if counts is None:
-            counts = TokenCounts(request_count=1, unconfirmed_requests=1)
+            counts = TokenCounts(
+                request_count=1, unconfirmed_requests=1, output_images=self.images
+            )
         elif cost is None:
             counts = counts.model_copy(update={"unpriced_requests": 1})
         return RequestReceipt(

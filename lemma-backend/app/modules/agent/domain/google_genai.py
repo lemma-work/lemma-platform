@@ -24,6 +24,11 @@ from pydantic import (
 from app.modules.agent.domain.value_objects import JsonObject
 
 
+#: Where a service account trades its signed assertion for an access token.
+#: The only address a stored key file may name.
+GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
+
+
 class ServiceAccountRuntimeCredentials(BaseModel):
     """A Google Cloud service account's JSON key, for Vertex AI.
 
@@ -48,6 +53,12 @@ class ServiceAccountRuntimeCredentials(BaseModel):
         for key in ("client_email", "private_key", "project_id"):
             if not isinstance(info.get(key), str) or not info[key]:
                 raise ValueError(f"has no {key}")
+        if info.get("token_uri", GOOGLE_TOKEN_URI) != GOOGLE_TOKEN_URI:
+            # google-auth posts its signed token request to this address on
+            # every refresh, from this server. A key file naming any other
+            # one would have the server send requests wherever its author
+            # chose.
+            raise ValueError("names a token address that is not Google's")
         return value
 
 

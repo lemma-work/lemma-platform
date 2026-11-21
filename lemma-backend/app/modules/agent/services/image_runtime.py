@@ -27,6 +27,12 @@ from app.modules.agent.services.runtime_system_profiles import (
 
 logger = get_logger(__name__)
 
+#: The deployment's own provider answers for this server, and workspace
+#: providers are not consulted, so only whoever runs it can fix this.
+_NO_SYSTEM_DRAWING_MODEL = (
+    "This server has no AI model that makes images. Ask whoever runs it to "
+    "add an image model to its model provider."
+)
 _NO_DRAWING_MODEL = (
     "No AI model that makes images is set up. Add an image model to one of the "
     "workspace's providers in Settings → Models."
@@ -72,7 +78,7 @@ async def resolve_image_runtime(
                         "set IMAGE_MODEL to one the system provider offers."
                     ),
                 )
-                raise ImageModelUnavailableError(_NO_DRAWING_MODEL)
+                raise ImageModelUnavailableError(_NO_SYSTEM_DRAWING_MODEL)
             runtime = AgentRuntimeConfig(
                 profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
                 model_name=model_name,

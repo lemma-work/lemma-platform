@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
+from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCapability,
     RuntimeModelCatalogEntry,
@@ -50,11 +51,19 @@ def google_genai_catalog(
 ) -> list[RuntimeModelCatalogEntry]:
     """Chat models first, in the order given, then the image models.
 
-    A name in both lists is a chat model: one entry per name, and a model an
-    agent can chat with must keep TOOLS.
+    A name in both lists is refused: nothing here can tell a chat model from
+    an image one, and guessing either way is wrong -- an image model offered
+    as a chat model fails every turn, a chat model filed as an image model can
+    never run one.
     """
     chat = _unique(chat_model_names)
-    images = [name for name in _unique(image_model_names) if name not in chat]
+    images = _unique(image_model_names)
+    both = [name for name in images if name in chat]
+    if both:
+        raise RuntimeProfileValidationError(
+            f"{', '.join(both)} is listed both as a chat model and as an image "
+            "model; list each model once."
+        )
     return [
         *(
             _entry(name, GOOGLE_CHAT_MODEL_CAPABILITIES, display_name, metadata_for)

@@ -23,11 +23,15 @@ import httpx2
 from google.genai.types import HttpRetryOptions
 from pydantic_ai.models.google import GoogleModel
 
+from app.core.log.log import get_logger
+from app.modules.agent.domain.google_genai import GOOGLE_TOKEN_URI
 from app.modules.agent.domain.runtime_profiles import (
     GoogleGenAIBackend,
     GoogleGenAIRuntimeConfig,
     RuntimeProfileScope,
 )
+
+logger = get_logger(__name__)
 
 GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com"
 VERTEX_AI_BASE_URL = "https://aiplatform.googleapis.com"
@@ -112,8 +116,12 @@ def service_account_credentials(service_account_json: str) -> object:
     """
     from google.oauth2 import service_account
 
+    info = json.loads(service_account_json)
+    # Pinned here as well as checked on save: a row written before the check,
+    # or by hand, must not choose where this server sends its token requests.
+    info["token_uri"] = GOOGLE_TOKEN_URI
     return service_account.Credentials.from_service_account_info(
-        json.loads(service_account_json), scopes=[_CLOUD_PLATFORM_SCOPE]
+        info, scopes=[_CLOUD_PLATFORM_SCOPE]
     )
 
 
@@ -136,7 +144,9 @@ async def verify_google_genai_access(
     ``ValueError``). Anything else -- a timeout, a 5xx -- is not the owner's
     mistake and does not block the save; the connection test reports it.
     """
-    from google.genai.errors import ClientError
+    from google.auth.exceptions import RefreshError
+    from google.auth.exceptions import TransportError as GoogleAuthTransportError
+    from google.genai.errors import APIError, ClientError
 
     from app.modules.agent.infrastructure.providers.discovery import (
         ProviderKeyRejectedError,
@@ -154,6 +164,10 @@ async def verify_google_genai_access(
         )
         try:
             await model.client.aio.models.get(model=model_name)
+        except RefreshError:
+            # The key file's account could not sign in at all: deleted,
+            # disabled, or its key revoked.
+            raise ProviderKeyRejectedError("refresh") from None
         except ClientError as exc:
             # Google answers a bad Gemini API key with 400 API_KEY_INVALID,
             # not 401, so the reason is read as well as the code.
@@ -163,4 +177,21 @@ async def verify_google_genai_access(
                 raise ValueError(
                     f"{model_name} isn't available to this account."
                 ) from None
-            raise
+            _note_unchecked(exc)
+        except (
+            APIError,
+            httpx2.TimeoutException,
+            httpx2.TransportError,
+            GoogleAuthTransportError,
+        ) as exc:
+            _note_unchecked(exc)
+
+
+def _note_unchecked(exc: Exception) -> None:
+    """Google could not be asked -- rate-limited, down, slow. Not the owner's
+    mistake, so the save goes ahead; the connection test will say so."""
+    logger.warning(
+        "agent.google_genai_model.access_unchecked.degraded",
+        error_type=type(exc).__name__,
+        status_code=getattr(exc, "code", None),
+    )

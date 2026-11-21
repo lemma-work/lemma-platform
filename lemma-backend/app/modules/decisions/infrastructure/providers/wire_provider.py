@@ -13,6 +13,7 @@ from a provider outage.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from functools import lru_cache
@@ -24,10 +25,14 @@ from app.modules.decisions.domain.answers import DecisionResult, DecisionUsage
 from app.modules.decisions.domain.errors import DecisionUnavailableError
 from app.modules.decisions.domain.request import DecisionCaller, DecisionTask
 from app.modules.decisions.infrastructure.providers.decision_wire import (
+    WireAnswer,
     WireAnswerError,
     WireDialect,
+    WireResponse,
+    answers_from,
     build_request,
-    parse_response,
+    read_wire,
+    split_request,
 )
 from app.modules.usage.contracts import MeteredRequest
 
@@ -80,32 +85,59 @@ class WireDecisionProvider:
     ) -> DecisionResult:
         del caller  # metered through the execution the service opened
         request = build_request(task, model=self._model, dialect=self.dialect)
-        async with self._metered() as metered:
-            response = await self._post(request.body, timeout_seconds)
-            if response.status_code != 200:
-                if response.status_code in _REFUSED:
-                    metered.reject()
-                self._log_refusal(response.status_code)
-                raise DecisionUnavailableError("provider_error")
-            try:
-                answers, model, input_tokens = parse_response(
-                    response.content, task, request.questions
-                )
-            except WireAnswerError as exc:
-                logger.warning(
-                    "decisions.wire_provider.answer_unreadable.degraded",
-                    provider=self.name,
-                    exc_info=True,
-                )
-                raise DecisionUnavailableError("invalid_output") from exc
-            if input_tokens is not None:
-                metered.settle(input_tokens=input_tokens)
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        found: dict[str, WireAnswer] = {}
+        model: str | None = None
+        input_tokens: int | None = None
+        for part in split_request(request, self.dialect.max_questions):
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise DecisionUnavailableError("timeout")
+            wire = await self._ask(part.body, remaining)
+            found.update(wire.answers)
+            model = wire.model or model
+            if wire.usage and wire.usage.input_tokens is not None:
+                input_tokens = (input_tokens or 0) + wire.usage.input_tokens
+        try:
+            answers = answers_from(found, task, request.questions)
+        except WireAnswerError as exc:
+            # The provider's text is not logged: it is its reading of a
+            # caller's evidence.
+            logger.warning(
+                "decisions.wire_provider.answer_unreadable.degraded",
+                provider=self.name,
+                reason=str(exc),
+            )
+            raise DecisionUnavailableError("invalid_output") from exc
         return DecisionResult(
             answers=answers,
             provider=self.name,
             model=model or self._model,
             usage=DecisionUsage(input_tokens=input_tokens),
         )
+
+    async def _ask(self, body: object, timeout_seconds: float) -> WireResponse:
+        """One request, metered on its own: what it reports is settled before
+        anything is made of its answers."""
+        async with self._metered() as metered:
+            response = await self._post(body, timeout_seconds)
+            if response.status_code != 200:
+                if response.status_code in _REFUSED:
+                    metered.reject()
+                self._log_refusal(response.status_code)
+                raise DecisionUnavailableError("provider_error")
+            try:
+                wire = read_wire(response.content)
+            except WireAnswerError as exc:
+                logger.warning(
+                    "decisions.wire_provider.answer_unreadable.degraded",
+                    provider=self.name,
+                    reason=str(exc),
+                )
+                raise DecisionUnavailableError("invalid_output") from exc
+            if wire.usage and wire.usage.input_tokens is not None:
+                metered.settle(input_tokens=wire.usage.input_tokens)
+            return wire
 
     async def _post(self, body: object, timeout_seconds: float) -> httpx.Response:
         from app.core.net.http_client import get_shared_http_client

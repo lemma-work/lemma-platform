@@ -15,6 +15,7 @@ from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.tools import ImagePart
 from app.modules.agent.infrastructure.tools.file_access import (
     read_workspace_file_bytes,
+    write_workspace_file_bytes,
 )
 from app.modules.agent.infrastructure.tools.tool_errors import safe_error_text
 from app.modules.agent.domain.vision import (
@@ -115,7 +116,7 @@ def _with_extension(path: str, media_type: str) -> str:
 
 async def _write_image(ctx: ToolContext, path: str, data: bytes) -> None:
     try:
-        await ctx.file_manager.write_file(path, data)
+        await write_workspace_file_bytes(ctx, path, data)
     except FileNotFoundError:
         raise FileNotFoundError(
             f"Couldn't save to {path}: create its folder first "

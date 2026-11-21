@@ -54,6 +54,12 @@ class WireDialect:
     noul_criteria: tuple[str, str]
     #: Worked examples as a structured criterion, or written into its text.
     structured_examples: bool
+    #: Short generated ids on the wire (`q3`, `q3-1`, `o2`) in place of the
+    #: caller's own keys and choice values, which may be longer or carry
+    #: characters the API refuses. Mapped back on the way in.
+    compact_ids: bool = False
+    #: The most questions one request may carry; more are sent in several.
+    max_questions: int | None = None
 
 
 #: Typesafe System One.
@@ -70,13 +76,17 @@ GEMINI = WireDialect(
     evidence_field="input",
     noul_criteria=("true_description", "false_description"),
     structured_examples=False,
+    # Keys are 1-64 of `[A-Za-z0-9_-]` and option keys must be plain text; a
+    # 64-character question key with `-0` appended would already be refused.
+    compact_ids=True,
+    max_questions=1000,
 )
 #: Worked examples sent per option. More is mostly repetition, and every one is
 #: input the request pays for.
 _EXAMPLES_PER_OPTION = 8
 
 
-class _WireAnswer(BaseModel):
+class WireAnswer(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     choice: str | None = None
@@ -98,7 +108,7 @@ class WireResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     model: str | None = None
-    answers: dict[str, _WireAnswer]
+    answers: dict[str, WireAnswer]
     usage: _WireUsage | None = None
 
 
@@ -109,12 +119,40 @@ class WireQuestion:
 
     key: str
     option: str | None = None
+    #: The choice values by the ids they were sent under, when they were not
+    #: sent as themselves.
+    choices: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class WireRequest:
     body: dict[str, JsonValue]
     questions: Mapping[str, WireQuestion]
+
+
+def split_request(request: WireRequest, limit: int | None) -> list[WireRequest]:
+    """``request`` as requests of at most ``limit`` questions each.
+
+    A multi-choice question's options may land in different requests: answers
+    are merged before they are read (`answers_from`), so that is harmless.
+    """
+    wire_questions = request.body["questions"]
+    assert isinstance(wire_questions, dict)
+    keys = list(wire_questions)
+    if limit is None or len(keys) <= limit:
+        return [request]
+    return [
+        WireRequest(
+            body={
+                **request.body,
+                "questions": {key: wire_questions[key] for key in chunk},
+            },
+            questions={key: request.questions[key] for key in chunk},
+        )
+        for chunk in (
+            keys[start : start + limit] for start in range(0, len(keys), limit)
+        )
+    ]
 
 
 class WireAnswerError(ValueError):
@@ -126,19 +164,30 @@ def build_request(
 ) -> WireRequest:
     questions: dict[str, JsonValue] = {}
     mapping: dict[str, WireQuestion] = {}
-    for question in task.schema.questions:
+    for position, question in enumerate(task.schema.questions):
         instructions = f"{task.instruction}\n\nQuestion: {question.text}"
         examples = _examples_by_value(task, question.key)
+        base_key = f"q{position}" if dialect.compact_ids else question.key
         if question.kind == "multi_choice":
             for index, option in enumerate(question.options):
-                wire_key = f"{question.key}{dialect.multi_separator}{index}"
+                wire_key = f"{base_key}{dialect.multi_separator}{index}"
                 questions[wire_key] = _option_noul(
                     instructions, option, examples, dialect
                 )
                 mapping[wire_key] = WireQuestion(question.key, str(option.value))
             continue
-        questions[question.key] = _single(question, instructions, examples, dialect)
-        mapping[question.key] = WireQuestion(question.key)
+        choices = (
+            {
+                f"o{index}": str(option.value)
+                for index, option in enumerate(question.options)
+            }
+            if dialect.compact_ids and question.kind == "choice"
+            else None
+        )
+        questions[base_key] = _single(
+            question, instructions, examples, dialect, choices
+        )
+        mapping[base_key] = WireQuestion(question.key, choices=choices)
     return WireRequest(
         body={
             "model": model,
@@ -162,14 +211,16 @@ def _single(
     instructions: str,
     examples: Mapping[str, list[str]],
     dialect: WireDialect,
+    choices: Mapping[str, str] | None = None,
 ) -> JsonValue:
     match question.kind:
         case "choice":
+            sent_as = {value: wire_id for wire_id, value in (choices or {}).items()}
             return {
                 "type": "choice",
                 "instructions": instructions,
                 "criteria": {
-                    str(option.value): _criterion(
+                    sent_as.get(str(option.value), str(option.value)): _criterion(
                         option, examples.get(str(option.value)), dialect
                     )
                     for option in question.options
@@ -243,22 +294,34 @@ def _examples_by_value(task: DecisionTask, key: str) -> dict[str, list[str]]:
     return by_value
 
 
-def parse_response(
-    content: bytes, task: DecisionTask, questions: Mapping[str, WireQuestion]
-) -> tuple[dict[str, Answer], str | None, int | None]:
-    """Answers per decision question, the model that ran, and input tokens.
+def read_wire(content: bytes) -> WireResponse:
+    """The response's shape, checked; ``WireAnswerError`` when it has none.
+
+    Separate from reading the answers so the usage a provider reports is
+    settled even when its answers turn out not to fit.
+    """
+    try:
+        return WireResponse.model_validate_json(content)
+    except ValidationError:
+        # Not chained: pydantic's error quotes the response, and the response
+        # is the provider's reading of a caller's evidence.
+        raise WireAnswerError("unreadable response") from None
+
+
+def answers_from(
+    found_answers: Mapping[str, WireAnswer],
+    task: DecisionTask,
+    questions: Mapping[str, WireQuestion],
+) -> dict[str, Answer]:
+    """Answers per decision question, from every wire answer of the decision.
 
     Raises `WireAnswerError` for anything that does not fit: a choice that was
     not offered, a probability outside [0, 1], a question left unanswered.
     """
-    try:
-        wire = WireResponse.model_validate_json(content)
-    except ValidationError as exc:
-        raise WireAnswerError("unreadable response") from exc
     multi: dict[str, dict[str, float]] = {}
     answers: dict[str, Answer] = {}
     for wire_key, target in questions.items():
-        found = wire.answers.get(wire_key)
+        found = found_answers.get(wire_key)
         if found is None:
             raise WireAnswerError(f"no answer for {wire_key}")
         if target.option is not None:
@@ -267,17 +330,41 @@ def parse_response(
         question = task.schema.question(target.key)
         if question is None:
             raise WireAnswerError(f"unknown question {target.key}")
-        answers[target.key] = _single_answer(question, found)
+        answers[target.key] = _single_answer(question, _as_sent(found, target))
     for key, chances in multi.items():
         question = task.schema.question(key)
         if question is None:
             raise WireAnswerError(f"unknown question {key}")
         answers[key] = _multi_answer(question, chances)
+    return answers
+
+
+def parse_response(
+    content: bytes, task: DecisionTask, questions: Mapping[str, WireQuestion]
+) -> tuple[dict[str, Answer], str | None, int | None]:
+    """Answers per decision question, the model that ran, and input tokens."""
+    wire = read_wire(content)
     input_tokens = wire.usage.input_tokens if wire.usage else None
-    return answers, wire.model, input_tokens
+    return answers_from(wire.answers, task, questions), wire.model, input_tokens
 
 
-def _single_answer(question: Question, wire: _WireAnswer) -> Answer:
+def _as_sent(found: WireAnswer, target: WireQuestion) -> WireAnswer:
+    """``found`` with any generated choice ids turned back into the values."""
+    if target.choices is None:
+        return found
+    return found.model_copy(
+        update={
+            "choice": target.choices.get(found.choice or "", found.choice),
+            "probabilities": {
+                target.choices.get(wire_id, wire_id): chance
+                for wire_id, chance in (found.probabilities or {}).items()
+            }
+            or None,
+        }
+    )
+
+
+def _single_answer(question: Question, wire: WireAnswer) -> Answer:
     match question.kind:
         case "choice":
             allowed = {str(value) for value in question.values}
@@ -301,7 +388,7 @@ def _multi_answer(question: Question, chances: Mapping[str, float]) -> Answer:
     return Answer(chosen, certainty)
 
 
-def _level(wire: _WireAnswer, count: int) -> tuple[int, float | None]:
+def _level(wire: WireAnswer, count: int) -> tuple[int, float | None]:
     """The most probable level, else the reported score rounded to one."""
     if wire.probabilities:
         candidates = {

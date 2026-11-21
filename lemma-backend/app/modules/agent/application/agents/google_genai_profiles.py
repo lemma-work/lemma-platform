@@ -229,16 +229,25 @@ def _configured(
     edit: GoogleProfileEdit,
     changes: dict[str, object],
 ) -> GoogleGenAIRuntimeConfig:
+    new_key_file = "credentials" in changes
     if (
-        isinstance(edit.vertex_project, UnsetType)
+        not new_key_file
+        and isinstance(edit.vertex_project, UnsetType)
         and isinstance(edit.vertex_location, UnsetType)
         and isinstance(edit.model_settings, UnsetType)
     ):
         return stored
+    # A project nobody typed came from the old key file, and must not outlive
+    # it: with a new key file and no project named, the new file's own is used.
+    project = (
+        None
+        if new_key_file and isinstance(edit.vertex_project, UnsetType)
+        else _or(edit.vertex_project, stored.vertex_project)
+    )
     config = google_genai_config(
         stored.backend,
         credentials=credentials,
-        vertex_project=_or(edit.vertex_project, stored.vertex_project),
+        vertex_project=project,
         vertex_location=_or(edit.vertex_location, stored.vertex_location),
         model_settings=(
             stored.model_settings

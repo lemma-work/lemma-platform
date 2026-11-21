@@ -64,3 +64,27 @@ def test_a_text_answer_draws_nothing() -> None:
 
     assert receipt.counts.output_image_tokens == 0
     assert receipt.counts.output_images == 0
+
+
+def test_a_picture_with_no_image_token_count_is_not_priced_as_text() -> None:
+    """An adapter that reports no modality split: the output total is mostly
+    picture, and the text rate would bill it at a twentieth of its cost."""
+    picture = BinaryImage(data=b"\x89PNG", media_type="image/png")
+    receipt = _dispatch(
+        RequestUsage(input_tokens=11, output_tokens=1120),
+        ModelResponse(parts=[FilePart(content=picture)]),
+    ).receipt(_CARD, priceable=True)
+
+    assert receipt.cost is None
+    assert receipt.counts.unpriced_requests == 1
+    assert receipt.counts.output_images == 1
+
+
+def test_a_picture_with_no_usage_at_all_is_still_counted() -> None:
+    picture = BinaryImage(data=b"\x89PNG", media_type="image/png")
+    receipt = _dispatch(
+        RequestUsage(), ModelResponse(parts=[FilePart(content=picture)])
+    ).receipt(_CARD, priceable=True)
+
+    assert receipt.counts.unconfirmed_requests == 1
+    assert receipt.counts.output_images == 1

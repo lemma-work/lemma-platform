@@ -16,6 +16,10 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import SecretStr, ValidationError
 
 from app.core.domain.generation import GenerationSettings, ReasoningEffort
+from app.modules.agent.application.agents.google_genai_profiles import (
+    GoogleProfileEdit,
+    google_profile_changes,
+)
 from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.google_genai_catalog import google_genai_catalog
 from app.modules.agent.domain.runtime_choice import choose_workspace_runtime
@@ -42,7 +46,7 @@ VERTEX = GoogleGenAIRuntimeConfig(
 GEMINI_API = GoogleGenAIRuntimeConfig(backend=GoogleGenAIBackend.GEMINI_API)
 
 
-def _service_account_json() -> str:
+def _service_account_json(project: str = "a-project", **extra: str) -> str:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     pem = key.private_bytes(
         serialization.Encoding.PEM,
@@ -52,12 +56,13 @@ def _service_account_json() -> str:
     return json.dumps(
         {
             "type": "service_account",
-            "project_id": "a-project",
+            "project_id": project,
             "private_key_id": "k1",
             "private_key": pem,
             "client_email": "runner@a-project.iam.gserviceaccount.com",
             "client_id": "1",
             "token_uri": "https://oauth2.googleapis.com/token",
+            **extra,
         }
     )
 
@@ -174,9 +179,9 @@ def test_reasoning_effort_is_sent_as_a_gemini_thinking_level(
 
 
 def test_image_models_draw_and_never_run_a_lemma() -> None:
-    catalog = google_genai_catalog(
-        ["gemini-4-hydrogen"], ["gemini-3.1-flash-image", "gemini-4-hydrogen"]
-    )
+    with pytest.raises(RuntimeProfileValidationError, match="both"):
+        google_genai_catalog(["gemini-3.1-flash-image"], ["gemini-3.1-flash-image"])
+    catalog = google_genai_catalog(["gemini-4-hydrogen"], ["gemini-3.1-flash-image"])
     assert [entry.name for entry in catalog] == [
         "gemini-4-hydrogen",
         "gemini-3.1-flash-image",
@@ -233,3 +238,49 @@ def test_a_background_pick_never_lands_on_an_image_model_and_drawing_does() -> N
 
     assert looking is not None and looking.model_name == "gemini-4-hydrogen"
     assert drawing is not None and drawing.model_name == "gemini-3.1-flash-image"
+
+
+def test_a_key_file_may_not_choose_where_tokens_are_requested() -> None:
+    """google-auth posts its signed token request to the file's token_uri
+    from this server: a tenant's file must not point it anywhere else."""
+    with pytest.raises(ValidationError, match="not Google's"):
+        ServiceAccountRuntimeCredentials(
+            service_account_json=SecretStr(
+                _service_account_json(token_uri="http://169.254.169.254/token")
+            )
+        )
+
+
+def test_a_new_key_file_brings_its_own_project_unless_one_is_named() -> None:
+    profile = checked_profile(
+        id=str(uuid4()),
+        organization_id=uuid4(),
+        scope="ORGANIZATION",
+        kind="MODEL_PROVIDER",
+        protocol="GOOGLE_GENAI",
+        name="Vertex",
+        default_model_name="gemini-4-hydrogen",
+        model_catalog=google_genai_catalog(["gemini-4-hydrogen"], []),
+        config=GoogleGenAIRuntimeConfig(
+            backend=GoogleGenAIBackend.VERTEX_AI, vertex_project="project-a"
+        ),
+        credentials=ServiceAccountRuntimeCredentials(
+            service_account_json=SecretStr(_service_account_json("project-a"))
+        ),
+    )
+
+    replaced = google_profile_changes(
+        profile,
+        GoogleProfileEdit(service_account_json=_service_account_json("project-b")),
+    )
+    named = google_profile_changes(
+        profile,
+        GoogleProfileEdit(
+            service_account_json=_service_account_json("project-b"),
+            vertex_project="project-a",
+        ),
+    )
+
+    assert replaced.config.vertex_project == "project-b"
+    assert replaced.asks_google_differently
+    assert named.config.vertex_project == "project-a"

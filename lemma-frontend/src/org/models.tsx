@@ -1,5 +1,5 @@
 import { LoadingIndicator } from "@/ui/loading";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
     source,
@@ -477,6 +477,11 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
     const [project, setProject] = useState("");
     const [location, setLocation] = useState("global");
     const [imageModels, setImageModels] = useState("");
+    const [draws, setDraws] = useState(true);
+    const [readingKeyFile, setReadingKeyFile] = useState(false);
+    const [keyFileError, setKeyFileError] = useState("");
+    /* Only the latest pick may land: two reads can finish out of order. */
+    const keyFilePick = useRef(0);
     const [tested, setTested] = useState<Tested | null>(null);
     const [error, setError] = useState("");
     /* Testing goes through this computer's own model lookup, which only the
@@ -525,7 +530,7 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
                     serviceAccountJson: signIn === "VERTEX_AI" ? keyFile.trim() : undefined,
                     vertexProject: project.trim() || undefined,
                     vertexLocation: location.trim() || undefined,
-                    imageModels: imageModels.trim() ? modelNames(imageModels) : undefined,
+                    imageModels: !draws ? [] : imageModels.trim() ? modelNames(imageModels) : undefined,
                 },
             }),
         }),
@@ -534,10 +539,23 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
     });
 
     const googleProblem = google ? googleSignInProblem(signIn, apiKey, keyFile) : null;
-    const ready = google ? googleProblem === null : Boolean(sentKey);
+    const ready = google ? googleProblem === null && !readingKeyFile : Boolean(sentKey);
     const readKeyFile = async (file: File | undefined) => {
+        /* The previous file is dropped the moment another is picked, so
+           Connect can never save one the input no longer shows. */
+        const pick = ++keyFilePick.current;
+        setKeyFile("");
+        setKeyFileError("");
         if (!file) return;
-        setKeyFile(await file.text());
+        setReadingKeyFile(true);
+        try {
+            const text = await file.text();
+            if (pick === keyFilePick.current) setKeyFile(text);
+        } catch {
+            if (pick === keyFilePick.current) setKeyFileError("That file could not be read.");
+        } finally {
+            if (pick === keyFilePick.current) setReadingKeyFile(false);
+        }
     };
 
     const toggleVision = (model: string) =>
@@ -585,7 +603,9 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
                             onChange={(event) => void readKeyFile(event.target.files?.[0])}
                         />
                         <span>
-                            {keyFile
+                            {readingKeyFile
+                                ? "Reading the key file…"
+                                : keyFile
                                 ? "Key file loaded. It is stored encrypted and never shown again."
                                 : "The JSON key of a service account with the Vertex AI User role."}
                         </span>
@@ -639,14 +659,22 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
             </div>
             {google && (
                 <div className="field">
-                    <label htmlFor="google-image-models">Image models <em>optional</em></label>
-                    <input
-                        id="google-image-models"
-                        value={imageModels}
-                        placeholder="gemini-3.1-flash-image"
-                        onChange={(event) => setImageModels(event.target.value)}
-                    />
-                    <span>What agents draw with. Left empty, Google&rsquo;s current image model.</span>
+                    <label className="check">
+                        <input type="checkbox" checked={draws} onChange={(event) => setDraws(event.target.checked)} />
+                        <span>Agents can make images with this provider</span>
+                    </label>
+                    {draws && (
+                        <>
+                            <label htmlFor="google-image-models">Image models <em>optional</em></label>
+                            <input
+                                id="google-image-models"
+                                value={imageModels}
+                                placeholder="gemini-3.1-flash-image"
+                                onChange={(event) => setImageModels(event.target.value)}
+                            />
+                            <span>What agents draw with, billed per picture. Left empty, Google&rsquo;s current image model.</span>
+                        </>
+                    )}
                 </div>
             )}
             {canTest && (
@@ -683,6 +711,7 @@ function AddKey({ orgId, onClose, onAdded }: { orgId: string; onClose: () => voi
                 </div>
             )}
             {error && <p className="reachrow__error">{error}</p>}
+            {keyFileError && <p className="reachrow__error">{keyFileError}</p>}
             {google && googleProblem && (keyFile || apiKey) && <p className="reachrow__error">{googleProblem}</p>}
             <div className="modal__acts">
                 <button className="linkish" onClick={onClose}>Cancel</button>
