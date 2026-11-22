@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import typer
+from typer.main import get_command
 
 from lemma_cli.cli_core.app import app
 from lemma_cli.cli_core.commands import machine
@@ -31,6 +35,17 @@ class FakeStream:
 
     def kill(self) -> None:
         self.killed = True
+
+    #: The real ``run_shell`` drives these on the stream it is handed, so a
+    #: fake stream it can run a whole shell session against offers them.
+    def resize(self, columns: int, lines: int) -> None:
+        pass
+
+    def send_input(self, text: str) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
 
 
 class FakeFiles:
@@ -282,33 +297,39 @@ def test_ps_and_kill_resolve_the_ref_like_exec(runner, patch_run) -> None:
     ]
 
 
-def test_shell_resolves_the_ref_like_exec(runner, patch_run, monkeypatch) -> None:
-    machines = FakeMachines()
+def test_shell_resolves_the_ref_like_exec(patch_run, monkeypatch) -> None:
+    """The real ``run_shell`` runs here, against the fake client with a real
+    pty as its terminal: nothing inside the shell path is doubled. CliRunner
+    cannot drive it -- it replaces sys.stdin/stdout with pipes, which the tty
+    guard would rightly refuse -- so the click command is invoked directly.
+    """
+    pty = pytest.importorskip("pty")  # run_shell needs a POSIX terminal
+    machines = FakeMachines(FakeStream([], 0, "succeeded"))
     _patch(patch_run, _state_with_pod(POD_B), machines)
-    seen: list[str] = []
-
-    from lemma_cli.cli_core import machine_shell
-
-    def fake_run_shell(client: Any, ref: str, command: str) -> int:
-        seen.append(ref)
-        return 0
-
-    monkeypatch.setattr(machine_shell, "run_shell", fake_run_shell)
-    # CliRunner replaces sys.stdin/stdout with pipes, so look like a terminal
-    # to the guard; the patched run_shell never touches a real one.
-    monkeypatch.setattr(
-        machine,
-        "sys",
-        SimpleNamespace(
-            stdin=SimpleNamespace(isatty=lambda: True),
-            stdout=SimpleNamespace(isatty=lambda: True),
-        ),
-    )
-
-    result = runner.invoke(app, ["machine", "shell", "--pod", POD_A, "pod:bay-1"])
-
-    assert result.exit_code == 0, result.stderr
-    assert seen == [f"pod:{POD_A}:bay-1"]
+    master_fd, slave_fd = pty.openpty()
+    stdin = os.fdopen(os.dup(slave_fd), encoding="utf-8")
+    stdout = os.fdopen(os.dup(slave_fd), "w", encoding="utf-8")
+    monkeypatch.setattr(sys, "stdin", stdin)
+    monkeypatch.setattr(sys, "stdout", stdout)
+    try:
+        code = get_command(app).main(
+            ["machine", "shell", "--pod", POD_A, "pod:bay-1"],
+            prog_name="lemma",
+            standalone_mode=False,
+        )
+        assert code == 0
+        ((verb, (ref, line), kwargs),) = machines.calls
+        assert verb == "exec"
+        assert (ref, line) == (f"pod:{POD_A}:bay-1", "bash -l")
+        assert kwargs["via"] == "socket"
+    finally:
+        # run_shell's `finally` set its done event; give the keyboard thread
+        # its 0.1s poll to leave select() before the pty closes under it.
+        time.sleep(0.2)
+        stdin.close()
+        stdout.close()
+        os.close(slave_fd)
+        os.close(master_fd)
 
 
 @pytest.mark.parametrize("command", ["exec", "shell", "ps", "kill"])
