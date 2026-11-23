@@ -7,9 +7,11 @@ import { lemma } from "@/session/client";
 import { isForbidden } from "@/session/auth-state";
 import { itemsOf } from "@/search/sources";
 import { canManage, type Member } from "@/org/membership";
-import { live } from "@/usage/queries";
-import { PlanPicker } from "./plan-picker";
-import { formatPrice, isTrouble, onDate, paying, priceLine, standing } from "./plan";
+import { live, useMyLimits } from "@/usage/queries";
+import { allowanceOf } from "@/usage/allowance";
+import { BillingNow } from "./billing-now";
+import { PlanCards } from "./plan-cards";
+import { formatPrice, isTrouble, onDate, paying, standing } from "./plan";
 import {
     useCancelTeam, useChangeTeam, useInvoices, useOrgPlan, usePlans, useSeats, useStartTeam,
 } from "./queries";
@@ -22,12 +24,12 @@ import {
  *  does not offer an action the server has already decided to refuse — the rule
  *  `org/membership.ts` states for the roster, applied to money.
  *
- *  A member still sees the plans. One you cannot buy yourself is still one you
- *  can ask an owner for, and a blank panel answers "what would it take to lift
- *  this limit?" with nothing.
+ *  A member still sees the plans, with what each would cost everyone here. One
+ *  you cannot buy yourself is still one you can ask an owner for, and a blank
+ *  panel answers "what would it take to lift this limit?" with nothing.
  *
- *  Drawn as rows (the plan, when it renews, the seats), the plans as cards,
- *  then the invoices as rows with their state as a dot and a word.
+ *  Drawn as what the organization is on (`BillingNow`), the plans as cards to
+ *  buy from (`PlanCards`), then the invoices as rows.
  */
 function statusWord(status: string): string {
     if (status === "paid") return "Paid";
@@ -46,9 +48,8 @@ function statusTone(status: string): string {
     return "kstatus kstatus--off";
 }
 
-export function TeamBillingSection({ orgId }: { orgId: string }) {
+export function TeamBillingSection({ orgId, orgName }: { orgId: string; orgName?: string }) {
     const [waiting, setWaiting] = useState(false);
-    const [stopping, setStopping] = useState(false);
 
     /* The same query keys the roster uses, so looking at billing costs no extra
        requests for anybody who has already opened People — and changing a role
@@ -69,17 +70,46 @@ export function TeamBillingSection({ orgId }: { orgId: string }) {
     const myRole = people.find((member) => member.user_id === me.data?.id)?.role ?? null;
     const mayBuy = canManage(myRole);
     const mayStop = myRole === "ORG_OWNER";
+    /* Whether this person may buy is only known once both reads answer;
+       until then nothing is offered, rather than a button the server may
+       refuse. */
+    const roleKnown = members.isSuccess && me.isSuccess;
+    /* Who can buy, counted only from a roster read to its end: the first
+       page of a larger organization would undercount them. */
+    const wholeRoster = members.isSuccess && !(members.data as { next_page_token?: string | null }).next_page_token;
+    const buyers = wholeRoster ? people.filter((member) => canManage(member.role)).length : 0;
 
     const plan = useOrgPlan(orgId, waiting);
     const plans = usePlans();
     const seats = useSeats(orgId);
+    const limits = useMyLimits(orgId);
     const invoices = useInvoices(orgId, mayBuy);
     const start = useStartTeam(orgId);
     const change = useChangeTeam(orgId);
     const cancel = useCancelTeam(orgId);
 
+    /* The sample workspace has no organization to bill, and the plans are
+       still worth seeing: what there is, and what each would give. */
     if (!live()) {
-        return <p className="kset-note">The sample workspace has no real organization, so there is nothing to bill.</p>;
+        return (
+            <div className="kset-stack kbill">
+                <PlanCards
+                    audience="TEAM"
+                    plans={plans.data}
+                    pending={plans.isPending}
+                    current={null}
+                    people={null}
+                    crowded={false}
+                    blocked={{
+                        short: "Not in the sample workspace",
+                        long: "The sample workspace has no organization to bill, so nothing here can be bought.",
+                    }}
+                    start={(planId) => start.mutateAsync(planId)}
+                    change={(planId) => change.mutateAsync(planId)}
+                    onWaiting={setWaiting}
+                />
+            </div>
+        );
     }
 
     if (isForbidden(plan.error)) {
@@ -87,116 +117,103 @@ export function TeamBillingSection({ orgId }: { orgId: string }) {
     }
 
     const subscription = plan.data ?? null;
-    const onPlan = subscription?.plan ?? null;
     const note = standing(subscription);
     const bought = seats.data?.current_seats ?? 0;
-    const present = seats.data?.member_count ?? 0;
-
-    const stoppable = mayStop && paying(subscription) && !subscription?.cancel_at_period_end;
+    /* Everyone in the organization, which is what a checkout charges for.
+       Only the seat read counts all of them, so until it answers the head
+       count is unknown, and nothing that depends on it is shown or sold. */
+    const present = seats.data?.member_count ?? null;
+    const where = orgName ?? "this organization";
+    const blocked = !roleKnown
+        ? (members.isError || me.isError
+            ? {
+                short: "Couldn’t read who can buy",
+                long: <>Couldn’t read who can choose the plan for {where}.
+                    <button type="button" className="b b--s b--secondary" onClick={() => { void members.refetch(); void me.refetch(); }}><RefreshIcon /> Try again</button></>,
+            }
+            : { short: "Checking who can buy…" })
+        : !mayBuy
+            ? {
+                short: "An owner or editor can choose it",
+                long: "Owners and editors choose the plan for " + where
+                    + (buyers > 0 ? ". " + (buyers === 1 ? "One person" : buyers + " people") + " here can." : "."),
+            }
+            : present === null
+                ? (seats.isError
+                    ? {
+                        short: "Couldn’t read how many people are here",
+                        long: <>Couldn’t read how many people are in {where}, so the plans can’t be priced for it.
+                            <button type="button" className="b b--s b--secondary" onClick={() => void seats.refetch()}><RefreshIcon /> Try again</button></>,
+                    }
+                    : { short: "Counting the people here…" })
+                : undefined;
+    const allowance = allowanceOf(limits.data);
+    const crowded = allowance.kind === "blocked" || (allowance.kind === "within" && allowance.warn);
+    const unpaid = present !== null && paying(subscription) && present > bought ? present - bought : 0;
 
     return (
-        <div className="kset-stack">
-            {plan.isPending && <p className="kset-note" role="status">Reading the plan…</p>}
+        <div className="kset-stack kbill">
+            {plan.isPending && <span className="ksk kbill-now--sk" aria-label="Reading the plan" />}
             {plan.isError && !isForbidden(plan.error) && (
                 <p className="kset-said kset-said--bad" role="alert">
-                    The plan couldn’t be read.
+                    Couldn’t read the plan.
                     <button type="button" className="b b--s b--secondary" onClick={() => void plan.refetch()}><RefreshIcon /> Try again</button>
                 </p>
             )}
 
-            {(!plan.isPending && !plan.isError) || seats.data ? (
-                <div className="klist">
-                    {!plan.isPending && !plan.isError && <>
-                        <div className="krow krow--kv">
-                            <span className="krow__k">Plan</span>
-                            <span className="krow__v kset-wrap">
-                                <b>{onPlan?.name ?? "No plan yet"}</b>
-                                {/* As on the personal screen: free and unbought
-                                    are the same sentence, and a price reading
-                                    "Free" under the word Free says nothing
-                                    twice. */}
-                                <span>{paying(subscription) ? priceLine(onPlan!) : "This organization has not bought a plan."}</span>
-                            </span>
-                            <span className="krow__end">
-                                {stoppable && !stopping && (
-                                    <button type="button" className="b b--s b--secondary b--red" onClick={() => setStopping(true)}>Stop renewing</button>
-                                )}
-                            </span>
-                        </div>
-                        {subscription?.current_period_end && !subscription.cancel_at_period_end && paying(subscription) && (
-                            <div className="krow krow--kv">
-                                <span className="krow__k">Renews</span>
-                                <span className="krow__v"><b>{onDate(subscription.current_period_end)}</b></span>
-                                <span className="krow__end" />
-                            </div>
-                        )}
-                    </>}
-                    {seats.data && (
-                        /* Two numbers, because they answer different questions
-                           and only their difference is worth acting on: a team
-                           that grew mid-period has more people than it has
-                           paid for, and nothing charges for the difference
-                           until the plan is next changed. */
-                        <div className="krow krow--kv">
-                            <span className="krow__k">Seats</span>
-                            <span className="krow__v kset-wrap">
-                                <b>Paid for {bought} {bought === 1 ? "seat" : "seats"}</b>
-                                <span>{present} {present === 1 ? "person" : "people"} in the organization</span>
-                            </span>
-                            <span className="krow__end">
-                                {present > bought && paying(subscription) && (
-                                    <span className="kstatus kstatus--warn">{present - bought} not yet paid for</span>
-                                )}
-                            </span>
-                        </div>
-                    )}
-                </div>
-            ) : null}
+            {!plan.isPending && !plan.isError && (
+                <BillingNow
+                    subscription={subscription}
+                    orgName={orgName ?? "this organization"}
+                    people={present ?? undefined}
+                    allowance={allowance}
+                    canBuy={mayBuy}
+                    stop={mayStop ? {
+                        run: (done) => cancel.mutate(undefined, { onSuccess: done }),
+                        pending: cancel.isPending,
+                        failed: cancel.isError,
+                    } : null}
+                />
+            )}
 
             {note && <p className={"kset-said" + (isTrouble(subscription) ? " kset-said--bad" : "")}>{note}</p>}
 
-            {stoppable && stopping && (
-                <div className="kset-stack" role="group" aria-label="Stop renewing">
-                    <p className="kset-said">Stop renewing {onPlan?.name}? Everyone here keeps working until the end of the period already paid for.</p>
-                    <div className="kset-acts">
-                        <button
-                            type="button"
-                            className="b b--s b--danger"
-                            disabled={cancel.isPending}
-                            onClick={() => { cancel.mutate(undefined, { onSuccess: () => setStopping(false) }); }}
-                        >{cancel.isPending ? "Stopping…" : "Stop renewing"}</button>
-                        <button type="button" className="b b--s b--secondary" onClick={() => setStopping(false)}>Keep it</button>
-                    </div>
-                    {cancel.isError && <p className="kset-said kset-said--bad" role="alert">That could not be cancelled. Nothing has changed.</p>}
-                </div>
+            {/* Seats follow the member count only when the plan changes, so
+                somebody who joined after the last payment is not on the bill
+                yet. Said with what will put them on it. */}
+            {unpaid > 0 && (
+                <p className="kstatus kstatus--warn kset-state">
+                    {unpaid === 1 ? "1 person" : unpaid + " people"} joined after the last payment, so {orgName ?? "this organization"} has {present} people
+                    and pays for {bought}. They’re added to the bill when the plan next changes.
+                </p>
             )}
 
-            <p className="ksub">Plans <span>A month, for each person in the organization</span></p>
-            <PlanPicker
+            <PlanCards
                 audience="TEAM"
                 plans={plans.data}
-                current={subscription}
                 pending={plans.isPending}
+                current={subscription}
+                people={present}
+                orgName={orgName}
+                crowded={crowded}
+                blocked={blocked}
                 start={(planId) => start.mutateAsync(planId)}
                 change={(planId) => change.mutateAsync(planId)}
                 onWaiting={setWaiting}
-                disabled={members.isSuccess && !mayBuy
-                    ? "An owner or an editor buys and changes the plan for this organization."
-                    : undefined}
             />
             {plans.isError && (
                 <p className="kset-said kset-said--bad" role="alert">
-                    The plans couldn’t be read.
+                    Couldn’t read the plans.
                     <button type="button" className="b b--s b--secondary" onClick={() => void plans.refetch()}><RefreshIcon /> Try again</button>
                 </p>
             )}
 
             {mayBuy && (invoices.isPending || invoices.isError || (invoices.data && invoices.data.length > 0)) && <>
                 <p className="ksub">Invoices</p>
-                {invoices.isPending && <p className="kset-note" role="status">Reading the history…</p>}
+                {invoices.isPending && <span className="ksk kbill-rows--sk" aria-label="Reading the invoices" />}
                 {invoices.isError && (
                     <p className="kset-said kset-said--bad" role="alert">
-                        The invoices couldn’t be read.
+                        Couldn’t read the invoices.
                         <button type="button" className="b b--s b--secondary" onClick={() => void invoices.refetch()}><RefreshIcon /> Try again</button>
                     </p>
                 )}
@@ -205,7 +222,7 @@ export function TeamBillingSection({ orgId }: { orgId: string }) {
                         {(invoices.data ?? []).map((invoice) => (
                             <div className="krow" key={invoice.id}>
                                 <span className="krow__v">
-                                    <b>{onDate(invoice.period_start)} — {onDate(invoice.period_end)}</b>
+                                    <b>{onDate(invoice.period_start)} – {onDate(invoice.period_end)}</b>
                                     <span className={statusTone(invoice.status)}>{statusWord(invoice.status)}</span>
                                 </span>
                                 <span className="krow__end">

@@ -69,7 +69,7 @@ const YOURS: SettingsEntry[] = [
     { key: "account", label: "Account", icon: ProfileIcon, title: "Account", blurb: "Who you are here." },
     { key: "appearance", label: "Appearance", icon: AppearanceIcon, title: "Appearance", blurb: "How Lemma looks on this device." },
     { key: "usage", label: "Usage", icon: UsageIcon, title: "Your usage", blurb: "What your work has used, and what you may use.", wide: true },
-    { key: "plan", label: "Plan", icon: CardIcon, title: "Your plan", blurb: "What you pay for, and what else there is." },
+    { key: "plan", label: "Plan", icon: CardIcon, title: "Your plan", blurb: "What you pay for, and what each plan gives you.", wide: true },
 ];
 
 const THEIRS: SettingsEntry[] = [
@@ -80,7 +80,7 @@ const THEIRS: SettingsEntry[] = [
     { key: "org-usage", label: "Usage", icon: UsageIcon, title: "Usage",
         blurb: "What this organization has used, by model and by kind of work.", wide: true },
     { key: "team-billing", label: "Billing", icon: ReceiptIcon, title: "Billing",
-        blurb: "What this organization pays for, and the seats it has bought." },
+        blurb: "What this organization pays for, and what each plan gives everyone in it.", wide: true },
 ];
 
 const HELP: SettingsEntry[] = [
@@ -172,7 +172,7 @@ export function SettingsSectionBody({ section, org, activeOrgId, focus }: {
             {org && section === "people" && <PeopleSection orgId={org.id} />}
             {org && section === "models" && <ModelsSection orgId={org.id} />}
             {org && section === "org-usage" && <OrgUsageSection orgId={org.id} />}
-            {org && section === "team-billing" && <TeamBillingSection orgId={org.id} />}
+            {org && section === "team-billing" && <TeamBillingSection orgId={org.id} orgName={org.name} />}
             {isThisMacSection(section) && <ThisMacPane section={section} focus={focus} />}
             {section === "help" && <HelpSection />}
         </>
