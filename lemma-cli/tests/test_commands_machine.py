@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -15,6 +16,17 @@ from typer.main import get_command
 from lemma_cli.cli_core.app import app
 from lemma_cli.cli_core.commands import machine
 from lemma_cli.cli_core.commands.machine import split_machine_path
+
+
+#: Help and usage errors come back Rich-rendered: coloured, wrapped and boxed
+#: on a wide terminal such as CI's (FORCE_COLOR is set there), which can split
+#: a flag like `--pod` with escape codes. Strip all of that before looking for
+#: words in it -- the same pattern test_commands_decisions.py uses.
+_STYLING = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    return " ".join(_STYLING.sub("", text).replace("\u2502", " ").split())
 
 
 class FakeStream:
@@ -219,7 +231,7 @@ def test_a_pod_flag_after_the_ref_is_a_usage_error(runner, patch_run, flag) -> N
     result = runner.invoke(app, ["machine", "exec", "pod:bay-1", "true", *flag])
 
     assert result.exit_code == 2
-    assert "--pod" in result.output
+    assert "--pod" in _plain(result.output)
     assert machines.calls == []  # nothing ran, on any pod
 
 
@@ -337,7 +349,7 @@ def test_machine_commands_advertise_the_pod_flag(runner, command) -> None:
     result = runner.invoke(app, ["machine", command, "--help"])
 
     assert result.exit_code == 0
-    assert "--pod" in result.output
+    assert "--pod" in _plain(result.output)
 
 
 def test_cp_uploads_a_local_file_into_a_directory(
