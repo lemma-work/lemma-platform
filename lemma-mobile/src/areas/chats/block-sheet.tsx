@@ -13,6 +13,7 @@ import {
     blockLine,
     blockTitle,
     memberBlockNote,
+    stopAnsweringFailed,
     stopAnsweringLabel,
     stopAnsweringLine,
     type Blockable,
@@ -35,19 +36,25 @@ export function BlockSheet({ podId, person, lemma, mayStopAnswering, onClose }: 
     const cache = useQueryClient();
     const offerStop = Boolean(person) && mayStopAnswering && person?.kind === "CONTACT";
     const [stop, setStop] = useState(false);
+    /* The block is the reader's and lands first: once it has, the chats are
+       read again whatever becomes of stopping the Lemma, and Try again asks
+       only for that. */
+    const [blocked, setBlocked] = useState(false);
     const save = useMutation({
         mutationFn: async (whom: Blockable) => {
-            await source.block(podId, whom);
+            if (!blocked) {
+                await source.block(podId, whom);
+                setBlocked(true);
+                void cache.invalidateQueries({ queryKey: [key, "chats", podId] });
+            }
             if (offerStop && stop) await source.setContactBlocked(podId, whom.id, true);
         },
-        onSuccess: () => {
-            void cache.invalidateQueries({ queryKey: [key, "chats", podId] });
-            onClose();
-        },
+        onSuccess: onClose,
     });
     const { reset } = save;
     useEffect(() => {
         setStop(false);
+        setBlocked(false);
         reset();
     }, [person?.id, reset]);
     const busy = save.isPending;
@@ -72,10 +79,16 @@ export function BlockSheet({ podId, person, lemma, mayStopAnswering, onClose }: 
                         </View>
                     ) : null}
                     {person.kind === "MEMBER" ? <Text size={14} tone={color.ink3} style={{ lineHeight: 20 }}>{memberBlockNote(person, lemma)}</Text> : null}
-                    <Trouble>{save.isError ? problemOf(save.error, "Couldn’t block them.") : null}</Trouble>
+                    <Trouble>
+                        {save.isError
+                            ? blocked
+                                ? stopAnsweringFailed(person, lemma) + " " + problemOf(save.error, "").trim()
+                                : problemOf(save.error, "Couldn’t block them.")
+                            : null}
+                    </Trouble>
                     <View style={{ flexDirection: "row", gap: 10, justifyContent: "flex-end" }}>
-                        <Button title="Cancel" kind="outline" height={48} size={16} disabled={busy} onPress={close} />
-                        <Button title="Block" height={48} size={16} busy={busy} onPress={() => save.mutate(person)} />
+                        <Button title={blocked ? "Done" : "Cancel"} kind="outline" height={48} size={16} disabled={busy} onPress={close} />
+                        <Button title={blocked ? "Try again" : "Block"} height={48} size={16} busy={busy} onPress={() => save.mutate(person)} />
                     </View>
                 </ScrollView>
             ) : null}
