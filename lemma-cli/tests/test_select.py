@@ -20,6 +20,9 @@ def test_item_label() -> None:
     assert item_label({"name": "Acme", "slug": "acme"}) == "Acme (acme)"
     assert item_label({"name": "Acme", "slug": "Acme"}) == "Acme"
     assert item_label({"id": "123"}) == "123"
+    assert (
+        item_label({"id": "conv-1", "title": "Q3 Planning"}) == "Q3 Planning (conv-1)"
+    )
     assert item_label({}, fallback="none") == "none"
 
 
@@ -52,6 +55,16 @@ def test_filter_items_by_slug() -> None:
     assert filter_items(items, "-pod") == items
 
 
+def test_filter_items_by_id_and_title() -> None:
+    items = [
+        {"id": "conv-101", "title": "Budget Review"},
+        {"id": "conv-202", "title": "Weekly Standup"},
+    ]
+    assert filter_items(items, "budget") == [items[0]]
+    assert filter_items(items, "101") == [items[0]]
+    assert filter_items(items, "standup") == [items[1]]
+
+
 def test_filter_items_no_matches() -> None:
     items = [
         {"name": "Alpha", "slug": "alpha"},
@@ -62,12 +75,13 @@ def test_filter_items_no_matches() -> None:
 
 def test_filter_items_handles_missing_fields() -> None:
     items = [
-        {"id": "item-1"},
+        {"id": "conv-1", "title": "Q3 Planning"},
         {"name": None, "slug": None},
         {"name": "Valid", "slug": "valid"},
     ]
     assert filter_items(items, "valid") == [items[2]]
-    assert filter_items(items, "item") == []
+    assert filter_items(items, "planning") == [items[0]]
+    assert filter_items(items, "conv") == [items[0]]
 
 
 def test_render_arrow_selector_basic() -> None:
@@ -78,7 +92,7 @@ def test_render_arrow_selector_basic() -> None:
     ]
     _render_arrow_selector(items, label="pod", selected=0, output=buf)
     content = buf.getvalue()
-    assert "Select pod (up/down, enter)" in content
+    assert "Select pod (type to filter, up/down, enter)" in content
     assert "> Alpha (alpha)" in content
     assert "  Beta (beta)" in content
     assert "\033[7m" in content
@@ -87,7 +101,9 @@ def test_render_arrow_selector_basic() -> None:
 def test_render_arrow_selector_with_filter() -> None:
     buf = io.StringIO()
     items = [{"name": "Alpha", "slug": "alpha"}]
-    _render_arrow_selector(items, label="pod", selected=0, filter_text="alp", output=buf)
+    _render_arrow_selector(
+        items, label="pod", selected=0, filter_text="alp", output=buf
+    )
     content = buf.getvalue()
     assert "Filter: alp" in content
     assert "> Alpha (alpha)" in content
@@ -95,7 +111,9 @@ def test_render_arrow_selector_with_filter() -> None:
 
 def test_render_arrow_selector_no_matches() -> None:
     buf = io.StringIO()
-    _render_arrow_selector([], label="pod", selected=0, filter_text="nonexistent", output=buf)
+    _render_arrow_selector(
+        [], label="pod", selected=0, filter_text="nonexistent", output=buf
+    )
     content = buf.getvalue()
     assert "Filter: nonexistent" in content
     assert "(no matches)" in content
@@ -184,14 +202,35 @@ def test_select_with_arrows_navigation(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_tty = MagicMock()
     monkeypatch.setitem(sys.modules, "termios", fake_termios)
     monkeypatch.setitem(sys.modules, "tty", fake_tty)
-    # Down arrow: '\x1b', then read(2) returns '[B'
+    # Down arrow: '\x1b', then read(1) returns '[', read(1) returns 'B'
     fake_stdin = MagicMock()
     fake_stdin.fileno.return_value = 0
-    fake_stdin.read.side_effect = ["\x1b", "[B", "\n"]
+    fake_stdin.read.side_effect = ["\x1b", "[", "B", "\n"]
     monkeypatch.setattr(sys, "stdin", fake_stdin)
 
     selected = _select_with_arrows(items, label="pod", current_id=None)
     assert selected == items[1]
+
+
+def test_select_with_arrows_delete_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    items = [
+        {"name": "Alpha", "slug": "alpha"},
+        {"name": "Beta", "slug": "beta"},
+    ]
+    fake_termios = MagicMock()
+    fake_tty = MagicMock()
+    monkeypatch.setitem(sys.modules, "termios", fake_termios)
+    monkeypatch.setitem(sys.modules, "tty", fake_tty)
+    # User sends Delete sequence "\x1b[3~", then presses Enter
+    # Delete key must be fully drained so '~' is not appended to filter,
+    # and Enter still returns items[0].
+    fake_stdin = MagicMock()
+    fake_stdin.fileno.return_value = 0
+    fake_stdin.read.side_effect = ["\x1b", "[", "3", "~", "\n"]
+    monkeypatch.setattr(sys, "stdin", fake_stdin)
+
+    selected = _select_with_arrows(items, label="pod", current_id=None)
+    assert selected == items[0]
 
 
 def test_select_with_arrows_exit_ctrl_c(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -10,7 +10,13 @@ from .state import console, fail
 
 
 def item_label(item: dict[str, Any], fallback: str = "") -> str:
-    name = item.get("name") or item.get("slug") or item.get("id") or fallback
+    name = (
+        item.get("name")
+        or item.get("title")
+        or item.get("slug")
+        or item.get("id")
+        or fallback
+    )
     subtitle = item.get("slug") or item.get("id")
     return f"{name} ({subtitle})" if subtitle and subtitle != name else str(name)
 
@@ -22,8 +28,11 @@ def filter_items(items: list[dict[str, Any]], text: str) -> list[dict[str, Any]]
     return [
         item
         for item in items
-        if needle in str(item.get("name") or "").lower()
+        if needle in item_label(item).lower()
+        or needle in str(item.get("name") or "").lower()
         or needle in str(item.get("slug") or "").lower()
+        or needle in str(item.get("id") or "").lower()
+        or needle in str(item.get("title") or "").lower()
     ]
 
 
@@ -92,7 +101,14 @@ def _select_with_arrows(
             )
             key = sys.stdin.read(1)
             if key == "\x1b":
-                key += sys.stdin.read(2)
+                next_ch = sys.stdin.read(1)
+                key += next_ch
+                if next_ch in {"[", "O"}:
+                    while True:
+                        ch = sys.stdin.read(1)
+                        key += ch
+                        if ch == "~" or ch.isalpha():
+                            break
             if key in {"\r", "\n"}:
                 if filtered:
                     console.print()
@@ -135,7 +151,7 @@ def _render_arrow_selector(
 ) -> None:
     out = output if output is not None else sys.stdout
     out.write("\033[2J\033[H")
-    out.write(f"Select {label} (up/down, enter)\n")
+    out.write(f"Select {label} (type to filter, up/down, enter)\n")
     if filter_text:
         out.write(f"Filter: {filter_text}\n")
     if not items:
