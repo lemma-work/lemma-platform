@@ -64,6 +64,8 @@
     "query-string": {
       "decode-uri-component": "0.5.1"
     },
-    "node-forge": "^1.4.4"
+    "node-forge": "^1.4.4",
+    "zod": "^4.6.6",
+    "tinypool": "^2.1.2"
   }
 }
