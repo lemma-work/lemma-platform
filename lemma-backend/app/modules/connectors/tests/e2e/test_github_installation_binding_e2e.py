@@ -291,17 +291,22 @@ async def _account_in(
     user_id: str,
     external_ref=None,
     token: str = "gho_mallory",
+    auth_config_id: UUID | None = None,
+    credentials: dict | None = None,
 ) -> str:
-    install = AuthConfig(
-        organization_id=UUID(org_id),
-        connector_id="github",
-        kind="http",
-        config_source="SYSTEM_DEFAULT",
-        status="ACTIVE",
-        name=f"github-{uuid4().hex[:8]}",
-    )
-    db_session.add(install)
-    await db_session.commit()
+    """An account of ``user_id``'s, on a new install unless one is named."""
+    if auth_config_id is None:
+        install = AuthConfig(
+            organization_id=UUID(org_id),
+            connector_id="github",
+            kind="http",
+            config_source="SYSTEM_DEFAULT",
+            status="ACTIVE",
+            name=f"github-{uuid4().hex[:8]}",
+        )
+        db_session.add(install)
+        await db_session.commit()
+        auth_config_id = install.id
     from app.core.crypto import get_secret_cipher
     from app.modules.connectors.domain.account import AccountEntity
 
@@ -311,10 +316,10 @@ async def _account_in(
         AccountEntity(
             user_id=UUID(user_id),
             organization_id=UUID(org_id),
-            auth_config_id=install.id,
+            auth_config_id=auth_config_id,
             connector_id="github",
             is_default=True,
-            credentials={"access_token": token},
+            credentials=credentials or {"access_token": token},
             external_ref=external_ref,
         )
     )
@@ -809,3 +814,106 @@ async def test_an_organization_reads_back_every_installation_it_holds_and_no_oth
 
     assert await bound_installations(db_session, UUID(org_id)) == (own, organization)
     assert await bound_installations(db_session, UUID(other_org_id)) == (elsewhere,)
+
+
+# -- a token refreshed on the way to a binding is the one that is kept ---------
+
+
+async def _stored_credentials(db_session: AsyncSession, account_id: str) -> dict:
+    from app.core.crypto import get_secret_cipher
+
+    db_session.expire_all()
+    account = await db_session.get(Account, UUID(account_id))
+    return await get_secret_cipher().decrypt_json_async(account.credentials)
+
+
+async def _stale_account_on_org_a(
+    scenario, db_session, github, github_sees, installation_id: str
+):
+    """Org A holds the installation, and a member of it has a GitHub account
+    whose access token ran out an hour ago: connected, never bound."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.modules.test_support.e2e_authz import invite_org_member
+
+    await _org_a_binds(scenario, db_session, github_sees, installation_id)
+    member = await scenario.create_user("h4-stale")
+    await invite_org_member(
+        scenario.owner_client,
+        scenario.async_client,
+        org_id=scenario.org_id,
+        user=member,
+    )
+    install = await db_session.scalar(
+        select(AuthConfig).where(
+            AuthConfig.organization_id == UUID(scenario.org_id),
+            AuthConfig.connector_id == "github",
+        )
+    )
+    github.refreshable("ghr_first", code="mallory")
+    account_id = await _account_in(
+        db_session,
+        org_id=scenario.org_id,
+        user_id=member["id"],
+        auth_config_id=install.id,
+        credentials={
+            "access_token": "gho_expired",
+            "refresh_token": "ghr_first",
+            "expires_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+        },
+    )
+    return member, account_id
+
+
+async def test_reconciling_keeps_the_token_it_refreshed_on_the_way(
+    scenario, db_session, github, github_sees
+):
+    """Asking GitHub what an account reaches refreshes its token first when
+    that has run out, and then records the installation it found. The record
+    used to be written from the account as it was read before the refresh, so
+    the old token went back over the new one -- and GitHub's refresh tokens
+    work once. The account could never refresh again: every later use of it
+    answered "Unable to refresh connector credentials."."""
+    installation_id = _installation_id()
+    member, account_id = await _stale_account_on_org_a(
+        scenario, db_session, github, github_sees, installation_id
+    )
+
+    seen = await scenario.async_client.get(
+        f"/organizations/{scenario.org_id}/connectors/accounts/{account_id}"
+        "/github/installations",
+        headers=auth_headers(member),
+        params={"refresh": True},
+    )
+
+    assert seen.status_code == 200, seen.text
+    assert seen.json()["install_state"] == "READY", seen.json()
+    stored = await _stored_credentials(db_session, account_id)
+    assert stored["access_token"] == "gho_mallory"
+    assert stored["refresh_token"] == "ghr_first+"
+    assert stored["refresh_token"] in github.refresh_tokens, "still good at GitHub"
+    account = await db_session.get(Account, UUID(account_id))
+    assert account.external_ref == installation_id
+
+
+async def test_binding_by_hand_keeps_the_token_it_refreshed_on_the_way(
+    scenario, db_session, github, github_sees
+):
+    """The same write, behind the endpoint that binds a chosen installation."""
+    installation_id = _installation_id()
+    member, account_id = await _stale_account_on_org_a(
+        scenario, db_session, github, github_sees, installation_id
+    )
+
+    bound = await scenario.async_client.post(
+        f"/organizations/{scenario.org_id}/connectors/accounts/{account_id}"
+        "/github/installations",
+        headers=auth_headers(member),
+        json={"installation_id": installation_id},
+    )
+
+    assert bound.status_code == 200, bound.text
+    stored = await _stored_credentials(db_session, account_id)
+    assert stored["refresh_token"] == "ghr_first+"
+    account = await db_session.get(Account, UUID(account_id))
+    assert account.external_ref == installation_id

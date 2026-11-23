@@ -335,3 +335,44 @@ async def test_a_rate_limit_stays_a_rate_limit_when_the_connector_refused():
     with pytest.raises(GithubImportError) as exc:
         await fetcher.fetch_zipball(owner="acme", repo="busy")
     assert exc.value.code == "GITHUB_RATE_LIMITED"
+
+
+async def test_a_public_repo_imports_anonymously_when_the_account_cannot_refresh():
+    """The person's GitHub sign-in has gone stale and the token endpoint
+    would not renew it. A public repository never needed that account, so the
+    import goes ahead without it; this used to fail the install with "Unable
+    to refresh connector credentials." before anything was fetched."""
+    from app.modules.connectors.domain.errors import OAuthWorkflowError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "authorization" not in request.headers
+        return httpx.Response(200, content=b"PK\x03\x04x")
+
+    fetcher = GithubBundleFetcher(
+        client=_client(handler),
+        operation_runner=_refusing_runner(
+            OAuthWorkflowError("Unable to refresh connector credentials.")
+        ),
+    )
+
+    assert await fetcher.fetch_zipball(owner="acme", repo="crm") == b"PK\x03\x04x"
+    assert fetcher.used_anonymous_access is True
+
+
+async def test_a_private_repo_reports_the_refresh_that_failed():
+    """Anonymous access cannot reach it, so the account was the way in, and
+    what went wrong with the account is the thing to say."""
+    from app.modules.connectors.domain.errors import OAuthWorkflowError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    fetcher = GithubBundleFetcher(
+        client=_client(handler),
+        operation_runner=_refusing_runner(
+            OAuthWorkflowError("Unable to refresh connector credentials.")
+        ),
+    )
+
+    with pytest.raises(OAuthWorkflowError):
+        await fetcher.fetch_zipball(owner="acme", repo="secret")

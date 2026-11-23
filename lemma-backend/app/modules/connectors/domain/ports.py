@@ -10,6 +10,7 @@ from app.core.authorization.context import Context
 
 from app.modules.connectors.domain.account import (
     AccountEntity,
+    AccountStatus,
     CredentialTypes,
     OAuthCredentials,
 )
@@ -83,6 +84,20 @@ class AccountRepositoryPort(Protocol):
     ) -> Sequence[AccountEntity]: ...
 
     async def mark_connected_for_reauth(self, auth_config_id: UUID) -> int: ...
+
+    async def set_status(self, account_id: UUID, status: AccountStatus) -> None:
+        """Write the status and nothing else (never the credentials)."""
+        ...
+
+    async def set_external_ref(
+        self, account_id: UUID, external_ref: str | None
+    ) -> None:
+        """Write the routing key and nothing else (never the credentials)."""
+        ...
+
+    async def stored_credentials(self, account_id: UUID) -> dict[str, object] | None:
+        """The credentials the row holds now, whatever this session read."""
+        ...
 
     async def list_by_user(
         self,

@@ -659,6 +659,9 @@ def _refreshing_service(
     account_repo = AsyncMock()
     account_repo.get.return_value = account
     account_repo.update.side_effect = lambda entity: entity
+    # The row holds what the account was read with, unless a test says a
+    # concurrent refresh has replaced it since.
+    account_repo.stored_credentials.return_value = credentials.model_dump(mode="json")
     auth_provider = _auth_provider()
     auth_provider.refresh_credentials.side_effect = refresh_error
     service = _service(
@@ -710,6 +713,42 @@ async def test_a_withdrawn_grant_is_a_409_that_asks_for_a_reconnect(expired):
         "connector_id": "slack",
     }
     assert account.status == AccountStatus.REAUTH_REQUIRED
+    # The mark is written on its own. The account in hand was read before the
+    # refresh went out; writing all of it back would write back its token.
+    service.account_repository.set_status.assert_awaited_once_with(
+        account.id, AccountStatus.REAUTH_REQUIRED
+    )
+    service.account_repository.update.assert_not_awaited()
+
+
+async def test_losing_a_refresh_race_uses_the_token_the_winner_stored():
+    """Two refreshes of one account, where a refresh token works once.
+
+    The second is told its token is no good -- the same answer a withdrawn
+    grant gets. But the row has moved: the first one's new token is in it. So
+    the grant is alive, that token is the one to use, and the account is not
+    marked for a reconnect it does not need.
+    """
+    service, account = _refreshing_service(
+        OAuthCredentials(
+            access_token="old",
+            refresh_token="spent",
+            expires_at=datetime.now() - timedelta(minutes=5),
+        ),
+        refresh_error=ConnectorReauthRequiredError(reason="bad_refresh_token"),
+    )
+    service.account_repository.stored_credentials.return_value = {
+        "access_token": "new",
+        "refresh_token": "rotated",
+    }
+
+    credentials = await service.get_account_credentials(account.id, account.user_id)
+
+    assert credentials.access_token == "new"
+    assert credentials.refresh_token == "rotated"
+    assert account.status == AccountStatus.CONNECTED
+    service.account_repository.set_status.assert_not_awaited()
+    service.account_repository.update.assert_not_awaited()
 
 
 async def test_an_expired_token_with_nothing_to_refresh_with_asks_for_a_reconnect():

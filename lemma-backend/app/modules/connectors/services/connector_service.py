@@ -65,6 +65,7 @@ from app.modules.connectors.services.account_credentials import (
 from app.modules.connectors.services.credential_refresh_failure import (
     raise_refresh_failure,
     reauth_required,
+    renewed_elsewhere,
 )
 from app.modules.connectors.services.upstream_error_details import (
     upstream_error_details,
@@ -959,6 +960,11 @@ class ConnectorService:
                     # expired token fails this call, an unexpired one carries
                     # on, and the next use tries again either way.
                     if isinstance(exc, ConnectorReauthRequiredError):
+                        renewed = await renewed_elsewhere(
+                            self.account_repository, account, oauth_credentials
+                        )
+                        if renewed is not None:
+                            return self._to_oauth_credentials(renewed)
                         await self._persist_account_status(
                             account, AccountStatus.REAUTH_REQUIRED
                         )
@@ -990,12 +996,13 @@ class ConnectorService:
     async def _persist_account_status(
         self, account: AccountEntity, status: AccountStatus
     ) -> AccountEntity:
-        """Persist an account status transition (idempotent)."""
+        """Persist an account status transition (idempotent): the status
+        alone, never the credentials ``account`` was read with."""
         if account.status == status:
             return account
-        account.status = status
-        account = await self.account_repository.update(account)
+        await self.account_repository.set_status(account.id, status)
         await self.uow.commit()
+        account.status = status
         return account
 
     async def mark_account_reauth_required(

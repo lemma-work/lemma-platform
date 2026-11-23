@@ -316,6 +316,47 @@ class AccountRepository(
         )
         return int(result.rowcount or 0)
 
+    # Three narrow statements, because `update` writes the whole row from the
+    # entity it is handed -- credentials included -- and an entity is a copy
+    # made when it was read. A token refreshed since (by this request or by
+    # another) is not on it, so marking an account or binding it with `update`
+    # put the old token back. For a provider whose refresh tokens are
+    # single-use, GitHub's among them, the old one is already spent: the
+    # account could never refresh again, and answered "Unable to refresh
+    # connector credentials." until somebody reconnected it.
+
+    async def set_status(self, account_id: UUID, status: AccountStatus) -> None:
+        """Write the status and nothing else."""
+        await self.session.execute(
+            update(Account).where(Account.id == account_id).values(status=status.value)
+        )
+
+    async def set_external_ref(
+        self, account_id: UUID, external_ref: str | None
+    ) -> None:
+        """Write the inbound routing key and nothing else."""
+        await self.session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(external_ref=external_ref)
+        )
+
+    async def stored_credentials(self, account_id: UUID) -> dict[str, object] | None:
+        """The credentials the row holds now, read past this session's copy.
+
+        A column select, not an entity one: the session keeps the first
+        instance it loaded and does not overwrite it with a later read, so
+        `get` here would answer with what this request saw when it started --
+        which is exactly what a caller asking this wants to look behind.
+        """
+        result = await self.session.execute(
+            select(Account.credentials).where(Account.id == account_id)
+        )
+        encrypted = result.scalar_one_or_none()
+        if encrypted is None:
+            return None
+        return await self.encryption.decrypt_json_async(encrypted)
+
     async def list_by_auth_config(
         self,
         auth_config_id: UUID,

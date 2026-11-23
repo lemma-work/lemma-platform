@@ -23,12 +23,20 @@ OperationRunner = Callable[[str, dict], Awaitable[dict]]
 #: person. Not a GitHub failure: the import falls back to anonymous access,
 #: which is all a public repository needs, and reports the refusal only when
 #: anonymous access did not reach the repository either.
+#:
+#: ``OAUTH_FLOW_ERROR`` is the account's token failing to refresh for a reason
+#: nobody classified -- the token endpoint down, or an answer in a dialect the
+#: connector does not read as a withdrawn grant. It is here because the account
+#: is as unusable for this fetch as a missing one: without it, a plugin in a
+#: public repository failed to install on the stale GitHub sign-in of whoever
+#: pressed Add, a credential the fetch never needed.
 _CONNECTOR_REFUSALS = frozenset(
     {
         "CONNECTION_REQUIRED",
         "CONNECTION_REQUIRES_PERSON",
         "CONNECTOR_NEEDS_ACCOUNT",
         "CONNECTOR_UNAVAILABLE",
+        "OAUTH_FLOW_ERROR",
         "POD_CONNECTOR_NOT_FOUND",
         "REAUTH_REQUIRED",
     }
