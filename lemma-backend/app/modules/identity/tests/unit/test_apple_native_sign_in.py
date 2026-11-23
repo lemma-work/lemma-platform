@@ -22,7 +22,6 @@ from cryptography.hazmat.primitives.serialization import (
     PrivateFormat,
 )
 from pydantic import SecretStr
-from structlog.testing import capture_logs
 from supertokens_python.exceptions import BadInputError
 from supertokens_python.recipe.thirdparty.providers.apple import Apple
 
@@ -229,24 +228,25 @@ async def test_nothing_is_asked_of_apple_when_there_is_no_phone_code_to_trade(
     ids=["refused", "down", "no-refresh-token", "unreachable"],
 )
 async def test_a_code_apple_does_not_trade_leaves_the_sign_in_as_it_was(
-    answer: httpx.Response | Exception,
+    answer: httpx.Response | Exception, caplog: pytest.LogCaptureFixture
 ):
     # The person is signed in either way; only the revocation is lost, and
     # that is logged rather than failing a sign-in Apple already vouched for.
     apple, _ = _apple(answer)
-    # Read from structlog itself: `caplog` sees its events only in the first
-    # test of a run.
-    with capture_logs() as said:
-        async with apple:
-            tokens = await with_native_refresh_token(
-                SENT, VERIFIED, config=WITH_PHONE, http=apple
-            )
+    async with apple:
+        tokens = await with_native_refresh_token(
+            SENT, VERIFIED, config=WITH_PHONE, http=apple
+        )
 
     assert tokens == SENT
-    assert [event["event"] for event in said] == [
-        "identity.apple_sign_in.code_not_traded"
+    # structlog hands the whole event to the stdlib record as a dict.
+    said = [
+        event["event"]
+        for event in (record.msg for record in caplog.records)
+        if isinstance(event, dict)
     ]
-    assert "c.one-time-code" not in str(said)
+    assert said == ["identity.apple_sign_in.code_not_traded"]
+    assert "c.one-time-code" not in caplog.text
 
 
 async def test_a_code_someone_else_signed_in_with_is_not_kept():
