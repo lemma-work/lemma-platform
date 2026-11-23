@@ -12,7 +12,9 @@ export function channelName(platform: string) {
 export function ChannelIcon({ platform, size = 18 }: { platform: string; size?: number }) {
     const key = channelKey(platform);
     if (["WHATSAPP", "TELEGRAM", "SLACK", "TEAMS"].includes(key)) {
-        return <img className="channel-icon" src={`/connector-logos/${key.toLowerCase()}.svg`} width={size} height={size} alt="" aria-hidden="true" />;
+        /* Not draggable: it sits on buttons, and a press that slips a few
+           pixels would pick the logo up as an image instead of clicking. */
+        return <img className="channel-icon" src={`/connector-logos/${key.toLowerCase()}.svg`} width={size} height={size} alt="" aria-hidden="true" draggable={false} />;
     }
     if (key === "EMAIL") return <EmailIcon size={size} aria-hidden="true" />;
     if (key === "DISCORD") return <DiscordIcon size={size} aria-hidden="true" />;

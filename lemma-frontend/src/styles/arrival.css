@@ -197,6 +197,7 @@
 .ast__slot,
 .ast__place,
 .ast__you {
+    --ring: 43cqw;
     position: absolute;
     left: 50%;
     top: 50%;
@@ -204,10 +205,20 @@
     z-index: 2;
 }
 
+/* Where each sits on its circle. `transform` is the spot's place, so it
+   holds while a spot is pressed too: the kit nudges every pressed button by
+   setting its `transform` (refinement.css), which here would slide the spot
+   to the middle, and the release would land beside it and open nothing. */
+.ast__slot,
+.ast__place,
+.ast__you,
+.ast > button:active:not(:disabled) {
+    transform: translate(-50%, -50%) rotate(var(--a)) translateX(var(--ring)) rotate(calc(var(--a) * -1));
+}
+
 .ast__slot {
     width: 48px;
     height: 48px;
-    transform: translate(-50%, -50%) rotate(var(--a)) translateX(43cqw) rotate(calc(var(--a) * -1));
     animation: ast-land 520ms cubic-bezier(.34, 1.7, .55, 1);
 }
 
@@ -312,7 +323,6 @@
     background: var(--ar-page);
     box-shadow: 0 0 0 1px var(--line-2), 0 8px 20px rgb(0 0 0 / 0.08);
     font-size: 14px;
-    transform: translate(-50%, -50%) rotate(var(--a)) translateX(43cqw) rotate(calc(var(--a) * -1));
     animation: ast-land 520ms cubic-bezier(.34, 1.7, .55, 1) 600ms backwards;
 }
 
@@ -321,6 +331,7 @@
 }
 
 .ast__place {
+    --ring: 35.5cqw;
     width: 36px;
     height: 36px;
     display: grid;
@@ -329,7 +340,6 @@
     background: var(--ar-page);
     border: 3px solid var(--ar-ground);
     box-shadow: 0 8px 20px rgb(0 0 0 / 0.1);
-    transform: translate(-50%, -50%) rotate(var(--a)) translateX(35.5cqw) rotate(calc(var(--a) * -1));
     scale: 0;
     z-index: 3;
 }
