@@ -129,8 +129,12 @@ class _Apple:
             )
         return httpx.Response(404)
 
-    def client(self, **options: Any) -> httpx.AsyncClient:
-        return httpx.AsyncClient(transport=httpx.MockTransport(self.answer), **options)
+    def client(self, *, timeout: float | None = None) -> httpx.AsyncClient:
+        """A client that reaches this Apple. SuperTokens makes its own with
+        `timeout=30.0`; the override's is handed in with none."""
+        return httpx.AsyncClient(
+            transport=httpx.MockTransport(self.answer), timeout=timeout
+        )
 
 
 @pytest.fixture
