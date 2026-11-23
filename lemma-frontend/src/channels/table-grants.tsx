@@ -10,9 +10,10 @@ import { useId, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type Pod } from "@/data";
 import { isForbidden } from "@/session/auth-state";
-import { channelApi, type TableGrant } from "./api";
+import { channelApi } from "./api";
 import { problemOf } from "./problem";
 import { useChannel } from "./queries";
+import { GIVE_REFUSED, grantSaid, mayGive, toggled } from "./table-grants-model";
 
 export function TableGrants({ pod, channelId }: { pod: Pod; channelId: string }) {
     const ids = useId();
@@ -39,7 +40,7 @@ export function TableGrants({ pod, channelId }: { pod: Pod; channelId: string })
                         <li key={grant.table} className="tgrants__row">
                             <span className="tgrants__text">
                                 <strong>{grant.table}</strong>
-                                <small>{said(grant)}</small>
+                                <small>{grantSaid(grant)}</small>
                             </span>
                             {may && (
                                 <button type="button" className="gsheet__inline gsheet__inline--bad" disabled={remove.isPending} onClick={() => remove.mutate(grant.table)}>Take back</button>
@@ -54,13 +55,6 @@ export function TableGrants({ pod, channelId }: { pod: Pod; channelId: string })
             {remove.isError && <p className="gside__problem" role="alert">{problemOf(remove.error, "Couldn’t take it back.")}</p>}
         </section>
     );
-}
-
-function said(grant: TableGrant): string {
-    const parts = [];
-    if (grant.readColumns.length) parts.push("read " + grant.readColumns.join(", "));
-    if (grant.addColumns.length) parts.push("add a row with " + grant.addColumns.join(", "));
-    return parts.join(" · ");
 }
 
 function GiveTable({ pod, channelId, onDone }: { pod: Pod; channelId: string; onDone: () => void }) {
@@ -81,11 +75,6 @@ function GiveTable({ pod, channelId, onDone }: { pod: Pod; channelId: string; on
         mutationFn: () => channelApi(pod.id).setTableGrant(channelId, table, { readColumns: [...read], addColumns: [...add] }),
         onSuccess: onDone,
     });
-    const toggle = (set: Set<string>, name: string) => {
-        const next = new Set(set);
-        if (next.has(name)) next.delete(name); else next.add(name);
-        return next;
-    };
     return (
         <div className="tgrants__give">
             <label className="tgrants__pick">
@@ -104,8 +93,8 @@ function GiveTable({ pod, channelId, onDone }: { pod: Pod; channelId: string; on
                         {(columns.data ?? []).map((column) => (
                             <tr key={column.name}>
                                 <th scope="row">{column.name}</th>
-                                <td><input type="checkbox" aria-label={"Read " + column.name} checked={read.has(column.name)} onChange={() => setRead((was) => toggle(was, column.name))} /></td>
-                                <td><input type="checkbox" aria-label={"Add " + column.name} checked={add.has(column.name)} onChange={() => setAdd((was) => toggle(was, column.name))} /></td>
+                                <td><input type="checkbox" aria-label={"Read " + column.name} checked={read.has(column.name)} onChange={() => setRead((was) => toggled(was, column.name))} /></td>
+                                <td><input type="checkbox" aria-label={"Add " + column.name} checked={add.has(column.name)} onChange={() => setAdd((was) => toggled(was, column.name))} /></td>
                             </tr>
                         ))}
                     </tbody>
@@ -113,13 +102,13 @@ function GiveTable({ pod, channelId, onDone }: { pod: Pod; channelId: string; on
             )}
             <div className="gsheet__foot gsheet__foot--split">
                 <button type="button" className="ghost-pill" onClick={onDone}>Cancel</button>
-                <button type="button" className="pill-button" disabled={!table || (read.size === 0 && add.size === 0) || save.isPending} onClick={() => save.mutate()}>
+                <button type="button" className="pill-button" disabled={!mayGive(table, read, add) || save.isPending} onClick={() => save.mutate()}>
                     {save.isPending ? "Giving…" : "Give it"}
                 </button>
             </div>
             {save.isError && (
                 <p className="gside__problem" role="alert">
-                    {isForbidden(save.error) ? "Only the group’s owners or an admin can give it a table, and only one whose settings and rows they hold." : problemOf(save.error, "Couldn’t give it that table.")}
+                    {isForbidden(save.error) ? GIVE_REFUSED : problemOf(save.error, "Couldn’t give it that table.")}
                 </p>
             )}
         </div>
