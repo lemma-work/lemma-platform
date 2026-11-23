@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.infrastructure.db.transaction_locks import mark_transaction_scoped_lock
 from app.modules.channels.domain.entities import Principal
 from app.modules.channels.infrastructure.block_models import PersonBlockModel
+from app.modules.contacts.contracts.same_person import same_person
 
 #: The most blocks one member keeps in one pod: what one read returns, so
 #: what ``block`` admits -- a block past it would be kept and never applied.
@@ -90,6 +91,31 @@ class BlockRepository:
                 select(b.user_id).where(
                     b.pod_id == pod_id,
                     anyone,
+                    b.user_id.in_(readers[start : start + _BATCH]),
+                )
+            )
+            found.update(rows)
+        return found
+
+    async def blockers_of_contact(
+        self, *, pod_id: UUID, contact_id: UUID, user_ids: Collection[UUID]
+    ) -> set[UUID]:
+        """Which of these members blocked this contact under any id they have
+        had. Merges, and the work carrying blocks to each survivor, commit
+        apart, so a block may sit under any of them; each read names those
+        ids in its own statement (``same_person``), so it sees the merges and
+        the blocks at one moment. Every member asked, a batch at a time."""
+        b = PersonBlockModel
+        readers = sorted(set(user_ids))
+        sam = same_person(b.blocked_contact_id, pod_id=pod_id, contact_id=contact_id)
+        found: set[UUID] = set()
+        for start in range(0, len(readers), _BATCH):
+            rows = await self._session.scalars(
+                select(b.user_id)
+                .distinct()
+                .where(
+                    b.pod_id == pod_id,
+                    sam,
                     b.user_id.in_(readers[start : start + _BATCH]),
                 )
             )

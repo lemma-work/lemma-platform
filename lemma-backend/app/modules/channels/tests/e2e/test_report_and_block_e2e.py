@@ -28,12 +28,7 @@ from app.modules.channels.tests.e2e.push_support import pushed, waiting
 from app.modules.channels.infrastructure import blocks as blocks_module
 from app.modules.channels.infrastructure.blocks import BlockRepository
 from app.modules.channels.tests.e2e.channel_pod import Pod, contact_place, group, say
-from app.modules.contacts.contracts import (
-    ContactRef,
-    IdentityStrength,
-    contact_by_id,
-    open_contact,
-)
+from app.modules.contacts.contracts import IdentityStrength, open_contact
 from app.modules.contacts.contracts.outreach import (
     Address,
     OutreachKind,
@@ -386,60 +381,67 @@ async def test_a_contact_the_pod_stopped_answering_is_pushed_to_nobody(
     assert await waiting(source.channel_id, editor) == held
 
 
-async def test_a_block_holds_when_a_merge_and_its_carry_land_mid_push(
+async def test_a_block_holds_through_successive_merges_and_their_carries(
     pod: Pod, db_session
 ):
-    """The push read who Sam was before the merge; the merge and the carry
-    that moved the editor's block to the survivor committed before it asked
-    about blocks. The editor is still not told."""
+    """Sam was A, then B, then C: two merges, each with a carry that commits
+    after it. A push asks once, at one moment. At every moment the merges and
+    carries pass through, and under every id Sam has had, the editor who
+    blocked Sam is not told -- and nobody else is swept in."""
     uow = SqlAlchemyUnitOfWork(db_session)
     pod_id = UUID(pod.id)
     editor = UUID(pod.editor["id"])
-    newer = await open_contact(
-        uow,
-        pod_id=pod_id,
-        kind=IdentityKind.TELEGRAM,
-        value="5550111",
-        strength=IdentityStrength.CHANNEL,
-        display_name="Sam",
-    )
-    older = await open_contact(
-        uow,
-        pod_id=pod_id,
-        kind=IdentityKind.EMAIL,
-        value="sam@wharf.example",
-        strength=IdentityStrength.CHANNEL,
-        display_name="Sam",
-    )
+
+    async def contact(kind: IdentityKind, value: str) -> UUID:
+        made = await open_contact(
+            uow,
+            pod_id=pod_id,
+            kind=kind,
+            value=value,
+            strength=IdentityStrength.CHANNEL,
+            display_name="Sam",
+        )
+        return made.id
+
+    a = await contact(IdentityKind.TELEGRAM, "5550111")
+    b = await contact(IdentityKind.EMAIL, "sam@wharf.example")
+    c = await contact(IdentityKind.PHONE, "+15550111")
+    stranger = await contact(IdentityKind.EMAIL, "kim@pier.example")
     blocks = BlockRepository(db_session)
-    await blocks.block(
-        pod_id=pod_id, user_id=editor, person=Principal.contact(newer.id)
-    )
-    await db_session.commit()
-    before_the_merge = await contact_by_id(uow, pod_id=pod_id, contact_id=newer.id)
-
-    await db_session.execute(
-        text("UPDATE contacts SET merged_into_id = :survivor WHERE id = :merged"),
-        {"survivor": older.id, "merged": newer.id},
-    )
-    await blocks.carry(pod_id=pod_id, merged_id=newer.id, survivor_id=older.id)
+    await blocks.block(pod_id=pod_id, user_id=editor, person=Principal.contact(a))
     await db_session.commit()
 
-    reads = iter([before_the_merge])
+    async def merge(merged: UUID, survivor: UUID) -> None:
+        # As ``contacts`` merges: the absorbed contact, and every contact
+        # already merged into it, point straight at the survivor.
+        await db_session.execute(
+            text(
+                "UPDATE contacts SET merged_into_id = :survivor"
+                " WHERE id = :merged OR merged_into_id = :merged"
+            ),
+            {"survivor": survivor, "merged": merged},
+        )
+        await db_session.commit()
 
-    async def first_read_before_the_merge(
-        uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, contact_id: UUID
-    ) -> ContactRef | None:
-        stale = next(reads, None)
-        if stale is not None:
-            return stale
-        return await contact_by_id(uow, pod_id=pod_id, contact_id=contact_id)
+    async def carry(merged: UUID, survivor: UUID) -> None:
+        await blocks.carry(pod_id=pod_id, merged_id=merged, survivor_id=survivor)
+        await db_session.commit()
 
-    blockers = await contact_blockers(
-        uow,
-        pod_id,
-        Principal.contact(newer.id),
-        [editor],
-        read=first_read_before_the_merge,
-    )
-    assert blockers == {editor}
+    async def blockers(writer: UUID) -> set[UUID] | None:
+        return await contact_blockers(uow, pod_id, Principal.contact(writer), [editor])
+
+    async def holds(moment: str, sam: tuple[UUID, ...], others: tuple[UUID, ...]):
+        for writer in sam:
+            assert await blockers(writer) == {editor}, (moment, writer)
+        for writer in others:
+            assert await blockers(writer) == set(), (moment, writer)
+
+    await holds("before any merge", (a,), (b, c, stranger))
+    await merge(a, b)
+    await holds("A merged into B, its carry pending", (a, b), (c, stranger))
+    await carry(a, b)
+    await holds("A's block carried to B", (a, b), (c, stranger))
+    await merge(b, c)
+    await holds("B merged into C, its carry pending", (a, b, c), (stranger,))
+    await carry(b, c)
+    await holds("B's block carried to C", (a, b, c), (stranger,))

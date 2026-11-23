@@ -24,7 +24,6 @@ email from any channel (``agent_surfaces``' sending).
 from __future__ import annotations
 
 from collections.abc import Collection
-from typing import Protocol
 from datetime import datetime, timedelta
 from uuid import UUID
 
@@ -54,7 +53,7 @@ from app.modules.channels.infrastructure.questions import QuestionRepository
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.rows import now
 from app.modules.channels.services.viewers import member_sees
-from app.modules.contacts.contracts import ContactRef, contact_by_id
+from app.modules.contacts.contracts import contact_by_id
 
 #: The work kind that sends a window once it ends.
 CHANNELS_PUSH_WINDOW = "channels.push_window"
@@ -274,57 +273,25 @@ async def _not_blocking(
     }
 
 
-class ReadsContact(Protocol):
-    """How a contact is read as they are now: ``contacts``' ``contact_by_id``."""
-
-    async def __call__(
-        self, uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, contact_id: UUID
-    ) -> ContactRef | None: ...
-
-
-async def _as_now(
-    uow: SqlAlchemyUnitOfWork, pod_id: UUID, writer: Principal, read: ReadsContact
-) -> tuple[Principal, bool]:
-    """The contact as they are now -- the one a merge made them -- and
-    whether the pod stopped answering them."""
-    assert writer.contact_id is not None
-    contact = await read(uow, pod_id=pod_id, contact_id=writer.contact_id)
-    if contact is None:
-        return writer, False
-    return Principal.contact(contact.id), contact.blocked
-
-
 async def contact_blockers(
     uow: SqlAlchemyUnitOfWork,
     pod_id: UUID,
     writer: Principal,
     readers: Collection[UUID],
-    *,
-    read: ReadsContact = contact_by_id,
 ) -> set[UUID] | None:
     """Which readers blocked this contact under any id they have had; None
     when the pod stopped answering them.
 
-    A contact merged into another may have their blocks under either id
-    until the merge's work carries them over. So: read who they are, ask
-    under both ids, and read again. A merge and its carry that committed in
-    between show as somebody new, who is asked about too -- and a carry
-    only ever follows its merge, so the second read cannot miss both.
+    Asked in one statement per batch of readers, so however many merges
+    and carries commit around the push, it sees them at one moment.
     """
-    blocks = BlockRepository(uow.session)
-    now, stopped = await _as_now(uow, pod_id, writer, read)
-    if stopped:
+    assert writer.contact_id is not None
+    contact = await contact_by_id(uow, pod_id=pod_id, contact_id=writer.contact_id)
+    if contact is not None and contact.blocked:
         return None
-    asked = {writer, now}
-    found = await blocks.blockers_among(pod_id=pod_id, people=asked, user_ids=readers)
-    later, stopped = await _as_now(uow, pod_id, writer, read)
-    if stopped:
-        return None
-    if later not in asked:
-        found |= await blocks.blockers_among(
-            pod_id=pod_id, people=[later], user_ids=readers
-        )
-    return found
+    return await BlockRepository(uow.session).blockers_of_contact(
+        pod_id=pod_id, contact_id=writer.contact_id, user_ids=readers
+    )
 
 
 def _withheld(channel: Channel, message: ChannelMessage, user_id: UUID) -> bool:
