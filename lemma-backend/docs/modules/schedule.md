@@ -248,9 +248,9 @@ webhook handler, a table change from the change-log delivery once its `when`
 conditions match, carrying the changed row's owner so the fire runs as them.
 No request or delivery waits on a model, and both paths get the outcomes below.
 
-The provider is the deployment's (`DECISION_PROVIDER`); with no Typesafe key
-it is the deployment's own model, so filters need nothing beyond a configured
-model.
+The provider is the deployment's (`DECISION_PROVIDER`); without the chosen
+provider's key it is the deployment's own model, so filters need nothing beyond
+a configured model.
 
 | Outcome | Recorded as |
 | --- | --- |
@@ -280,7 +280,22 @@ agent holds by default, with one exception: `created_by_workload_id` records
 the agent that created a schedule (the pod's id for its default assistant),
 and that agent, acting for the schedule's owner, may delete it with
 `schedule.create` -- the authority it created it with -- so cleaning up after
-itself needs no approval. Webhook ingress is public by necessity and
+itself needs no approval.
+
+Pointing a DATASTORE trigger at a table takes `datastore.table.update` on it,
+because a trigger that sees every change reaches rows its author may not read
+and, on a table where each person has their own rows, runs as their owners.
+A trigger whose config says `rows: OWNER_READABLE` takes only
+`datastore.record.read`, which a member with the default role holds: it is
+handed only the changes its owner could read through the record API -- their
+own rows on such a table, every row on a shared one, the rule the live change
+feed applies (`trigger_delivery.owner_can_see`) -- and runs every one as its
+owner, so it observes nothing they could not and acts with no authority but
+theirs; edit access to the target is not asked either. Other people's changes
+are not even counted as skips, since how often they write is itself something
+the owner could not read. The filter follows `user_id`, so a person who takes
+the schedule over (by changing what it does) sees their own rows from then on.
+Webhook ingress is public by necessity and
 uses source-specific verification adapters plus schedule matching. Deletion of
 a pod is consumed as a system event to tear down schedules and external jobs.
 

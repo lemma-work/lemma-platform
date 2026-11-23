@@ -73,7 +73,7 @@ async def test_only_explicit_reactivation_resets_failure_streak(
     service._resolve_update_target = AsyncMock(  # type: ignore[method-assign]
         return_value={"is_active": True}
     )
-    service._require_datastore_table_update = AsyncMock()  # type: ignore[method-assign]
+    service._require_table_watch = AsyncMock()  # type: ignore[method-assign]
 
     await service.update_schedule(
         schedule.id,

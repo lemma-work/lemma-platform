@@ -524,3 +524,19 @@ test("the hosted form is drawn when no session starts, and says why", async () =
     assert.equal((root.querySelector(".lw-submit") as HTMLButtonElement).disabled, true);
     assert.match(root.textContent ?? "", /This widget is not available/);
 });
+
+test("every call tells a Lemma app's own session client to leave it alone", async () => {
+    // On a page that loaded the Lemma SDK, SuperTokens patches fetch for every
+    // script, and a call it intercepts carries headers the widget's CORS refuses.
+    const page = load({});
+    const urls: string[] = [];
+    const answer = page.window.fetch;
+    page.window.fetch = ((url: string, init?: RequestInit) => {
+        urls.push(url);
+        return answer(url, init);
+    }) as unknown as typeof page.window.fetch;
+    await openChat(page);
+    await say(page, "Hello");
+    assert.ok(urls.length > 1, "the widget called nothing");
+    for (const url of urls) assert.ok(url.endsWith("#superTokensDoNotDoInterception"), url);
+});

@@ -5,6 +5,8 @@
 * a table change runs as the owner of the changed row, bounded by the target,
   unless the schedule is set to run as its owner -- and only someone who may
   edit the target writes one that runs as row owners (H16, both ways);
+* a trigger that sees only the rows its owner can read takes no more than
+  reading them, and runs every change as its owner;
 * a run somebody retries runs as them, not as the first attempt's person;
 * a run whose person has left the pod, or may not run the target, runs nothing.
 """
@@ -50,7 +52,9 @@ async def _pod(client: AsyncClient, org_id: str) -> str:
     return response.json()["id"]
 
 
-async def _rls_table(client: AsyncClient, pod_id: str) -> None:
+async def _rls_table(
+    client: AsyncClient, pod_id: str, *, enable_rls: bool = True
+) -> None:
     response = await client.post(
         f"/pods/{pod_id}/datastore/tables",
         json={
@@ -60,7 +64,7 @@ async def _rls_table(client: AsyncClient, pod_id: str) -> None:
                 {"name": "source", "type": "TEXT"},
                 {"name": "value", "type": "TEXT"},
             ],
-            "enable_rls": True,
+            "enable_rls": enable_rls,
         },
     )
     assert response.status_code in {200, 201}, response.text
@@ -109,11 +113,14 @@ async def _datastore_schedule(
     workflow_name: str | None = None,
     instruction: str | None = None,
     run_as: str | None = None,
+    rows: str | None = None,
     status: int = 201,
 ) -> dict:
     config: dict[str, object] = {"table_name": TABLE, "operations": ["INSERT"]}
     if run_as is not None:
         config["run_as"] = run_as
+    if rows is not None:
+        config["rows"] = rows
     payload: dict[str, object] = {
         "schedule_type": "DATASTORE",
         "config": config,
@@ -512,3 +519,92 @@ async def test_a_schedule_whose_owner_left_the_pod_starts_nothing(
     )
     assert conversations.status_code == 200, conversations.text
     assert conversations.json()["items"] == []
+
+
+async def test_a_member_watches_their_own_rows_and_never_sees_anyone_elses(
+    authenticated_client: AsyncClient,
+    async_client: AsyncClient,
+    fixed_test_org,
+    worker,
+):
+    """A member with the default role cannot watch every change to a table,
+    but may watch the rows they can read -- on a per-person table, their own
+    -- run as them."""
+    _ = worker
+    admin = authenticated_client
+    pod_id = await _pod(admin, fixed_test_org["id"])
+    await _rls_table(admin, pod_id)
+    workflow = await _end_only_workflow(admin, pod_id)
+    user, _ = await _member(
+        admin,
+        async_client,
+        org_id=fixed_test_org["id"],
+        pod_id=pod_id,
+        prefix="schedule-authority-own-rows",
+        role="POD_USER",
+    )
+    await _datastore_schedule(
+        async_client,
+        pod_id,
+        headers=auth_headers(user),
+        workflow_name=workflow["name"],
+        run_as="SCHEDULE_OWNER",
+        status=403,
+    )
+    schedule = await _datastore_schedule(
+        async_client,
+        pod_id,
+        headers=auth_headers(user),
+        workflow_name=workflow["name"],
+        rows="OWNER_READABLE",
+    )
+    assert schedule["user_id"] == user["id"]
+    assert schedule["config"]["rows"] == "OWNER_READABLE"
+
+    await _write_row(admin, pod_id, "admin-row")
+    await _write_row(async_client, pod_id, "users-row", headers=auth_headers(user))
+
+    # Changes are delivered in log order: once the member's row has a run,
+    # the admin's earlier row has been considered too.
+    runs = await _runs(admin, pod_id, schedule["id"])
+    assert [run["user_id"] for run in runs] == [user["id"]]
+    assert runs[0]["payload"]["source"] == "users-row"
+    skips = await admin.get(f"/pods/{pod_id}/schedules/{schedule['id']}/skips")
+    assert skips.status_code == 200, skips.text
+    assert skips.json()["items"] == []
+
+
+async def test_a_members_trigger_on_a_shared_table_runs_every_row_as_them(
+    authenticated_client: AsyncClient,
+    async_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    worker,
+):
+    """Every row of a shared table is the member's to read; an admin's write
+    starts the member's run with the member's access, never the admin's."""
+    _ = worker
+    admin = authenticated_client
+    pod_id = await _pod(admin, fixed_test_org["id"])
+    await _rls_table(admin, pod_id, enable_rls=False)
+    workflow = await _end_only_workflow(admin, pod_id)
+    user, _ = await _member(
+        admin,
+        async_client,
+        org_id=fixed_test_org["id"],
+        pod_id=pod_id,
+        prefix="schedule-authority-shared-rows",
+        role="POD_USER",
+    )
+    schedule = await _datastore_schedule(
+        async_client,
+        pod_id,
+        headers=auth_headers(user),
+        workflow_name=workflow["name"],
+        rows="OWNER_READABLE",
+    )
+
+    await _write_row(admin, pod_id, "admin-row")
+
+    (run,) = await _runs(admin, pod_id, schedule["id"])
+    assert run["user_id"] == user["id"] != fixed_test_user["id"]

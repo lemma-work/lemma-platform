@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -28,6 +29,21 @@ def resolve_app_project_env(
         merged.update(read_env_file(source_dir / filename))
     merged.update(os.environ)
     return merged
+
+
+def _with_target_values(
+    env: Mapping[str, str], *, pod_id: str, target_env: Mapping[str, str] | None
+) -> dict[str, str]:
+    """``env`` with each ``VITE_LEMMA_*`` value it leaves empty taken from the
+    Lemma the app is deployed to.
+
+    A bundle's app source carries no `.env.local` (that file is the builder's,
+    for one dev Lemma), so importing it, or deploying an app folder pulled
+    from one, used to stop on "Missing required app env vars" although the
+    target was right there. Values the project does set still win.
+    """
+    target = {"VITE_LEMMA_POD_ID": pod_id, **(target_env or {})}
+    return {**target, **{key: value for key, value in env.items() if value}}
 
 
 def _validate_app_env(env: dict[str, str]) -> None:
@@ -245,7 +261,13 @@ def deploy_app_bundle(
     source_dir: Path,
     dist_dir: Path | None = None,
     ensure_exists: bool = False,
+    target_env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
+    """Build (or take the prebuilt ``dist_dir``) and upload one app.
+
+    ``target_env`` is the deployed-to Lemma's ``VITE_LEMMA_API_URL`` and
+    ``VITE_LEMMA_AUTH_URL`` (:func:`target_app_env`); the pod id is known here.
+    """
     source = source_dir.resolve()
     tier = classify_app_source(source)
 
@@ -260,11 +282,14 @@ def deploy_app_bundle(
 
     temp_dist_dir: Path | None = None
     if tier == "vite":
-        env = resolve_app_project_env(source)
-        _validate_app_env(env)
         if dist_dir is None:
+            env = _with_target_values(
+                resolve_app_project_env(source), pod_id=pod_id, target_env=target_env
+            )
+            _validate_app_env(env)
             dist_dir = _build_app(source, env)
         else:
+            # Prebuilt: the build already ran, so its env has nothing to say.
             dist_dir = dist_dir.resolve()
             if not dist_dir.is_dir():
                 raise ValueError(f"App dist directory does not exist: {dist_dir}")

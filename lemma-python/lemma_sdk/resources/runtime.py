@@ -39,6 +39,9 @@ from ..openapi_client.models.create_open_ai_compatible_runtime_profile_request i
 from ..openapi_client.models.create_agent_host_runtime_profile_request import (
     CreateAgentHostRuntimeProfileRequest,
 )
+from ..openapi_client.models.create_google_gen_ai_runtime_profile_request import (
+    CreateGoogleGenAIRuntimeProfileRequest,
+)
 from ..openapi_client.models.update_anthropic_compatible_runtime_profile_request import (
     UpdateAnthropicCompatibleRuntimeProfileRequest,
 )
@@ -48,18 +51,23 @@ from ..openapi_client.models.update_open_ai_compatible_runtime_profile_request i
 from ..openapi_client.models.update_agent_host_runtime_profile_request import (
     UpdateAgentHostRuntimeProfileRequest,
 )
+from ..openapi_client.models.update_google_gen_ai_runtime_profile_request import (
+    UpdateGoogleGenAIRuntimeProfileRequest,
+)
 from .base import BoundResource, as_uuid
 
 _CREATE_MODELS = {
     "AGENT_HOST": CreateAgentHostRuntimeProfileRequest,
     "OPENAI_COMPATIBLE": CreateOpenAICompatibleRuntimeProfileRequest,
     "ANTHROPIC_COMPATIBLE": CreateAnthropicCompatibleRuntimeProfileRequest,
+    "GOOGLE_GENAI": CreateGoogleGenAIRuntimeProfileRequest,
 }
 
 _UPDATE_MODELS = {
     "AGENT_HOST": UpdateAgentHostRuntimeProfileRequest,
     "OPENAI_COMPATIBLE": UpdateOpenAICompatibleRuntimeProfileRequest,
     "ANTHROPIC_COMPATIBLE": UpdateAnthropicCompatibleRuntimeProfileRequest,
+    "GOOGLE_GENAI": UpdateGoogleGenAIRuntimeProfileRequest,
 }
 
 

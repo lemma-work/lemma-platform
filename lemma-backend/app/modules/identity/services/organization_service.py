@@ -41,6 +41,7 @@ from app.modules.identity.domain.organization_entities import (
     OrganizationJoinPolicy,
     OrganizationMemberEntity,
     OrganizationRole,
+    may_self_join,
     org_role_holds,
 )
 from app.modules.identity.domain.user_entities import UserEntity
@@ -315,16 +316,12 @@ class OrganizationService:
     def _can_self_join(
         self, organization: OrganizationEntity, user: UserEntity
     ) -> bool:
-        if organization.join_policy == OrganizationJoinPolicy.PUBLIC:
-            return True
-        if organization.join_policy == OrganizationJoinPolicy.EMAIL_DOMAIN:
-            if not user.is_verified:
-                return False
-            user_domain = work_domain_from_email(str(user.email))
-            return bool(organization.email_domain) and (
-                user_domain == organization.email_domain
-            )
-        return False
+        return may_self_join(
+            join_policy=organization.join_policy,
+            email_domain=organization.email_domain,
+            user_email=str(user.email),
+            user_verified=user.is_verified,
+        )
 
     async def get_member(
         self, user_id: UUID, organization_id: UUID

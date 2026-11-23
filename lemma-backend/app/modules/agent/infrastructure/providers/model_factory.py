@@ -334,7 +334,47 @@ def _unmetered_model_from_runtime_profile(
             settings=ModelSettings(max_tokens=ANTHROPIC_DEFAULT_MAX_TOKENS),
         )
 
-    return None
+    return _google_genai_model(
+        protocol,
+        model_name_value,
+        config=config,
+        scope=runtime_profile.get("scope"),
+        runtime_credentials=runtime_credentials,
+        profile_id=profile_id,
+    )
+
+
+def _google_genai_model(
+    protocol: object,
+    model_name: str,
+    *,
+    config: Mapping[str, object],
+    scope: object,
+    runtime_credentials: Mapping[str, object] | None,
+    profile_id: str | None,
+) -> Model | None:
+    """A GOOGLE_GENAI profile's model; ``None`` for any protocol this file
+    does not build."""
+    if protocol != RuntimeProfileProtocol.GOOGLE_GENAI:
+        return None
+    from app.modules.agent.domain.runtime_profiles import GoogleGenAIRuntimeConfig
+    from app.modules.agent.infrastructure.providers.google_genai_model import (
+        google_genai_endpoint,
+        google_genai_model,
+    )
+
+    google_config = GoogleGenAIRuntimeConfig.model_validate(dict(config))
+    return google_genai_model(
+        model_name,
+        config=google_config,
+        credentials=runtime_credentials,
+        scope=scope,
+        http_client=get_provider_http_client(
+            protocol="google_genai",
+            base_url=google_genai_endpoint(google_config),
+            profile_id=profile_id,
+        ),
+    )
 
 
 def connection_check_model(

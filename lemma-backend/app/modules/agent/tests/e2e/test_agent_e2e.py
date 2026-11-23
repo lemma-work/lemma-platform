@@ -3400,6 +3400,7 @@ class TestAgentOpenApi:
             "AGENT_HOST",
             "OPENAI_COMPATIBLE",
             "ANTHROPIC_COMPATIBLE",
+            "GOOGLE_GENAI",
         }
         assert (
             schemas["CreateOpenAICompatibleRuntimeProfileRequest"]["properties"][
@@ -3435,6 +3436,7 @@ class TestAgentOpenApi:
             "AGENT_HOST",
             "OPENAI_COMPATIBLE",
             "ANTHROPIC_COMPATIBLE",
+            "GOOGLE_GENAI",
         }
         # Every field optional: the controller reads which keys were sent to
         # tell "leave alone" from "clear", so a required one would force a
@@ -3443,6 +3445,7 @@ class TestAgentOpenApi:
             "UpdateOpenAICompatibleRuntimeProfileRequest",
             "UpdateAnthropicCompatibleRuntimeProfileRequest",
             "UpdateAgentHostRuntimeProfileRequest",
+            "UpdateGoogleGenAIRuntimeProfileRequest",
         ):
             assert schemas[member].get("required", []) == []
 

@@ -11,6 +11,7 @@ from app.core.authorization.permissions import (
 )
 from app.core.domain.aggregate import AggregateRoot
 from app.modules.identity.domain.email import normalize_identity_email
+from app.modules.identity.domain.email_domains import work_domain_from_email
 from app.modules.identity.domain.user_entities import UserEntity
 
 
@@ -89,6 +90,27 @@ class OrganizationJoinPolicy(str, Enum):
     INVITE_ONLY = "INVITE_ONLY"  # default — invitation/approval only
     EMAIL_DOMAIN = "EMAIL_DOMAIN"  # users whose email domain matches self-join
     PUBLIC = "PUBLIC"  # any Lemma user may self-join
+
+
+def may_self_join(
+    *,
+    join_policy: OrganizationJoinPolicy,
+    email_domain: str | None,
+    user_email: str,
+    user_verified: bool,
+) -> bool:
+    """Whether this person may join the organization without being asked in.
+
+    An address nobody proved is not a claim on its domain: on an installation
+    with email verification off, anybody can sign up as anybody@company.com.
+    """
+    if join_policy == OrganizationJoinPolicy.PUBLIC:
+        return True
+    if join_policy == OrganizationJoinPolicy.EMAIL_DOMAIN:
+        if not user_verified or not email_domain:
+            return False
+        return work_domain_from_email(user_email) == email_domain
+    return False
 
 
 class OrganizationInvitationStatus(str, Enum):

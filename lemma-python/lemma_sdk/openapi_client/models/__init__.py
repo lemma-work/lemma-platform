@@ -57,6 +57,7 @@ _NAME_TO_MODULE = {
     'AgentResourcePermissionRequest': 'agent_resource_permission_request',
     'AgentResourcePermissionResponse': 'agent_resource_permission_response',
     'AgentRunApprovalDecision': 'agent_run_approval_decision',
+    'AgentRunResponse': 'agent_run_response',
     'AgentRunStartResponse': 'agent_run_start_response',
     'AgentRunStatus': 'agent_run_status',
     'AgentRuntimeConfig': 'agent_runtime_config',
@@ -211,6 +212,8 @@ _NAME_TO_MODULE = {
     'CreateConversationRequestMetadataType0': 'create_conversation_request_metadata_type_0',
     'CreateFolderRequest': 'create_folder_request',
     'CreateFunctionRequest': 'create_function_request',
+    'CreateGoogleGenAIRuntimeProfileRequest': 'create_google_gen_ai_runtime_profile_request',
+    'CreateGoogleGenAIRuntimeProfileRequestModelSettings': 'create_google_gen_ai_runtime_profile_request_model_settings',
     'CreateOpenAICompatibleRuntimeProfileRequest': 'create_open_ai_compatible_runtime_profile_request',
     'CreateOpenAICompatibleRuntimeProfileRequestHeaders': 'create_open_ai_compatible_runtime_profile_request_headers',
     'CreateOpenAICompatibleRuntimeProfileRequestModelSettings': 'create_open_ai_compatible_runtime_profile_request_model_settings',
@@ -241,6 +244,7 @@ _NAME_TO_MODULE = {
     'DecisionAnswerResponse': 'decision_answer_response',
     'DecisionExampleBody': 'decision_example_body',
     'DecisionExampleBodyAnswers': 'decision_example_body_answers',
+    'DecisionImageBody': 'decision_image_body',
     'DecisionNode': 'decision_node',
     'DecisionNodeConfig': 'decision_node_config',
     'DecisionNodePositionType0': 'decision_node_position_type_0',
@@ -347,6 +351,7 @@ _NAME_TO_MODULE = {
     'FunctionSummaryResponse': 'function_summary_response',
     'FunctionType': 'function_type',
     'GenerationSettings': 'generation_settings',
+    'GoogleGenAIBackend': 'google_gen_ai_backend',
     'GranteeRef': 'grantee_ref',
     'GranteeRefGranteeType': 'grantee_ref_grantee_type',
     'GroupPublicResponse': 'group_public_response',
@@ -444,6 +449,7 @@ _NAME_TO_MODULE = {
     'MyMembershipUpdateNotifyViaType0Item': 'my_membership_update_notify_via_type_0_item',
     'MyUsageLimitsResponse': 'my_usage_limits_response',
     'MyUsageLimitsResponsePlanTypeType0': 'my_usage_limits_response_plan_type_type_0',
+    'NamedPodResponse': 'named_pod_response',
     'NavigateCommand': 'navigate_command',
     'NavigateRequest': 'navigate_request',
     'NavigateResponse': 'navigate_response',
@@ -515,6 +521,12 @@ _NAME_TO_MODULE = {
     'PersonRef': 'person_ref',
     'PlanStepResponse': 'plan_step_response',
     'PlanStepResponseDetail': 'plan_step_response_detail',
+    'PluginInstallItemResponse': 'plugin_install_item_response',
+    'PluginInstallRequest': 'plugin_install_request',
+    'PluginInstallResponse': 'plugin_install_response',
+    'PluginInstallState': 'plugin_install_state',
+    'PluginInstallStepResponse': 'plugin_install_step_response',
+    'PluginSourceRequest': 'plugin_source_request',
     'PodAccountCreateRequest': 'pod_account_create_request',
     'PodAccountListResponse': 'pod_account_list_response',
     'PodAccountResponse': 'pod_account_response',
@@ -616,6 +628,7 @@ _NAME_TO_MODULE = {
     'ResourceVisibility': 'resource_visibility',
     'RowRequest': 'row_request',
     'RowRequestValues': 'row_request_values',
+    'RunTokenUsage': 'run_token_usage',
     'RuntimeModelCapability': 'runtime_model_capability',
     'RuntimeModelCatalogEntry': 'runtime_model_catalog_entry',
     'RuntimeModelCatalogEntryDefaultModelSettings': 'runtime_model_catalog_entry_default_model_settings',
@@ -778,6 +791,8 @@ _NAME_TO_MODULE = {
     'UpdateConversationRequest': 'update_conversation_request',
     'UpdateConversationRequestMetadataType0': 'update_conversation_request_metadata_type_0',
     'UpdateFunctionRequest': 'update_function_request',
+    'UpdateGoogleGenAIRuntimeProfileRequest': 'update_google_gen_ai_runtime_profile_request',
+    'UpdateGoogleGenAIRuntimeProfileRequestModelSettingsType0': 'update_google_gen_ai_runtime_profile_request_model_settings_type_0',
     'UpdateMemberRoleRequest': 'update_member_role_request',
     'UpdateOpenAICompatibleRuntimeProfileRequest': 'update_open_ai_compatible_runtime_profile_request',
     'UpdateOpenAICompatibleRuntimeProfileRequestModelSettingsType0': 'update_open_ai_compatible_runtime_profile_request_model_settings_type_0',
@@ -838,6 +853,7 @@ _NAME_TO_MODULE = {
     'WorkflowCreateRequest': 'workflow_create_request',
     'WorkflowDetailResponse': 'workflow_detail_response',
     'WorkflowEdge': 'workflow_edge',
+    'WorkflowEdgeKind': 'workflow_edge_kind',
     'WorkflowGraphUpdateRequest': 'workflow_graph_update_request',
     'WorkflowListResponse': 'workflow_list_response',
     'WorkflowMode': 'workflow_mode',
@@ -911,6 +927,7 @@ if TYPE_CHECKING:
     from .agent_resource_permission_request import AgentResourcePermissionRequest
     from .agent_resource_permission_response import AgentResourcePermissionResponse
     from .agent_run_approval_decision import AgentRunApprovalDecision
+    from .agent_run_response import AgentRunResponse
     from .agent_run_start_response import AgentRunStartResponse
     from .agent_run_status import AgentRunStatus
     from .agent_runtime_config import AgentRuntimeConfig
@@ -1065,6 +1082,8 @@ if TYPE_CHECKING:
     from .create_conversation_request_metadata_type_0 import CreateConversationRequestMetadataType0
     from .create_folder_request import CreateFolderRequest
     from .create_function_request import CreateFunctionRequest
+    from .create_google_gen_ai_runtime_profile_request import CreateGoogleGenAIRuntimeProfileRequest
+    from .create_google_gen_ai_runtime_profile_request_model_settings import CreateGoogleGenAIRuntimeProfileRequestModelSettings
     from .create_open_ai_compatible_runtime_profile_request import CreateOpenAICompatibleRuntimeProfileRequest
     from .create_open_ai_compatible_runtime_profile_request_headers import CreateOpenAICompatibleRuntimeProfileRequestHeaders
     from .create_open_ai_compatible_runtime_profile_request_model_settings import CreateOpenAICompatibleRuntimeProfileRequestModelSettings
@@ -1095,6 +1114,7 @@ if TYPE_CHECKING:
     from .decision_answer_response import DecisionAnswerResponse
     from .decision_example_body import DecisionExampleBody
     from .decision_example_body_answers import DecisionExampleBodyAnswers
+    from .decision_image_body import DecisionImageBody
     from .decision_node import DecisionNode
     from .decision_node_config import DecisionNodeConfig
     from .decision_node_position_type_0 import DecisionNodePositionType0
@@ -1201,6 +1221,7 @@ if TYPE_CHECKING:
     from .function_summary_response import FunctionSummaryResponse
     from .function_type import FunctionType
     from .generation_settings import GenerationSettings
+    from .google_gen_ai_backend import GoogleGenAIBackend
     from .grantee_ref import GranteeRef
     from .grantee_ref_grantee_type import GranteeRefGranteeType
     from .group_public_response import GroupPublicResponse
@@ -1298,6 +1319,7 @@ if TYPE_CHECKING:
     from .my_membership_update_notify_via_type_0_item import MyMembershipUpdateNotifyViaType0Item
     from .my_usage_limits_response import MyUsageLimitsResponse
     from .my_usage_limits_response_plan_type_type_0 import MyUsageLimitsResponsePlanTypeType0
+    from .named_pod_response import NamedPodResponse
     from .navigate_command import NavigateCommand
     from .navigate_request import NavigateRequest
     from .navigate_response import NavigateResponse
@@ -1369,6 +1391,12 @@ if TYPE_CHECKING:
     from .person_ref import PersonRef
     from .plan_step_response import PlanStepResponse
     from .plan_step_response_detail import PlanStepResponseDetail
+    from .plugin_install_item_response import PluginInstallItemResponse
+    from .plugin_install_request import PluginInstallRequest
+    from .plugin_install_response import PluginInstallResponse
+    from .plugin_install_state import PluginInstallState
+    from .plugin_install_step_response import PluginInstallStepResponse
+    from .plugin_source_request import PluginSourceRequest
     from .pod_account_create_request import PodAccountCreateRequest
     from .pod_account_list_response import PodAccountListResponse
     from .pod_account_response import PodAccountResponse
@@ -1470,6 +1498,7 @@ if TYPE_CHECKING:
     from .resource_visibility import ResourceVisibility
     from .row_request import RowRequest
     from .row_request_values import RowRequestValues
+    from .run_token_usage import RunTokenUsage
     from .runtime_model_capability import RuntimeModelCapability
     from .runtime_model_catalog_entry import RuntimeModelCatalogEntry
     from .runtime_model_catalog_entry_default_model_settings import RuntimeModelCatalogEntryDefaultModelSettings
@@ -1632,6 +1661,8 @@ if TYPE_CHECKING:
     from .update_conversation_request import UpdateConversationRequest
     from .update_conversation_request_metadata_type_0 import UpdateConversationRequestMetadataType0
     from .update_function_request import UpdateFunctionRequest
+    from .update_google_gen_ai_runtime_profile_request import UpdateGoogleGenAIRuntimeProfileRequest
+    from .update_google_gen_ai_runtime_profile_request_model_settings_type_0 import UpdateGoogleGenAIRuntimeProfileRequestModelSettingsType0
     from .update_member_role_request import UpdateMemberRoleRequest
     from .update_open_ai_compatible_runtime_profile_request import UpdateOpenAICompatibleRuntimeProfileRequest
     from .update_open_ai_compatible_runtime_profile_request_model_settings_type_0 import UpdateOpenAICompatibleRuntimeProfileRequestModelSettingsType0
@@ -1692,6 +1723,7 @@ if TYPE_CHECKING:
     from .workflow_create_request import WorkflowCreateRequest
     from .workflow_detail_response import WorkflowDetailResponse
     from .workflow_edge import WorkflowEdge
+    from .workflow_edge_kind import WorkflowEdgeKind
     from .workflow_graph_update_request import WorkflowGraphUpdateRequest
     from .workflow_list_response import WorkflowListResponse
     from .workflow_mode import WorkflowMode
@@ -1778,6 +1810,7 @@ __all__ = [
     'AgentResourcePermissionRequest',
     'AgentResourcePermissionResponse',
     'AgentRunApprovalDecision',
+    'AgentRunResponse',
     'AgentRunStartResponse',
     'AgentRunStatus',
     'AgentRuntimeConfig',
@@ -1932,6 +1965,8 @@ __all__ = [
     'CreateConversationRequestMetadataType0',
     'CreateFolderRequest',
     'CreateFunctionRequest',
+    'CreateGoogleGenAIRuntimeProfileRequest',
+    'CreateGoogleGenAIRuntimeProfileRequestModelSettings',
     'CreateOpenAICompatibleRuntimeProfileRequest',
     'CreateOpenAICompatibleRuntimeProfileRequestHeaders',
     'CreateOpenAICompatibleRuntimeProfileRequestModelSettings',
@@ -1962,6 +1997,7 @@ __all__ = [
     'DecisionAnswerResponse',
     'DecisionExampleBody',
     'DecisionExampleBodyAnswers',
+    'DecisionImageBody',
     'DecisionNode',
     'DecisionNodeConfig',
     'DecisionNodePositionType0',
@@ -2068,6 +2104,7 @@ __all__ = [
     'FunctionSummaryResponse',
     'FunctionType',
     'GenerationSettings',
+    'GoogleGenAIBackend',
     'GranteeRef',
     'GranteeRefGranteeType',
     'GroupPublicResponse',
@@ -2165,6 +2202,7 @@ __all__ = [
     'MyMembershipUpdateNotifyViaType0Item',
     'MyUsageLimitsResponse',
     'MyUsageLimitsResponsePlanTypeType0',
+    'NamedPodResponse',
     'NavigateCommand',
     'NavigateRequest',
     'NavigateResponse',
@@ -2236,6 +2274,12 @@ __all__ = [
     'PersonRef',
     'PlanStepResponse',
     'PlanStepResponseDetail',
+    'PluginInstallItemResponse',
+    'PluginInstallRequest',
+    'PluginInstallResponse',
+    'PluginInstallState',
+    'PluginInstallStepResponse',
+    'PluginSourceRequest',
     'PodAccountCreateRequest',
     'PodAccountListResponse',
     'PodAccountResponse',
@@ -2337,6 +2381,7 @@ __all__ = [
     'ResourceVisibility',
     'RowRequest',
     'RowRequestValues',
+    'RunTokenUsage',
     'RuntimeModelCapability',
     'RuntimeModelCatalogEntry',
     'RuntimeModelCatalogEntryDefaultModelSettings',
@@ -2499,6 +2544,8 @@ __all__ = [
     'UpdateConversationRequest',
     'UpdateConversationRequestMetadataType0',
     'UpdateFunctionRequest',
+    'UpdateGoogleGenAIRuntimeProfileRequest',
+    'UpdateGoogleGenAIRuntimeProfileRequestModelSettingsType0',
     'UpdateMemberRoleRequest',
     'UpdateOpenAICompatibleRuntimeProfileRequest',
     'UpdateOpenAICompatibleRuntimeProfileRequestModelSettingsType0',
@@ -2559,6 +2606,7 @@ __all__ = [
     'WorkflowCreateRequest',
     'WorkflowDetailResponse',
     'WorkflowEdge',
+    'WorkflowEdgeKind',
     'WorkflowGraphUpdateRequest',
     'WorkflowListResponse',
     'WorkflowMode',

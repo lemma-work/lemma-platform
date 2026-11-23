@@ -787,6 +787,11 @@ function TriageButton({ client, issueId }: { client: LemmaClient; issueId: strin
 }
 ```
 
+An `API` function answers `start` with its finished run, and the hook takes
+that as the result without reading it back. A `JOB` run is polled: first after
+250 ms, then doubling up to `pollIntervalMs` (default 2000 ms), so a job that
+finishes in about a second is shown about then.
+
 ### 15. Workflow Launcher
 
 Start a workflow with a form for its input schema.

@@ -23,6 +23,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work.writer import HasSession
 from app.core.infrastructure.work import (
     SYSTEM_NAMESPACE,
+    DeadContext,
     JobContext,
     WorkClass,
     WorkMode,
@@ -32,6 +33,7 @@ from app.core.infrastructure.work import (
     org_namespace,
     registry as default_registry,
 )
+from app.core.log.log import get_logger
 from app.modules.identity.contracts.account_facts import AccountDeleted
 from app.modules.identity.contracts.profile_facts import UserMobileChanged
 from app.modules.identity.domain.events import (
@@ -45,9 +47,14 @@ from app.modules.identity.domain.events import (
 from app.modules.identity.domain.organization_entities import OrganizationRole
 from app.modules.identity.domain.ports import IdentityEmailPort
 
+logger = get_logger(__name__)
+
 IDENTITY_EMAIL = "identity.email"
 IDENTITY_WHATSAPP_VERIFICATION = "identity.whatsapp_verification"
 IDENTITY_ACCOUNT_DELETED = "identity.account_deleted"
+#: The deletion's second try, written when the first died: the same work,
+#: no longer waiting on Apple (`on_account_deleted_dead`).
+IDENTITY_ACCOUNT_DELETED_WITHOUT_APPLE = "identity.account_deleted_without_apple"
 
 #: The events that owe somebody an email.
 _EMAIL_EVENTS: tuple[type[DomainEvent], ...] = (
@@ -158,6 +165,44 @@ async def run_account_deleted(ctx: JobContext, payload: AccountDeleted) -> None:
     await end_deleted_account_sign_in(payload.user_id)
 
 
+async def run_account_deleted_without_apple(
+    ctx: JobContext, payload: AccountDeleted
+) -> None:
+    from app.modules.identity.infrastructure.supertokens_auth.account_removal import (
+        end_deleted_account_sign_in,
+    )
+
+    del ctx
+    await end_deleted_account_sign_in(payload.user_id, wait_for_apple=False)
+
+
+async def on_account_deleted_dead(ctx: DeadContext) -> None:
+    """A deletion that died still frees the address.
+
+    The likeliest death is Apple's revoke endpoint down for longer than the
+    day an item may wait on a dependency. The person has already been told
+    the account is gone and signed out, so their SuperTokens user -- and the
+    address it holds -- must not outlive the item. A hook gets no network, so
+    this writes the second try as an item of its own: the same work, which
+    asks Apple once more and finishes without it.
+    """
+    try:
+        payload = AccountDeleted.model_validate(ctx.item.payload)
+    except ValueError:
+        return
+    logger.warning(
+        "identity.account.deletion_retried_without_apple",
+        user_id=str(payload.user_id),
+        reason=ctx.reason,
+    )
+    await ctx.work.add(
+        IDENTITY_ACCOUNT_DELETED_WITHOUT_APPLE,
+        ctx.item.ns,
+        AccountDeleted(user_id=payload.user_id),
+        dedup_key=f"identity-account-deleted-without-apple:{payload.user_id}",
+    )
+
+
 def register_identity_work(registry: WorkRegistry) -> None:
     registry.handler(
         kind=IDENTITY_EMAIL,
@@ -176,7 +221,14 @@ def register_identity_work(registry: WorkRegistry) -> None:
         cls=WorkClass.DELIVERY,
         mode=WorkMode.JOB,
         payload=AccountDeleted,
+        on_dead=on_account_deleted_dead,
     )(run_account_deleted)
+    registry.handler(
+        kind=IDENTITY_ACCOUNT_DELETED_WITHOUT_APPLE,
+        cls=WorkClass.DELIVERY,
+        mode=WorkMode.JOB,
+        payload=AccountDeleted,
+    )(run_account_deleted_without_apple)
 
 
 register_identity_work(default_registry)

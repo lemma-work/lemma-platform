@@ -115,7 +115,7 @@ async def search_files(
     if awaiting:
         payload["files_awaiting_processing"] = awaiting
         notes.append(
-            f"{awaiting} file(s) in this pod are still being processed and are "
+            f"{awaiting} file(s) in this Lemma are still being processed and are "
             "not searchable yet; retry once processing finishes."
         )
     # Counted and worded separately from the queued ones on purpose. Waiting
@@ -128,7 +128,7 @@ async def search_files(
     if failed:
         payload["files_failed_processing"] = failed
         notes.append(
-            f"{failed} file(s) in this pod could not be processed and will "
+            f"{failed} file(s) in this Lemma could not be processed and will "
             "never match a search. Read one with pod_read_file for the reason."
         )
     if notes:

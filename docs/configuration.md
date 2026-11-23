@@ -587,8 +587,21 @@ revalidate every use and shared caches keep nothing.
 This needs only what serving apps already needs: the wildcard app host routed to
 the API, credentialed CORS for the app origins, and a sign-in page that honours
 `redirect_uri`. `AUTH_WEBSITE_BASE_PATH` is appended to an `AUTH_FRONTEND_URL`
-with no path of its own. Private apps are not served this way on plain HTTP
-(the desktop), where only public apps open at the app address.
+with no path of its own.
+
+On plain HTTP only public apps open at the app address -- the desktop and the
+Docker install among them -- unless the stack sets `PRIVATE_APPS_OVER_HTTP=true`.
+That is for a local development stack only: it is refused outside
+`ENVIRONMENT=local`/`testing`, and applies only to app hosts under `.localhost`,
+which never leave the machine. There a private app opens by the same ticket and
+checks, and the cookie is a host-only `lemmaAppAccess` without `Secure`, which
+the `__Host-` name requires. `make dev` sets it.
+
+An app framed in the web app is signed in only if the web app, the API and the
+app are one site to the browser. `localhost` and `<slug>.apps.lemma.localhost`
+are not, so with `make dev`'s default addresses the access page asks you to
+sign in. `make dev DEV_ONE_SITE=1` serves the web app at `lemma.localhost`, the
+API at `api.lemma.localhost` and the session cookie on `.lemma.localhost`.
 
 ## Outside MCP clients
 
@@ -635,6 +648,19 @@ protection of your own:
 PUBLIC_WEB_ALTCHA_ENABLED=false
 ```
 
+On a server people test pages on, a visitor's email-code step can't be
+finished: the addresses testers type reach no inbox. Name the code instead, and
+every code a visitor is sent is those six digits and nothing is mailed. Expiry,
+the five-guess limit and rate limits still apply. Anybody who knows it can
+confirm any address on that server's widgets, so startup refuses it when
+`ENVIRONMENT=production`. Unset by default; a local stack with
+`EMAIL_TRANSPORT=filesystem` needs none, since the code lands in
+`EMAIL_OUTPUT_DIR`.
+
+```dotenv
+PUBLIC_WEB_TEST_VISITOR_CODE=424242
+```
+
 ## Authentication and email
 
 Email transport, sender identity, and the sign-up abuse controls are covered in
@@ -675,6 +701,65 @@ account before exposing the sign-up page.
 Unset means `open` on Lemma Desktop too. Desktop sets `SIGNUP_MODE` only while
 the installation is shared, from its *Who can join* choice; see
 [Desktop security](architecture/desktop-security.md).
+
+### Signing in with Google, Microsoft or Apple
+
+A provider is registered only when every value it needs is set, and the
+sign-in page draws a button only for the providers the backend registered (it
+asks SuperTokens' `/loginmethods`), so a button never leads somewhere
+unconfigured.
+
+```dotenv
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+MICROSOFT_CLIENT_ID=
+MICROSOFT_CLIENT_SECRET=
+# Unset is `common`: personal and work accounts both.
+MICROSOFT_TENANT_ID=
+# Sign in with Apple: the Services ID (not the app's bundle id), the team
+# that owns it, and the Sign in with Apple key.
+APPLE_CLIENT_ID=com.example.signin
+APPLE_TEAM_ID=
+APPLE_KEY_ID=
+# The .p8 file's contents, BEGIN and END lines included. Newlines may be
+# written as \n. A value that is not an EC private key leaves Apple
+# unregistered and logs identity.apple_sign_in.private_key_unusable.
+APPLE_PRIVATE_KEY=
+```
+
+Google and Microsoft send the browser straight back to the sign-in page, so
+their consoles list `<AUTH_FRONTEND_URL>/auth/callback/google` and
+`<AUTH_FRONTEND_URL>/auth/callback/active-directory`.
+
+Apple answers with a form POST, which only the API can take. Its return URL
+is `<API_URL>/st/auth/callback/apple`; the API forwards the browser to
+`<AUTH_FRONTEND_URL>/auth/callback/apple`, and only ever to that origin, so a
+sign-in with Apple has to start from the sign-in page on `AUTH_FRONTEND_URL`.
+In the Services ID, list the hosts of both URLs as its domains and the API's
+URL as its return URL. Apple shows the person's name to Lemma once, on the
+first sign-in, and Lemma keeps it then.
+
+When someone who signs in with Apple deletes their account, Lemma asks Apple
+to revoke that sign-in, as Apple asks of apps that offer it. Each Apple
+sign-in's refresh token is kept for this, sealed with the secret cipher in the
+SuperTokens user's metadata, and the deletion's work item spends it just
+before it removes the user. While Apple is unreachable the item waits and
+tries again; anything Apple answers is final, and the deletion finishes.
+Revoking signs a client secret with the same key, so keep the `APPLE_*`
+values set for as long as any account was made with Apple.
+
+**Register your sending domains with Apple before turning it on.** Someone who
+chooses *Hide My Email* signs up as an `@privaterelay.appleid.com` address,
+and Apple forwards mail to it only from senders registered under *Sign in with
+Apple for Email Communication* in the Apple Developer account, authenticated
+by SPF for the envelope sender or DKIM for the From domain. Until the From
+domain of `SMTP_FROM_EMAIL` or `RESEND_FROM_EMAIL` is registered (and the
+envelope-sender domain too, if your provider uses its own), the welcome mail,
+invitations and codes to those people bounce, and with the bounce webhook set
+up a hard bounce switches the account off. An address on the relay that has
+no account here is sent to Apple from the email box rather than mailed a
+code: the code would bounce, or make an account that Apple could not then
+sign in to.
 
 **Resend is not a transport.** To send through Resend, leave
 `EMAIL_TRANSPORT=smtp`, set `RESEND_API_KEY` and `RESEND_FROM_EMAIL`, and leave
@@ -809,11 +894,12 @@ durable state, not configuration.
 
 ## Models
 
-Lemma talks to any OpenAI-compatible or Anthropic-compatible endpoint. There is
-no provider-specific logic beyond those two shapes.
+Lemma talks to any OpenAI-compatible or Anthropic-compatible endpoint, and to
+Google's Gen AI API (Gemini) on either of its hosts. There is no
+provider-specific logic beyond those three shapes.
 
 ```dotenv
-LEMMA_DEFAULT_MODEL_TYPE=openai_compat   # openai_compat | anthropic_compat
+LEMMA_DEFAULT_MODEL_TYPE=openai_compat   # openai_compat | anthropic_compat | google_genai
 LEMMA_OPENAI_API_KEY=
 LEMMA_OPENAI_BASE_URL=https://api.openai.com/v1
 LEMMA_OPENAI_DEFAULT_MODEL=
@@ -828,6 +914,20 @@ LEMMA_OPENAI_REASONING_MODEL_NAMES=
 
 LEMMA_ANTHROPIC_API_KEY=
 LEMMA_ANTHROPIC_DEFAULT_MODEL=claude-sonnet-4-5
+
+# Google (LEMMA_DEFAULT_MODEL_TYPE=google_genai). With a project set, models run
+# on Vertex AI as a service account: the key file below if given, else the
+# identity the server runs as (Workload Identity on GKE, or
+# `gcloud auth application-default login` on a laptop), which needs
+# roles/aiplatform.user. Without a project, the Gemini API with its API key.
+LEMMA_GOOGLE_VERTEX_PROJECT=
+LEMMA_GOOGLE_VERTEX_LOCATION=global
+LEMMA_GOOGLE_SERVICE_ACCOUNT_JSON=
+LEMMA_GOOGLE_API_KEY=
+LEMMA_GOOGLE_DEFAULT_MODEL=gemini-4-hydrogen
+LEMMA_GOOGLE_MODEL_NAMES=gemini-4-hydrogen,gemini-4-argon,gemini-4-carbon,gemini-3.8-flash
+# Image models, for the generate_image tool. Never an agent's chat model.
+LEMMA_GOOGLE_IMAGE_MODEL_NAMES=gemini-3.1-flash-image
 
 # Embeddings and reranking for datastore search. `local` runs in-process and
 # needs no key; the dimension must match what your index was built with.
@@ -866,11 +966,17 @@ runs drive their own model loop and ignore these settings.
 
 `POST /pods/{pod_id}/decisions` answers closed questions -- a choice, several
 choices, yes or no, a point on a scale -- about some evidence. One provider
-answers them for the whole deployment. By default it is the language model
-configured above, so decisions need no setting at all.
+answers them for the whole deployment. By default it is Google's Decisions API
+when `LEMMA_GOOGLE_API_KEY` is set, and the language model configured above when
+it is not, so decisions need no setting at all.
 
 ```dotenv
-DECISION_PROVIDER=model       # model | typesafe
+DECISION_PROVIDER=gemini      # gemini | model | typesafe
+# Google's decision model. It is served on the Gemini API only, which refuses
+# service accounts, so it takes LEMMA_GOOGLE_API_KEY even where models run on
+# Vertex AI. Without the key the `model` provider answers instead.
+GEMINI_DECISION_MODEL=gemini-decision-1
+GEMINI_DECISION_PRICE_PER_MILLION_INPUT_TOKENS_USD=0.10
 # The model the `model` provider asks, by public name. Empty: the default model.
 # A small, fast model is a good choice; decisions are short.
 DECISION_MODEL=
@@ -888,8 +994,9 @@ DECISION_BACKGROUND_TIMEOUT_SECONDS=25
 DECISION_RATE_LIMIT_PER_MINUTE=600   # per organization and priority; 0 for none
 ```
 
-Choosing `typesafe` sends the evidence of every decision to Typesafe, so list it
-wherever your deployment names the processors its users' data reaches.
+Choosing `typesafe` sends the evidence of every decision to Typesafe, and a
+Google key with the `gemini` default sends it to Google, so list whichever
+applies wherever your deployment names the processors its users' data reaches.
 
 Live voice calls ask one decision of this API per finished turn, with
 `priority: interactive`: whether it is conversation for the voice alone or

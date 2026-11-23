@@ -186,8 +186,19 @@ export interface PodApp {
 
 /** The apps of the Lemmas given, newest first, read under the key every
  *  view of them shares. One Lemma's own leads with the app it opens on,
- *  when somebody chose one: its home shows first what opening it shows. */
-export function useApps(pods: readonly Pod[]): { apps: PodApp[]; pending: boolean } {
+ *  when somebody chose one: its home shows first what opening it shows.
+ *
+ *  `failed` is the Lemmas whose apps couldn't be read and that have none
+ *  kept from an earlier read, so a page says it couldn't read them rather
+ *  than that they have none; `retry` reads those again, and `retrying` is
+ *  true while it does. */
+export function useApps(pods: readonly Pod[]): {
+    apps: PodApp[];
+    pending: boolean;
+    failed: readonly Pod[];
+    retry: () => void;
+    retrying: boolean;
+} {
     const results = useQueries({
         queries: pods.map((pod) => ({ queryKey: ["outcome-apps", pod.id], queryFn: () => source.listTabs(pod.id), staleTime: 5 * 60_000 })),
     });
@@ -195,7 +206,14 @@ export function useApps(pods: readonly Pod[]): { apps: PodApp[]; pending: boolea
         .flatMap((pod, index) => (results[index]?.data ?? []).flatMap((tab) => (tab.kind === "app" ? [{ pod, app: tab }] : [])))
         .sort((a, b) => (Date.parse(b.app.updated ?? "") || 0) - (Date.parse(a.app.updated ?? "") || 0));
     const apps = pods.length === 1 ? homeFirst(newest, pods[0].homeApp, ({ app }) => app.id) : newest;
-    return { apps, pending: results.some((result) => result.isPending) };
+    const lost = results.flatMap((result, index) => (result.isError && !result.data ? [{ result, pod: pods[index] }] : []));
+    return {
+        apps,
+        pending: results.some((result) => result.isPending),
+        failed: lost.map(({ pod }) => pod),
+        retry: () => lost.forEach(({ result }) => void result.refetch()),
+        retrying: lost.some(({ result }) => result.isFetching),
+    };
 }
 
 /** Apps as tiles: a cover, a name and -- across Lemmas -- whose it is. Each

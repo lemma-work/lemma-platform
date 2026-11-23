@@ -6,7 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { agentUpdateCommand, source, stillLooking } from "@/data";
 import { apiUrl, hasApiUrl } from "@/session/client";
 import { LoadingIndicator } from "@/ui/loading";
-import { ComputerIcon, DownloadIcon, RefreshIcon, TerminalIcon } from "@/ui/icons";
+import { DownloadIcon, RefreshIcon, TerminalIcon } from "@/ui/icons";
 import { agentHost, ownSettingsRow, takesOwnSettings, useAgentHost } from "./agent-host";
 import { useAutoConnectThisComputer, wasRemoved } from "./auto-connect";
 import { invoke } from "./bridge";
@@ -87,14 +87,16 @@ export function useCheckAgain() {
     return { check, checking, problem };
 }
 
+/** "Check again", for a row's end: the button, and what went wrong beside
+ *  it when the host could not be asked. */
 export function CheckAgainButton() {
     const { check, checking, problem } = useCheckAgain();
     return (
         <>
-            <button className="btn" disabled={checking} onClick={() => void check()}>
-                <RefreshIcon size={13} className={checking ? "spin" : undefined} /> {checking ? "Checking…" : "Check again"}
+            {problem && <span className="kset-said kset-said--bad" role="alert">{problem}</span>}
+            <button type="button" className="b b--s b--secondary" disabled={checking} onClick={() => void check()}>
+                <RefreshIcon className={checking ? "spin" : undefined} /> {checking ? "Checking…" : "Check again"}
             </button>
-            {problem && <p className="thismac__problem" role="alert">{problem}</p>}
         </>
     );
 }
@@ -112,8 +114,9 @@ export function CheckAgainButton() {
  *  up.
  *
  *  `children` is this computer's agent list as the backend published it,
- *  drawn by the page in its own rows so an agent here and one on another
- *  machine are the same object. */
+ *  drawn by the page in its own rows (`li.krow`) so an agent here and one on
+ *  another machine are the same object. The computer is a subheading with
+ *  its state at the far end, and its own row comes first in the list. */
 export function ThisComputerCard({ release, children }: { release?: string; children?: ReactNode }) {
     const noun = useThisComputer();
     const { status, error, connectError, retryConnect, refetch, userId } = useAutoConnectThisComputer();
@@ -167,44 +170,40 @@ export function ThisComputerCard({ release, children }: { release?: string; chil
                 ? "Connect again"
                 : "Try again";
 
+    const tone = described.tone === "ok" ? "kstatus" : described.tone === "warn" ? "kstatus kstatus--warn" : "kstatus kstatus--off";
+
     return (
-        <section className="mgroup thismac" aria-label={capitalised(noun)}>
-            <div className="mgroup__head">
-                <ComputerIcon size={14} />
-                <span className="mgroup__name">{capitalised(noun)}</span>
-                <span className="mgroup__meta">{release ? "Lemma app " + release : ""}</span>
-                <span className={"mrow__state mrow__state--" + described.tone} role="status">
-                    <i aria-hidden="true" />
-                    {described.label}
-                </span>
-            </div>
-            <div className="thismac__body">
-                <p className="thismac__detail">{described.detail}</p>
-                <div className="thismac__acts">
-                    {described.action && (
-                        <button className="btn" disabled={acting} onClick={act}>
-                            {described.action === "update" ? <DownloadIcon size={13} /> : <RefreshIcon size={13} />} {actionLabel}
-                        </button>
-                    )}
-                    {status?.available && (
-                        <button className="linkish" onClick={() => void run(() => agentHost.openLog(), "The log could not be opened.")}>
-                            <TerminalIcon size={13} /> Open log
-                        </button>
-                    )}
-                </div>
-                {problem && <p className="thismac__problem" role="alert">{problem}</p>}
-            </div>
-            {children}
+        <section className="kset-stack" aria-label={capitalised(noun)}>
+            <p className="ksub">
+                {capitalised(noun)}
+                {release && <span>Lemma app {release}</span>}
+                <span className={tone} role="status">{described.label}</span>
+            </p>
+            <ul className="klist">
+                <li className="krow">
+                    <span className="krow__v kset-wrap">
+                        <span>{described.detail}</span>
+                        {problem && <span className="kset-said--bad" role="alert">{problem}</span>}
+                    </span>
+                    <span className="krow__end">
+                        {status?.available && (
+                            <button type="button" className="b b--s b--quiet" onClick={() => void run(() => agentHost.openLog(), "The log could not be opened.")}>
+                                <TerminalIcon /> Open log
+                            </button>
+                        )}
+                        {described.action && (
+                            <button type="button" className="b b--s b--secondary" disabled={acting} onClick={act}>
+                                {described.action === "update" ? <DownloadIcon /> : <RefreshIcon />} {actionLabel}
+                            </button>
+                        )}
+                    </span>
+                </li>
+                {children}
+            </ul>
         </section>
     );
 }
 
-/** The coding agents this computer found, for Settings → This Mac → Coding
- *  agents: what is installed, which release, and what to type to update it.
- *
- *  Read from the workspace's list of computers, joined on `host_id` — the same
- *  list the Models page draws — so the two places cannot disagree about what
- *  is here. Adding one for teammates to pick stays on Models. */
 /** Claude Code only. Off by default: it starts with Lemma's instructions,
  *  skills and tools only, so what it does in a conversation is what Lemma
  *  asked of it. On, it also loads the person's own -- as in their terminal.
@@ -224,28 +223,36 @@ function OwnSettingsToggle({ harness, name }: { harness: string; name: string })
     });
     const row = ownSettingsRow(host.status, harness);
     const label = `Let ${name} use my own skills and settings`;
+    const checked = change.isPending ? change.variables === true : row.checked;
     return (
-        <>
-            <label className="thismac-row__said" title={row.blocked ?? undefined}>
-                <input
-                    type="checkbox"
-                    className="thismac-switch"
-                    role="switch"
-                    aria-label={label}
-                    checked={change.isPending ? change.variables === true : row.checked}
-                    disabled={row.blocked !== null || change.isPending}
-                    onChange={(event) => { setProblem(null); change.mutate(event.target.checked); }}
-                />{" "}
+        <span className="kset-toggle kset-long" title={row.blocked ?? undefined}>
+            <button
+                type="button"
+                className="kswitch"
+                role="switch"
+                aria-label={label}
+                aria-checked={checked}
+                disabled={row.blocked !== null || change.isPending}
+                onClick={() => { setProblem(null); change.mutate(!checked); }}
+            />
+            <span>
                 Use my own skills and settings
                 {row.blocked ? " · " + row.blocked
                     : row.checked ? " · Loads what you set up for it, as in Terminal."
                         : " · Uses Lemma’s instructions, skills and tools only."}
-            </label>
-            {problem && <span className="thismac-said thismac-said--bad" role="alert">{problem}</span>}
-        </>
+                {problem && <span className="kset-said--bad" role="alert"> {problem}</span>}
+            </span>
+        </span>
     );
 }
 
+/** The coding agents this computer found, for Settings → This Mac → Coding
+ *  agents, as rows: what is installed, which release, how it stands, and
+ *  what to type to update it.
+ *
+ *  Read from the workspace's list of computers, joined on `host_id` — the same
+ *  list the Models page draws — so the two places cannot disagree about what
+ *  is here. Adding one for Lemmas to pick stays on Models. */
 export function ThisComputerAgents() {
     const noun = useThisComputer();
     const hostId = useThisHostId();
@@ -258,21 +265,19 @@ export function ThisComputerAgents() {
     if (!hostId || !mine) return null;
     if (stillLooking(mine)) {
         return (
-            <p className="mgroup__empty">
-                <LoadingIndicator label="Finding coding agents" />
-            </p>
+            <li className="krow">
+                <span className="krow__v"><span><LoadingIndicator label="Finding coding agents" /></span></span>
+            </li>
         );
     }
     if (mine.agents.length === 0) {
         return (
-            <div className="thismac-row">
-                <div className="thismac-row__text">
-                    <span className="thismac-row__said">
-                        No coding agents found on {noun}. Install Claude Code, Codex, Cursor or OpenCode, then press Check again.
-                    </span>
-                </div>
-                <div className="thismac-row__control"><CheckAgainButton /></div>
-            </div>
+            <li className="krow">
+                <span className="krow__v kset-wrap">
+                    <span>No coding agents found on {noun}. Install Claude Code, Codex, Cursor or OpenCode, then check again.</span>
+                </span>
+                <span className="krow__end"><CheckAgainButton /></span>
+            </li>
         );
     }
     const unsettled = mine.agents.some((agent) => !agent.ready);
@@ -281,27 +286,25 @@ export function ThisComputerAgents() {
             {mine.agents.map((agent) => {
                 const update = agentUpdateCommand(agent.harness);
                 return (
-                    <div className="thismac-row" key={agent.id}>
-                        <div className="thismac-row__text">
-                            <span className="thismac-row__name">
-                                {agent.name}{agent.version ? " " + agent.version : ""}
-                            </span>
-                            <span className="thismac-row__said">
-                                {agent.state}
-                                {update ? <> · To update, run <code>{update}</code> in Terminal.</> : null}
-                            </span>
+                    <li className="krow" key={agent.id}>
+                        <span className="krow__v kset-wrap">
+                            <b>{agent.name}{agent.version ? " " + agent.version : ""}</b>
+                            {update && <span>To update, run <code>{update}</code> in Terminal.</span>}
                             <OwnSettingsSwitch harness={agent.harness} name={agent.name} />
-                        </div>
-                    </div>
+                        </span>
+                        <span className="krow__end">
+                            <span className={agent.ready ? "kstatus" : "kstatus kstatus--warn"}>{agent.state}</span>
+                        </span>
+                    </li>
                 );
             })}
             {unsettled && (
-                <div className="thismac-row">
-                    <div className="thismac-row__text">
-                        <span className="thismac-row__said">Signed in or updated one of these? Look again now instead of waiting.</span>
-                    </div>
-                    <div className="thismac-row__control"><CheckAgainButton /></div>
-                </div>
+                <li className="krow">
+                    <span className="krow__v kset-wrap">
+                        <span>Signed in or updated one of these? Look again now instead of waiting.</span>
+                    </span>
+                    <span className="krow__end"><CheckAgainButton /></span>
+                </li>
             )}
         </>
     );

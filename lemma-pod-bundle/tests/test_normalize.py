@@ -76,6 +76,27 @@ def test_normalize_table_payload_defaults_and_drops_none():
     }
 
 
+def test_normalize_table_payload_keeps_contact_ownership():
+    table = {
+        "name": "visitors",
+        "columns": [{"name": "contact_id", "type": "UUID"}],
+        "enable_rls": False,
+        "contact_owned": True,
+        "contact_columns": ["title"],
+    }
+    payload = _normalize_table_payload(table)
+    assert payload["contact_owned"] is True
+    assert payload["contact_columns"] == ["title"]
+
+
+def test_normalize_table_payload_writes_nothing_for_an_ordinary_table():
+    payload = _normalize_table_payload(
+        {"name": "items", "contact_owned": False, "contact_columns": []}
+    )
+    assert "contact_owned" not in payload
+    assert "contact_columns" not in payload
+
+
 def test_sanitize_table_payload_strips_system_columns():
     payload = {
         "name": "items",
@@ -120,6 +141,14 @@ def test_normalize_function_payload_strips_server_fields():
         "name": "hello",
         "code": "print('hi')",
     }
+
+
+def test_a_function_kept_from_the_assistant_says_so_and_no_other_does():
+    kept = {"name": "claim", "code": "...", "assistant_invoke": False}
+    offered = {"name": "lookup", "code": "...", "assistant_invoke": True}
+
+    assert _normalize_function_payload(kept)["assistant_invoke"] is False
+    assert "assistant_invoke" not in _normalize_function_payload(offered)
 
 
 def test_normalize_agent_payload_makes_schemas_explicit():

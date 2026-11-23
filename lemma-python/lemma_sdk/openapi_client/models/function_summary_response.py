@@ -41,6 +41,7 @@ class FunctionSummaryResponse:
             updated_at (datetime.datetime | None):
             user_id (UUID):
             allowed_actions (list[str] | Unset):
+            assistant_invoke (bool | Unset): Offered to the Lemma's assistant and runnable by it. Default: True.
             code_path (None | str | Unset):
             config (JsonObject | None | Unset):
             contacts_invoke (bool | Unset): Callable from a contact's conversation. Default: False.
@@ -60,6 +61,7 @@ class FunctionSummaryResponse:
     updated_at: datetime.datetime | None
     user_id: UUID
     allowed_actions: list[str] | Unset = UNSET
+    assistant_invoke: bool | Unset = True
     code_path: None | str | Unset = UNSET
     config: JsonObject | None | Unset = UNSET
     contacts_invoke: bool | Unset = False
@@ -100,6 +102,8 @@ class FunctionSummaryResponse:
         allowed_actions: list[str] | Unset = UNSET
         if not isinstance(self.allowed_actions, Unset):
             allowed_actions = self.allowed_actions
+
+        assistant_invoke = self.assistant_invoke
 
         code_path: None | str | Unset
         if isinstance(self.code_path, Unset):
@@ -165,6 +169,8 @@ class FunctionSummaryResponse:
         )
         if allowed_actions is not UNSET:
             field_dict["allowed_actions"] = allowed_actions
+        if assistant_invoke is not UNSET:
+            field_dict["assistant_invoke"] = assistant_invoke
         if code_path is not UNSET:
             field_dict["code_path"] = code_path
         if config is not UNSET:
@@ -236,6 +242,8 @@ class FunctionSummaryResponse:
         user_id = UUID(d.pop("user_id"))
 
         allowed_actions = cast(list[str], d.pop("allowed_actions", UNSET))
+
+        assistant_invoke = d.pop("assistant_invoke", UNSET)
 
         def _parse_code_path(data: object) -> None | str | Unset:
             if data is None:
@@ -330,6 +338,7 @@ class FunctionSummaryResponse:
             updated_at=updated_at,
             user_id=user_id,
             allowed_actions=allowed_actions,
+            assistant_invoke=assistant_invoke,
             code_path=code_path,
             config=config,
             contacts_invoke=contacts_invoke,

@@ -214,6 +214,77 @@ class TestDatastoreRecords:
             assert "SQL" not in error["message"]
 
     @pytest.mark.asyncio
+    async def test_json_column_round_trips_every_json_value(
+        self,
+        pod_api: DatastoreApi,
+    ):
+        """A JSON column stores and returns a number, boolean or string as itself.
+
+        Only objects and arrays used to reach the database encoded: a number or
+        boolean failed in the driver and a plain string was refused as
+        malformed JSON. A string holding a serialized object or array is still
+        taken as that object or array.
+        """
+        await pod_api.create_table(
+            {
+                "name": "payloads",
+                "enable_rls": False,
+                "columns": [
+                    {"name": "label", "type": "TEXT", "required": True},
+                    {"name": "payload", "type": "JSON"},
+                ],
+            }
+        )
+        cases: list[tuple[object, object, str]] = [
+            (42, 42, "number"),
+            (3.5, 3.5, "number"),
+            (True, True, "boolean"),
+            (False, False, "boolean"),
+            ("hello", "hello", "string"),
+            ("42", "42", "string"),
+            ("true", "true", "string"),
+            ({"vendor": "Acme"}, {"vendor": "Acme"}, "object"),
+            ([1, "two", None], [1, "two", None], "array"),
+            ('{"vendor": "Acme"}', {"vendor": "Acme"}, "object"),
+        ]
+
+        for index, (sent, stored, _kind) in enumerate(cases):
+            created = await pod_api.create_record(
+                "payloads", {"label": f"single-{index}", "payload": sent}
+            )
+            assert created["payload"] == stored, sent
+            read = await pod_api.get_record("payloads", created["id"])
+            assert read["payload"] == stored, sent
+
+        moving = await pod_api.create_record("payloads", {"label": "moving"})
+        for sent, stored, _kind in cases:
+            updated = await pod_api.update_record(
+                "payloads", moving["id"], {"payload": sent}
+            )
+            assert updated["payload"] == stored, sent
+
+        await pod_api.bulk_create(
+            "payloads",
+            [
+                {"label": f"bulk-{index}", "payload": sent}
+                for index, (sent, _stored, _kind) in enumerate(cases)
+            ],
+        )
+        listed = await pod_api.list_records("payloads", limit=100)
+        by_label = {row["label"]: row["payload"] for row in listed["items"]}
+        for index, (_sent, stored, _kind) in enumerate(cases):
+            assert by_label[f"bulk-{index}"] == stored
+
+        typed = await pod_api.query(
+            "SELECT label, jsonb_typeof(payload) AS kind FROM payloads "
+            "WHERE label LIKE 'single-%'"
+        )
+        kinds = {row["label"]: row["kind"] for row in typed["items"]}
+        assert kinds == {
+            f"single-{index}": kind for index, (_s, _st, kind) in enumerate(cases)
+        }
+
+    @pytest.mark.asyncio
     async def test_records_support_typed_values_computed_columns_and_validation(
         self,
         project_workspace: DatastoreApi,

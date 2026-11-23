@@ -70,7 +70,7 @@ class MemoryScope:
                 path,
                 "Only memory files may be written here: the two shared indexes, "
                 f"`{self.paths.pod_agent_folder}/`, `{self.paths.personal_agent_folder}/`, "
-                "or a pod-shared topic file under `/memory` that is not another "
+                "or a shared topic file under `/memory` that is not another "
                 "agent's.",
             )
         return _refused(path, "Only files under /memory or /me may be read here.")

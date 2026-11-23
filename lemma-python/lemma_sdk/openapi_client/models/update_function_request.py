@@ -24,6 +24,8 @@ class UpdateFunctionRequest:
     """Request to update a function.
 
     Attributes:
+        assistant_invoke (bool | None | Unset): Offer this function to the Lemma's assistant, or stop. Omit to leave it
+            as it is.
         code (None | str | Unset): Updated Python source for the function. When provided, the platform re-analyzes the
             code and refreshes input_schema, output_schema, and config_schema on the returned function.
         config (JsonObject | None | Unset):
@@ -37,6 +39,7 @@ class UpdateFunctionRequest:
         visibility (None | ResourceVisibility | Unset):
     """
 
+    assistant_invoke: bool | None | Unset = UNSET
     code: None | str | Unset = UNSET
     config: JsonObject | None | Unset = UNSET
     description: None | str | Unset = UNSET
@@ -50,6 +53,12 @@ class UpdateFunctionRequest:
             FunctionPermissionsReplaceRequest,
         )
         from ..models.json_object import JsonObject
+
+        assistant_invoke: bool | None | Unset
+        if isinstance(self.assistant_invoke, Unset):
+            assistant_invoke = UNSET
+        else:
+            assistant_invoke = self.assistant_invoke
 
         code: None | str | Unset
         if isinstance(self.code, Unset):
@@ -104,6 +113,8 @@ class UpdateFunctionRequest:
         field_dict: dict[str, Any] = {}
 
         field_dict.update({})
+        if assistant_invoke is not UNSET:
+            field_dict["assistant_invoke"] = assistant_invoke
         if code is not UNSET:
             field_dict["code"] = code
         if config is not UNSET:
@@ -129,6 +140,15 @@ class UpdateFunctionRequest:
         from ..models.json_object import JsonObject
 
         d = dict(src_dict)
+
+        def _parse_assistant_invoke(data: object) -> bool | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(bool | None | Unset, data)
+
+        assistant_invoke = _parse_assistant_invoke(d.pop("assistant_invoke", UNSET))
 
         def _parse_code(data: object) -> None | str | Unset:
             if data is None:
@@ -228,6 +248,7 @@ class UpdateFunctionRequest:
         visibility = _parse_visibility(d.pop("visibility", UNSET))
 
         update_function_request = cls(
+            assistant_invoke=assistant_invoke,
             code=code,
             config=config,
             description=description,

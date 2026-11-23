@@ -55,8 +55,12 @@ MAX_ANSWER_CHARS = 5000
 #: what the table already holds.
 UNSAVED = "We couldn't save that answer"
 
-#: Column types a person outside the pod can be asked to fill. A vector, a JSON
-#: blob, a user reference or a file path is not something a stranger types.
+#: Column types a person outside the pod can be asked to fill. A plain UUID is
+#: one: it is usually a reference the page fills in (the slot being booked, the
+#: listing being asked about), and writing one tells nobody anything -- a UUID
+#: that points at another row is a foreign key, which ``reveals_existing``
+#: keeps from strangers like any other. What stays shut is said in
+#: ``_UNFILLABLE_BECAUSE``.
 FILLABLE_TYPES = frozenset(
     {
         DatastoreDataType.TEXT,
@@ -66,8 +70,25 @@ FILLABLE_TYPES = frozenset(
         DatastoreDataType.DATE,
         DatastoreDataType.DATETIME,
         DatastoreDataType.ENUM,
+        DatastoreDataType.UUID,
     }
 )
+
+#: Why a type nobody outside fills is shut, in the words a refusal uses. A
+#: member reference is the one with a reason beyond "nobody types that": the
+#: write checks the id is a member, so accepting or refusing one would tell a
+#: stranger who belongs, and a row would claim a member it was never from.
+_UNFILLABLE_BECAUSE = {
+    DatastoreDataType.USER: (
+        "it names a member of this Lemma, and only members can say which"
+    ),
+    DatastoreDataType.JSON: "it holds structured data, not an answer someone types",
+    DatastoreDataType.VECTOR: "it holds an embedding, not an answer someone types",
+    DatastoreDataType.FILE_PATH: (
+        "it takes a file, and only a page that can upload one can ask for it"
+    ),
+}
+_FILLED_AUTOMATICALLY = "it is filled in automatically"
 
 #: Column types a person outside fills by attaching a file, on a page that can
 #: upload one. Where nothing can be uploaded -- a group, where a guest only
@@ -185,23 +206,53 @@ def attachment_name(raw: str | None) -> str:
     return name[:MAX_ATTACHMENT_NAME_CHARS]
 
 
-def is_fillable(
+def unfillable_reason(
     column: ColumnSchema, primary_key: str, *, attachments: bool = False
-) -> bool:
-    """Whether a person outside the pod could be asked for this column.
+) -> str | None:
+    """Why a person outside the pod can't be asked for this column, or ``None``.
 
     ``attachments`` when the page asking can upload a file, so a file column
     can be asked for too.
     """
     if column.name in SYSTEM_COLUMNS or column.name == CONTACT_COLUMN:
-        return False
+        return _FILLED_AUTOMATICALLY
     if column.auto or column.computed or column.system:
-        return False
+        return _FILLED_AUTOMATICALLY
     if column.name == primary_key and column.default is not None:
-        return False
+        return _FILLED_AUTOMATICALLY
     if attachments and column.type in ATTACHABLE_TYPES:
-        return True
-    return column.type in FILLABLE_TYPES
+        return None
+    if column.type in FILLABLE_TYPES:
+        return None
+    return _UNFILLABLE_BECAUSE.get(
+        column.type, f"a {column.type.value} column isn't something people type"
+    )
+
+
+def is_fillable(
+    column: ColumnSchema, primary_key: str, *, attachments: bool = False
+) -> bool:
+    """Whether a person outside the pod could be asked for this column."""
+    return unfillable_reason(column, primary_key, attachments=attachments) is None
+
+
+def _with_reasons(
+    names: list[str],
+    by_name: dict[str, ColumnSchema],
+    primary_key: str,
+    attachments: bool,
+) -> str:
+    """Each refused column, with why: ``owner (it names a member ...)``."""
+    said: list[str] = []
+    for name in names:
+        column = by_name.get(name)
+        reason = (
+            "the table has no such column"
+            if column is None
+            else unfillable_reason(column, primary_key, attachments=attachments)
+        )
+        said.append(f"{name} ({reason})")
+    return "; ".join(said)
 
 
 def needs_answer(column: ColumnSchema) -> bool:
@@ -275,7 +326,10 @@ def opening_problem(
         or not is_fillable(by_name[name], primary_key, attachments=attachments)
     ]
     if refused:
-        return f"People outside can't fill in {', '.join(refused)}"
+        return (
+            "People outside can't fill in "
+            f"{_with_reasons(refused, by_name, primary_key, attachments)}"
+        )
     if audience is PublicAudience.ANYONE:
         telling = [
             name for name in chosen if reveals_existing(by_name[name], primary_key)
@@ -318,9 +372,10 @@ def _missing_problem(
         if not is_fillable(c, primary_key, attachments=attachments)
     ]
     if unaskable:
+        by_name = {column.name: column for column in columns}
         return (
-            f"The table needs {', '.join(unaskable)}, which people outside "
-            "can't fill in"
+            "The table needs a value people outside can't fill in: "
+            f"{_with_reasons(unaskable, by_name, primary_key, attachments)}"
         )
     if missing:
         names = ", ".join(column.name for column in missing)

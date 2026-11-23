@@ -9,6 +9,10 @@ import type { JsonObject } from './JsonObject.js';
  * Function response.
  */
 export type FunctionResponse = {
+    /**
+     * Offered to the Lemma's assistant and runnable by it.
+     */
+    assistant_invoke?: boolean;
     code?: (string | null);
     code_path?: (string | null);
     config?: (JsonObject | null);

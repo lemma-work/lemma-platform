@@ -27,6 +27,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/conversations/{conversation_id}` | `agent.conversation.get` | Get Pod Conversation |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/approvals` | `agent.conversation.approval.list` | List Agent Run Approvals |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/messages` | `agent.conversation.message.list` | List Pod Conversation Messages |
+| GET | `/pods/{pod_id}/conversations/{conversation_id}/runs/{run_id}` | `agent.conversation.run.get` | Get Conversation Run |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/stream` | `agent.conversation.stream` | Stream Pod Conversation |
 | GET | `/pods/{pod_id}/pod-links` | `agent.pod_link.list` | List Pods That Can Ask This Pod |
 | PATCH | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | `agent.runtime.profiles.update` | Update Agent Runtime Profile |
@@ -371,6 +372,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/pods/{pod_id}/roles/{role_name}` | `pod.roles.delete` | Delete Pod Role |
 | GET | `/organizations/{organization_id}/pods` | `pod.list` | List Pods by Organization |
 | GET | `/organizations/{organization_id}/pods/joinable` | `pod.list_joinable` | List Pods the Caller Can Join |
+| GET | `/pods/by-name` | `pod.find_by_name` | Find a Pod by Name |
 | GET | `/pods/{pod_id}` | `pod.get` | Get Pod |
 | GET | `/pods/{pod_id}/join-requests` | `pod.join_request.list` | List Pod Join Requests |
 | GET | `/pods/{pod_id}/join-requests/me` | `pod.join_request.me` | Get My Pod Join Request |
@@ -384,6 +386,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/resources/{resource_type}/{resource_name}/access` | `pod.resource_access.get` | Get Resource Access |
 | GET | `/pods/{pod_id}/roles` | `pod.roles.list` | List Pod Roles |
 | GET | `/pods/{pod_id}/roles/{role_name}/permissions` | `pod.role.permissions.get` | Get Pod Role Permissions |
+| PATCH | `/pods/{pod_id}` | `pod.update` | Update Pod |
 | PATCH | `/pods/{pod_id}/members/{pod_member_id}/roles` | `pod.member.update_roles` | Update Member Roles |
 | PATCH | `/pods/{pod_id}/roles/{role_name}` | `pod.roles.update` | Update Pod Role |
 | POST | `/pods` | `pod.create` | Create Pod |
@@ -393,7 +396,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/join-requests/{join_request_id}/reject` | `pod.join_request.reject` | Reject Pod Join Request |
 | POST | `/pods/{pod_id}/members` | `pod.member.add` | Add Pod Member |
 | POST | `/pods/{pod_id}/roles` | `pod.roles.create` | Create Pod Role |
-| PUT | `/pods/{pod_id}` | `pod.update` | Update Pod |
 | PUT | `/pods/{pod_id}/outcome` | `outcome.set` | Set what the pod owns |
 | PUT | `/pods/{pod_id}/resources/{resource_type}/{resource_name}/access/grantees/{grantee_type}/{grantee_id}` | `pod.resource_access.grant.replace` | Replace Resource Access Grant |
 | PUT | `/pods/{pod_id}/roles/{role_name}/permissions` | `pod.role.permissions.replace` | Replace Pod Role Permissions |
@@ -408,6 +410,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/bundle/exports/{export_id}` | `pod.bundle.export.get` | Get Pod Export Status |
 | GET | `/pods/{pod_id}/bundle/imports/{import_id}` | `pod.bundle.import.get` | Get Pod Import Status |
 | GET | `/pods/{pod_id}/bundle/imports/{import_id}/events` | `pod.bundle.import.events` | Stream Pod Import Progress |
+| GET | `/pods/{pod_id}/bundle/installs/{install_id}` | `pod.bundle.install.get` | Get Plugin Install Status |
 | GET | `/pods/{pod_id}/bundle/publishes/{publish_id}` | `pod.bundle.publish.get` | Get Pod Publish Status |
 | GET | `/pods/{pod_id}/bundle/publishes/{publish_id}/events` | `pod.bundle.publish.events` | Stream Pod Publish Progress |
 | POST | `/pods/start` | `pod.start` | Start a Lemma |
@@ -415,6 +418,8 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/bundle/imports` | `pod.bundle.import.start` | Start Pod Import |
 | POST | `/pods/{pod_id}/bundle/imports/{import_id}/apply` | `pod.bundle.import.apply` | Apply Pod Import |
 | POST | `/pods/{pod_id}/bundle/imports/{import_id}/replan` | `pod.bundle.import.replan` | Re-plan Pod Import |
+| POST | `/pods/{pod_id}/bundle/installs` | `pod.bundle.install.start` | Install Plugins |
+| POST | `/pods/{pod_id}/bundle/installs/{install_id}/retry` | `pod.bundle.install.retry` | Retry Failed Plugins |
 | POST | `/pods/{pod_id}/bundle/publishes` | `pod.bundle.publish.start` | Publish Pod To GitHub |
 | POST | `/pods/{pod_id}/bundle/uploads` | `pod.bundle.upload` | Stage A Local Bundle Upload |
 

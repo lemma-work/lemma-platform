@@ -1,97 +1,719 @@
-/* The way in: one look for every door -- the web's first visit, a plugin's
-   install page, an invitation accepted from Home. The mark top left, the
-   steps along the top, one narrow column of rows under a heading and one
-   sentence. Text on Albert Sans, figures on Inter, weight at 500. */
+/* The way in, face first. On the left, whoever is asking: Lemma's mark
+   until your Lemma exists, then its clay face, big, with what it is doing in
+   a word. On the right, the question in its own words, your answer, and the
+   way on. Text on Albert Sans, figures on Inter, weight at 500.
+
+   Surfaces, lowest to highest: the ground the face stands on; the page the
+   question is on; wells and fields set into it. Emphasis, highest to
+   lowest: the one solid button that moves on; a blue tint and tick for
+   whatever is picked; ink for words; lines for structure. */
+
+/* A Lemma's own page draws the same scene, so it takes the same surfaces. */
+.ox-scene {
+    --ar-ground: var(--wash-a);
+    --ar-page: var(--paper);
+    --ar-band: var(--wash-b);
+    --ar-well: var(--wash-a);
+    --ar-field: var(--paper);
+    --ar-quiet: var(--paper);
+    --ar-pick: var(--select, var(--accent-soft));
+    --ar-pick-ink: var(--info);
+    display: grid;
+    justify-items: center;
+    width: 100%;
+}
 
 .ar {
+    --ar-ground: var(--wash-a);
+    --ar-page: var(--paper);
+    --ar-band: var(--wash-b);
+    --ar-well: var(--wash-a);
+    --ar-field: var(--paper);
+    --ar-quiet: var(--paper);
+    --ar-pick: var(--select, var(--accent-soft));
+    --ar-pick-ink: var(--info);
     min-height: 100dvh;
     display: grid;
-    grid-template-rows: auto 1fr;
-    background: var(--paper);
+    grid-template-columns: minmax(320px, 36%) minmax(0, 1fr);
+    background: var(--ar-page);
     color: var(--ink);
     font-family: var(--font-outcomes), var(--ui);
     font-size: 14px;
     line-height: 1.45;
 }
 
-/* Inside a page that already has its own frame (the install panel): no bar
-   and no height of its own, the same column and rows. */
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .ar,
+    :root:not([data-theme="light"]) .ox-scene {
+        --ar-ground: var(--chrome);
+        --ar-page: var(--wash-b);
+        --ar-band: var(--paper);
+        --ar-well: var(--chrome);
+        --ar-field: var(--chrome);
+        --ar-quiet: var(--paper);
+    }
+}
+
+:root[data-theme="dark"] .ar,
+:root[data-theme="dark"] .ox-scene {
+    --ar-ground: var(--chrome);
+    --ar-page: var(--wash-b);
+    --ar-band: var(--paper);
+    --ar-well: var(--chrome);
+    --ar-field: var(--chrome);
+    --ar-quiet: var(--paper);
+}
+
+/* Inside a page that already has its own frame (the install panel): the
+   question side alone, no height of its own. */
 .ar--inline {
     min-height: 0;
     display: block;
     background: transparent;
 }
 
-.ar__bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 22px max(16px, 3vw);
-    color: var(--ink-3);
-}
-
-.ar__steps {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 6px 16px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    font-size: 12.5px;
-}
-
-.ar__steps li {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.ar__steps li::before {
-    content: "";
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--line-2);
-}
-
-.ar__steps li[data-state="done"]::before {
-    background: var(--ink-3);
-}
-
-.ar__steps li[data-state="now"] {
-    color: var(--ink);
-}
-
-.ar__steps li[data-state="now"]::before {
-    background: var(--accent);
-}
-
 .ar__col {
-    width: min(460px, 100%);
-    margin: 0 auto;
-    padding: 4vh max(16px, 3vw) 96px;
+    width: 100%;
     display: grid;
     align-content: start;
     gap: 14px;
 }
 
-.ar--inline .ar__col {
-    width: 100%;
+.ar__hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+/* ---------- the speaker ---------- */
+
+.arh {
+    position: sticky;
+    top: 0;
+    height: 100dvh;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    padding: 24px max(16px, 3vw) 28px;
+    background: var(--ar-ground);
+    border-right: 1px solid var(--line);
+    color: var(--ink-3);
+}
+
+.arh__hero {
+    display: grid;
+    justify-items: center;
+    align-content: center;
+    gap: 18px;
+    text-align: center;
+}
+
+/* ---------- the scene: who speaks, and what attaches to it ---------- */
+
+.ast {
+    container-type: inline-size;
+    position: relative;
+    width: min(380px, 100%);
+    aspect-ratio: 1;
+    color: var(--ink);
+}
+
+.ast__glow {
+    position: absolute;
+    inset: -40%;
+    background: radial-gradient(farthest-side at 50% 50%, color-mix(in srgb, var(--brand-bars, var(--info)) 16%, transparent), transparent 75%);
+    pointer-events: none;
+}
+
+/* Lemma's own bars, until your Lemma is made: they breathe, and one jumps
+   for each key you type. */
+.ast__bars {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    translate: -50% -50%;
+    display: flex;
+    align-items: flex-end;
+    gap: 3.7cqw;
+    height: 34%;
+    transition: transform 420ms cubic-bezier(.5, 0, .3, 1), opacity 380ms ease;
+}
+
+.ast__bars i {
+    width: 9cqw;
+    border-radius: 2.6cqw;
+    background: var(--brand-bars, var(--brand));
+    transform-origin: 50% 100%;
+    animation: ast-breathe 2.8s ease-in-out infinite;
+    box-shadow: 0 16px 40px color-mix(in srgb, var(--brand-bars, var(--brand)) 25%, transparent);
+}
+
+.ast__bars i:nth-child(1) { height: 40%; }
+.ast__bars i:nth-child(2) { height: 67%; animation-delay: .25s; }
+.ast__bars i:nth-child(3) { height: 100%; animation-delay: .5s; }
+.ast__bars i.is-jump { animation: ast-jump 300ms cubic-bezier(.3, 1.6, .5, 1); }
+
+@keyframes ast-breathe { 0%, 100% { transform: scaleY(1); } 50% { transform: scaleY(1.05); } }
+@keyframes ast-jump { 0% { transform: scaleY(1); } 40% { transform: scaleY(1.22); } 100% { transform: scaleY(1); } }
+
+.ast[data-born] .ast__bars {
+    transform: scale(.3) translateY(30%);
+    opacity: 0;
+}
+
+/* Your Lemma's face: its tint, its live rig, no ring around it. */
+.ast__face {
+    position: absolute;
+    left: 22%;
+    top: 22%;
+    width: 56%;
+    height: 56%;
+    display: grid;
+    place-items: center;
+    border-radius: 30%;
+    background: var(--ar-well);
+    box-shadow: 0 2px 4px rgb(0 0 0 / 0.04), 0 24px 60px rgb(0 0 0 / 0.14);
+    overflow: hidden;
+    opacity: 0;
+    scale: .3;
+    transition: scale 760ms cubic-bezier(.34, 1.56, .55, 1) 160ms, opacity 300ms ease 160ms, box-shadow 200ms;
+    z-index: 1;
+}
+
+.ast[data-born] .ast__face {
+    opacity: 1;
+    scale: 1;
+}
+
+.ast[data-part="ai"] .ast__face {
+    box-shadow: 0 0 0 4px var(--ar-pick), 0 24px 60px rgb(0 0 0 / 0.14);
+}
+
+/* Around the face: a spot per app, a place per way to reach it, and you.
+   Each sits on a circle at its own angle, `--a`; a change of angle moves it
+   round, not across. */
+.ast__slot,
+.ast__place,
+.ast__you {
+    --ring: 43cqw;
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transition: transform 620ms cubic-bezier(.34, 1.3, .55, 1), opacity 300ms, scale 400ms cubic-bezier(.34, 1.6, .55, 1);
+    z-index: 2;
+}
+
+/* Where each sits on its circle. `transform` is the spot's place, so it
+   holds while a spot is pressed too: the kit nudges every pressed button by
+   setting its `transform` (refinement.css), which here would slide the spot
+   to the middle, and the release would land beside it and open nothing. */
+.ast__slot,
+.ast__place,
+.ast__you,
+.ast > button:active:not(:disabled) {
+    transform: translate(-50%, -50%) rotate(var(--a)) translateX(var(--ring)) rotate(calc(var(--a) * -1));
+}
+
+.ast__slot {
+    width: 48px;
+    height: 48px;
+    animation: ast-land 520ms cubic-bezier(.34, 1.7, .55, 1);
+}
+
+/* An app is always a round spot, so the ring that says how far it has gone
+   in wraps it exactly. */
+.ast__tile {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--ar-page);
+    color: var(--ink);
+    box-shadow: 0 0 0 1px var(--line-2), 0 8px 20px rgb(0 0 0 / 0.08);
+    transition: opacity 300ms, transform 300ms, box-shadow 200ms;
+}
+
+.ast__slot[data-state="empty"] .ast__tile {
+    background: transparent;
+    box-shadow: none;
+    border: 1.5px dashed var(--line-2);
+    color: var(--ink-3);
+}
+
+.ast[data-part="apps"] .ast__slot[data-state="empty"] .ast__tile {
+    border-color: var(--ar-pick-ink);
+    background: var(--ar-pick);
+    color: var(--ar-pick-ink);
+}
+
+.ast__slot[data-state="picked"] .ast__tile {
+    box-shadow: 0 0 0 1.5px var(--ar-pick-ink), 0 8px 20px rgb(0 0 0 / 0.08);
+}
+
+.ast__slot[data-landing] .ast__tile {
+    opacity: 0;
+    transform: scale(.6);
+}
+
+.ast__slot[data-state="going"] .ast__tile {
+    animation: ast-float 2.6s ease-in-out infinite;
+}
+
+.ast__slot[data-state="next"] .ast__tile,
+.ast__slot[data-state="stopped"] .ast__tile {
+    opacity: .55;
+}
+
+.ast__ring {
+    position: absolute;
+    inset: -7px;
+    width: 62px;
+    height: 62px;
+    rotate: -90deg;
+    overflow: visible;
+    opacity: 0;
+    transition: opacity 300ms;
+}
+
+.ast__slot[data-state="going"] .ast__ring,
+.ast__slot[data-state="next"] .ast__ring {
+    opacity: 1;
+}
+
+.ast__ring circle {
+    fill: none;
+    stroke-width: 2.5;
+    stroke-linecap: round;
+}
+
+.ast__track { stroke: var(--line-2); }
+.ast__done { stroke: var(--ink); transition: stroke-dashoffset 600ms ease; }
+
+.ast__tick {
+    position: absolute;
+    right: -3px;
+    bottom: -3px;
+    width: 18px;
+    height: 18px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--ok);
+    color: var(--ar-page);
+    transform: scale(0);
+    transition: transform 420ms cubic-bezier(.34, 1.6, .55, 1) 200ms;
+}
+
+.ast__slot[data-state="in"] .ast__tick {
+    transform: scale(1);
+}
+
+@keyframes ast-land { 0% { scale: .5; opacity: 0; } 60% { scale: 1.12; opacity: 1; } 100% { scale: 1; } }
+@keyframes ast-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+
+.ast__you {
+    width: 34px;
+    height: 34px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--ar-page);
+    box-shadow: 0 0 0 1px var(--line-2), 0 8px 20px rgb(0 0 0 / 0.08);
+    font-size: 14px;
+    animation: ast-land 520ms cubic-bezier(.34, 1.7, .55, 1) 600ms backwards;
+}
+
+.ast[data-part="people"] .ast__you {
+    box-shadow: 0 0 0 3px var(--ar-pick-ink), 0 8px 20px rgb(0 0 0 / 0.08);
+}
+
+.ast__place {
+    --ring: 35.5cqw;
+    width: 36px;
+    height: 36px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--ar-page);
+    border: 3px solid var(--ar-ground);
+    box-shadow: 0 8px 20px rgb(0 0 0 / 0.1);
+    scale: 0;
+    z-index: 3;
+}
+
+.ast__place[data-on] {
+    scale: 1;
+}
+
+/* On a Lemma's own page (`act`) the parts around the face are buttons:
+   each lifts a little under the pointer and names itself in a pill under
+   it. The way in draws the same parts as a picture, and is untouched. */
+button.ast__slot,
+button.ast__you,
+button.ast__place {
     padding: 0;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+button.ast__slot {
+    border: 0;
+    background: none;
+}
+
+button.ast__you {
+    border: 0;
+    color: var(--ink);
+}
+
+button.ast__slot:hover,
+button.ast__slot:focus-visible,
+button.ast__you:hover,
+button.ast__you:focus-visible,
+button.ast__place:hover,
+button.ast__place:focus-visible {
+    scale: 1.08;
+    z-index: 4;
+    outline: none;
+}
+
+button.ast__slot:hover .ast__tile {
+    box-shadow: 0 0 0 1px var(--line-2), 0 12px 26px rgb(0 0 0 / 0.14);
+}
+
+button.ast__slot:focus-visible .ast__tile,
+button.ast__you:focus-visible,
+button.ast__place:focus-visible {
+    box-shadow: 0 0 0 2px var(--info), 0 8px 20px rgb(0 0 0 / 0.08);
+}
+
+button.ast__slot[data-state="empty"]:hover .ast__tile {
+    border-color: var(--ink-3);
+    color: var(--ink);
+}
+
+/* A place it could answer on, but doesn't yet: an outline to press. */
+.ast__place[data-ghost] {
+    scale: 0.86;
+    border: 1.5px dashed var(--line-2);
+    background: var(--ar-page);
+    box-shadow: none;
+    color: var(--ink-3);
+}
+
+.ast__place[data-ghost] > * {
+    opacity: 0.55;
+    filter: grayscale(1);
+    transition: opacity 160ms, filter 160ms;
+}
+
+.ast__place[data-ghost]:hover > *,
+.ast__place[data-ghost]:focus-visible > * {
+    opacity: 1;
+    filter: none;
+}
+
+.ast__place[data-ghost]:hover {
+    scale: 0.96;
+    border-color: var(--ink-3);
+}
+
+/* Others in it besides the reader, on the reader's spot. */
+.ast__more {
+    position: absolute;
+    top: -6px;
+    right: -8px;
+    display: grid;
+    place-items: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 4px;
+    border-radius: 9px;
+    background: var(--ink);
+    color: var(--paper);
+    font-size: 10.5px;
+    font-style: normal;
+    font-variant-numeric: tabular-nums;
+}
+
+/* The name of what is pointed at, in a pill under it. */
+.ast [data-tip]::after {
+    content: attr(data-tip);
+    position: absolute;
+    left: 50%;
+    top: calc(100% + 8px);
+    translate: -50% 0;
+    padding: 4px 9px;
+    border-radius: 999px;
+    background: var(--ink);
+    color: var(--paper);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.3;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 140ms;
+    z-index: 5;
+}
+
+.ast [data-tip]:hover::after,
+.ast [data-tip]:focus-visible::after {
+    opacity: 1;
+}
+
+.ast__ripples {
+    position: absolute;
+    left: 22%;
+    top: 22%;
+    width: 56%;
+    height: 56%;
+    pointer-events: none;
+}
+
+.ast__ripples i {
+    position: absolute;
+    inset: 0;
+    border-radius: 30%;
+    border: 2px solid var(--ok);
+    opacity: 0;
+    animation: ast-ripple 1.6s ease-out forwards;
+}
+
+.ast__ripples i:nth-child(2) { animation-delay: 220ms; }
+.ast__ripples i:nth-child(3) { animation-delay: 440ms; }
+
+@keyframes ast-ripple { 0% { transform: scale(1); opacity: .55; } 100% { transform: scale(1.7); opacity: 0; } }
+
+.ast__said {
+    position: absolute;
+    left: 70%;
+    top: 10%;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 12px 7px 9px;
+    border-radius: 999px;
+    background: var(--ar-page);
+    color: var(--ink);
+    box-shadow: 0 0 0 1px var(--line), 0 8px 20px rgb(0 0 0 / 0.12);
+    font-size: 13px;
+    white-space: nowrap;
+    opacity: 0;
+    transform: translateY(8px) scale(.9);
+    transform-origin: 0 100%;
+    transition: opacity 260ms ease, transform 420ms cubic-bezier(.34, 1.5, .55, 1);
+    z-index: 6;
+    /* Words, not a control: unseen, it would otherwise take the clicks
+       meant for the spots it sits over. */
+    pointer-events: none;
+}
+
+.ast__said[data-on] {
+    opacity: 1;
+    transform: none;
+}
+
+.ast__burst {
+    position: absolute;
+    inset: -25%;
+    width: 150%;
+    height: 150%;
+    pointer-events: none;
+    z-index: 7;
+}
+
+/* A ticked app's line drawing on its way across to the Lemma. */
+.ar-ghost {
+    position: fixed;
+    z-index: 100;
+    display: grid;
+    place-items: center;
+    margin: 0;
+    border-radius: 12px;
+    background: var(--paper);
+    color: var(--ink);
+    box-shadow: 0 0 0 1px var(--line-2), 0 18px 40px rgb(0 0 0 / 0.18);
+    pointer-events: none;
+}
+
+.ar-ghost svg {
+    width: 46%;
+    height: 46%;
+}
+
+/* The scene on a phone: a strip over the question. */
+.ast-strip {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+.ast-strip__face {
+    flex: none;
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    border-radius: 14px;
+    overflow: hidden;
+}
+
+.ast-strip__face .tface {
+    background: transparent !important;
+}
+
+.ast-strip__hop {
+    animation: ast-hop 900ms cubic-bezier(.3, 1.4, .5, 1);
+}
+
+@keyframes ast-hop { 0% { transform: none; } 30% { transform: translateY(-8px) rotate(-4deg); } 60% { transform: none; } 80% { transform: translateY(-2px); } 100% { transform: none; } }
+
+.ast-strip__bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 22px;
+}
+
+.ast-strip__bars i {
+    width: 6px;
+    border-radius: 2px;
+    background: var(--brand-bars, var(--brand));
+}
+
+.ast-strip__bars i:nth-child(1) { height: 40%; }
+.ast-strip__bars i:nth-child(2) { height: 67%; }
+.ast-strip__bars i:nth-child(3) { height: 100%; }
+
+.ast-strip__said {
+    display: grid;
+    min-width: 0;
+}
+
+.ast-strip__said b {
+    color: var(--ink);
+    font-size: 15px;
+    font-weight: 500;
+}
+
+.ast-strip__tiles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-left: auto;
+}
+
+.ast-strip__tile {
+    width: 24px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--ar-page);
+    color: var(--ink);
+    box-shadow: 0 0 0 1px var(--line-2);
+}
+
+.ast-strip__tile[data-state="picked"],
+.ast-strip__tile[data-state="next"] {
+    opacity: .5;
+}
+
+.arh__said {
+    display: grid;
+    gap: 4px;
+}
+
+.arh__name {
+    color: var(--ink);
+    font-size: 24px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    animation: ar-enter 600ms ease;
+}
+
+.arh__status {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    color: var(--ink-3);
+    font-size: 14px;
+}
+
+.arh__status i {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--ok);
+}
+
+.arh__dots {
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.arh__dots li {
+    width: 22px;
+    height: 4px;
+    border-radius: 4px;
+    background: var(--line-2);
+}
+
+.arh__dots li[data-state="on"] {
+    background: var(--ink);
+}
+
+/* ---------- the question ---------- */
+
+/* The question side: one column, centred in whatever width there is, from
+   a little way down; the way on follows the answer rather than waiting at
+   the bottom of the window. */
+.arq {
+    min-width: 0;
+    min-height: 100dvh;
+    padding: 0 max(16px, 4vw);
+}
+
+.arq__body {
+    width: 100%;
+    max-width: 620px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    margin: 0 auto;
+    padding: clamp(32px, 16vh, 160px) 0 56px;
+    animation: ar-enter 460ms cubic-bezier(.2, .9, .3, 1);
+}
+
+@keyframes ar-enter {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: none; }
 }
 
 .ar__form {
-    display: grid;
-    gap: 14px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
 }
 
 .ar__t {
     margin: 0;
-    font-size: 26px;
+    font-size: 31px;
     font-weight: 500;
-    line-height: 1.2;
+    line-height: 1.18;
     letter-spacing: -0.02em;
     text-wrap: balance;
 }
@@ -101,15 +723,345 @@
 }
 
 .ar__model {
-    margin: 0;
+    margin: -8px 0 0;
     color: var(--ink-2);
-    font-size: 15px;
+    font-size: 15.5px;
     line-height: 1.55;
 }
 
 .ar--inline .ar__model {
+    margin: 0;
     font-size: 14px;
 }
+
+/* The way on, right under the answer. */
+.ar__acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 14px;
+    margin-top: 8px;
+}
+
+.ar--inline .ar__acts {
+    margin-top: 6px;
+    padding: 0;
+    border-top: 0;
+}
+
+.ar__sum {
+    margin-right: auto;
+    color: var(--ink-3);
+    font-size: 13px;
+}
+
+.ar kbd {
+    font-family: var(--ui);
+    font-size: 11px;
+    padding: 1px 6px;
+    border: 1px solid var(--line-2);
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    color: var(--ink-2);
+}
+
+@media (max-width: 900px) {
+    /* The strip keeps its own height; the question takes the rest. */
+    .ar {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto 1fr;
+    }
+
+    /* The speaker becomes a strip over the question. */
+    .arh {
+        position: static;
+        height: auto;
+        grid-template-rows: auto;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        gap: 12px;
+        padding: 12px max(16px, 4vw);
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+    }
+
+    .arh__status {
+        justify-content: flex-start;
+        font-size: 12.5px;
+    }
+
+    .arh__dots li {
+        width: 12px;
+    }
+
+    .arq {
+        min-height: 0;
+    }
+
+    .arq__body {
+        padding-top: 24px;
+    }
+
+    .ar__t {
+        font-size: 25px;
+    }
+}
+
+/* ---------- answers ---------- */
+
+.ar__big input {
+    width: 100%;
+    height: 56px;
+    padding: 0;
+    border: 0;
+    border-bottom: 2px solid var(--ink);
+    border-radius: 0;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: 28px;
+}
+
+.ar__big input::placeholder {
+    color: var(--ink-3);
+}
+
+.ar .ar__big input:focus-visible {
+    outline: none;
+    border-bottom-color: var(--ar-pick-ink);
+}
+
+.ar__zone {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: -6px 0 0;
+    color: var(--ink-3);
+    font-size: 13.5px;
+}
+
+.ar__zone-pick {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ar__zone select {
+    height: 32px;
+    padding: 0 8px;
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
+    background: var(--ar-field);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+}
+
+.ar__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.ar__chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 38px;
+    padding: 0 14px;
+    border: 1px solid var(--line-2);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 14.5px;
+    cursor: pointer;
+}
+
+.ar__chip:hover {
+    background: var(--accent-soft);
+}
+
+/* Picked: tinted, outlined and ticked, never the button's fill. */
+.ar__chip[aria-pressed="true"],
+.ar__chip[aria-pressed="true"]:hover {
+    border-color: var(--ar-pick-ink);
+    background: var(--ar-pick);
+    color: var(--ink);
+}
+
+.ar__chip[aria-pressed="true"]::before {
+    content: "";
+    width: 9px;
+    height: 5px;
+    margin: -3px 1px 0 -2px;
+    border-left: 2px solid var(--ar-pick-ink);
+    border-bottom: 2px solid var(--ar-pick-ink);
+    transform: rotate(-45deg);
+}
+
+.ar__field {
+    display: grid;
+    gap: 6px;
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.ar__field input {
+    height: 40px;
+    padding: 0 12px;
+    border: 1px solid var(--line-2);
+    border-radius: 10px;
+    background: var(--ar-field);
+    color: var(--ink);
+    font: inherit;
+    font-size: 14.5px;
+}
+
+.ar__note {
+    margin: 0;
+    color: var(--ink-3);
+    font-size: 13.5px;
+}
+
+.ar__problem {
+    margin: 0;
+    color: var(--ink);
+    font-size: 13.5px;
+}
+
+.ars__stopped {
+    display: grid;
+    gap: 8px;
+}
+
+.ar__why {
+    color: var(--ink-3);
+    font-size: 13px;
+}
+
+.ar__why summary {
+    cursor: pointer;
+    width: fit-content;
+}
+
+.ar__why p {
+    margin: 6px 0 0;
+    max-width: 60ch;
+    overflow-wrap: anywhere;
+}
+
+.ar__tag {
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--ar-pick);
+    color: var(--ar-pick-ink);
+    font-size: 11.5px;
+    font-weight: 400;
+}
+
+.ar__pic {
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    display: grid;
+    place-items: center;
+    background: var(--ar-well);
+    color: var(--ink-2);
+    flex: none;
+}
+
+.ar__dest {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    align-self: flex-start;
+    margin: 0;
+    padding: 4px 12px 4px 4px;
+    border: 1px solid var(--line-2);
+    border-radius: 999px;
+    background: var(--ar-quiet);
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.ar__dest .tface {
+    border-radius: 50%;
+}
+
+.ar__dest b {
+    color: var(--ink);
+    font-weight: 500;
+}
+
+/* ---------- the Lemma, as it says hello ---------- */
+
+/* What the Lemma has, a row each: its AI, its apps, who is in it. Its face
+   and name are already beside the question, so not here again. */
+.arl {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+    background: var(--ar-quiet);
+}
+
+.arl li {
+    display: grid;
+    grid-template-columns: 28px 9.5em minmax(0, 1fr);
+    align-items: center;
+    gap: 12px;
+    padding: 13px 16px;
+    border-top: 1px solid var(--line);
+}
+
+.arl li:first-child {
+    border-top: 0;
+}
+
+.arl b {
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.arl li > span:last-child {
+    color: var(--ink-3);
+    font-size: 13.5px;
+}
+
+.arl__rename {
+    display: grid;
+    gap: 6px;
+    color: var(--ink-3);
+    font-size: 13px;
+}
+
+.arl__rename input {
+    height: 40px;
+    padding: 0 12px;
+    border: 1px solid var(--line-2);
+    border-radius: 10px;
+    background: var(--ar-field);
+    color: var(--ink);
+    font: inherit;
+    font-size: 16px;
+}
+
+@media (max-width: 560px) {
+    .arl li {
+        grid-template-columns: 28px minmax(0, 1fr);
+        gap: 2px 12px;
+    }
+
+    .arl li .ar__pic {
+        grid-row: span 2;
+    }
+}
+
+/* ---------- rows: Lemmas to join, accounts ---------- */
 
 .ar__rows {
     display: grid;
@@ -128,6 +1080,23 @@
     border-bottom: 1px solid var(--line-2);
 }
 
+.ar__rows--boxed {
+    margin: 0;
+    border: 1px solid var(--line-2);
+    border-radius: 12px;
+    background: var(--ar-quiet);
+    overflow: hidden;
+}
+
+.ar__rows--boxed .ar__row {
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--line);
+}
+
+.ar__rows--boxed .ar__row:last-child {
+    border-bottom: 0;
+}
+
 .ar__tile {
     flex: none;
     display: grid;
@@ -135,7 +1104,7 @@
     width: 36px;
     height: 36px;
     border-radius: 10px;
-    background: var(--wash-b);
+    background: var(--ar-well);
     color: var(--ink-2);
 }
 
@@ -151,7 +1120,7 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 7px;
-    font-size: 14.5px;
+    font-size: 15px;
     font-weight: 500;
 }
 
@@ -163,14 +1132,15 @@
 .ar__mark {
     padding: 0 7px;
     border-radius: 999px;
-    background: var(--wash-b);
+    background: var(--ar-well);
     color: var(--ink-3);
     font-size: 11.5px;
     font-weight: 400;
     line-height: 1.6;
 }
 
-.ar__in {
+.ar__in,
+.ar__done {
     flex: none;
     display: inline-flex;
     align-items: center;
@@ -179,41 +1149,455 @@
     font-size: 13px;
 }
 
-.ar__sub {
-    margin: 10px 0 -6px;
-    color: var(--ink-3);
-    font-size: 12px;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+.ar__done {
+    color: var(--ok);
 }
 
-.ar__acts {
+.ar__either {
+    flex: none;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+}
+
+/* ---------- apps ---------- */
+
+.ar__glyph {
+    flex: none;
+    display: grid;
+    place-items: center;
+    border-radius: 12px;
+    background: var(--ar-well);
+    color: var(--ink);
+}
+
+/* The apps: a tab for each job they picked, every app for it, ticked to
+   add and pressed to open in place. */
+.arx {
+    display: grid;
+    gap: 12px;
+}
+
+/* One small pill per job picked, wrapping: every job stays in sight,
+   however many are picked, and the one in front is never scrolled away. */
+.arx__tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-top: 4px;
+}
+
+.arx__tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 30px;
+    padding: 0 11px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--wash-a);
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 13.5px;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.arx__tab:hover {
+    color: var(--ink);
+}
+
+.arx__tab[aria-selected="true"] {
+    background: var(--accent);
+    color: var(--on-accent);
+}
+
+.arx__tab small {
+    min-width: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--ar-pick);
+    color: var(--ar-pick-ink);
+    font-size: 11.5px;
+    line-height: 18px;
+    text-align: center;
+}
+
+.arx__tab[aria-selected="true"] small {
+    background: color-mix(in srgb, var(--on-accent) 22%, transparent);
+    color: var(--on-accent);
+}
+
+.arx__list {
+    display: grid;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.arx__opt {
+    padding: 12px 14px;
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+    background: var(--ar-quiet);
+}
+
+.arx__opt[data-on="yes"] {
+    border-color: var(--ar-pick-ink);
+    background: var(--ar-pick);
+}
+
+/* Open, its screens and words read on plain ground; the border and the
+   tick still say it is picked. */
+.arx__opt[data-on="yes"][data-open="yes"] {
+    background: var(--ar-quiet);
+}
+
+.arx__row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.arx__about {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.arx__peek {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px;
+    border: 0;
+    border-radius: 6px;
+    background: none;
+    color: var(--ink-3);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.arx__peek:hover,
+.arx__opt:hover .arx__peek {
+    color: var(--ink);
+}
+
+.arx__peek svg {
+    transition: transform 150ms ease;
+}
+
+.arx__opt[data-open="yes"] .arx__peek svg {
+    transform: rotate(180deg);
+}
+
+.arx__detail {
+    display: grid;
+    gap: 12px;
+    margin-top: 12px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+}
+
+.arx__shot {
+    margin: 0;
+    border: 1px solid var(--line-2);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--ar-page);
+}
+
+.arx__shot figcaption {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 12px;
-    margin-top: 6px;
+    justify-content: space-between;
+    gap: 6px 12px;
+    padding: 8px 10px;
+    border-top: 1px solid var(--line);
+    color: var(--ink-3);
+    font-size: 12.5px;
 }
+
+.arx__pager {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-variant-numeric: tabular-nums;
+}
+
+.arx__pager button {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid var(--line-2);
+    border-radius: 7px;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.arx__intro {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 14px;
+    line-height: 1.55;
+}
+
+.arx__does {
+    display: grid;
+    gap: 5px;
+    margin: 0;
+    padding-left: 18px;
+    color: var(--ink-2);
+    font-size: 13.5px;
+    line-height: 1.5;
+}
+
+.arx__links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+    margin: 0;
+}
+
+.arx__all {
+    justify-self: start;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .arx__peek svg {
+        transition: none;
+    }
+}
+
+@media (max-width: 560px) {
+    .arx__peek {
+        display: none;
+    }
+}
+
+.arx__needs {
+    color: var(--ink-3);
+    font-size: 12.5px;
+}
+
+.arx__tick {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 1.5px solid var(--line-2);
+    border-radius: 7px;
+    background: transparent;
+    color: var(--ar-page);
+    cursor: pointer;
+}
+
+.arx__tick[aria-checked="true"] {
+    border-color: var(--ar-pick-ink);
+    background: var(--ar-pick-ink);
+}
+
+/* ---------- setting up ---------- */
+
+.ars {
+    display: grid;
+    gap: 14px;
+}
+
+.ar__bar {
+    height: 6px;
+    border-radius: 6px;
+    background: var(--line-2);
+    overflow: hidden;
+}
+
+.ar__bar i {
+    display: block;
+    height: 100%;
+    border-radius: 6px;
+    background: var(--ink);
+    transition: width 400ms ease;
+}
+
+.ars__stages,
+.ars__apps {
+    display: grid;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.ars__stages li {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--ink-3);
+    font-size: 15.5px;
+}
+
+.ars__stages li[data-state="now"] {
+    color: var(--ink);
+}
+
+.ars__stages li[data-state="done"] {
+    color: var(--ink-2);
+}
+
+.ars__stages i,
+.ars__apps i {
+    flex: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1.5px solid var(--line-2);
+    position: relative;
+}
+
+.ars__stages li[data-state="now"] i,
+.ars__apps li[data-state="adding"] i {
+    border: 2px solid var(--line-2);
+    border-top-color: var(--ink);
+    animation: ar-spin 900ms linear infinite;
+}
+
+.ars__stages li[data-state="done"] i,
+.ars__apps li[data-state="added"] i {
+    border: 0;
+    background: var(--ok);
+}
+
+.ars__stages li[data-state="done"] i::after,
+.ars__apps li[data-state="added"] i::after {
+    content: "";
+    position: absolute;
+    left: 4px;
+    top: 3px;
+    width: 5px;
+    height: 3px;
+    border-left: 1.6px solid var(--ar-page);
+    border-bottom: 1.6px solid var(--ar-page);
+    transform: rotate(-45deg);
+}
+
+.ars__apps {
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+}
+
+.ars__apps li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+}
+
+.ars__apps small {
+    color: var(--ink-3);
+    font-size: 12.5px;
+}
+
+.ars__apps li[data-state="failed"] small,
+.ars__apps li[data-state="asks"] small {
+    color: var(--ink);
+}
+
+@keyframes ar-spin {
+    to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ars__stages li[data-state="now"] i,
+    .ars__apps li[data-state="adding"] i {
+        animation: none;
+    }
+
+    .ar__bar i {
+        transition: none;
+    }
+}
+
+/* ---------- accounts ---------- */
+
+.ara {
+    display: grid;
+    gap: 10px;
+    padding: 16px;
+    border-radius: 16px;
+    background: var(--ar-ground);
+}
+
+.ara__h {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 500;
+}
+
+/* ---------- ready ---------- */
+
+.arr__shot {
+    position: relative;
+    margin: 0;
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: var(--shadow-object);
+}
+
+.arr__shot figcaption {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    padding: 2px 9px;
+    border: 1px solid var(--line-2);
+    border-radius: 999px;
+    background: var(--ar-page);
+    color: var(--ink-3);
+    font-size: 11px;
+}
+
+/* ---------- buttons ---------- */
 
 .ar__btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 6px;
-    height: 34px;
-    padding: 0 14px;
+    height: 40px;
+    padding: 0 18px;
     border: 1px solid var(--line-2);
-    border-radius: 9px;
-    background: var(--paper);
+    border-radius: 10px;
+    background: transparent;
     color: var(--ink);
     font: inherit;
-    font-size: 14px;
+    font-size: 14.5px;
     font-weight: 500;
+    text-decoration: none;
+    white-space: nowrap;
     cursor: pointer;
 }
 
 .ar__btn:hover {
-    background: var(--wash-b);
+    background: var(--accent-soft);
 }
 
 .ar__btn--primary {
@@ -228,8 +1612,8 @@
 }
 
 .ar__btn--small {
-    height: 28px;
-    padding: 0 11px;
+    height: 32px;
+    padding: 0 12px;
     font-size: 13px;
 }
 
@@ -255,72 +1639,499 @@
     color: var(--ink);
 }
 
-.ar__chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 7px;
-}
-
-.ar__chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 34px;
-    padding: 0 13px;
-    border: 1px solid var(--line-2);
-    border-radius: 999px;
-    background: var(--paper);
-    color: var(--ink);
-    font: inherit;
-    font-size: 14px;
-    cursor: pointer;
-}
-
-.ar__chip:hover {
-    background: var(--wash-b);
-}
-
-/* Picked: filled, so a row of nine reads at a glance as which are on. */
-.ar__chip[aria-pressed="true"],
-.ar__chip[aria-pressed="true"]:hover {
-    border-color: var(--accent);
-    background: var(--accent);
-    color: var(--on-accent);
-}
-
-.ar__field {
-    display: grid;
-    gap: 5px;
-    color: var(--ink-2);
-    font-size: 13px;
-}
-
-.ar__field input {
-    height: 36px;
-    padding: 0 11px;
-    border: 1px solid var(--line-2);
-    border-radius: 9px;
-    background: var(--paper);
-    color: var(--ink);
-    font: inherit;
-    font-size: 14px;
-}
-
-.ar__note {
-    margin: 0;
-    color: var(--ink-3);
-    font-size: 13px;
-}
-
-.ar__problem {
-    margin: 0;
-    color: var(--ink);
-    font-size: 13.5px;
+.ar__quiet:disabled {
+    cursor: default;
+    opacity: 0.55;
 }
 
 .ar button:focus-visible,
 .ar a:focus-visible,
-.ar input:focus-visible {
+.ar input:focus-visible,
+.ar select:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
+}
+
+/* ---------- the apps going in, over a step ---------- */
+
+.arin {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: var(--ar-band);
+}
+
+.arin[data-done] {
+    border-color: transparent;
+    background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+
+.arin__apps {
+    display: flex;
+}
+
+.arin__tile {
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    margin-left: -6px;
+    border: 2px solid var(--ar-band);
+    border-radius: 50%;
+    background: var(--ar-page);
+    color: var(--ink);
+}
+
+.arin__tile:first-child {
+    margin-left: 0;
+}
+
+.arin__said {
+    display: grid;
+    min-width: 0;
+}
+
+.arin__what {
+    color: var(--ink);
+    font-size: 14px;
+}
+
+.arin__more {
+    color: var(--ink-3);
+    font-size: 12.5px;
+}
+
+.arin__pct {
+    color: var(--ink-2);
+    font-family: var(--font-figures, inherit);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+}
+
+.arin__check {
+    width: 22px;
+    height: 22px;
+    display: inline-grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--ok);
+    color: var(--ar-page);
+}
+
+.arin__bar {
+    grid-column: 1 / -1;
+    display: grid;
+    gap: 4px;
+}
+
+.arin__bar span {
+    height: 4px;
+    overflow: hidden;
+    border-radius: 4px;
+    background: var(--line-2);
+}
+
+.arin__bar i {
+    display: block;
+    height: 100%;
+    border-radius: 4px;
+    background: var(--ink);
+    transition: width 600ms ease;
+}
+
+.arin[data-done] .arin__bar i {
+    background: var(--ok);
+}
+
+.arin .ars__stages {
+    grid-column: 1 / -1;
+    padding-top: 8px;
+}
+
+/* ---------- where to reach it ---------- */
+
+.arp {
+    display: grid;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.arp__place {
+    border: 1px solid var(--line-2);
+    border-radius: 16px;
+    background: var(--ar-page);
+    transition: border-color 300ms, box-shadow 300ms;
+}
+
+.arp__place[data-state="on"] {
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 10px 30px rgb(0 0 0 / 0.07);
+}
+
+.arp__place[data-state="missing"] {
+    background: transparent;
+}
+
+.arp__place[data-state="missing"] .arp__logo {
+    opacity: .5;
+    filter: grayscale(1);
+}
+
+.arp__missing {
+    display: inline-flex;
+    align-items: flex-start;
+    gap: 6px;
+    color: var(--ink-3);
+}
+
+.arp__missing svg {
+    flex: none;
+    margin-top: 2px;
+    color: var(--warn, var(--ink-3));
+}
+
+.arp__place[data-state="heard"] {
+    border-color: color-mix(in srgb, var(--ok) 55%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 14%, transparent);
+}
+
+.arp__row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 13px 14px;
+}
+
+.arp__logo {
+    flex: none;
+    width: 40px;
+    height: 40px;
+    display: grid;
+    place-items: center;
+    border-radius: 12px;
+    background: var(--ar-well);
+    color: var(--ink);
+}
+
+.arp__said {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+    gap: 1px;
+}
+
+.arp__name {
+    color: var(--ink);
+    font-size: 15px;
+    font-weight: 500;
+}
+
+.arp__line {
+    color: var(--ink-3);
+    font-size: 13px;
+}
+
+.arp__on {
+    color: var(--ok);
+}
+
+.arp__on i {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 6px;
+    border-radius: 50%;
+    background: var(--ok);
+    vertical-align: 1px;
+}
+
+.arp__spin {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--line-2);
+    border-top-color: var(--ink);
+    border-radius: 50%;
+    animation: ar-spin 800ms linear infinite;
+}
+
+.arp__body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px 20px;
+    padding: 2px 14px 16px 68px;
+    animation: ar-enter 480ms cubic-bezier(.2, .9, .3, 1);
+}
+
+.arp__body[data-qr] {
+    grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.arp__left {
+    display: grid;
+    align-content: start;
+    gap: 12px;
+    min-width: 0;
+}
+
+.arp__handle {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--ink);
+    font-family: var(--font-figures, inherit);
+    font-size: 21px;
+    letter-spacing: -0.01em;
+    overflow-wrap: anywhere;
+}
+
+.arp__copy {
+    flex: none;
+    width: 30px;
+    height: 30px;
+    display: inline-grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--ink-2);
+    cursor: pointer;
+}
+
+.arp__copy:hover {
+    color: var(--ink);
+    background: var(--accent-soft);
+}
+
+.arp__acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 14px;
+}
+
+.arp__waiting {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.arp__waiting i {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ok);
+    animation: arp-beacon 1.6s ease-out infinite;
+}
+
+@keyframes arp-beacon {
+    0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 60%, transparent); }
+    100% { box-shadow: 0 0 0 9px transparent; }
+}
+
+.arp__knows {
+    font-size: 12.5px;
+    max-width: 46ch;
+}
+
+.arp__qr {
+    display: grid;
+    justify-items: center;
+    align-content: start;
+    gap: 6px;
+    color: var(--ink-3);
+    font-size: 11.5px;
+}
+
+
+/* ---------- ready ---------- */
+
+.ar__label {
+    color: var(--ink-3);
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.arw {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border: 1px solid var(--line-2);
+    border-radius: 16px;
+    background: var(--ar-band);
+}
+
+.arw > div {
+    display: grid;
+    align-content: start;
+    gap: 8px;
+    min-width: 0;
+    padding: 14px 16px;
+    border-left: 1px solid var(--line);
+}
+
+.arw > div:first-child {
+    border-left: 0;
+}
+
+.arw b {
+    color: var(--ink-3);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.arw__pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.arw__pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px 0 5px;
+    border-radius: 999px;
+    background: var(--ar-page);
+    box-shadow: 0 0 0 1px var(--line-2);
+    color: var(--ink);
+    font-size: 13px;
+}
+
+.arw__pill[data-going] {
+    color: var(--ink-3);
+}
+
+.arw__pill--plain {
+    padding-left: 10px;
+}
+
+/* A pill holds one short phrase on one line; anything longer is copy to cut. */
+.arw__pill {
+    white-space: nowrap;
+}
+
+
+.arw__icon {
+    width: 20px;
+    height: 20px;
+    display: grid;
+    place-items: center;
+    border-radius: 6px;
+    background: var(--ar-well);
+    color: var(--ink);
+}
+
+.arw__icon--big {
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+}
+
+.art {
+    display: grid;
+    gap: 8px;
+}
+
+.art__try {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+    background: var(--ar-page);
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.art__try:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 10px 30px rgb(0 0 0 / 0.07);
+}
+
+.art__text {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+    font-size: 14.5px;
+}
+
+.art__text small {
+    color: var(--ink-3);
+    font-size: 12.5px;
+}
+
+.art__go {
+    color: var(--ink-3);
+}
+
+@media (max-width: 900px) {
+    .arp__body,
+    .arp__body[data-qr] {
+        grid-template-columns: minmax(0, 1fr);
+        padding-left: 14px;
+    }
+
+    .arp__qr {
+        display: none;
+    }
+
+    .arp__handle {
+        font-size: 16.5px;
+    }
+
+    .arw {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .arw > div {
+        border-left: 0;
+        border-top: 1px solid var(--line);
+    }
+
+    .arw > div:first-child {
+        border-top: 0;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ast__bars i,
+    .ast__slot,
+    .ast__you,
+    .ast__ripples i,
+    .ast__slot[data-state="going"] .ast__tile,
+    .arp__waiting i,
+    .arp__body,
+    .arq__body,
+    .arh__name,
+    .ast-strip__hop {
+        animation: none;
+    }
+
+    .ast__bars,
+    .ast__face,
+    .ast__slot,
+    .ast__place,
+    .ast__said,
+    .art__try {
+        transition: none;
+    }
+}
+
+.arin__tile[data-state="waiting"] {
+    opacity: .5;
 }

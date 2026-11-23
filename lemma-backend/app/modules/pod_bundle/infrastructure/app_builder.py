@@ -11,6 +11,11 @@ reasons:
   build`` inside the importing user's sandbox with the *target* pod's
   values. (A static/no-``package.json`` app needs no rebuild — the host injects
   ``window.__LEMMA_CONFIG__`` at serve time — so its files are deployed as-is.)
+  A bundle whose author built the app to read that config too may ship the
+  build: ``dist.zip`` beside ``source/``, stamped with the digest of the source
+  it came from (``lemma_pod_bundle.app_build``). While the digest names this
+  very source the build is deployed with no sandbox at all. An export writes no
+  stamp -- it cannot tell what an app reads -- so its apps are still rebuilt.
 * **It must hold no DB connection across the build.** The build + storage upload
   take minutes and touch the sandbox and object storage; holding a pooled
   connection across them would violate the pool-safety discipline the whole
@@ -41,6 +46,13 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from lemma_pod_bundle import (
+    APP_DIST_ARCHIVE,
+    APP_DIST_SOURCE_DIGEST,
+    APP_SOURCE_EXCLUDE_DIRS,
+    prebuilt_dist,
+)
+
 from app.core.concurrency.offload import run_blocking
 from app.core.config import settings
 from app.core.log.log import get_logger
@@ -66,20 +78,10 @@ _BUILD_TIMEOUT_SECONDS = int(
 )
 _IO_TIMEOUT_SECONDS = 120
 # Source-tree entries never worth shipping/rebuilding from (mirrors the CLI's
-# _should_exclude_source_path so an export→import round-trips cleanly).
-_SOURCE_EXCLUDE_DIRS = frozenset(
-    {
-        "node_modules",
-        ".git",
-        "dist",
-        "build",
-        ".next",
-        ".turbo",
-        ".cache",
-        "coverage",
-        "__pycache__",
-    }
-)
+# _should_exclude_source_path so an export→import round-trips cleanly). Shared
+# with the bundle format, so a shipped build's source digest is of exactly the
+# files stored here as the app's source.
+_SOURCE_EXCLUDE_DIRS = APP_SOURCE_EXCLUDE_DIRS
 
 
 # --- pure helpers (unit-testable without a DB or a sandbox) -------------------
@@ -219,9 +221,14 @@ class AppSandboxBuilder:
                 f"rm -rf {shlex.quote(build_dir)} && mkdir -p {shlex.quote(src_dir)}",
             )
             await self._upload(session, source_zip, f"{build_dir}/source.zip")
+            # Python's zipfile both ways, not `unzip` and `zip`: every sandbox
+            # image has python3, and the Docker workspace image has neither
+            # tool -- E2B's base happens to -- so every local import of an app
+            # failed here. Nothing is lost against `unzip` restoring modes: the
+            # bundle was unpacked server-side with none (`extract_bundle`).
             await self._sh(
                 session,
-                f"cd {shlex.quote(build_dir)} && unzip -oq source.zip -d src",
+                f"cd {shlex.quote(build_dir)} && python3 -m zipfile -e source.zip src",
             )
             await self._run_build(session, src_dir, workspace=workspace)
             dist_index = f"{src_dir}/dist/index.html"
@@ -233,9 +240,12 @@ class AppSandboxBuilder:
                 raise AppBuildFailedError(
                     f"App '{app_slug}' build produced no dist/index.html."
                 )
+            # `.` is the one path zipfile's CLI names nothing, so the members
+            # land at the archive root, where the host looks for index.html.
             await self._sh(
                 session,
-                f"cd {shlex.quote(src_dir)}/dist && zip -rq {shlex.quote(build_dir)}/dist.zip .",
+                f"cd {shlex.quote(src_dir)}/dist && "
+                f"python3 -m zipfile -c {shlex.quote(build_dir)}/dist.zip .",
             )
             return await self._download(session, f"{build_dir}/dist.zip")
 
@@ -421,12 +431,13 @@ class AppStepRunner:
         user_id: UUID,
     ) -> tuple[bytes | None, bytes]:
         """Produce ``(source_bytes, dist_bytes)`` for upload. A Vite source is built
-        in a sandbox; a static source is deployed as-is; a bundle carrying only a
-        prebuilt ``dist.zip`` (widget/no-source app) deploys that build as its own
-        source."""
+        in a sandbox -- unless the bundle ships its build, stamped with the digest
+        of this very source, which is deployed as it is; a static source is
+        deployed as-is; a bundle carrying only a prebuilt ``dist.zip``
+        (widget/no-source app) deploys that build as its own source."""
         source_dir = resource_dir / "source"
         html_file = resource_dir / "html.html"
-        dist_zip = resource_dir / "dist.zip"
+        dist_zip = resource_dir / APP_DIST_ARCHIVE
 
         if source_dir.is_dir():
             source_bytes = await run_blocking(zip_dir, source_dir, limiter="cpu_bound")
@@ -434,6 +445,28 @@ class AppStepRunner:
             if tier != "vite":
                 # static: the source *is* the served site.
                 return source_bytes, source_bytes
+            shipped = await run_blocking(
+                prebuilt_dist, resource_dir, limiter="cpu_bound"
+            )
+            if shipped is not None:
+                # Built from exactly this source by whoever made the bundle:
+                # no sandbox, no install, no build. An invalid build still
+                # fails at deploy, as one built here would.
+                logger.info(
+                    "pod_bundle.app_builder.prebuilt_dist_used",
+                    app=name,
+                    app_slug=app_slug,
+                )
+                dist_bytes = await run_blocking(shipped.read_bytes, limiter="cpu_bound")
+                return source_bytes, dist_bytes
+            if dist_zip.is_file() and (resource_dir / APP_DIST_SOURCE_DIGEST).is_file():
+                # Stamped, but for other source (edited after the build) or
+                # unreadable: the source wins, and is built.
+                logger.info(
+                    "pod_bundle.app_builder.prebuilt_dist_stale",
+                    app=name,
+                    app_slug=app_slug,
+                )
             dist_bytes = await self._sandbox.build(
                 user_id=user_id,
                 pod_id=pod_id,

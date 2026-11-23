@@ -7,6 +7,7 @@ import type { Conversation, FileContent, Invitation, LibraryItem, LinkShare, Mem
 import { displayAgentName, isPodDefaultAgent } from "./agent-names";
 import { originOf } from "@/thread/conversation-origin";
 import { sampleListing } from "@/thread/memory-notes";
+import { slug } from "@/outcomes/named-address";
 import { agentChanges, agentRows, answeringAs, grantsBody, readAgentDetail, type AgentDraft, type AgentGrant } from "./agents";
 import {
     createRequest,
@@ -45,7 +46,7 @@ import { madeIn } from "./made";
 /** A stand-in for when there is no session — enough to judge the layout, and
  *  loudly labelled so it is never mistaken for your pods. */
 
-const ORGS: Org[] = [{ id: "acme", name: "Acme" }];
+const ORGS: Org[] = [{ id: "acme", name: "Acme", handle: "acme" }];
 
 /** A first morning, on demand.
  *
@@ -2457,6 +2458,14 @@ export const fixtureSource: PodSource = {
         return made;
     },
     async getPod(podId: string) { return PODS.find(pod => pod.id === podId) ?? null; },
+    async findPodByName(orgHandle: string, word: string) {
+        await wait(60);
+        /* The sample's one organization holds every Lemma it shows, so any
+           name it has is one the reader is in. */
+        const org = ORGS.find((one) => one.handle === orgHandle);
+        const called = org ? PODS.filter((pod) => pod.orgId === org.id && slug(pod.name) === word) : [];
+        return called.length === 1 ? called[0].id : null;
+    },
     async askablePods(podId: string) {
         await wait(60);
         /* Every sample pod has the same person in it, so each can ask all the
@@ -2928,7 +2937,7 @@ export const fixtureSource: PodSource = {
             default_model_name: key.models[0] ?? null,
             model_catalog: key.models.map((name) => ({
                 name,
-                capabilities: key.protocol === "anthropic" || key.visionModels?.includes(name)
+                capabilities: key.protocol !== "openai" || key.visionModels?.includes(name)
                     ? ["TEXT", "TOOLS", "VISION"]
                     : ["TEXT", "TOOLS"],
             })),

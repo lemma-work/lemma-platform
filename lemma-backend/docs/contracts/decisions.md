@@ -32,7 +32,7 @@ Answers closed questions about one piece of evidence and stores nothing.
   ledger, where the call is metered like a model call.
 - **Answers:** one per question, `{value, confidence}`. `confidence` is null
   unless the provider measures one. `value: null` comes only from a provider
-  that judges the evidence insufficient (`model`); `typesafe` always answers
+  that judges the evidence insufficient (`model`); `gemini` and `typesafe` always answer
   its most probable value with that value's probability as `confidence`. An
   answer is unsure when `value` is null, or `confidence` is set and below the
   caller's own threshold ([decisions module](../modules/decisions.md)).
@@ -43,3 +43,12 @@ Answers closed questions about one piece of evidence and stores nothing.
   `not_configured`) when the provider did not answer. 429 `DECISION_RATE_LIMITED`
   and most 503s are worth retrying; `token_limit` asks for less evidence, and a
   422 is not worth retrying unchanged.
+- **Images:** `images` names at most 4 files of the pod by `path`; `evidence`
+  may then be omitted. Each is read with the caller's own access, as any file
+  read is; a file that is missing, not theirs to read, over 10 MiB, or not a
+  still PNG, JPEG, WebP or GIF by its bytes refuses the request with 422
+  listing each one (`DECISION_INPUT_TOO_LARGE` when size was the problem),
+  before the rest of the request is checked. A server whose decision model
+  cannot read images, or whose provider is `typesafe` or `gemini`, refuses any request
+  with images: 422 `DECISION_IMAGES_UNSUPPORTED`, before the provider is
+  asked. No URL is ever fetched.

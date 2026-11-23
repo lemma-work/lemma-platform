@@ -16,6 +16,7 @@ import {
     linkOnlyOpensHere, memberEmail, memberName, roleLabel, unsentInvitation, type Member, type Role,
 } from "./membership";
 import { WhoCanJoinOrg } from "./who-can-join-org";
+import { ConfirmDialog } from "@/shell/confirm-dialog";
 
 /** Who is here, and how somebody else gets to be.
  *
@@ -150,10 +151,12 @@ export function PeopleSection({ orgId }: { orgId: string }) {
         onError: (error: Error) => setProblem(error.message || "That role was not changed."),
     });
 
+    /* Asked in the shared yes-or-no dialog, which stays until the server
+       answers and says a refusal where the question was asked. */
+    const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
     const remove = useMutation({
         mutationFn: (memberId: string) => lemma().organizations.members.remove(orgId, memberId),
-        onSuccess: refresh,
-        onError: (error: Error) => setProblem(error.message || "They were not removed."),
+        onSuccess: () => { setRemoving(null); refresh(); },
     });
 
     function send() {
@@ -295,11 +298,7 @@ export function PeopleSection({ orgId }: { orgId: string }) {
                                         title={"Remove " + memberName(member)}
                                         aria-label={"Remove " + memberName(member)}
                                         disabled={remove.isPending}
-                                        onClick={() => {
-                                            if (window.confirm("Remove " + memberName(member) + " from this organization?")) {
-                                                remove.mutate(member.id);
-                                            }
-                                        }}
+                                        onClick={() => { remove.reset(); setRemoving({ id: member.id, name: memberName(member) }); }}
                                     ><CloseIcon size={15} /></button>
                                 )}
                             </li>
@@ -344,6 +343,19 @@ export function PeopleSection({ orgId }: { orgId: string }) {
             )}
 
             {door}
+            {removing && (
+                <ConfirmDialog
+                    title={"Remove " + removing.name + "?"}
+                    line="They lose access to this organization and its Lemmas straight away."
+                    confirm="Remove"
+                    working="Removing…"
+                    danger
+                    busy={remove.isPending}
+                    problem={remove.isError ? remove.error.message || "They were not removed." : null}
+                    onConfirm={() => remove.mutate(removing.id)}
+                    onClose={() => setRemoving(null)}
+                />
+            )}
         </div>
     );
 }

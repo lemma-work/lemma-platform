@@ -1,11 +1,15 @@
 "use client";
 
+import { PageHead } from "./page-head";
 import { useMemo, useState } from "react";
 import { source, type Org, type Pod } from "@/data";
 import { TeammateFace } from "@/space/teammate-face";
 import { HISTORY_DAYS, useRecents } from "./data";
 import { historyDays, historyRows, historySaid, outcomeView, type Go, type HistoryRow } from "./model";
 import { Empty, to } from "./parts";
+import { Calm } from "./calm";
+import { TryAgain, codeOf } from "./read-again";
+import { SkeletonRows } from "@/ui/skeleton";
 
 type Showing = "all" | "chats" | "ran" | "wrong";
 
@@ -54,14 +58,25 @@ export function History({ org, pods, podId, go }: {
 
     return (
         <div className="ox-page ox-hist">
-            <h1 className="ox-title">{one ? `What ${one.name} has been doing` : "History"}</h1>
-            <p className="ox-sub">
-                {source.label !== "live" ? "History needs a signed-in session."
-                    : recents.isPending ? "Reading what has moved…"
-                    : recents.isError ? "Couldn’t read what has moved" + (recents.error instanceof Error && recents.error.message ? `: ${recents.error.message}` : ".")
-                    : historySaid(mine, HISTORY_DAYS) + (one ? "" : " Across the Lemmas you’re in.")}
-            </p>
-            {recents.isError && <p className="ox-hist__again"><button type="button" className="ox-btn" onClick={() => void recents.refetch()}>Try again</button></p>}
+            <PageHead
+                title="History"
+                line={source.label !== "live" ? "History needs a signed-in session."
+                    : !recents.isSuccess ? (one ? `What ${one.name} has been doing.` : "What your Lemmas have been doing.")
+                    : (one ? `What ${one.name} has been doing. ` : "") + historySaid(mine, HISTORY_DAYS) + (one ? "" : " Across the Lemmas you’re in.")}
+            />
+            {source.label === "live" && recents.isPending && (
+                <SkeletonRows label="Reading what has moved" rows={6} slow="Still reading what has moved. It’s slower than usual." />
+            )}
+            {recents.isError && (
+                <Calm
+                    tone="warn"
+                    title="Couldn’t read what has moved"
+                    note={codeOf(recents.error)}
+                    actions={<TryAgain busy={recents.isFetching} onClick={() => void recents.refetch()} />}
+                >
+                    Nothing in it changed. Every chat and run is still with its Lemma.
+                </Calm>
+            )}
             {recents.isSuccess && (
                 <>
                     <div className="ox-hist__bar">

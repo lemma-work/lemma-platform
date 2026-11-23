@@ -15,6 +15,12 @@ ahead of the request: the request caps already bound the input, and on a
 provider that can count, counting is a second round-trip as slow as the first.
 And the model is asked not to think, where it can be asked: a closed question
 needs no reasoning, and a model that thinks by default spends seconds on it.
+
+Images go to the model as image content, and only to a model its runtime
+profile declares reads them (`VISION` among `model_capabilities`). Any other
+model is never sent one: a text-only model handed an image refuses the whole
+request, which would reach the caller as a provider failure to retry rather
+than as the request this server cannot answer.
 """
 
 from __future__ import annotations
@@ -32,12 +38,19 @@ from app.modules.decisions.domain.answers import (
     answer_schema,
     to_value,
 )
-from app.modules.decisions.domain.errors import DecisionUnavailableError
+from app.modules.decisions.domain.errors import (
+    DecisionUnavailableError,
+    images_unsupported,
+)
 from app.modules.decisions.domain.request import DecisionCaller, DecisionTask
-from app.modules.decisions.infrastructure.providers.model_prompt import build_prompt
+from app.modules.decisions.infrastructure.providers.model_prompt import (
+    DecisionPrompt,
+    build_prompt,
+)
 
 if TYPE_CHECKING:
     from pydantic_ai import UsageLimits
+    from pydantic_ai.messages import UserContent
     from pydantic_ai.models import Model
 
 
@@ -79,6 +92,10 @@ _BUDGETS = {
 #: two bytes per token, which is why it is checked against what the provider
 #: reports rather than counted ahead of the request.
 _INPUT_TOKENS_PER_REQUEST = 64_000
+#: Added per image. An image of at most 1568 pixels a side -- what the route
+#: sends -- costs under 2,500 input tokens on the hosted models that read
+#: images; the rest is headroom for one that counts more.
+_INPUT_TOKENS_PER_IMAGE = 3_000
 #: An answers object is small; the headroom is for models that reason first and
 #: count that toward output.
 _OUTPUT_TOKENS_PER_REQUEST = 8_000
@@ -111,10 +128,13 @@ class ModelDecisionProvider:
         del timeout_seconds  # the service bounds the whole call
         budget = _BUDGETS[task.priority]
         resolve = self._resolver or _system_resolver()
+        input_tokens = _INPUT_TOKENS_PER_REQUEST + _INPUT_TOKENS_PER_IMAGE * len(
+            task.images
+        )
         runtime = await resolve(
             usage_limits=UsageLimits(
                 request_limit=budget.requests,
-                input_tokens_limit=_INPUT_TOKENS_PER_REQUEST * budget.requests,
+                input_tokens_limit=input_tokens * budget.requests,
                 output_tokens_limit=_OUTPUT_TOKENS_PER_REQUEST * budget.requests,
             ),
             user_id=caller.user_id,
@@ -122,6 +142,8 @@ class ModelDecisionProvider:
             pod_id=caller.pod_id,
             model_name=self._model_name,
         )
+        if task.images and not _reads_images(runtime.runtime_profile):
+            raise images_unsupported()
         prompt = build_prompt(task)
         agent = Agent(
             runtime.model,
@@ -148,7 +170,9 @@ class ModelDecisionProvider:
             return output
 
         try:
-            result = await agent.run(prompt.user, usage_limits=runtime.usage_limits)
+            result = await agent.run(
+                _user_content(prompt, task), usage_limits=runtime.usage_limits
+            )
         except UsageLimitExceeded as exc:
             # A token or request ceiling, possibly hit before the model was
             # asked at all -- not an answer that failed to fit the questions.
@@ -177,6 +201,28 @@ def _system_resolver() -> ModelResolver:
     from app.modules.agent.contracts.model_runtime import resolve_system_runtime
 
     return resolve_system_runtime
+
+
+def _reads_images(profile: Mapping[str, object | None]) -> bool:
+    capabilities = profile.get("model_capabilities")
+    return isinstance(capabilities, list | tuple) and any(
+        str(capability).upper() == "VISION" for capability in capabilities
+    )
+
+
+def _user_content(
+    prompt: DecisionPrompt, task: DecisionTask
+) -> str | list[UserContent]:
+    if not task.images:
+        return prompt.user
+    from pydantic_ai import BinaryContent
+
+    content: list[UserContent] = [prompt.user]
+    for label, image in zip(prompt.image_labels, task.images, strict=True):
+        content.append(label)
+        content.append(BinaryContent(data=image.data, media_type=image.media_type))
+    content.append(prompt.user_after_images)
+    return content
 
 
 def _model_name(profile: Mapping[str, object | None]) -> str | None:

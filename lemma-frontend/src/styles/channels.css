@@ -456,31 +456,6 @@ code.gsheet__code-text {
 .smanage {
     gap: 16px;
 }
-.smanage__back {
-    justify-self: start;
-    margin: 0;
-    font-size: 13px;
-    color: var(--ink-2);
-}
-.smanage__head {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-.smanage__title {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-}
-.smanage__title h3 {
-    font-size: 19px;
-    font-weight: 500;
-}
-.smanage__title span {
-    font-size: 13px;
-    color: var(--ink-2);
-    overflow-wrap: anywhere;
-}
 .smanage__health {
     display: flex;
     align-items: center;

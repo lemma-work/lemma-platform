@@ -5,7 +5,8 @@ import { MATE } from "@/copy";
 import { isForbidden, isMissing } from "@/session/auth-state";
 import { lemma } from "@/session/client";
 import { useSession } from "@/session/session";
-import { LockIcon } from "@/ui/icons";
+import { Calm, Problem } from "@/outcomes/calm";
+import { Icon } from "@/outcomes/parts";
 
 /** How often a waiting page asks whether the answer has come. */
 const WAITING_POLL_MS = 15_000;
@@ -17,9 +18,10 @@ const WAITING_POLL_MS = 15_000;
  *  a link somebody sent you opened somebody else's Lemma, with nothing on
  *  screen saying it had happened.
  *
- *  **There is no name to show.** Everything this app knows about a Lemma is
- *  read from the pod, and the pod is what is closed — so every line here is
- *  written to work without one.
+ *  **There is usually no name to show.** Everything this app knows about a
+ *  Lemma is read from the pod, and the pod is what is closed — so every line
+ *  here is written to work without one, and uses the name and the face
+ *  (dimmed) only where the caller already has them.
  *
  *  **The account is shown instead.** The commonest reason for this screen is
  *  not a closed door but the wrong account: a work link opened in a browser
@@ -37,6 +39,9 @@ export function NotYours({
     podId,
     onArrived,
     aside,
+    name,
+    face,
+    onHome,
 }: {
     podId: string;
     /** Membership was made. The shell refetches and walks in. */
@@ -44,6 +49,11 @@ export function NotYours({
     /** Another way on, under the account line, for somebody with nowhere
      *  else to go yet. */
     aside?: ReactNode;
+    /** The Lemma's name and face, where they are known without reading it. */
+    name?: string;
+    face?: ReactNode;
+    /** Where to go when the Lemma turns out not to exist. */
+    onHome?: () => void;
 }) {
     const queryClient = useQueryClient();
     const session = useSession();
@@ -134,93 +144,112 @@ export function NotYours({
     const admitted = ask.data?.standing === "approved";
     const nowhere = isMissing(ask.error);
     const email = me.data?.email ?? null;
+    /* The closed Lemma's own name and face, where whoever drew this knows
+       them; the door is written to read right without either. */
+    const called = name ?? "this " + MATE;
 
     /* Signs out and comes back to this same address, where sign-in returns
        you after. A full load, so nothing the other account could see stays
        in memory. */
     const switchAccount = () => void session.leave(window.location.pathname + window.location.search);
+    const otherAccount = <button type="button" className="b b--m b--secondary" onClick={switchAccount}>Use another account</button>;
+    const signedInAs = email ? <>Signed in as {email}</> : null;
 
-    let title: string;
-    let body: ReactNode;
-    let action: ReactNode = null;
+    let calm: ReactNode;
     if (nowhere) {
         /* Not a locked door — no door. Offering to ask for something that does
            not exist sends somebody to wait for an answer that can never come. */
-        title = "This " + MATE + " doesn’t exist";
-        body = <p>It may have been deleted, or the link is wrong. Check it with whoever sent it.</p>;
+        calm = (
+            <Calm
+                icon="search"
+                title={"This " + MATE + " isn’t here"}
+                actions={onHome ? <button type="button" className="b b--m b--primary" onClick={onHome}>Home</button> : undefined}
+            >
+                <p>It was deleted, or the link came from somewhere else.</p>
+            </Calm>
+        );
     } else if (admitted) {
-        title = "You’re in";
-        body = <p>Opening it now.</p>;
-        action = (
-            <button className="ox-link" onClick={arrive}>Still here? Open it</button>
+        calm = (
+            <Calm
+                art={face ? <span className="kcalm__face">{face}</span> : undefined}
+                icon="check"
+                title="You’re in"
+                actions={<button type="button" className="b b--m b--primary" onClick={arrive}>Still here? Open it</button>}
+            >
+                <p>Opening it now.</p>
+            </Calm>
         );
     } else if (waiting) {
-        title = "Request sent";
-        body = (
-            <p>
-                The people who run this {MATE} have it, in Lemma and by email. You’ll get an email
-                with the answer, and this page opens on its own if you’re let in.
-            </p>
-        );
-        action = (
-            <button className="ox-link" disabled={withdraw.isPending} onClick={() => withdraw.mutate()}>
-                {withdraw.isPending ? "Withdrawing…" : "Withdraw request"}
-            </button>
+        calm = (
+            <Calm
+                art={face ? <span className="kcalm__face">{face}</span> : undefined}
+                icon="lock"
+                title={"Asked to join " + called}
+                actions={(
+                    <button type="button" className="b b--m b--secondary" disabled={withdraw.isPending} onClick={() => withdraw.mutate()}>
+                        {withdraw.isPending ? "Withdrawing…" : "Withdraw request"}
+                    </button>
+                )}
+                note={signedInAs}
+            >
+                <p>You’re in as soon as one of its admins says yes.</p>
+                {checkFailed && <Problem onRetry={checkIn}>Couldn’t check whether you’re in yet.</Problem>}
+                {withdraw.isError && <Problem onRetry={() => withdraw.mutate()}>Couldn’t withdraw the request.</Problem>}
+            </Calm>
         );
     } else if (declined) {
-        title = "Your request was declined";
-        body = <p>The people who run this {MATE} said no for now. If you still need it, ask one of them, or ask again.</p>;
-        action = (
-            <button className="ox-btn" disabled={ask.isPending} onClick={() => ask.mutate()}>
-                {ask.isPending ? "Asking…" : "Ask again"}
-            </button>
+        calm = (
+            <Calm
+                art={face ? <span className="kcalm__face kcalm__face--off">{face}</span> : undefined}
+                icon="lock"
+                title="Your request was declined"
+                actions={(
+                    <>
+                        {otherAccount}
+                        <button type="button" className="b b--m b--primary" disabled={ask.isPending} onClick={() => ask.mutate()}>
+                            {ask.isPending ? "Asking…" : "Ask again"}
+                        </button>
+                    </>
+                )}
+                note={signedInAs}
+            >
+                <p>Its admins said no for now. If you still need it, ask one of them, or ask again.</p>
+                {ask.isError && <Problem onRetry={() => ask.mutate()}>Couldn’t ask to join.</Problem>}
+            </Calm>
         );
     } else {
-        title = "You’re not in this " + MATE + " yet";
-        body = <p>Ask to join and the people who run it get your request. Some {MATE}s let you straight in.</p>;
-        action = (
-            <button
-                className="ox-btn ox-btn--primary"
-                disabled={ask.isPending || standing.isPending}
-                onClick={() => ask.mutate()}
+        calm = (
+            <Calm
+                art={face ? <span className="kcalm__face kcalm__face--off">{face}</span> : undefined}
+                icon="lock"
+                title={"You’re not in " + called}
+                actions={(
+                    <>
+                        {otherAccount}
+                        <button
+                            type="button"
+                            className="b b--m b--primary"
+                            disabled={ask.isPending || standing.isPending}
+                            onClick={() => ask.mutate()}
+                        >
+                            <Icon name="lock" size={16} />
+                            {ask.isPending ? "Asking…" : "Ask to join"}
+                        </button>
+                    </>
+                )}
+                note={signedInAs}
             >
-                {ask.isPending ? "Asking…" : "Ask to join"}
-            </button>
+                <p>{name ? name + " is" : "It’s"} only for the people added to it. Ask to join, and its admins see it in People.</p>
+                {ask.isError && <Problem onRetry={() => ask.mutate()}>Couldn’t ask to join.</Problem>}
+                {checkFailed && <Problem onRetry={checkIn}>Couldn’t check whether you’re in yet.</Problem>}
+            </Calm>
         );
     }
 
     return (
-        <div className="ox-page ox-door">
-            <span className="ox-door__mark" aria-hidden="true"><LockIcon size={18} /></span>
-            <h1 className="ox-door__t">{title}</h1>
-            <div className="ox-door__body">{body}</div>
-            {action && <div className="ox-door__actions">{action}</div>}
-            {ask.error && !nowhere && (
-                <p className="ox-door__error" role="alert">
-                    {ask.error instanceof Error ? ask.error.message : "Couldn’t send the request. Try again."}
-                </p>
-            )}
-            {checkFailed && (
-                <p className="ox-door__error" role="alert">
-                    Couldn’t check whether you’re in yet.{" "}
-                    <button className="ox-link" onClick={checkIn}>Check again</button>
-                </p>
-            )}
-            {withdraw.error && (
-                <p className="ox-door__error" role="alert">
-                    {withdraw.error instanceof Error ? withdraw.error.message : "Couldn’t withdraw the request. Try again."}
-                </p>
-            )}
-            {!nowhere && !admitted && (
-                <p className="ox-door__who ox-vs">
-                    {email ? <>Signed in as {email}. </> : null}
-                    <button className="ox-link" onClick={switchAccount}>Use another account</button>
-                </p>
-            )}
-            {aside && <p className="ox-door__aside ox-vs">{aside}</p>}
-            {/* Which link this was, for somebody who has been sent two:
-                small, last, and plain text rather than a chip. */}
-            <p className="ox-door__which ox-vs">Link {podId}</p>
+        <div className="kdoor">
+            {calm}
+            {aside && <p className="kdoor__aside">{aside}</p>}
         </div>
     );
 }

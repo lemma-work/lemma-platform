@@ -42,6 +42,20 @@ def split_full_name(full_name: str) -> tuple[str | None, str | None]:
     return _clean(parts[0]), _clean(" ".join(parts[1:]))
 
 
+def _apple_names(source: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Apple's ``user.name``, which SuperTokens files under the id-token payload.
+
+    Apple puts no name in the id token. It posts a ``user`` object beside it,
+    on the first sign-in only and unsigned -- acceptable for a display name
+    the person can change, and the only chance there is to have it at all.
+    """
+    user = source.get("user")
+    name = user.get("name") if isinstance(user, dict) else None
+    if not isinstance(name, dict):
+        return None, None
+    return _clean(name.get("firstName")), _clean(name.get("lastName"))
+
+
 def names_from_provider(
     from_id_token_payload: dict[str, Any] | None,
     from_user_info_api: dict[str, Any] | None,
@@ -59,6 +73,10 @@ def names_from_provider(
 
         first = _clean(source.get("given_name"))
         last = _clean(source.get("family_name"))
+        if first or last:
+            return first, last
+
+        first, last = _apple_names(source)
         if first or last:
             return first, last
 

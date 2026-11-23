@@ -26,6 +26,14 @@ from app.core.domain.generation import (
     ReasoningEffort as ReasoningEffort,
 )
 from app.modules.agent.domain.errors import RuntimeProfileValidationError
+
+# Re-exported: a Google provider's own shapes, kept beside each other.
+from app.modules.agent.domain.google_genai import (
+    DEFAULT_VERTEX_LOCATION as DEFAULT_VERTEX_LOCATION,
+    GoogleGenAIBackend as GoogleGenAIBackend,
+    GoogleGenAIRuntimeConfig as GoogleGenAIRuntimeConfig,
+    ServiceAccountRuntimeCredentials as ServiceAccountRuntimeCredentials,
+)
 from app.modules.agent.domain.value_objects import HarnessKind, JsonObject
 
 
@@ -65,6 +73,10 @@ class RuntimeProfileProtocol(str, Enum):
 
     OPENAI_COMPATIBLE = "OPENAI_COMPATIBLE"
     ANTHROPIC_COMPATIBLE = "ANTHROPIC_COMPATIBLE"
+    #: The Google Gen AI API: ``generateContent`` on either the Gemini API
+    #: (an API key) or Vertex AI (a service account). One wire, two hosts --
+    #: see ``GoogleGenAIRuntimeConfig``.
+    GOOGLE_GENAI = "GOOGLE_GENAI"
     AGENT_HOST = "AGENT_HOST"
 
 
@@ -93,12 +105,16 @@ class RuntimeModelCapability(str, Enum):
     TOOLS = "TOOLS"
     VISION = "VISION"
     REASONING = "REASONING"
+    #: Returns images, not just text. Such a model draws; it is never an
+    #: agent's chat model unless it also has TOOLS.
+    IMAGE_OUTPUT = "IMAGE_OUTPUT"
 
 
 MODEL_PROVIDER_PROTOCOLS = frozenset(
     {
         RuntimeProfileProtocol.OPENAI_COMPATIBLE,
         RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE,
+        RuntimeProfileProtocol.GOOGLE_GENAI,
     }
 )
 
@@ -156,6 +172,14 @@ class RuntimeModelCatalogEntry(BaseModel):
         return value
 
     @property
+    def draws_only(self) -> bool:
+        """An image model: it draws, and cannot run an agent's turn."""
+        return (
+            RuntimeModelCapability.IMAGE_OUTPUT in self.capabilities
+            and RuntimeModelCapability.TOOLS not in self.capabilities
+        )
+
+    @property
     def reasons(self) -> bool:
         """Whether this model takes a reasoning effort or thinking budget."""
         return RuntimeModelCapability.REASONING in self.capabilities
@@ -167,7 +191,9 @@ class ApiKeyRuntimeCredentials(BaseModel):
     api_key: SecretStr = Field(min_length=1)
 
 
-RuntimeCredentials = ApiKeyRuntimeCredentials | JsonObject
+RuntimeCredentials = (
+    ApiKeyRuntimeCredentials | ServiceAccountRuntimeCredentials | JsonObject
+)
 
 
 def reveal_credentials(credentials: object | None) -> dict[str, object] | None:
@@ -227,6 +253,7 @@ class HarnessRuntimeConfig(BaseModel):
 RuntimeProfileConfig = (
     OpenAICompatibleRuntimeConfig
     | AnthropicCompatibleRuntimeConfig
+    | GoogleGenAIRuntimeConfig
     | HarnessRuntimeConfig
 )
 
@@ -240,6 +267,7 @@ CONFIG_MODEL_BY_PROTOCOL: Mapping[
 ] = {
     RuntimeProfileProtocol.OPENAI_COMPATIBLE: OpenAICompatibleRuntimeConfig,
     RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE: AnthropicCompatibleRuntimeConfig,
+    RuntimeProfileProtocol.GOOGLE_GENAI: GoogleGenAIRuntimeConfig,
     RuntimeProfileProtocol.AGENT_HOST: HarnessRuntimeConfig,
 }
 
@@ -452,6 +480,11 @@ class AgentRuntimeProfile(BaseModel):
             catalog_names.add(entry.name)
         if catalog_names and self.default_model_name not in catalog_names:
             raise ValueError("default_model_name must match a model catalog name")
+        for entry in self.model_catalog:
+            if entry.name == self.default_model_name and entry.draws_only:
+                raise ValueError(
+                    "default_model_name must be a chat model, not an image model"
+                )
 
 
 def checked_profile(**fields: object) -> AgentRuntimeProfile:
@@ -503,6 +536,8 @@ REDACTED_VALUE = "<redacted>"
 # guess -- a key in a base URL's query, a password in its userinfo, a gateway
 # subscription header -- while masking `max_tokens` for containing "token".
 _PUBLIC_URL_KEYS = ("base_url",)
+#: Names, not secrets: which Google host and project a profile bills.
+_PUBLIC_NAME_KEYS = ("backend", "vertex_project", "vertex_location")
 
 
 def public_url(url: str) -> str:
@@ -532,6 +567,9 @@ def public_provider_config(config: Mapping[str, object]) -> JsonObject:
         if key in config:
             value = config[key]
             public[key] = public_url(str(value)) if value else value
+    for key in _PUBLIC_NAME_KEYS:
+        if key in config:
+            public[key] = config[key]
     headers = config.get("headers")
     if isinstance(headers, Mapping):
         public["header_names"] = sorted(str(name) for name in headers)

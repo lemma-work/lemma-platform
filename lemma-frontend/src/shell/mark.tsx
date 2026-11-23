@@ -3,6 +3,7 @@ import { parseResourceIcon, identityVariantSeed } from "./resource-icon";
 import { Character, characterFromUrl, characterForSeed } from "./character";
 import { CharacterPuppet } from "./character-puppet";
 import type { CharacterName } from "./cast";
+import { markTint } from "./mark-tint";
 
 /** A teammate's mark.
  *
@@ -31,27 +32,18 @@ import type { CharacterName } from "./cast";
  *  study that breathes it reads as a sticker. Below `ANIMATED_MIN` there is
  *  nothing to see — a wave is four pixels — so those stay stills. */
 
-function hueOf(seed: string): number {
-    let hash = 0;
-    for (let index = 0; index < seed.length; index += 1) {
-        hash = (hash * 31 + seed.charCodeAt(index)) % 3600;
-    }
-    return hash / 10;
-}
+/* The colour a seed paints in lives apart, so a surface that wants only
+   that does not load the rigs. */
+export { markHue, markTint } from "./mark-tint";
 
-/** The raw hue, for the surfaces that paint something larger than a tile —
- *  the call bar's halo, the profile's banner. */
-export function markHue(seed: string): number {
-    return hueOf(seed);
-}
-
-/** Kept for the call bar, which paints a halo from the same seed. */
-export function markTint(seed: string): { background: string; color: string } {
-    const hue = hueOf(seed);
-    return {
-        background: `hsl(${hue} var(--mark-sat) var(--mark-bg))`,
-        color: `hsl(${hue} var(--mark-sat) var(--mark-fg))`,
-    };
+/** The cast character a mark with this seed and icon draws, or null when
+ *  it draws a picture or a glyph instead. For a caller that drives the rig
+ *  itself -- its mood and its greeting -- rather than through `Mark`. */
+export function characterOf(seed: string, icon?: string | null): CharacterName | null {
+    const parsed = parseResourceIcon(icon);
+    if (parsed?.kind === "url") return characterFromUrl(parsed.url) ?? null;
+    if (parsed?.kind === "glyph") return null;
+    return characterForSeed(identityVariantSeed(seed, parsed?.kind === "identity" ? parsed.variant : 0));
 }
 
 export const Mark = memo(function Mark({

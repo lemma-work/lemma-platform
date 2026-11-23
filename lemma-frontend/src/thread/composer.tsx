@@ -7,6 +7,16 @@ import {
     type Attachment,
 } from "./attachments";
 import { AttachedFiles } from "./attached";
+
+/** The event a chat's own drop target hands its files to the box with. */
+const DROP_EVENT = "lemma:chat-drop";
+
+/** Hand files dropped on a chat, anywhere on it, to its box, which checks
+ *  and attaches them as it would its own drop. */
+export function dropIntoComposer(files: readonly File[]) {
+    if (files.length === 0) return;
+    window.dispatchEvent(new CustomEvent<File[]>(DROP_EVENT, { detail: [...files] }));
+}
 import { composerActions, type Queued } from "./queued";
 import { draftStore, readDraft, writeDraft } from "./drafts";
 
@@ -250,6 +260,17 @@ export const Composer = memo(function Composer({
         setRefused(why);
         if (take.length > 0) onAttach?.(take);
     }
+
+    /* Files dropped anywhere on the chat it belongs to, not only on the box,
+       come here (`dropIntoComposer`): the newest box taking files takes them. */
+    const offerRef = useRef(offer);
+    offerRef.current = offer;
+    useEffect(() => {
+        if (!takesFiles) return;
+        const take = (event: Event) => offerRef.current((event as CustomEvent<File[]>).detail ?? []);
+        window.addEventListener(DROP_EVENT, take);
+        return () => window.removeEventListener(DROP_EVENT, take);
+    }, [takesFiles]);
 
     async function send() {
         const text = draft.trim();

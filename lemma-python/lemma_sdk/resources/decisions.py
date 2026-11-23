@@ -59,17 +59,23 @@ class PodDecisions(BoundResource):
         self,
         *,
         instruction: str,
-        evidence: Any,
         schema: Mapping[str, Any],
+        evidence: Any = None,
+        images: Sequence[str] | None = None,
         examples: Sequence[Mapping[str, Any]] | None = None,
         priority: Literal["interactive", "background"] = "background",
     ) -> DecisionResponse:
         body: dict[str, Any] = {
             "instruction": instruction,
-            "evidence": evidence,
             "schema": dict(schema),
             "priority": priority,
         }
+        if evidence is not None:
+            body["evidence"] = evidence
+        # File paths in this Lemma, read with the caller's access; only a
+        # deployment whose decision model reads images answers them.
+        if images:
+            body["images"] = [{"path": path} for path in images]
         if examples:
             body["examples"] = [dict(example) for example in examples]
         return self._call(

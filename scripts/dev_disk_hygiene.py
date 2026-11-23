@@ -2,7 +2,7 @@
 """Find, and with --apply remove, what local development leaves behind.
 
 A checkout here grows three kinds of weight: build output (a Rust dev target
-directory, node_modules, a backend virtualenv), git worktrees whose branch has
+directory, node_modules, a frontend .next, a backend virtualenv), git worktrees whose branch has
 already landed, and local branches nobody will check out again. With many
 worktrees -- several made by agents -- that adds up faster than anyone clears
 it. This walks the main checkout and every worktree `git worktree list`
@@ -51,8 +51,13 @@ from typing import Callable, Iterable, Iterator
 
 DAY = 86400.0
 PROTECTED_BRANCHES = {"main", "master"}
-# Build output that `npm ci` / `uv sync` recreate, found this deep at most.
-DEPENDENCY_DIRS = ("node_modules", ".venv")
+# Build output that `npm ci` / `uv sync` / `next build` recreate, found this
+# deep at most. A frontend `.next` is about 400 MB and nothing else clears it.
+DEPENDENCY_DIRS = ("node_modules", ".venv", ".next")
+# Where Claude Code puts the worktrees it makes for agents, relative to the main
+# checkout. An agent's worktree is done when its session is, so its build
+# output is judged idle sooner than a person's.
+AGENT_WORKTREES = Path(".claude") / "worktrees"
 DEPENDENCY_SEARCH_DEPTH = 3
 SKIP_DESCENT = {".git", "node_modules", ".venv", "target", ".next", "dist", "build"}
 LOCAL_IMAGE_REPOSITORIES = ("lemma-workspace", "lemma-function")
@@ -631,6 +636,14 @@ def plan_worktrees(
     return removing
 
 
+def is_agent_worktree(path: Path, repo: Path) -> bool:
+    try:
+        path.relative_to(repo / AGENT_WORKTREES)
+    except ValueError:
+        return False
+    return True
+
+
 def plan_build_output(
     args: argparse.Namespace,
     repo: Path,
@@ -667,7 +680,12 @@ def plan_build_output(
                         f"sweep {len(stale)} entries older than {args.artifact_age_days:g}d",
                         remove_paths(stale),
                     )
-        if in_use or idle <= args.deps_idle_days * DAY:
+        idle_days = (
+            args.agent_deps_idle_days
+            if is_agent_worktree(worktree.path, repo)
+            else args.deps_idle_days
+        )
+        if in_use or idle <= idle_days * DAY:
             continue
         for directory in dependency_dirs(worktree.path):
             plan.add(
@@ -904,7 +922,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--deps-idle-days",
         type=float,
         default=14,
-        help="remove node_modules/.venv idle this long (14)",
+        help="remove node_modules/.venv/.next idle this long (14)",
+    )
+    parser.add_argument(
+        "--agent-deps-idle-days",
+        type=float,
+        default=2,
+        help="the same, for worktrees under .claude/worktrees (2)",
     )
     parser.add_argument(
         "--worktree-idle-days",

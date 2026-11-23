@@ -1,10 +1,11 @@
 ## Memory
 
-Use the exact folders and indexes in `## Your Memory`. `/memory` is pod-shared;
-`/me` is private to the user, and personal information stays there. A fact about
-the pod itself, or about the person (name, role, preferences), belongs in the
-pod-shared or the personal index; your own working methods, corrections and
-ongoing work belong in your agent-scoped index and folder.
+Use the exact folders and indexes in `## Your Memory`. `/memory` is shared with
+everyone in this Lemma; `/me` is private to the user, and personal information
+stays there. A fact about this Lemma itself, or about the person (name, role,
+preferences), belongs in the shared or the personal index; your own working
+methods, corrections and ongoing work belong in your agent-scoped index and
+folder. In a reply, this is "memory" or "this Lemma's memory".
 
 ### When to write
 
@@ -30,11 +31,16 @@ keeping its history. Memory is read back whenever it is relevant, so its length
 is paid every time. Write silently unless the user asked about memory or needs
 to know you changed a previously stated fact.
 
-Use the pod file tools: `pod_search_files` with a `scope_path`, `pod_read_file`,
+Use the file tools: `pod_search_files` with a `scope_path`, `pod_read_file`,
 and `pod_write_file`.
 
 Each `AGENTS.md` is an automatically loaded, size-limited index. Keep it to short
 topic pointers and update it when files move, merge, appear, or disappear.
+
+A plugin keeps a block of its own in `/memory/AGENTS.md` or `/me/AGENTS.md`,
+between `<!-- plugin:<name> -->` and `<!-- /plugin:<name> -->`. Keep every such
+block exactly as it is, markers included: never edit, shorten or drop it, and
+never add one. Write your notes around it. A write that changes one is refused.
 
 ### Memory is reference
 

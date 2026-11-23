@@ -11,7 +11,9 @@ import { useOAuthRedirectUri } from "@/data/oauth-redirect";
 import {
     useConnector, useCreateAccount, useCreateInstall, useConnectorRefresh, useDeleteInstall, useRotateCredentials,
 } from "./queries";
-import { Fields } from "./fields";
+import { Problem } from "@/outcomes/calm";
+import { SchemaFields } from "./fields";
+import { ServiceMark } from "./service-mark";
 import { blank, fields, payload, problems, type Values } from "./schema";
 import {
     canBringOwnApp, canInstallWithDefaults, connectorProblem, connectRoute, connectSchema, freshInstallName, installSchema, kindFor,
@@ -228,10 +230,40 @@ export function ConnectDialog({
     /* Loading, not pending: a query that is switched off — sample data has no
        catalogue to ask — is pending forever, and this would never get past it. */
     if (detail.isLoading) {
-        return <Modal title={"Connect " + connector.title} narrow onClose={onClose}>
+        return <Modal title={"Connect " + connector.title} mark={<ServiceMark entry={connector} />} onClose={onClose}
+            footer={<button type="button" className="b b--l b--secondary" onClick={onClose}>Cancel</button>}>
             <p className="connect-lead"><LoadingIndicator inline label="Reading what this one needs" /></p>
         </Modal>;
     }
+
+    /* Each step's buttons sit at the dialog's foot, Cancel first and the
+       step's one act beside it, as in every dialog; what is only sometimes
+       there (bringing your own app) stays in the body, as a quiet choice. */
+    const cancel = <button type="button" className="b b--l b--secondary" disabled={busy} onClick={onClose}>Cancel</button>;
+    const redirectOnly = !showingApp && route === "redirect" && list.length === 0;
+    const nothingToFill = !redirectOnly && !showingApp && list.length === 0 && nothingToAsk;
+    const cannot = !redirectOnly && !nothingToFill && list.length === 0;
+    const footer = redirectOnly ? <>
+        {cancel}
+        <button type="button" className="b b--l b--primary" disabled={busy} onClick={() => onAuthorize(against?.id ?? null)}>
+            {authorizing
+                ? "Opening " + connector.title + "…"
+                : <>Continue to {connector.title} <ExternalIcon size={13} /></>}
+        </button>
+    </> : nothingToFill ? <>
+        {cancel}
+        <button type="button" className="b b--l b--primary" disabled={busy} onClick={() => void submit()}>
+            {busy ? "Connecting…" : "Connect"}
+        </button>
+    </> : cannot ? (
+        <button type="button" className="b b--l b--secondary" onClick={onClose}>Close</button>
+    ) : <>
+        {cancel}
+        <button type="button" className="b b--l b--primary" disabled={busy} onClick={() => void submit()}>
+            {busy ? (showingApp ? "Saving…" : "Connecting…") : showingApp ? "Save and authorise"
+                : route === "redirect" ? <>Continue <ExternalIcon size={13} /></> : "Connect"}
+        </button>
+    </>;
 
     return (
         <Modal
@@ -239,8 +271,9 @@ export function ConnectDialog({
                 ? signsIn ? "Use your own " + connector.title + " app" : "Set up " + connector.title
                 : "Connect " + connector.title}
             subtitle={against?.name && !showingApp ? against.name : undefined}
-            narrow
+            mark={<ServiceMark entry={connector} />}
             onClose={onClose}
+            footer={footer}
         >
             <div className="connect-form">
                 {showingApp && (
@@ -259,52 +292,35 @@ export function ConnectDialog({
                     </button>
                 )}
 
-                {!showingApp && route === "redirect" && list.length === 0 ? (
+                {redirectOnly ? (
                     <>
                         <p className="connect-lead">
                             This one signs in through {connector.title}. You will come back here once it is done.
                         </p>
-                        {shownAuthorizeFailure && <p className="library-problem" role="alert">{shownAuthorizeFailure}</p>}
+                        {shownAuthorizeFailure && <Problem>{shownAuthorizeFailure}</Problem>}
                         {shownAuthorizeFailure !== authorizeFailure && machineApp && (
                             <button type="button" className="linkish thismac-setup" onClick={machineApp.open}>
                                 <KeyIcon size={13} /> Set up on {machineApp.machine}
                             </button>
                         )}
-                        <div className="record-form__actions">
-                            <button className="btn btn--primary" disabled={busy} onClick={() => onAuthorize(against?.id ?? null)}>
-                                {authorizing
-                                    ? <LoadingIndicator inline label={"Opening " + connector.title} />
-                                    : <>Continue <ExternalIcon size={13} /></>}
+                        {appKinds.length > 0 && !ownApp && mayInstall !== false && against?.config_source !== "ORG_CUSTOM" && (
+                            <button type="button" className="b b--s b--quiet kd-start" disabled={busy} onClick={() => { setBringingApp(true); setValues({}); }}>
+                                Use your own app instead
                             </button>
-                            {appKinds.length > 0 && !ownApp && mayInstall !== false && against?.config_source !== "ORG_CUSTOM" && (
-                                <button className="btn" disabled={busy} onClick={() => { setBringingApp(true); setValues({}); }}>
-                                    Use your own app
-                                </button>
-                            )}
-                            <button className="btn" onClick={onClose}>Cancel</button>
-                        </div>
+                        )}
                     </>
-                ) : !showingApp && list.length === 0 && nothingToAsk ? (
+                ) : nothingToFill ? (
                     <>
                         <p className="connect-lead">Nothing to fill in for this one.</p>
-                        {failure && <p className="library-problem" role="alert">{failure}</p>}
-                        <div className="record-form__actions">
-                            <button className="btn btn--primary" disabled={busy} onClick={() => void submit()}>
-                                {busy ? <LoadingIndicator inline label="Connecting" /> : "Connect"}
-                            </button>
-                            <button className="btn" disabled={busy} onClick={onClose}>Cancel</button>
-                        </div>
+                        {failure && <Problem>{failure}</Problem>}
                     </>
-                ) : list.length === 0 ? (
-                    <>
-                        {/* A schema with no fields is not a form to submit. Saying
-                            so beats drawing an empty box with a Connect button
-                            under it that can only fail. */}
-                        <p role="alert" className="connect-lead">
-                            This connector has not described what it needs, so it cannot be connected from here yet.
-                        </p>
-                        <div className="record-form__actions"><button className="btn" onClick={onClose}>Close</button></div>
-                    </>
+                ) : cannot ? (
+                    /* A schema with no fields is not a form to submit. Saying
+                       so beats drawing an empty box with a Connect button
+                       under it that can only fail. */
+                    <p role="alert" className="connect-lead">
+                        This connector has not described what it needs, so it cannot be connected from here yet.
+                    </p>
                 ) : (
                     <>
                         {!showingApp && route === "redirect" && (
@@ -312,16 +328,9 @@ export function ConnectDialog({
                                 This one signs in through {connector.title}, once it knows which account you mean.
                             </p>
                         )}
-                        <Fields list={list} values={ready} problems={shown} disabled={busy}
+                        <SchemaFields list={list} values={ready} problems={shown} disabled={busy}
                             onChange={(name, value) => setValues({ ...ready, [name]: value })} />
-                        {(failure ?? shownAuthorizeFailure) && <p className="library-problem" role="alert">{failure ?? shownAuthorizeFailure}</p>}
-                        <div className="record-form__actions">
-                            <button className="btn btn--primary" disabled={busy} onClick={() => void submit()}>
-                                {busy ? <LoadingIndicator inline label="Connecting" /> : showingApp ? "Save and authorise"
-                                    : route === "redirect" ? <>Continue <ExternalIcon size={13} /></> : "Connect"}
-                            </button>
-                            <button className="btn" disabled={busy} onClick={onClose}>Cancel</button>
-                        </div>
+                        {(failure ?? shownAuthorizeFailure) && <Problem>{failure ?? shownAuthorizeFailure}</Problem>}
                     </>
                 )}
             </div>
@@ -369,31 +378,36 @@ export function RotateDialog({ orgId, connector, install, accountId, accountName
         }
     };
 
+    const cannot = !detail.isLoading && list.length === 0;
     return (
-        <Modal title="Replace the credential" subtitle={accountName} narrow onClose={onClose}>
+        <Modal
+            title="Replace the credential"
+            subtitle={accountName}
+            mark={<ServiceMark entry={connector} />}
+            onClose={onClose}
+            footer={cannot
+                ? <button type="button" className="b b--l b--secondary" onClick={onClose}>Close</button>
+                : <>
+                    <button type="button" className="b b--l b--secondary" disabled={rotate.isPending} onClick={onClose}>Cancel</button>
+                    <button type="button" className="b b--l b--primary" disabled={rotate.isPending || detail.isLoading} onClick={() => void submit()}>
+                        {rotate.isPending ? "Replacing…" : <>Replace <RefreshIcon size={14} /></>}
+                    </button>
+                </>}
+        >
             <div className="connect-form">
                 <p className="connect-lead">
                     Existing connections will use the replacement credential. Check that it has the access they need.
                 </p>
                 {detail.isLoading ? <p className="connect-lead"><LoadingIndicator inline label="Reading what this one needs" /></p>
-                    : list.length === 0 ? (
-                        <>
-                            <p role="alert" className="connect-lead">
-                                This connector does not describe a credential that can be replaced from here.
-                            </p>
-                            <div className="record-form__actions"><button className="btn" onClick={onClose}>Close</button></div>
-                        </>
+                    : cannot ? (
+                        <p role="alert" className="connect-lead">
+                            This connector does not describe a credential that can be replaced from here.
+                        </p>
                     ) : (
                         <>
-                            <Fields list={list} values={ready} problems={shown} disabled={rotate.isPending}
+                            <SchemaFields list={list} values={ready} problems={shown} disabled={rotate.isPending}
                                 onChange={(name, value) => setValues({ ...ready, [name]: value })} />
-                            {failure && <p className="library-problem" role="alert">{failure}</p>}
-                            <div className="record-form__actions">
-                                <button className="btn btn--primary" disabled={rotate.isPending} onClick={() => void submit()}>
-                                    {rotate.isPending ? <LoadingIndicator inline label="Replacing" /> : <>Replace <RefreshIcon size={14} /></>}
-                                </button>
-                                <button className="btn" disabled={rotate.isPending} onClick={onClose}>Cancel</button>
-                            </div>
+                            {failure && <Problem>{failure}</Problem>}
                         </>
                     )}
             </div>

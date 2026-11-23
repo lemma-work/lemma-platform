@@ -9,10 +9,10 @@ import { Icon, to, type IconName } from "./parts";
 
 export type LemmaSection = Exclude<OutcomeTab, "home">;
 
-/** A Lemma's pages. Its row of tabs holds what is in it, each named for the
- *  tool it stands in for -- a chat app, an app, a base, a doc app, a drive --
- *  and then About, which says what the Lemma is. The rest are parts of
- *  About: reached from it, and each still a page with an address of its own. */
+/** A Lemma's pages, each named for the tool it stands in for -- a chat app,
+ *  an app, a base, a doc app, a drive -- then what it does on its own and
+ *  knows, About, and About's parts. Its page opens each from a section; this
+ *  list is the menu on the pages that have no section (Settings). */
 export const LEMMA_SECTIONS: readonly { tab: LemmaSection; label: string; icon: IconName }[] = [
     { tab: "chats", label: "Chats", icon: "chat" },
     { tab: "apps", label: "Apps", icon: "app" },
@@ -23,6 +23,9 @@ export const LEMMA_SECTIONS: readonly { tab: LemmaSection; label: string; icon: 
     { tab: "people", label: "People", icon: "people" },
     { tab: "contacts", label: "Contacts", icon: "inbox" },
     { tab: "automations", label: "Automations", icon: "flow" },
+    { tab: "agents", label: "Agents", icon: "agent" },
+    { tab: "memory", label: "Memory", icon: "about" },
+    { tab: "skills", label: "Skills", icon: "skill" },
     { tab: "settings", label: "Settings", icon: "gear" },
 ];
 
@@ -93,7 +96,7 @@ export function LemmaActions({ pod, go, actions, newChat = true }: {
                 <summary aria-label={`More for ${pod.name}`} title="More"><Icon name="more" size={16} /></summary>
                 <div className="ox-more__menu" role="menu">
                     <a role="menuitem" {...link(outcomeView(pod.id, "about"))}>About {pod.name}</a>
-                    <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.addPeople(pod.id); }}>Who has access</button>
+                    <a role="menuitem" {...link(outcomeView(pod.id, "people"))}>Who has access</a>
                     <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.connect(pod.id); }}>Where to reach it</button>
                     <button type="button" role="menuitem" onClick={(event) => { closeMenu(event); actions.share(pod.id); }}>Share or export</button>
                     <a role="menuitem" {...link({ name: "computer", podId: pod.id, conversationId: null })}>Its computer</a>

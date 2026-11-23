@@ -14,6 +14,11 @@ from app.modules.agent.infrastructure.tools.workspace_cli import (
     machine_tools,
     workspace_cli,
 )
+from app.modules.agent.infrastructure.tools.workspace_cli.generate_image import (
+    GenerateImageRequest,
+    GenerateImageResult,
+    generate_image_internal,
+)
 from app.modules.agent.infrastructure.tools.workspace_cli.machine_tools import (
     ExposePortRequest,
     ListMachinesRequest,
@@ -169,6 +174,22 @@ async def view_image(
     return await workspace_cli.view_image_internal(ctx, request)
 
 
+async def generate_image(
+    ctx: ToolContext,
+    request: GenerateImageRequest,
+) -> GenerateImageResult:
+    """
+    Make an image from a description -- an illustration, a banner, a diagram
+    in a given style, a product shot -- or edit one: pass it (and up to two
+    more to draw from) as `reference_image_paths` and say what to change.
+    The image is saved on your machine at `workspace_file_path`; look at it
+    with `view_image` before you use it, and copy it to the pod with
+    `sync_files` when people should see it. Each image costs real money, so
+    describe it fully the first time rather than iterating on vague prompts.
+    """
+    return await generate_image_internal(ctx, request)
+
+
 async def list_machines(
     ctx: ToolContext,
     request: ListMachinesRequest,
@@ -250,4 +271,16 @@ SPECS = (
 # the agent declared (the catalog adds it), so it is a group of its own.
 VIEW_IMAGE_SPECS = (
     tool(view_image, ToolGroup.VIEW_IMAGE, ToolPolicy(replay=ReplayClass.SAFE)),
+)
+
+# Offered beside the workspace tools when the deployment or the workspace has a
+# model that draws: the image is saved on the machine, so it needs one.
+IMAGE_GENERATION_SPECS = (
+    # Behind tool search: most chats never draw, and its schema would sit in
+    # every request's cached prefix.
+    tool(
+        generate_image,
+        ToolGroup.IMAGE_GENERATION,
+        ToolPolicy(kind="sandbox", deferrable=True),
+    ),
 )

@@ -91,6 +91,11 @@ def test_global_settings_exclude_module_owned_controls() -> None:
         "microsoft_client_id",
         "microsoft_client_secret",
         "microsoft_tenant_id",
+        # Apple arrived here directly, beside the two it is read with.
+        "apple_client_id",
+        "apple_key_id",
+        "apple_private_key",
+        "apple_team_id",
         "organization_home_cache_ttl_seconds",
         "session_cookie_domain",
         "session_cookie_older_domain",

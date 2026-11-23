@@ -80,6 +80,16 @@ def _normalize_column_for_diff(
     return normalized
 
 
+#: The column a contact-owned table always has, added by the platform when the
+#: table is made. A bundle may leave it out of `columns`; it is still the table's.
+CONTACT_COLUMN = "contact_id"
+
+
+def _implied_column(name: str, desired: dict[str, Any]) -> bool:
+    """A column the bundle does not list but still means the table to have."""
+    return name == CONTACT_COLUMN and bool(desired.get("contact_owned"))
+
+
 def diff_table_columns(existing: dict[str, Any], desired: dict[str, Any]) -> TableDiff:
     primary_key = str(
         existing.get("primary_key_column") or desired.get("primary_key_column") or "id"
@@ -113,7 +123,7 @@ def diff_table_columns(existing: dict[str, Any], desired: dict[str, Any]) -> Tab
     to_remove = sorted(
         name
         for name in existing_columns.keys() - desired_columns.keys()
-        if name and name != primary_key
+        if name and name != primary_key and not _implied_column(name, desired)
     )
 
     existing_columns_raw = {

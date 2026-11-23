@@ -473,6 +473,10 @@ class PromptCaching(AbstractCapability[object]):
                 anthropic_cache_tool_definitions=_ANTHROPIC_CACHE_TTL,
                 anthropic_cache_messages=_ANTHROPIC_CACHE_TTL,
             )
+        if self._protocol is RuntimeProfileProtocol.GOOGLE_GENAI:
+            # Gemini caches a repeated prefix implicitly and bills the hit as
+            # cached input; there is nothing to send for it.
+            return ModelSettings()
         # The `user` field: the one affinity lever in baseline Chat Completions.
         # `prompt_cache_key` is OpenAI-only and a strict shim rejects it.
         return OpenAIChatModelSettings(openai_user=self._affinity_key)

@@ -153,8 +153,11 @@ async def put_public_rows(
             ctx=ctx,
         )
     except OpeningRefused as exc:
+        # A code, so a client can tell "this table can't be opened like that"
+        # (the message says which column and why) from a malformed request.
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "TABLE_OPENING_REFUSED", "message": str(exc)},
         ) from exc
     await uow.commit()
     return _opening(opening)

@@ -32,12 +32,15 @@ async def ensure_personal_workspace(
     owner_user_id: UUID,
     owner_membership_id: UUID,
     name: str,
+    create: bool = True,
 ) -> PersonalWorkspace | None:
     """The person's own pod in this organization, made if they have none.
 
-    ``None`` when they have none and their plan has no room for another. The
-    pod counts like any other, and joining an organization must not fail
-    because of it: the person arrives with no pod of their own there.
+    ``None`` when they have none and their plan has no room for another, or
+    have none and ``create`` is false -- a caller that wants the one they
+    have without making one. The pod counts like any other, and joining an
+    organization must not fail because of it: the person arrives with no pod
+    of their own there.
     """
     member_count = (
         select(func.count(PodMember.id))
@@ -77,6 +80,8 @@ async def ensure_personal_workspace(
             uow, pod_id=chosen_id, user_id=owner_user_id
         )
         return PersonalWorkspace(chosen_id, assistant_id, False)
+    if not create:
+        return None
     # Names are unique inside an organization, including colleagues with the
     # same first name. The caller holds the organization provisioning lock.
     existing_name = await uow.session.scalar(

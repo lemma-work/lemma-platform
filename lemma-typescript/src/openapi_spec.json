@@ -1421,6 +1421,104 @@
         "title": "AgentRunApprovalDecision",
         "type": "string"
       },
+      "AgentRunResponse": {
+        "description": "One run of a conversation: how it went, and the model tokens it used.",
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "conversation_id": {
+            "format": "uuid",
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "output": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output"
+          },
+          "parent_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Run Id"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AgentRunStatus"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunTokenUsage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Model tokens the run used, summed over its model calls; null when none were recorded against it. A run still working reads what it has used so far. Leaves out the conversation's title and the memory kept after the run, which land later. Tokens only: no cost."
+          }
+        },
+        "required": [
+          "id",
+          "conversation_id",
+          "status",
+          "started_at"
+        ],
+        "title": "AgentRunResponse",
+        "type": "object"
+      },
       "AgentRunStartResponse": {
         "properties": {
           "agent_run_id": {
@@ -6692,6 +6790,19 @@
             ],
             "title": "Last Run Finished At"
           },
+          "last_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The conversation's latest run, to read with `agent.conversation.run.get` -- its outcome and the tokens it used. Set when one conversation is read.",
+            "title": "Last Run Id"
+          },
           "last_run_retryable": {
             "default": false,
             "title": "Last Run Retryable",
@@ -7398,6 +7509,12 @@
         "additionalProperties": false,
         "description": "Request to create a function.\n\nInput and output schemas are derived from the submitted code and returned\non the function response. They are not accepted in create requests.",
         "properties": {
+          "assistant_invoke": {
+            "default": true,
+            "description": "Offer this function to the Lemma's assistant. False keeps it for the flows that call it -- apps, workflows, schedules and other functions: the assistant is not shown it and is refused if it runs it by name.",
+            "title": "Assistant Invoke",
+            "type": "boolean"
+          },
           "code": {
             "anyOf": [
               {
@@ -7470,6 +7587,127 @@
           "name"
         ],
         "title": "CreateFunctionRequest",
+        "type": "object"
+      },
+      "CreateGoogleGenAIRuntimeProfileRequest": {
+        "description": "A Google provider: the Gemini API with an API key, or Vertex AI with a\nservice account key file. Never the server's own Google identity.",
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "backend": {
+            "$ref": "#/components/schemas/GoogleGenAIBackend",
+            "default": "GEMINI_API"
+          },
+          "default_model_name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "image_model_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Model Names"
+          },
+          "model_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Model Names",
+            "type": "array"
+          },
+          "model_settings": {
+            "additionalProperties": true,
+            "title": "Model Settings",
+            "type": "object"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "service_account_json": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Account Json"
+          },
+          "source": {
+            "const": "GOOGLE_GENAI",
+            "default": "GOOGLE_GENAI",
+            "title": "Source",
+            "type": "string"
+          },
+          "vertex_location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vertex Location"
+          },
+          "vertex_project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vertex Project"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "CreateGoogleGenAIRuntimeProfileRequest",
         "type": "object"
       },
       "CreateOpenAICompatibleRuntimeProfileRequest": {
@@ -7709,7 +7947,7 @@
           },
           "config": {
             "additionalProperties": true,
-            "description": "Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`.",
+            "description": "Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`. DATASTORE `rows: OWNER_READABLE` hands the trigger only rows its owner can read (their own on a per-person table, every row on a shared one), each run as the owner; making it needs only to read the table's rows, where the default `rows: ALL` needs `datastore.table.update`.",
             "title": "Config",
             "type": "object"
           },
@@ -8267,6 +8505,23 @@
           "answers"
         ],
         "title": "DecisionExampleBody",
+        "type": "object"
+      },
+      "DecisionImageBody": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "description": "A file of this Lemma, by path (`/receipts/0042.jpg`, or `/me/...` for one of your own). Read with your access: a file you cannot read is refused (422).",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "DecisionImageBody",
         "type": "object"
       },
       "DecisionNode": {
@@ -10726,6 +10981,12 @@
             "title": "Allowed Actions",
             "type": "array"
           },
+          "assistant_invoke": {
+            "default": true,
+            "description": "Offered to the Lemma's assistant and runnable by it.",
+            "title": "Assistant Invoke",
+            "type": "boolean"
+          },
           "code": {
             "anyOf": [
               {
@@ -10909,6 +11170,12 @@
             },
             "title": "Allowed Actions",
             "type": "array"
+          },
+          "assistant_invoke": {
+            "default": true,
+            "description": "Offered to the Lemma's assistant and runnable by it.",
+            "title": "Assistant Invoke",
+            "type": "boolean"
           },
           "code": {
             "anyOf": [
@@ -11359,6 +11626,12 @@
       "FunctionResponse": {
         "description": "Function response.",
         "properties": {
+          "assistant_invoke": {
+            "default": true,
+            "description": "Offered to the Lemma's assistant and runnable by it.",
+            "title": "Assistant Invoke",
+            "type": "boolean"
+          },
           "code": {
             "anyOf": [
               {
@@ -12032,6 +12305,12 @@
             "title": "Allowed Actions",
             "type": "array"
           },
+          "assistant_invoke": {
+            "default": true,
+            "description": "Offered to the Lemma's assistant and runnable by it.",
+            "title": "Assistant Invoke",
+            "type": "boolean"
+          },
           "code_path": {
             "anyOf": [
               {
@@ -12253,6 +12532,15 @@
         },
         "title": "GenerationSettings",
         "type": "object"
+      },
+      "GoogleGenAIBackend": {
+        "description": "Which host answers the Google Gen AI API, and so how it is signed in to.\n\n``GEMINI_API`` takes an API key. ``VERTEX_AI`` takes a service account --\na stored key file, or for the deployment's own profile, the identity the\nserver already runs as (Application Default Credentials).",
+        "enum": [
+          "GEMINI_API",
+          "VERTEX_AI"
+        ],
+        "title": "GoogleGenAIBackend",
+        "type": "string"
       },
       "GranteeRef": {
         "properties": {
@@ -14548,7 +14836,7 @@
         "properties": {
           "evidence": {
             "$ref": "#/components/schemas/JsonValue",
-            "description": "What to judge: an email, an event, a row, as text or JSON. Never followed as instructions. At most 64 KiB; send the part that matters."
+            "description": "What to judge: an email, an event, a row, as text or JSON. Never followed as instructions. At most 64 KiB; send the part that matters. Required unless `images` are sent."
           },
           "examples": {
             "description": "Past cases and their answers, to steer the provider.",
@@ -14557,6 +14845,15 @@
             },
             "maxItems": 20,
             "title": "Examples",
+            "type": "array"
+          },
+          "images": {
+            "description": "Images to judge with the evidence -- a receipt photo, a slide -- as files of this Lemma: PNG, JPEG, WebP or GIF (still), at most 10 MiB each; larger than 1568 pixels a side is shrunk before it is sent. What an image says is evidence, never instructions. 422 `DECISION_IMAGES_UNSUPPORTED` when this server's decision model cannot read images.",
+            "items": {
+              "$ref": "#/components/schemas/DecisionImageBody"
+            },
+            "maxItems": 4,
+            "title": "Images",
             "type": "array"
           },
           "instruction": {
@@ -14587,7 +14884,6 @@
         },
         "required": [
           "instruction",
-          "evidence",
           "schema"
         ],
         "title": "MakeDecisionRequest",
@@ -15212,6 +15508,21 @@
           "warning_percent"
         ],
         "title": "MyUsageLimitsResponse",
+        "type": "object"
+      },
+      "NamedPodResponse": {
+        "description": "Which pod an address in names means: its id, and nothing else.\n\nSomebody not in it learns no more than an id link would have told them.",
+        "properties": {
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pod_id"
+        ],
+        "title": "NamedPodResponse",
         "type": "object"
       },
       "NavigateCommand": {
@@ -17729,6 +18040,298 @@
           "action"
         ],
         "title": "PlanStepResponse",
+        "type": "object"
+      },
+      "PluginInstallItemResponse": {
+        "description": "Where one plugin of an install is.",
+        "properties": {
+          "app": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The app it put in the Lemma, once INSTALLED, if it brings one.",
+            "title": "App"
+          },
+          "connect_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where to connect the account a failure names, if it names one.",
+            "title": "Connect Url"
+          },
+          "current_step": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PluginInstallStepResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The step running now, if one is."
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "import_id": {
+            "description": "Its import: GET /pods/{pod_id}/bundle/imports/{import_id} has its whole plan and every step.",
+            "format": "uuid",
+            "title": "Import Id",
+            "type": "string"
+          },
+          "name": {
+            "description": "The bundle's own name once planned, else its folder's.",
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          },
+          "position": {
+            "description": "Its place in the request, from 0.",
+            "title": "Position",
+            "type": "integer"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/ExportProgressResponse",
+            "description": "Plan steps done (or skipped) of all its steps; 0/0 before its plan."
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it stopped: the question its page asks (NEEDS_ANSWER), or what failed (FAILED).",
+            "title": "Reason"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          },
+          "repo_url": {
+            "title": "Repo Url",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PluginInstallState",
+            "description": "WAITING behind the plugins before it; INSTALLING; INSTALLED; NEEDS_ANSWER -- stopped before anything was applied, because its install page would ask the question in `reason`; FAILED -- stopped, and POST \u2026/retry continues it from the failed step; CANCELLED by somebody."
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "position",
+          "import_id",
+          "repo_url",
+          "name",
+          "state"
+        ],
+        "title": "PluginInstallItemResponse",
+        "type": "object"
+      },
+      "PluginInstallRequest": {
+        "additionalProperties": false,
+        "description": "Body for installing several plugins into one Lemma.",
+        "properties": {
+          "plugins": {
+            "description": "The plugins to install, in the order to install them. Each counts as one import against the daily import limit.",
+            "items": {
+              "$ref": "#/components/schemas/PluginSourceRequest"
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Plugins",
+            "type": "array"
+          }
+        },
+        "required": [
+          "plugins"
+        ],
+        "title": "PluginInstallRequest",
+        "type": "object"
+      },
+      "PluginInstallResponse": {
+        "description": "A plugin install: every plugin it named, in order.",
+        "properties": {
+          "finished": {
+            "description": "Every plugin has stopped moving: INSTALLED, NEEDS_ANSWER, FAILED or CANCELLED. The Lemma tells the person who started it in their chat with it when this turns true.",
+            "title": "Finished",
+            "type": "boolean"
+          },
+          "install_id": {
+            "format": "uuid",
+            "title": "Install Id",
+            "type": "string"
+          },
+          "plugins": {
+            "items": {
+              "$ref": "#/components/schemas/PluginInstallItemResponse"
+            },
+            "title": "Plugins",
+            "type": "array"
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "install_id",
+          "pod_id",
+          "finished",
+          "plugins"
+        ],
+        "title": "PluginInstallResponse",
+        "type": "object"
+      },
+      "PluginInstallState": {
+        "description": "Where one bundle of an install is, as the person would say it.",
+        "enum": [
+          "WAITING",
+          "INSTALLING",
+          "INSTALLED",
+          "NEEDS_ANSWER",
+          "FAILED",
+          "CANCELLED"
+        ],
+        "title": "PluginInstallState",
+        "type": "string"
+      },
+      "PluginInstallStepResponse": {
+        "description": "The step a bundle is on.",
+        "properties": {
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "kind",
+          "name"
+        ],
+        "title": "PluginInstallStepResponse",
+        "type": "object"
+      },
+      "PluginSourceRequest": {
+        "additionalProperties": false,
+        "description": "One plugin: a GitHub repository, and the folder in it its bundle is in.",
+        "properties": {
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Repository owner.",
+            "title": "Owner"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "pattern": "^[A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*(?:/[A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*)*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The folder that holds the bundle's `pod.json`, e.g. 'install/mail'. Omit for a repository that is one bundle.",
+            "title": "Path"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Branch, tag or sha.",
+            "title": "Ref"
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Repository name.",
+            "title": "Repo"
+          },
+          "repo_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The repository's URL (alternative to owner+repo).",
+            "title": "Repo Url"
+          }
+        },
+        "title": "PluginSourceRequest",
         "type": "object"
       },
       "PodAccountCreateRequest": {
@@ -21116,12 +21719,52 @@
         "title": "RowRequest",
         "type": "object"
       },
+      "RunTokenUsage": {
+        "description": "Model tokens one run used, summed over its model calls.",
+        "properties": {
+          "cache_write_tokens": {
+            "default": 0,
+            "description": "Input tokens written to the provider's prompt cache.",
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "cached_input_tokens": {
+            "default": 0,
+            "description": "Input tokens read from the provider's prompt cache.",
+            "title": "Cached Input Tokens",
+            "type": "integer"
+          },
+          "input_tokens": {
+            "default": 0,
+            "description": "Tokens sent to the model, cached ones included (cached_input_tokens says how many of these were cache reads).",
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "models": {
+            "description": "Every model the run's calls were recorded against, by name.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "output_tokens": {
+            "default": 0,
+            "description": "Tokens the model wrote.",
+            "title": "Output Tokens",
+            "type": "integer"
+          }
+        },
+        "title": "RunTokenUsage",
+        "type": "object"
+      },
       "RuntimeModelCapability": {
         "enum": [
           "TEXT",
           "TOOLS",
           "VISION",
-          "REASONING"
+          "REASONING",
+          "IMAGE_OUTPUT"
         ],
         "title": "RuntimeModelCapability",
         "type": "string"
@@ -21198,6 +21841,7 @@
         "enum": [
           "OPENAI_COMPATIBLE",
           "ANTHROPIC_COMPATIBLE",
+          "GOOGLE_GENAI",
           "AGENT_HOST"
         ],
         "title": "RuntimeProfileProtocol",
@@ -26184,6 +26828,18 @@
         "additionalProperties": false,
         "description": "Request to update a function.",
         "properties": {
+          "assistant_invoke": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Offer this function to the Lemma's assistant, or stop. Omit to leave it as it is.",
+            "title": "Assistant Invoke"
+          },
           "code": {
             "anyOf": [
               {
@@ -26261,6 +26917,143 @@
           }
         },
         "title": "UpdateFunctionRequest",
+        "type": "object"
+      },
+      "UpdateGoogleGenAIRuntimeProfileRequest": {
+        "description": "Omitted keeps a field. The host (``backend``) is not editable: moving\nbetween the Gemini API and Vertex AI is a new provider.",
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "default_model_name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "image_model_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Model Names"
+          },
+          "model_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Names"
+          },
+          "model_settings": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Settings"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "service_account_json": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Account Json"
+          },
+          "source": {
+            "const": "GOOGLE_GENAI",
+            "default": "GOOGLE_GENAI",
+            "title": "Source",
+            "type": "string"
+          },
+          "vertex_location": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vertex Location"
+          },
+          "vertex_project": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vertex Project"
+          }
+        },
+        "title": "UpdateGoogleGenAIRuntimeProfileRequest",
         "type": "object"
       },
       "UpdateMemberRoleRequest": {
@@ -26490,7 +27283,7 @@
                 "type": "null"
               }
             ],
-            "description": "Replaces the whole config. Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`.",
+            "description": "Replaces the whole config. Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`. DATASTORE `rows: OWNER_READABLE` hands the trigger only rows its owner can read (their own on a per-person table, every row on a shared one), each run as the owner; making it needs only to read the table's rows, where the default `rows: ALL` needs `datastore.table.update`.",
             "title": "Config"
           },
           "filter_instruction": {
@@ -28903,6 +29696,11 @@
             "title": "Id",
             "type": "string"
           },
+          "kind": {
+            "$ref": "#/components/schemas/WorkflowEdgeKind",
+            "default": "NEXT",
+            "description": "`NEXT` is followed when the source finishes. `FAILURE` is followed instead of failing the run when the source fails: its output is then `{error}` (with any partial output), read as `<source>.error`. At most one FAILURE edge per node, never from an END. A LOOP's also catches failures in its body that no body node routes itself."
+          },
           "label": {
             "anyOf": [
               {
@@ -28930,6 +29728,15 @@
         ],
         "title": "WorkflowEdge",
         "type": "object"
+      },
+      "WorkflowEdgeKind": {
+        "description": "What an edge is followed on.",
+        "enum": [
+          "NEXT",
+          "FAILURE"
+        ],
+        "title": "WorkflowEdgeKind",
+        "type": "string"
       },
       "WorkflowGraphUpdateRequest": {
         "description": "Named request body for replacing a workflow graph.",
@@ -33971,6 +34778,7 @@
                   "mapping": {
                     "AGENT_HOST": "#/components/schemas/CreateAgentHostRuntimeProfileRequest",
                     "ANTHROPIC_COMPATIBLE": "#/components/schemas/CreateAnthropicCompatibleRuntimeProfileRequest",
+                    "GOOGLE_GENAI": "#/components/schemas/CreateGoogleGenAIRuntimeProfileRequest",
                     "OPENAI_COMPATIBLE": "#/components/schemas/CreateOpenAICompatibleRuntimeProfileRequest"
                   },
                   "propertyName": "source"
@@ -33984,6 +34792,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/CreateAnthropicCompatibleRuntimeProfileRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CreateGoogleGenAIRuntimeProfileRequest"
                   }
                 ],
                 "title": "Data"
@@ -34172,6 +34983,7 @@
                   "mapping": {
                     "AGENT_HOST": "#/components/schemas/UpdateAgentHostRuntimeProfileRequest",
                     "ANTHROPIC_COMPATIBLE": "#/components/schemas/UpdateAnthropicCompatibleRuntimeProfileRequest",
+                    "GOOGLE_GENAI": "#/components/schemas/UpdateGoogleGenAIRuntimeProfileRequest",
                     "OPENAI_COMPATIBLE": "#/components/schemas/UpdateOpenAICompatibleRuntimeProfileRequest"
                   },
                   "propertyName": "source"
@@ -34185,6 +34997,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/UpdateAnthropicCompatibleRuntimeProfileRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/UpdateGoogleGenAIRuntimeProfileRequest"
                   }
                 ],
                 "title": "Data"
@@ -37150,6 +37965,69 @@
         }
       }
     },
+    "/pods/by-name": {
+      "get": {
+        "description": "Which pod a web address spelled in names means (`/l/{organization}/{pod}/...`): `organization` is the organization's handle, `pod` the pod's name as one word of an address -- lower case, letters and digits, a hyphen for every other run. Answers only for a pod the caller could already see by name or walk into without asking: one they are in, any pod for the organization's owner, a pod open to everyone, and a pod open to the organization for anyone in it or free to join it. Every other name, an unknown handle, and a word two pods share are one 404. Open the pod, or ask to join it, by the id.",
+        "operationId": "pod.find_by_name",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "organization",
+            "required": true,
+            "schema": {
+              "maxLength": 255,
+              "minLength": 1,
+              "title": "Organization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pod",
+            "required": true,
+            "schema": {
+              "maxLength": 255,
+              "minLength": 1,
+              "title": "Pod",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamedPodResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Find a Pod by Name",
+        "tags": [
+          "Pods"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "pod",
+          "result": "entity",
+          "verb": "find_by_name"
+        }
+      }
+    },
     "/pods/start": {
       "post": {
         "description": "Make a pod that owns something, in one transaction: the pod, what it owns, a template's own rules in its shared memory, and the chat where its agent sets itself up, opened with the caller's first message. From a template (`template`, with `due` for a finish line) it also brings the template's tables, skill and schedules, applied by a worker, and its agent starts once they are in; from the caller's own words (`outcome` and `name`) its agent starts at once. A failure leaves nothing behind. 404 for a template that is not here; 403 outside the organization; 409 when its name collides with one made at the same moment.",
@@ -37298,8 +38176,8 @@
           "verb": "get"
         }
       },
-      "put": {
-        "description": "Update pod details",
+      "patch": {
+        "description": "Update pod details; only the fields sent change",
         "operationId": "pod.update",
         "parameters": [
           {
@@ -39312,6 +40190,195 @@
           "resource": "pod.bundle.import",
           "result": "entity",
           "verb": "replan"
+        }
+      }
+    },
+    "/pods/{pod_id}/bundle/installs": {
+      "post": {
+        "description": "Install several plugins -- bundles in folders of GitHub repositories -- into this pod, in the order named. Returns 202 with an install_id at once; the server fetches, plans and applies each with its install page's defaults, and keeps going when nobody polls. A plugin whose page would ask a question stops before anything is applied (NEEDS_ANSWER) and the next one goes ahead. Each plugin counts as one import against the daily import limit.",
+        "operationId": "pod.bundle.install.start",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PluginInstallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginInstallResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Install Plugins",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod.bundle.install"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod.bundle.install",
+          "result": "entity",
+          "verb": "start"
+        }
+      }
+    },
+    "/pods/{pod_id}/bundle/installs/{install_id}": {
+      "get": {
+        "description": "Where each plugin of an install is: its state, steps done of its plan, the step running, and why it stopped. Only its starter's: anyone else gets 404.",
+        "operationId": "pod.bundle.install.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "install_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Install Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginInstallResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Plugin Install Status",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "pod.bundle.install",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
+    "/pods/{pod_id}/bundle/installs/{install_id}/retry": {
+      "post": {
+        "description": "Put every FAILED plugin of the install back in the queue. One with a plan carries on from the step that failed; the steps already applied stay. One that failed before its plan was made starts over. The others are left as they are.",
+        "operationId": "pod.bundle.install.retry",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "install_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Install Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginInstallResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Failed Plugins",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod.bundle.install"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod.bundle.install",
+          "result": "entity",
+          "verb": "retry"
         }
       }
     },
@@ -45771,6 +46838,77 @@
           "resource": "agent.conversation",
           "result": "entity",
           "verb": "retry"
+        }
+      }
+    },
+    "/pods/{pod_id}/conversations/{conversation_id}/runs/{run_id}": {
+      "get": {
+        "description": "One run of a conversation: its status, output and error, and the model tokens it used (input, output, cache reads and writes, and the models). A conversation's latest run is `last_run_id` on the conversation; a send's is `agent_run_id` on its answer. 404 for a run of any other conversation.",
+        "operationId": "agent.conversation.run.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Conversation Run",
+        "tags": [
+          "agent_conversations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.conversation.run",
+          "result": "entity",
+          "verb": "get"
         }
       }
     },

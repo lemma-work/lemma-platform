@@ -38,6 +38,7 @@ def priceable_request(
     settings: Mapping[str, object],
     *,
     prices_images_as_text: bool,
+    prices_image_output: bool = False,
 ) -> bool:
     """Whether every part of this request is billed at ordinary token rates.
 
@@ -45,7 +46,9 @@ def priceable_request(
     the only content category whose price depends on the card rather than on
     the request -- see `RateCard.prices_images_as_text`.
     """
-    if parameters.native_tools or parameters.allow_image_output:
+    if parameters.native_tools:
+        return False
+    if parameters.allow_image_output and not prices_image_output:
         return False
     # A server-side continuation can restore content or work absent locally.
     if any(settings.get(key) for key in _SERVER_SIDE_SETTINGS):

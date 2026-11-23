@@ -10,6 +10,13 @@ test("a destination that names a teammate names them", () => {
     assert.equal(waiting.faces.length, 1, "one door, one face");
 });
 
+test("an address spelled in names names its Lemma, not the organization before it", () => {
+    assert.equal(waitingFor("/l/fjord/renewals").name, "Renewals");
+    assert.equal(waitingFor("/l/fjord/launch-desk-2/apps/ideas").name, "Launch Desk 2");
+    assert.equal(waitingFor("/l/fjord/renewals").faces[0], waitingFor("/l/acme/renewals/files").faces[0], "the same face for the same Lemma");
+    assert.equal(waitingFor("/l/marketing/files").name, "Marketing", "an id address still reads as before");
+});
+
 test("the app's own paths name the Lemma they are inside, and the app's places name nobody", () => {
     assert.equal(waitingFor("/t/outcome/marketing/apps").name, "Marketing");
     assert.equal(waitingFor("/t/chats/marketing/c/c1").name, "Marketing");
@@ -78,4 +85,10 @@ test("an unnameable teammate still gets a face", () => {
     const waiting = waitingFor("/t/a3f9c1e2-4b5d-11ee-be56-0242ac120002/conversation");
     assert.equal(waiting.name, null);
     assert.equal(waiting.faces.length, 1);
+    assert.equal(waiting.id, "a3f9c1e2-4b5d-11ee-be56-0242ac120002", "its tint comes from its id");
+});
+
+test("a destination that names nobody has no id to tint by", () => {
+    assert.equal(waitingFor(null).id, null);
+    assert.equal(waitingFor("/connect").id, null);
 });

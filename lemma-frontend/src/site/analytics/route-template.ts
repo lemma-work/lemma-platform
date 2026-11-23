@@ -97,6 +97,7 @@ export const ROUTE_TEMPLATES: readonly string[] = [
     "/product/vignettes/[id]",
     "/remix",
     "/s/[kind]/[...path]",
+    "/settings/[[...section]]",
     "/sign-in-to-site/[conversationId]/[toolCallId]",
     "/slack/allowed",
     "/slack/connect",
@@ -232,6 +233,7 @@ function viewTemplate(view: View): string {
         case "connectors": return "/connectors";
         case "people": return "/people";
         case "history": return view.podId ? "/history/[lemma]" : "/history";
+        case "settings": return view.section ? "/settings/[section]" : "/settings";
         case "hire": return "/l/new";
         case "chats": {
             const { open } = view;

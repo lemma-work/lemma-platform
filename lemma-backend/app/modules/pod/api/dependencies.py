@@ -15,14 +15,19 @@ from app.modules.icon.contracts.provisioning import create_icon_service
 from app.modules.schedule.contracts.pod_teardown import (
     create_pod_schedule_teardown,
 )
+from app.modules.pod.infrastructure.named_pods import NamedPods
 from app.modules.pod.infrastructure.open_pods import OpenPods
 from app.modules.pod.infrastructure.owned_pods import OwnedPods
+from app.modules.pod.services.pod_address_service import PodAddressService
 from app.modules.pod.infrastructure.pod_repositories import (
     PodJoinRequestRepository,
     PodRepository,
     PodMemberRepository,
 )
-from app.modules.identity.contracts.organizations import build_organization_membership
+from app.modules.identity.contracts.organizations import (
+    OrganizationsByHandle,
+    build_organization_membership,
+)
 from app.core.authorization.permissions import Permissions
 
 from app.modules.pod.domain.pod_entities import PodRole
@@ -112,6 +117,16 @@ def get_pod_join_request_service(
 PodJoinRequestServiceDep = Annotated[
     PodJoinRequestService, Depends(get_pod_join_request_service)
 ]
+
+
+def get_pod_address_service(uow: UoWDep) -> PodAddressService:
+    return PodAddressService(
+        organizations=OrganizationsByHandle(uow),
+        named_pods=NamedPods(uow),
+    )
+
+
+PodAddressServiceDep = Annotated[PodAddressService, Depends(get_pod_address_service)]
 
 
 def require_pod_role(required_role: PodRole):

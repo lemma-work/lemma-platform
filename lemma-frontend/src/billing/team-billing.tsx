@@ -7,9 +7,11 @@ import { lemma } from "@/session/client";
 import { isForbidden } from "@/session/auth-state";
 import { itemsOf } from "@/search/sources";
 import { canManage, type Member } from "@/org/membership";
-import { live } from "@/usage/queries";
-import { PlanPicker } from "./plan-picker";
-import { formatPrice, isTrouble, onDate, paying, priceLine, standing } from "./plan";
+import { live, useMyLimits } from "@/usage/queries";
+import { allowanceOf } from "@/usage/allowance";
+import { BillingNow } from "./billing-now";
+import { PlanCards } from "./plan-cards";
+import { formatPrice, isTrouble, onDate, paying, standing } from "./plan";
 import {
     useCancelTeam, useChangeTeam, useInvoices, useOrgPlan, usePlans, useSeats, useStartTeam,
 } from "./queries";
@@ -22,9 +24,12 @@ import {
  *  does not offer an action the server has already decided to refuse — the rule
  *  `org/membership.ts` states for the roster, applied to money.
  *
- *  A member still sees the plans. One you cannot buy yourself is still one you
- *  can ask an owner for, and a blank panel answers "what would it take to lift
- *  this limit?" with nothing.
+ *  A member still sees the plans, with what each would cost everyone here. One
+ *  you cannot buy yourself is still one you can ask an owner for, and a blank
+ *  panel answers "what would it take to lift this limit?" with nothing.
+ *
+ *  Drawn as what the organization is on (`BillingNow`), the plans as cards to
+ *  buy from (`PlanCards`), then the invoices as rows.
  */
 function statusWord(status: string): string {
     if (status === "paid") return "Paid";
@@ -34,9 +39,17 @@ function statusWord(status: string): string {
     return "Draft";
 }
 
-export function TeamBillingSection({ orgId }: { orgId: string }) {
+/** The dot beside that word: paid is green, due is warm, failed is red, the
+ *  rest grey. */
+function statusTone(status: string): string {
+    if (status === "paid") return "kstatus";
+    if (status === "unpaid") return "kstatus kstatus--warn";
+    if (status === "failed") return "kstatus kstatus--bad";
+    return "kstatus kstatus--off";
+}
+
+export function TeamBillingSection({ orgId, orgName }: { orgId: string; orgName?: string }) {
     const [waiting, setWaiting] = useState(false);
-    const [stopping, setStopping] = useState(false);
 
     /* The same query keys the roster uses, so looking at billing costs no extra
        requests for anybody who has already opened People — and changing a role
@@ -57,131 +70,172 @@ export function TeamBillingSection({ orgId }: { orgId: string }) {
     const myRole = people.find((member) => member.user_id === me.data?.id)?.role ?? null;
     const mayBuy = canManage(myRole);
     const mayStop = myRole === "ORG_OWNER";
+    /* Whether this person may buy is only known once both reads answer;
+       until then nothing is offered, rather than a button the server may
+       refuse. */
+    const roleKnown = members.isSuccess && me.isSuccess;
+    /* Who can buy, counted only from a roster read to its end: the first
+       page of a larger organization would undercount them. */
+    const wholeRoster = members.isSuccess && !(members.data as { next_page_token?: string | null }).next_page_token;
+    const buyers = wholeRoster ? people.filter((member) => canManage(member.role)).length : 0;
 
     const plan = useOrgPlan(orgId, waiting);
     const plans = usePlans();
     const seats = useSeats(orgId);
+    const limits = useMyLimits(orgId);
     const invoices = useInvoices(orgId, mayBuy);
     const start = useStartTeam(orgId);
     const change = useChangeTeam(orgId);
     const cancel = useCancelTeam(orgId);
 
+    /* The sample workspace has no organization to bill, and the plans are
+       still worth seeing: what there is, and what each would give. */
     if (!live()) {
-        return <p className="usage-quiet">The sample workspace has no real organization, so there is nothing to bill.</p>;
-    }
-
-    if (isForbidden(plan.error)) {
-        return <p className="usage-quiet">Only members of this organization can see what it pays for.</p>;
-    }
-
-    const subscription = plan.data ?? null;
-    const onPlan = subscription?.plan ?? null;
-    const note = standing(subscription);
-    const bought = seats.data?.current_seats ?? 0;
-    const present = seats.data?.member_count ?? 0;
-
-    return (
-        <div className="usage-panel">
-            <section className="usage-block">
-                <h4>What this organization is on</h4>
-
-                {plan.isPending && <p className="usage-quiet" role="status">Reading the plan…</p>}
-                {plan.isError && !isForbidden(plan.error) && (
-                    <p className="usage-quiet">
-                        The plan could not be read.{" "}
-                        <button className="btn" onClick={() => void plan.refetch()}><RefreshIcon size={14} /> Try again</button>
-                    </p>
-                )}
-
-                {!plan.isPending && !plan.isError && (
-                    <div className="plan-now">
-                        <strong>{onPlan?.name ?? "No plan yet"}</strong>
-                        <span className="plan-now__price">
-                            {/* As on the personal screen: free and unbought are
-                                the same sentence, and a price line reading
-                                "Free" under the word Free says nothing twice. */}
-                            {paying(subscription) ? priceLine(onPlan!) : "This organization has not bought a plan."}
-                        </span>
-                        {subscription?.current_period_end && !subscription.cancel_at_period_end && paying(subscription) && (
-                            <small>Renews {onDate(subscription.current_period_end)}</small>
-                        )}
-                    </div>
-                )}
-
-                {note && <p className="plan-note" data-bad={isTrouble(subscription)}>{note}</p>}
-
-                {seats.data && (
-                    <p className="plan-seats">
-                        {/* Two numbers, because they answer different questions
-                            and only their difference is worth acting on: a team
-                            that grew mid-period has more people than it has
-                            paid for, and nothing charges for the difference
-                            until the plan is next changed. */}
-                        Paid for {bought} {bought === 1 ? "seat" : "seats"} · {present} {present === 1 ? "person" : "people"} in the organization
-                        {present > bought && paying(subscription) && (
-                            <em> — {present - bought} not yet paid for.</em>
-                        )}
-                    </p>
-                )}
-
-                {mayStop && paying(subscription) && !subscription?.cancel_at_period_end && (
-                    stopping ? (
-                        <div className="plan-stop">
-                            <p>Stop renewing {onPlan?.name}? Everyone here keeps working until the end of the period already paid for.</p>
-                            <div className="plan-stop__actions">
-                                <button
-                                    className="btn btn--danger"
-                                    disabled={cancel.isPending}
-                                    onClick={() => { cancel.mutate(undefined, { onSuccess: () => setStopping(false) }); }}
-                                >{cancel.isPending ? "Stopping…" : "Stop renewing"}</button>
-                                <button className="btn" onClick={() => setStopping(false)}>Keep it</button>
-                            </div>
-                            {cancel.isError && <p className="plans__problem">That could not be cancelled. Nothing has changed.</p>}
-                        </div>
-                    ) : (
-                        <button className="plan-stop__ask" onClick={() => setStopping(true)}>Stop renewing</button>
-                    )
-                )}
-            </section>
-
-            <section className="usage-block">
-                <h4>Plans</h4>
-                <PlanPicker
+        return (
+            <div className="kset-stack kbill">
+                <PlanCards
                     audience="TEAM"
                     plans={plans.data}
-                    current={subscription}
                     pending={plans.isPending}
+                    current={null}
+                    people={null}
+                    crowded={false}
+                    blocked={{
+                        short: "Not in the sample workspace",
+                        long: "The sample workspace has no organization to bill, so nothing here can be bought.",
+                    }}
                     start={(planId) => start.mutateAsync(planId)}
                     change={(planId) => change.mutateAsync(planId)}
                     onWaiting={setWaiting}
-                    disabled={members.isSuccess && !mayBuy
-                        ? "An owner or an editor buys and changes the plan for this organization."
-                        : undefined}
                 />
-            </section>
+            </div>
+        );
+    }
 
-            {mayBuy && (invoices.isPending || (invoices.data && invoices.data.length > 0)) && (
-                <section className="usage-block">
-                    <h4>Invoices</h4>
-                    {invoices.isPending && <p className="usage-quiet" role="status">Reading the history…</p>}
-                    <ul className="usage-breakdown">
+    if (isForbidden(plan.error)) {
+        return <p className="kset-note">Only members of this organization can see what it pays for.</p>;
+    }
+
+    const subscription = plan.data ?? null;
+    const note = standing(subscription);
+    const bought = seats.data?.current_seats ?? 0;
+    /* Everyone in the organization, which is what a checkout charges for.
+       Only the seat read counts all of them, so until it answers the head
+       count is unknown, and nothing that depends on it is shown or sold. */
+    const present = seats.data?.member_count ?? null;
+    const where = orgName ?? "this organization";
+    const blocked = !roleKnown
+        ? (members.isError || me.isError
+            ? {
+                short: "Couldn’t read who can buy",
+                long: <>Couldn’t read who can choose the plan for {where}.
+                    <button type="button" className="b b--s b--secondary" onClick={() => { void members.refetch(); void me.refetch(); }}><RefreshIcon /> Try again</button></>,
+            }
+            : { short: "Checking who can buy…" })
+        : !mayBuy
+            ? {
+                short: "An owner or editor can choose it",
+                long: "Owners and editors choose the plan for " + where
+                    + (buyers > 0 ? ". " + (buyers === 1 ? "One person" : buyers + " people") + " here can." : "."),
+            }
+            : present === null
+                ? (seats.isError
+                    ? {
+                        short: "Couldn’t read how many people are here",
+                        long: <>Couldn’t read how many people are in {where}, so the plans can’t be priced for it.
+                            <button type="button" className="b b--s b--secondary" onClick={() => void seats.refetch()}><RefreshIcon /> Try again</button></>,
+                    }
+                    : { short: "Counting the people here…" })
+                : undefined;
+    const allowance = allowanceOf(limits.data);
+    const crowded = allowance.kind === "blocked" || (allowance.kind === "within" && allowance.warn);
+    const unpaid = present !== null && paying(subscription) && present > bought ? present - bought : 0;
+
+    return (
+        <div className="kset-stack kbill">
+            {plan.isPending && <span className="ksk kbill-now--sk" aria-label="Reading the plan" />}
+            {plan.isError && !isForbidden(plan.error) && (
+                <p className="kset-said kset-said--bad" role="alert">
+                    Couldn’t read the plan.
+                    <button type="button" className="b b--s b--secondary" onClick={() => void plan.refetch()}><RefreshIcon /> Try again</button>
+                </p>
+            )}
+
+            {!plan.isPending && !plan.isError && (
+                <BillingNow
+                    subscription={subscription}
+                    orgName={orgName ?? "this organization"}
+                    people={present ?? undefined}
+                    allowance={allowance}
+                    canBuy={mayBuy}
+                    stop={mayStop ? {
+                        run: (done) => cancel.mutate(undefined, { onSuccess: done }),
+                        pending: cancel.isPending,
+                        failed: cancel.isError,
+                    } : null}
+                />
+            )}
+
+            {note && <p className={"kset-said" + (isTrouble(subscription) ? " kset-said--bad" : "")}>{note}</p>}
+
+            {/* Seats follow the member count only when the plan changes, so
+                somebody who joined after the last payment is not on the bill
+                yet. Said with what will put them on it. */}
+            {unpaid > 0 && (
+                <p className="kstatus kstatus--warn kset-state">
+                    {unpaid === 1 ? "1 person" : unpaid + " people"} joined after the last payment, so {orgName ?? "this organization"} has {present} people
+                    and pays for {bought}. They’re added to the bill when the plan next changes.
+                </p>
+            )}
+
+            <PlanCards
+                audience="TEAM"
+                plans={plans.data}
+                pending={plans.isPending}
+                current={subscription}
+                people={present}
+                orgName={orgName}
+                crowded={crowded}
+                blocked={blocked}
+                start={(planId) => start.mutateAsync(planId)}
+                change={(planId) => change.mutateAsync(planId)}
+                onWaiting={setWaiting}
+            />
+            {plans.isError && (
+                <p className="kset-said kset-said--bad" role="alert">
+                    Couldn’t read the plans.
+                    <button type="button" className="b b--s b--secondary" onClick={() => void plans.refetch()}><RefreshIcon /> Try again</button>
+                </p>
+            )}
+
+            {mayBuy && (invoices.isPending || invoices.isError || (invoices.data && invoices.data.length > 0)) && <>
+                <p className="ksub">Invoices</p>
+                {invoices.isPending && <span className="ksk kbill-rows--sk" aria-label="Reading the invoices" />}
+                {invoices.isError && (
+                    <p className="kset-said kset-said--bad" role="alert">
+                        Couldn’t read the invoices.
+                        <button type="button" className="b b--s b--secondary" onClick={() => void invoices.refetch()}><RefreshIcon /> Try again</button>
+                    </p>
+                )}
+                {(invoices.data ?? []).length > 0 && (
+                    <div className="klist">
                         {(invoices.data ?? []).map((invoice) => (
-                            <li key={invoice.id}>
-                                <span>
-                                    {onDate(invoice.period_start)} — {onDate(invoice.period_end)}
-                                    {" · "}{statusWord(invoice.status)}
+                            <div className="krow" key={invoice.id}>
+                                <span className="krow__v">
+                                    <b>{onDate(invoice.period_start)} – {onDate(invoice.period_end)}</b>
+                                    <span className={statusTone(invoice.status)}>{statusWord(invoice.status)}</span>
                                 </span>
-                                <span className="usage-breakdown__cost">
-                                    {formatPrice(invoice.total_cents, invoice.currency)}
+                                <span className="krow__end">
+                                    <span className="kset-fig">{formatPrice(invoice.total_cents, invoice.currency)}</span>
                                     {invoice.status === "unpaid" && invoice.checkout_url && (
-                                        <> <a href={invoice.checkout_url} target="_blank" rel="noreferrer">Pay <ExternalIcon size={12} /></a></>
+                                        <a className="b b--s b--secondary" href={invoice.checkout_url} target="_blank" rel="noreferrer">Pay <ExternalIcon /></a>
                                     )}
                                 </span>
-                            </li>
+                            </div>
                         ))}
-                    </ul>
-                </section>
-            )}
+                    </div>
+                )}
+            </>}
         </div>
     );
 }

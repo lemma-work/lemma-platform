@@ -14,6 +14,9 @@ from ...models.create_agent_host_runtime_profile_request import (
 from ...models.create_anthropic_compatible_runtime_profile_request import (
     CreateAnthropicCompatibleRuntimeProfileRequest,
 )
+from ...models.create_google_gen_ai_runtime_profile_request import (
+    CreateGoogleGenAIRuntimeProfileRequest,
+)
 from ...models.create_open_ai_compatible_runtime_profile_request import (
     CreateOpenAICompatibleRuntimeProfileRequest,
 )
@@ -26,6 +29,7 @@ def _get_kwargs(
     *,
     body: CreateAgentHostRuntimeProfileRequest
     | CreateAnthropicCompatibleRuntimeProfileRequest
+    | CreateGoogleGenAIRuntimeProfileRequest
     | CreateOpenAICompatibleRuntimeProfileRequest,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
@@ -40,6 +44,8 @@ def _get_kwargs(
     if isinstance(body, CreateAgentHostRuntimeProfileRequest):
         _kwargs["json"] = body.to_dict()
     elif isinstance(body, CreateOpenAICompatibleRuntimeProfileRequest):
+        _kwargs["json"] = body.to_dict()
+    elif isinstance(body, CreateAnthropicCompatibleRuntimeProfileRequest):
         _kwargs["json"] = body.to_dict()
     else:
         _kwargs["json"] = body.to_dict()
@@ -86,6 +92,7 @@ def sync_detailed(
     client: AuthenticatedClient | Client,
     body: CreateAgentHostRuntimeProfileRequest
     | CreateAnthropicCompatibleRuntimeProfileRequest
+    | CreateGoogleGenAIRuntimeProfileRequest
     | CreateOpenAICompatibleRuntimeProfileRequest,
 ) -> Response[AgentRuntimeProfileResponse | ErrorResponse]:
     """Create Agent Runtime Profile
@@ -93,7 +100,7 @@ def sync_detailed(
     Args:
         organization_id (UUID):
         body (CreateAgentHostRuntimeProfileRequest |
-            CreateAnthropicCompatibleRuntimeProfileRequest |
+            CreateAnthropicCompatibleRuntimeProfileRequest | CreateGoogleGenAIRuntimeProfileRequest |
             CreateOpenAICompatibleRuntimeProfileRequest):
 
     Raises:
@@ -122,6 +129,7 @@ def sync(
     client: AuthenticatedClient | Client,
     body: CreateAgentHostRuntimeProfileRequest
     | CreateAnthropicCompatibleRuntimeProfileRequest
+    | CreateGoogleGenAIRuntimeProfileRequest
     | CreateOpenAICompatibleRuntimeProfileRequest,
 ) -> AgentRuntimeProfileResponse | ErrorResponse | None:
     """Create Agent Runtime Profile
@@ -129,7 +137,7 @@ def sync(
     Args:
         organization_id (UUID):
         body (CreateAgentHostRuntimeProfileRequest |
-            CreateAnthropicCompatibleRuntimeProfileRequest |
+            CreateAnthropicCompatibleRuntimeProfileRequest | CreateGoogleGenAIRuntimeProfileRequest |
             CreateOpenAICompatibleRuntimeProfileRequest):
 
     Raises:
@@ -153,6 +161,7 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
     body: CreateAgentHostRuntimeProfileRequest
     | CreateAnthropicCompatibleRuntimeProfileRequest
+    | CreateGoogleGenAIRuntimeProfileRequest
     | CreateOpenAICompatibleRuntimeProfileRequest,
 ) -> Response[AgentRuntimeProfileResponse | ErrorResponse]:
     """Create Agent Runtime Profile
@@ -160,7 +169,7 @@ async def asyncio_detailed(
     Args:
         organization_id (UUID):
         body (CreateAgentHostRuntimeProfileRequest |
-            CreateAnthropicCompatibleRuntimeProfileRequest |
+            CreateAnthropicCompatibleRuntimeProfileRequest | CreateGoogleGenAIRuntimeProfileRequest |
             CreateOpenAICompatibleRuntimeProfileRequest):
 
     Raises:
@@ -187,6 +196,7 @@ async def asyncio(
     client: AuthenticatedClient | Client,
     body: CreateAgentHostRuntimeProfileRequest
     | CreateAnthropicCompatibleRuntimeProfileRequest
+    | CreateGoogleGenAIRuntimeProfileRequest
     | CreateOpenAICompatibleRuntimeProfileRequest,
 ) -> AgentRuntimeProfileResponse | ErrorResponse | None:
     """Create Agent Runtime Profile
@@ -194,7 +204,7 @@ async def asyncio(
     Args:
         organization_id (UUID):
         body (CreateAgentHostRuntimeProfileRequest |
-            CreateAnthropicCompatibleRuntimeProfileRequest |
+            CreateAnthropicCompatibleRuntimeProfileRequest | CreateGoogleGenAIRuntimeProfileRequest |
             CreateOpenAICompatibleRuntimeProfileRequest):
 
     Raises:

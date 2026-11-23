@@ -7,6 +7,7 @@ SHELL := /bin/bash
 #   make dev           start infra + backend + frontend (hot-reload)
 #   make dev-public    same, with an ephemeral public Cloudflare API URL
 #   make dev RELOAD=1  same, with uvicorn --reload on the backend
+#   make dev DEV_ONE_SITE=1  same, on lemma.localhost so framed apps are signed in
 #   make dev OTEL=1 LLM_OTEL=1  same, with local HyperDX + Phoenix dashboards
 #   make stop          stop backend/frontend processes
 #   make stop-all      also stop infra containers
@@ -42,7 +43,7 @@ SHELL := /bin/bash
         lint lint-clients lint-lockfiles measure-clients client-structure-record client-typecheck-record \
         quality quality-frontend check architecture pre-push codeql codeql-python codeql-javascript codeql-all migrate \
         fix format lint-python lint-frontend lint-rust lint-shell lint-ci lint-docker lint-docs lint-config \
-        lint-repo hooks dev-clean dev-clean-apply _disk-hint
+        lint-repo hooks dev-clean dev-clean-apply worktree-deps _disk-hint
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -128,8 +129,31 @@ DEV_POSTGRES_PORT     ?= 5432
 DEV_REDIS_PORT        ?= 6379
 DEV_SUPERTOKENS_PORT  ?= 3567
 
+# `make dev DEV_ONE_SITE=1` serves the web app, the API and every app as one
+# site, so an app framed in the web app is signed in.
+#
+# By default the web app and the API are on `localhost` and apps on
+# `<slug>.apps.lemma.localhost`. Browsers count those as different sites, so the
+# session cookie (SameSite=Lax, on `localhost`) never reaches an app: a framed
+# app shows its sign-in card, and a private one cannot get past its access
+# page. One site is `lemma.localhost` for the web app, `api.lemma.localhost`
+# for the API and the session cookie on `.lemma.localhost` -- the shape hosted
+# Lemma has under its own domain. `*.localhost` needs no DNS or hosts file.
+#
+# Not the default: a developer's open tabs and bookmarks, and any OAuth
+# redirect URI registered with a provider for local development, name
+# `localhost`.
+DEV_ONE_SITE          ?=
+ifeq ($(strip $(DEV_ONE_SITE)),1)
+DEV_SITE_DOMAIN       := lemma.localhost
+DEV_BACKEND_URL       := http://api.$(DEV_SITE_DOMAIN):$(DEV_BACKEND_PORT)
+DEV_FRONTEND_URL      := http://$(DEV_SITE_DOMAIN):$(DEV_FRONTEND_PORT)
+DEV_SESSION_COOKIE_DOMAIN := .$(DEV_SITE_DOMAIN)
+else
 DEV_BACKEND_URL       := http://localhost:$(DEV_BACKEND_PORT)
 DEV_FRONTEND_URL      := http://localhost:$(DEV_FRONTEND_PORT)
+DEV_SESSION_COOKIE_DOMAIN :=
+endif
 DEV_AUTH_FRONTEND_URL := $(DEV_FRONTEND_URL)
 DEV_APP_BASE_DOMAIN   := apps.lemma.localhost:$(DEV_BACKEND_PORT)
 # A sandbox browser needs an origin, not a path: the dashboard is a Next.js
@@ -244,10 +268,14 @@ BACKEND_WORKSPACE_CALLBACK_AUTH_URL ?= $(DEV_SANDBOX_FRONTEND_URL)
 BACKEND_WORKSPACE_CALLBACK_FRONTEND_URL ?= $(DEV_SANDBOX_FRONTEND_URL)
 BACKEND_APP_BASE_DOMAIN         ?= $(DEV_APP_BASE_DOMAIN)
 BACKEND_BROWSER_BASE_DOMAIN     ?= $(DEV_BROWSER_BASE_DOMAIN)
-BACKEND_SESSION_COOKIE_DOMAIN   ?=
+BACKEND_SESSION_COOKIE_DOMAIN   ?= $(DEV_SESSION_COOKIE_DOMAIN)
 BACKEND_SESSION_COOKIE_SECURE   ?= false
 BACKEND_SESSION_COOKIE_SAME_SITE?= lax
-BACKEND_CORS_ORIGINS            ?= ["http://localhost:$(DEV_FRONTEND_PORT)","http://127.0.0.1:$(DEV_FRONTEND_PORT)"]
+# Private apps open at their http://<slug>.apps.lemma.localhost address for the
+# people allowed to read them, as they do over HTTPS. Signed in there only on
+# one site (DEV_ONE_SITE above); otherwise their access page asks you to sign in.
+BACKEND_PRIVATE_APPS_OVER_HTTP  ?= true
+BACKEND_CORS_ORIGINS            ?= ["$(DEV_FRONTEND_URL)","http://127.0.0.1:$(DEV_FRONTEND_PORT)"]
 BACKEND_CORS_ORIGIN_REGEX       ?= $(DEV_CORS_ORIGIN_REGEX)
 BACKEND_TELEGRAM_POLLING        ?= true
 BACKEND_SLACK_SOCKET_MODE       ?= true
@@ -330,6 +358,7 @@ BACKEND_DEV_ENV := \
 	ENABLE_TELEGRAM_POLLING_MODE=$(BACKEND_TELEGRAM_POLLING) \
 	ENABLE_SLACK_SOCKET_MODE=$(BACKEND_SLACK_SOCKET_MODE) \
 	APP_BASE_DOMAIN=$(BACKEND_APP_BASE_DOMAIN) \
+	PRIVATE_APPS_OVER_HTTP=$(BACKEND_PRIVATE_APPS_OVER_HTTP) \
 	WORKSPACE_BROWSER_BASE_DOMAIN=$(BACKEND_BROWSER_BASE_DOMAIN) \
 	SESSION_COOKIE_DOMAIN=$(BACKEND_SESSION_COOKIE_DOMAIN) \
 	SESSION_COOKIE_SECURE=$(BACKEND_SESSION_COOKIE_SECURE) \
@@ -340,7 +369,7 @@ BACKEND_DEV_ENV := \
 FRONTEND_API_URL              ?= $(DEV_BACKEND_URL)
 FRONTEND_SITE_URL             ?= $(DEV_FRONTEND_URL)
 FRONTEND_AUTH_URL             ?= $(DEV_AUTH_FRONTEND_URL)/auth
-FRONTEND_SESSION_TOKEN_DOMAIN ?=
+FRONTEND_SESSION_TOKEN_DOMAIN ?= $(DEV_SESSION_COOKIE_DOMAIN)
 FRONTEND_APPS_DOMAIN_SUFFIX   ?= $(DEV_APPS_DOMAIN_SUFFIX)
 
 FRONTEND_DEV_ENV := \
@@ -387,6 +416,7 @@ help:
 	@echo "    make dev-frontend       start only the frontend (backend running elsewhere)"
 	@echo "    make dev-public         start with an ephemeral public API tunnel"
 	@echo "    make dev RELOAD=1       same, with uvicorn --reload on the backend"
+	@echo "    make dev DEV_ONE_SITE=1 same, on http://lemma.localhost:3000 so apps open signed in"
 	@echo "    make stop               stop app and tunnel processes"
 	@echo "    make stop-all           also bring down infra containers"
 	@echo "    make logs               tail infrastructure container logs"
@@ -477,6 +507,7 @@ help:
 	@echo "  Disk"
 	@echo "    make dev-clean          dry run: what stale build output, worktrees and branches would go"
 	@echo "    make dev-clean-apply    remove them (GIT=1 also runs git gc)"
+	@echo "    make worktree-deps      install deps, cloning node_modules from a matching worktree (ONLY=backend,frontend)"
 	@echo ""
 	@echo "  Other"
 	@echo "    make migrate            apply backend database migrations"
@@ -522,9 +553,12 @@ init:
 # ~2s and browser tools timing out against their 90s budget. So the workspace
 # image is checked for the architecture it will actually run on. The function
 # image is deliberately amd64 everywhere (see SANDBOX_FUNCTION_PLATFORM), so it
-# is only checked for presence.
+# is only checked for presence. The machine's architecture is asked the way
+# SANDBOX_PLATFORM asks it, podman's `.Host.Arch` second: were the two to
+# disagree, every `make dev` would see a mismatch and rebuild.
 _ensure-sandbox-images:
-	@host_arch="$$(docker version --format '{{.Server.Arch}}' 2>/dev/null || echo amd64)"; \
+	@host_arch="$$(docker version --format '{{.Server.Arch}}' 2>/dev/null \
+		|| docker info --format '{{.Host.Arch}}' 2>/dev/null || echo amd64)"; \
 	workspace_arch="$$(docker image inspect --format '{{.Architecture}}' "$(DEV_WORKSPACE_IMAGE)" 2>/dev/null || true)"; \
 	if [ "$$workspace_arch" = "$$host_arch" ] \
 		&& docker image inspect "$(DEV_FUNCTION_IMAGE)" >/dev/null 2>&1; then \
@@ -2407,6 +2441,14 @@ dev-clean:
 
 dev-clean-apply:
 	@$(DEV_CLEAN) --apply $(if $(filter 1,$(GIT)),--git)
+
+# A new worktree's dependencies, without a fresh copy of each. node_modules is
+# cloned copy-on-write from any worktree whose install matches this lockfile,
+# and installed with `npm ci` only when none does; Python goes to `uv sync`,
+# which already clones from the uv cache. ONLY= picks components (backend, cli,
+# python, typescript, frontend) so a backend-only task installs no frontend.
+worktree-deps:
+	@uv run --quiet --no-project python scripts/worktree_deps.py $(if $(ONLY),--only $(ONLY))
 
 # A one-line nudge from the commands that are about to need disk. Below this,
 # a single Rust build plus an image pull can fail a dev session halfway in.

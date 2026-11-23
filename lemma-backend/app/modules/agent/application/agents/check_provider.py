@@ -35,6 +35,9 @@ from app.modules.agent.infrastructure.providers.connection_check import (
 )
 from app.modules.agent.services.generation_settings import run_generation_settings
 from app.modules.agent.infrastructure.providers import discovery
+from app.modules.agent.infrastructure.providers.google_genai_model import (
+    GoogleCredentialsMissing,
+)
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 
 logger = get_logger(__name__)
@@ -149,8 +152,9 @@ async def _listed_models(
                 headers=anthropic_config.headers,
             )
         else:
-            # Azure and Vertex have no listing Lemma reads; the completion is
-            # the whole test for them.
+            # Google's listing names every model the project could reach --
+            # embedding, speech and image ones beside chat -- so it says
+            # nothing about this provider's own; the completion is the test.
             return None
     except discovery.ProviderKeyRejectedError as exc:
         raise _CheckFailed(discovery.key_rejected_message(profile.name)) from exc
@@ -167,10 +171,13 @@ async def _answer_one_message(
     resolved: ResolvedAgentRuntime, seams: ProviderCheckCollaborators
 ) -> None:
     profile = resolved.profile
-    model = seams.model_builder()(
-        runtime_profile=resolved.runtime_snapshot().as_payload(),
-        runtime_credentials=resolved.credentials,
-    )
+    try:
+        model = seams.model_builder()(
+            runtime_profile=resolved.runtime_snapshot().as_payload(),
+            runtime_credentials=resolved.credentials,
+        )
+    except GoogleCredentialsMissing as missing:
+        raise _CheckFailed(str(missing)) from missing
     if model is None:
         raise _CheckFailed(f"{profile.name} can't be tested from here.")
     try:

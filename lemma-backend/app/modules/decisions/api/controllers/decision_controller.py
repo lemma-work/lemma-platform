@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.core.authorization.dependencies import PodContextDep, require_pod_membership
 from app.modules.decisions.api.dependencies import (
     DecisionServiceDep,
+    ImageReaderDep,
     bounded_body,
     caller_from_context,
 )
@@ -47,10 +48,13 @@ async def make_decision(
     body: MakeDecisionRequest,
     ctx: PodContextDep,
     service: DecisionServiceDep,
+    images: ImageReaderDep,
 ) -> DecisionResponse:
     del pod_id  # bound into ctx by PodContextDep
+    caller = caller_from_context(ctx)
+    request = body.to_request(await images.read(ctx, body.images))
     try:
-        result = await service.decide(body.to_request(), caller_from_context(ctx))
+        result = await service.decide(request, caller)
     except DecisionLimitedError as exc:
         # Raised as an HTTPException because only that handler sends headers,
         # and a 429 a client cannot schedule its retry from is half an answer.

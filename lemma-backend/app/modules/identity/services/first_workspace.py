@@ -267,12 +267,18 @@ async def _land(
             organization_id=organization.id,
             owner_user_id=user_id,
             name=organization_lemma_name(organization.name, team=chosen.team),
+            shared=chosen.team,
         )
         if chosen.entry == "new_org"
         else None
     )
     if made is not None:
-        return _Landing(made.pod_id, made.assistant_id, made.created), made.pod_id
+        # A workspace of one lands in its person's own Lemma, which is not one
+        # the organization shares.
+        return (
+            _Landing(made.pod_id, made.assistant_id, made.created),
+            made.pod_id if chosen.team else None,
+        )
     entered = await enter_organization_lemma(
         uow,
         organization_id=organization.id,
@@ -295,16 +301,17 @@ async def _land(
     # Named even when they are not in it -- they left it -- so a screen can
     # offer it back among the Lemmas they could join.
     shared_pod_id = await organization_lemma_id(uow, organization_id=organization.id)
-    if not with_pod:
-        return None, shared_pod_id
-    # An organization with no Lemma of its own, or one this person left: the
-    # private pod a first workspace used to be, so a chat has somewhere to go.
+    # Their own Lemma: the "Personal" a workspace of one is made with, found
+    # whether or not one was asked for; or, only with `with_pod`, one made
+    # now -- in an organization with no shared Lemma, or one this person
+    # left, so a chat has somewhere to go.
     personal = await ensure_personal_workspace(
         uow,
         organization_id=organization.id,
         owner_user_id=user_id,
         owner_membership_id=membership_id,
         name=first_pod_name(full_name),
+        create=with_pod,
     )
     if personal is None:
         return None, shared_pod_id

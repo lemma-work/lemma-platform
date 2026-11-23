@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 180 |
+| `covered` | 181 |
 | `gap` | 5 |
 | `manual` | 37 |
 | `planned` | 37 |
 | `withdrawn` | 2 |
-| **total** | **261** |
+| **total** | **262** |
 
-Scenario tests declaring a promise: 461.
+Scenario tests declaring a promise: 462.
 
 ## Contract coverage
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 262 | 421 |
+| OpenAPI operations | 263 | 426 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -125,6 +125,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-POD-022` Approving a request cannot be used to gain authority | `covered` | `test_approving_cannot_confer_a_higher_organization_role`, `test_approving_within_your_own_authority_is_allowed`, `test_approving_cannot_confer_unheld_pod_permissions`, `test_an_organization_editor_cannot_make_themselves_a_pod_administrator`, `test_an_invitation_cannot_smuggle_a_pod_administrator` |
 | `PS-POD-023` A member finds the pods open to them, and joins one | `covered` | `test_a_member_finds_the_pods_open_to_them`, `test_an_owner_is_offered_nothing_and_an_outsider_is_refused` |
 | `PS-POD-024` A pod can take in everyone who joins its organization | `covered` | `test_an_invite_only_pod_cannot_take_in_new_members`, `test_a_pod_editor_cannot_make_new_members_join`, `test_a_newcomer_joins_the_pods_set_to_take_them_in` |
+| `PS-POD-025` A link in names finds its pod for whoever could walk in | `covered` | `test_a_link_in_names_finds_its_pod_for_whoever_could_walk_in` |
 | `PS-POD-030` A person sees exactly the pods they may open | `covered` | `test_a_non_member_cannot_open_the_pod`, `test_an_outsider_cannot_open_the_pod`, `test_the_cli_lists_pods`, `test_the_python_sdk_lists_pods`, `test_the_typescript_sdk_lists_pods` |
 | `PS-POD-031` A person sees their pods across every organization at once | `covered` | `test_an_organization_has_a_home` |
 | `PS-POD-032` A person sees what waits on them, and what moved, across every pod at once | `planned` | — |
@@ -176,12 +177,12 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-006` Authentication resumes the person's requested destination | `manual` | — |
 | `PS-ONB-007` A new person confirms their name and can prove their phone before they start | `manual` | — |
 | `PS-ONB-008` A person is asked what they do once, and the answer stays with them | `covered` | `test_what_a_person_does_stays_with_them` |
-| `PS-ONB-009` Every way in looks the same and says what a Lemma is | `manual` | — |
+| `PS-ONB-009` Every way in looks the same: your Lemma asks, in its own voice | `manual` | — |
 | `PS-ONB-010` The person who creates an organization owns it | `covered` | `test_creator_of_an_organization_owns_it`, `test_a_person_can_own_several_organizations` |
 | `PS-ONB-011` An organization has a handle that survives being renamed | `covered` | `test_renaming_an_organization_keeps_its_handle`, `test_handle_availability_is_checkable` |
 | `PS-ONB-014` Two organizations may share a display name | `covered` | `test_two_organizations_may_share_a_display_name` |
 | `PS-ONB-013` Only an owner changes what the organization is | `covered` | `test_only_an_owner_changes_the_organization` |
-| `PS-ONB-015` A new organization opens in a Lemma everyone in it shares | `covered` | `test_a_new_organization_opens_in_a_lemma_everyone_shares` |
+| `PS-ONB-015` A new organization opens in its first Lemma: shared by a team, its person's own alone | `covered` | `test_a_workspace_of_one_opens_in_its_persons_own_lemma` |
 | `PS-ONB-016` An organization's own Lemma starts by bringing the team's stuff in | `manual` | — |
 | `PS-ONB-020` An invited person joins with the role they were offered | `covered` | `test_an_invited_person_joins_with_the_offered_role`, `test_an_editor_invites_up_to_their_own_level`, `test_an_invitation_is_addressed` |
 | `PS-ONB-021` An invitation can carry a pod, and accepting it grants both | `covered` | `test_an_invitation_cannot_smuggle_a_pod_administrator`, `test_an_invitation_carries_its_pod`, `test_an_invitation_to_a_vanished_pod_is_not_silently_half_applied` |

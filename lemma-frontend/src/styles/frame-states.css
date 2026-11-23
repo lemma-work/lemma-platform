@@ -1,0 +1,161 @@
+/* The frame's states (design.md, "States") that the kit's `.kcalm`,
+   `.kproblem` and `.ksk` don't already draw: an app opening in the frame,
+   and the frame's pages while they read. */
+
+/* An app opening (outcomes/stage.tsx `AppOpening`), over its frame until the
+   frame answers: its mark large, a thin bar, one line; then slow, then
+   didn't open. The same centred layout stands where an app has to open in
+   its own window (desktop/app-window.tsx).
+
+   The veil is `.app-veil`, never `.app-cover`: that is the cover picture's
+   own class (stage/app-cover.tsx), and sharing it stretched every app's
+   picture over the whole page. */
+.app-veil {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    display: grid;
+    background: var(--paper);
+}
+
+.app-veil[hidden] {
+    display: none;
+}
+
+.app-open {
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 14px;
+    min-width: 0;
+    padding: 24px 16px;
+    color: var(--ink-2);
+    font-size: 14px;
+    text-align: center;
+}
+
+.app-veil > .app-open {
+    animation: app-open-in 220ms both;
+}
+
+.app-open__app,
+.app-open__mark {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+}
+
+.app-open__mark {
+    display: grid;
+    place-items: center;
+    background: var(--wash-a);
+    color: var(--ink-2);
+}
+
+.app-open__t {
+    margin: 6px 0 0;
+    color: var(--ink);
+    font-size: 20px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+}
+
+.app-open__line {
+    max-width: 420px;
+    margin: 0;
+    line-height: 1.5;
+    text-wrap: pretty;
+}
+
+.app-open__note {
+    max-width: 420px;
+    margin: 0;
+    color: var(--ink-3);
+    font-size: 12.5px;
+    overflow-wrap: anywhere;
+}
+
+.app-open__bar {
+    display: block;
+    width: 140px;
+    height: 3px;
+    overflow: hidden;
+    border-radius: 2px;
+    background: var(--line-2);
+}
+
+.app-open__bar > i {
+    display: block;
+    width: 40%;
+    height: 100%;
+    border-radius: 2px;
+    background: var(--ink);
+    animation: app-open-slide 1.1s ease-in-out infinite;
+}
+
+.app-open__acts {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+@keyframes app-open-in {
+    from {
+        opacity: 0;
+    }
+}
+
+@keyframes app-open-slide {
+    from {
+        translate: -100% 0;
+    }
+
+    to {
+        translate: 260% 0;
+    }
+}
+
+/* A page's own list or grid, loading or failed under its real header: the
+   kit's shapes, spaced as the page's own rows are. */
+.ox-page .kskrows,
+.ox-page .kskcards-wrap {
+    margin-top: 8px;
+}
+
+.ox-page .kcalm {
+    padding-top: 40px;
+}
+
+/* A failure inside a section (one list of several on a page), smaller than
+   a page's own. */
+.ox-sectfail {
+    display: grid;
+    justify-items: start;
+    gap: 8px;
+    padding: 12px 0;
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.ox-sectfail .kproblem {
+    color: var(--ink-2);
+}
+
+.ox-sectfail .kproblem > svg {
+    color: var(--warn);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .app-veil > .app-open {
+        animation: none;
+    }
+
+    .app-open__bar > i {
+        width: 100%;
+        animation: none;
+        opacity: 0.35;
+    }
+}

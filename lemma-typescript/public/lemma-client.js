@@ -9178,7 +9178,7 @@ var LemmaClient = (() => {
     return {};
   }
   function resolveConfig(overrides = {}) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n;
     const win = windowConfig();
     const configuredApiUrl = (_b = (_a = overrides.apiUrl) != null ? _a : win.apiUrl) != null ? _b : apiUrlFromEnv();
     if (!configuredApiUrl && typeof window === "undefined") {
@@ -9200,7 +9200,8 @@ var LemmaClient = (() => {
       timeoutMs: (_j = overrides.timeoutMs) != null ? _j : win.timeoutMs,
       maxRetries: (_k = overrides.maxRetries) != null ? _k : win.maxRetries,
       client: (_l = overrides.client) != null ? _l : win.client,
-      appId: (_m = overrides.appId) != null ? _m : win.appId
+      appId: (_m = overrides.appId) != null ? _m : win.appId,
+      webWidgets: (_n = overrides.webWidgets) != null ? _n : win.webWidgets
     };
   }
 
@@ -9271,6 +9272,16 @@ var LemmaClient = (() => {
     const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
     return withLeadingSlash.endsWith("/") ? withLeadingSlash.slice(0, -1) : withLeadingSlash;
   }
+  function isPublicApiPath(url, apiPrefix) {
+    let pathname;
+    try {
+      const base = typeof window === "undefined" ? "http://localhost" : window.location.href;
+      pathname = new URL(url, base).pathname;
+    } catch {
+      return false;
+    }
+    return pathname.startsWith("/public/") || apiPrefix !== "" && pathname.startsWith(`${apiPrefix}/public/`);
+  }
   function resolveApiBase(apiUrl) {
     if (typeof window === "undefined") {
       throw new Error("Cookie session support requires a browser environment.");
@@ -9297,6 +9308,7 @@ var LemmaClient = (() => {
       unauthorisedListeners.add(onUnauthorised);
     }
     const { apiDomain, apiBasePath } = resolveApiBase(apiUrl);
+    const apiPrefix = apiBasePath.slice(0, -SESSION_API_SUFFIX.length);
     const signature = `${apiDomain}${apiBasePath}`;
     if (initializedSignature === signature) {
       return;
@@ -9353,6 +9365,12 @@ var LemmaClient = (() => {
             if (event.action === "UNAUTHORISED") {
               unauthorisedListeners.forEach((listener) => listener());
             }
+          },
+          override: {
+            functions: (original) => ({
+              ...original,
+              shouldDoInterceptionBasedOnUrl: (url, domain, backendDomain) => !isPublicApiPath(url, apiPrefix) && original.shouldDoInterceptionBasedOnUrl(url, domain, backendDomain)
+            })
           }
         })
       ]
@@ -16523,6 +16541,70 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Install Plugins
+     * Install several plugins -- bundles in folders of GitHub repositories -- into this pod, in the order named. Returns 202 with an install_id at once; the server fetches, plans and applies each with its install page's defaults, and keeps going when nobody polls. A plugin whose page would ask a question stops before anything is applied (NEEDS_ANSWER) and the next one goes ahead. Each plugin counts as one import against the daily import limit.
+     * @param podId
+     * @param requestBody
+     * @returns PluginInstallResponse Successful Response
+     * @throws ApiError
+     */
+    static podBundleInstallStart(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/bundle/installs",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Plugin Install Status
+     * Where each plugin of an install is: its state, steps done of its plan, the step running, and why it stopped. Only its starter's: anyone else gets 404.
+     * @param podId
+     * @param installId
+     * @returns PluginInstallResponse Successful Response
+     * @throws ApiError
+     */
+    static podBundleInstallGet(podId, installId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/bundle/installs/{install_id}",
+        path: {
+          "pod_id": podId,
+          "install_id": installId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Retry Failed Plugins
+     * Put every FAILED plugin of the install back in the queue. One with a plan carries on from the step that failed; the steps already applied stay. One that failed before its plan was made starts over. The others are left as they are.
+     * @param podId
+     * @param installId
+     * @returns PluginInstallResponse Successful Response
+     * @throws ApiError
+     */
+    static podBundleInstallRetry(podId, installId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/bundle/installs/{install_id}/retry",
+        path: {
+          "pod_id": podId,
+          "install_id": installId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Publish Pod To GitHub
      * Publish the pod as a bundle to a GitHub repository, as the account the pod's `github` connector resolves to for the caller. Refused up front with `CONNECTION_REQUIRED` / `REAUTH_REQUIRED` (with `connect_url`) or `POD_CONNECTOR_NOT_FOUND` when there is none. Returns 202 with a publish_id; poll the status endpoint for the repo URL.
      * @param podId
@@ -16681,6 +16763,27 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Find a Pod by Name
+     * Which pod a web address spelled in names means (`/l/{organization}/{pod}/...`): `organization` is the organization's handle, `pod` the pod's name as one word of an address -- lower case, letters and digits, a hyphen for every other run. Answers only for a pod the caller could already see by name or walk into without asking: one they are in, any pod for the organization's owner, a pod open to everyone, and a pod open to the organization for anyone in it or free to join it. Every other name, an unknown handle, and a word two pods share are one 404. Open the pod, or ask to join it, by the id.
+     * @param organization
+     * @param pod
+     * @returns NamedPodResponse Successful Response
+     * @throws ApiError
+     */
+    static podFindByName(organization, pod) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/by-name",
+        query: {
+          "organization": organization,
+          "pod": pod
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Delete Pod
      * Delete a pod
      * @param podId
@@ -16720,7 +16823,7 @@ var LemmaClient = (() => {
     }
     /**
      * Update Pod
-     * Update pod details
+     * Update pod details; only the fields sent change
      * @param podId
      * @param requestBody
      * @returns PodResponse Successful Response
@@ -16728,7 +16831,7 @@ var LemmaClient = (() => {
      */
     static podUpdate(podId, requestBody) {
       return request(OpenAPI, {
-        method: "PUT",
+        method: "PATCH",
         url: "/pods/{pod_id}",
         path: {
           "pod_id": podId
@@ -16925,6 +17028,15 @@ var LemmaClient = (() => {
     }
     get(podId) {
       return this.client.request(() => PodsService.podGet(podId));
+    }
+    /**
+     * The id of the pod an address in names means (`/l/{organization}/{pod}`):
+     * the organization's handle, and the pod's name as one word of an address.
+     * Answered only for a pod you could already see by name or walk into
+     * without asking; every other name is a 404, as a name nobody has is.
+     */
+    findByName(organization, pod) {
+      return this.client.request(() => PodsService.podFindByName(organization, pod));
     }
     /**
      * Make a pod. `config.join_policy` says who may join it (invite-only unless
@@ -23616,6 +23728,18 @@ var LemmaClient = (() => {
     }
     get app() {
       return this._config.app;
+    }
+    /**
+     * A web widget this page may embed, as the app host named it: the one called
+     * `name`, or with no name the first. Like `app`, it describes the page, not
+     * whichever pod the client is pointed at. Undefined when the host named none
+     * -- outside a hosted app, while the deployment's public web is off, or when
+     * no switched-on widget of the app's pod allows the app's address.
+     */
+    webWidget(name) {
+      var _a;
+      const widgets = (_a = this._config.webWidgets) != null ? _a : [];
+      return name === void 0 ? widgets[0] : widgets.find((widget) => widget.name === name);
     }
     /**
      * Initialize the client by checking auth state.

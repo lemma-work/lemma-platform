@@ -1,10 +1,11 @@
 """What a run must satisfy before anything is persisted or a sandbox is leased.
 
-Everything here is a pure function of a function definition and the input it was
-called with. Split out of ``FunctionService`` rather than inlined because these
-are the checks that decide whether a call becomes a *refusal* or a *run*, and
-that distinction is what the caller sees: a run row, a lease, and most of the
-time a cold sandbox start are all on the far side of them.
+Everything here is a pure function of a function definition, the input it was
+called with, and who called it. Split out of ``FunctionService`` rather than
+inlined because these are the checks that decide whether a call becomes a
+*refusal* or a *run*, and that distinction is what the caller sees: a run row,
+a lease, and most of the time a cold sandbox start are all on the far side of
+them.
 """
 
 from __future__ import annotations
@@ -12,10 +13,12 @@ from __future__ import annotations
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, best_match
 
+from app.core.authorization.context import Context
 from app.core.log.log import get_logger
 from app.modules.function.domain.entities import FunctionEntity, FunctionStatus
 from app.modules.function.domain.errors import FunctionValidationError
 from app.modules.function.domain.types import JsonObject
+from app.modules.function.services.assistant_access import require_runnable_by
 
 logger = get_logger(__name__)
 
@@ -84,3 +87,11 @@ def validate_input(function: FunctionEntity, input_data: JsonObject) -> None:
         f"Input for function '{function.name}' is invalid at '{field}': "
         f"{error.message}. Check the function's declared input and try again."
     )
+
+
+def preflight(function: FunctionEntity, input_data: JsonObject, ctx: Context) -> None:
+    """Every refusal a member's call can meet: kept from the assistant, nothing
+    runnable, or input that does not match."""
+    require_runnable_by(function, ctx)
+    require_ready_revision(function)
+    validate_input(function, input_data)

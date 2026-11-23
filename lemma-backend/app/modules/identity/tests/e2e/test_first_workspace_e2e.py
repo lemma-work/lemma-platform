@@ -119,10 +119,16 @@ async def test_a_personal_address_gets_a_workspace_of_ones_own_and_its_lemma(
     # A personal address opens no door for anyone else.
     assert organization.join_policy == OrganizationJoinPolicy.INVITE_ONLY
     assert organization.email_domain is None
-    # A workspace of one has one Lemma, and it is theirs.
-    assert workspace.pod_id == workspace.organization_pod_id
+    # A workspace of one has one Lemma, and it is theirs alone: private, not
+    # the organization's shared Lemma, so nobody invited later is put in it
+    # and it carries no mark for everyone.
     assert workspace.pod_name == "Personal"
     assert workspace.pod_created
+    assert workspace.organization_pod_id is None
+    lemma = await db_session.get(Pod, workspace.pod_id)
+    assert lemma is not None
+    assert lemma.config.get("join_policy", "INVITE_ONLY") == "INVITE_ONLY"
+    assert lemma.config.get("auto_join_new_members", False) is False
 
 
 @pytest.mark.parametrize(
@@ -609,7 +615,9 @@ async def _owner_with_invitation(signup_user, uow, invitee_email: str):
         OrganizationRole,
     )
 
-    owner = await signup_user(email=f"owner-{uuid4().hex[:8]}@gmail.com")
+    # A company's organization, so it has a Lemma everyone in it shares: a
+    # workspace of one keeps its person's own Lemma private.
+    owner = await signup_user(email=f"owner@inv-{uuid4().hex[:8]}.com")
     owned = await ensure_first_workspace(
         uow,
         organization_service=_organization_service(uow),

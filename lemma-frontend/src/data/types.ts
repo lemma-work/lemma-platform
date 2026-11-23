@@ -14,6 +14,19 @@ import type { ScheduleDraft, ScheduleRun, ServerEvent, StandingJob, TargetChoice
 /** The shapes the app renders. Both sources produce exactly these, so which
  *  one is in front of you is a configuration detail rather than a rewrite. */
 
+/** A Google provider: the Gemini API with an API key, or Vertex AI as a
+ *  service account (its downloaded key file). Image models draw for the
+ *  agents' generate_image tool and are never a chat model. */
+export interface GoogleProviderKey {
+    backend: "GEMINI_API" | "VERTEX_AI";
+    serviceAccountJson?: string;
+    /** Empty uses the key file's own project. */
+    vertexProject?: string;
+    vertexLocation?: string;
+    /** Absent offers Google's current image model; empty offers none. */
+    imageModels?: string[];
+}
+
 export type MemberKind = "person" | "teammate";
 
 export interface Member {
@@ -51,6 +64,10 @@ export const NEW_CONVERSATION = "new";
 export interface Org {
     id: string;
     name: string;
+    /** Its handle: one word, never renamed and never shared with another
+     *  organization, which a link spelled in names starts with. Absent where
+     *  the organization was only just made and not read back yet. */
+    handle?: string;
 }
 
 /** An invitation addressed to the person signed in.
@@ -90,6 +107,9 @@ export interface NewOrg {
     name: string;
     emailDomain?: string;
     derived?: boolean;
+    /** A workspace of one: its first Lemma is its person's own, not one
+     *  everyone who joins later is put in. */
+    personal?: boolean;
 }
 
 /** What the way in asks of the server's first-workspace rule. */
@@ -219,6 +239,10 @@ export interface Pod {
     id: string;
     orgId: string;
     name: string;
+    /** The name as the server keeps it, which its address in names is
+     *  spelled from; `name` is the same made readable ("SalesCRM" shows as
+     *  "Sales CRM", and is still `salescrm` in a link). */
+    storedName?: string;
     /** A pod may carry its own icon; without one it wears a generated orb. */
     iconUrl: string | null;
     /** What the teammate is for, in one line: the job it was hired with. The
@@ -563,6 +587,10 @@ export interface PodSource {
     connectPod(podId: string, askingPodId: string, shares: LinkShare[]): Promise<void>;
     disconnectPod(podId: string, askingPodId: string): Promise<void>;
     getPod(podId: string): Promise<Pod | null>;
+    /** The id of the Lemma a link spelled in names means (`/l/{handle}/{word}`),
+     *  or null where it names none the reader may learn of. The server tells
+     *  a name only to somebody who could already see that Lemma or walk in. */
+    findPodByName(orgHandle: string, word: string): Promise<string | null>;
     listTabs(podId: string): Promise<Tab[]>;
     createPod(orgId: string, name: string, description?: string): Promise<Pod>;
     /** Set (or clear) a teammate's face. An emoji, a URL, or the
@@ -663,11 +691,15 @@ export interface PodSource {
     listComputers(): Promise<Computer[]>;
     /** Buy-your-own: a base URL and a key, and the models it serves. */
     addProviderKey(orgId: string, key: {
-        protocol: "openai" | "anthropic";
+        protocol: "openai" | "anthropic" | "google";
         name: string;
         baseUrl: string;
+        /** The Gemini API's key; empty for Vertex AI, which signs in with
+         *  `google.serviceAccountJson` instead. */
         apiKey: string;
         models: string[];
+        /** Google only: which host, and for Vertex AI how it signs in. */
+        google?: GoogleProviderKey;
         /** The models on an OpenAI-compatible route that read images. Its
          *  `/models` list rarely says, and without this the backend treats
          *  every one as text-only. Ignored for Anthropic, whose models all

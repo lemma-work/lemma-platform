@@ -8,6 +8,7 @@ from ..openapi_client.api.pods import (
     outcome_set,
     pod_create,
     pod_delete,
+    pod_find_by_name,
     pod_get,
     pod_list,
     pod_list_joinable,
@@ -15,6 +16,7 @@ from ..openapi_client.api.pods import (
 )
 from ..openapi_client.api.query import outcome_history, outcome_standing
 from ..openapi_client.models.joinable_pod_list_response import JoinablePodListResponse
+from ..openapi_client.models.named_pod_response import NamedPodResponse
 from ..openapi_client.models.outcome_history_response import OutcomeHistoryResponse
 from ..openapi_client.models.outcome_input import OutcomeInput
 from ..openapi_client.models.outcome_set_response import OutcomeSetResponse
@@ -69,6 +71,15 @@ class BoundPods(BoundResource):
             limit=limit,
             page_token=page_token if page_token is not None else UNSET,
         )
+
+    def find_by_name(self, organization: str, pod: str) -> NamedPodResponse:
+        """The pod a web address spelled in names means (`/l/{organization}/{pod}`).
+
+        `organization` is the organization's handle and `pod` the pod's name as
+        one word of an address. Answers with its id only for a pod you could
+        already see by name or walk into; any other name is not found.
+        """
+        return self._call(pod_find_by_name, organization=organization, pod=pod)
 
     def create(self, request: PodCreateRequest) -> PodResponse:
         return self._call(pod_create, body=request)

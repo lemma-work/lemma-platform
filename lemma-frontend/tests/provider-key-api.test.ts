@@ -26,7 +26,15 @@ test("a provider key names the kind of profile it is", async context => {
         await liveSource.addProviderKey("org-example", {
             protocol: "anthropic", name: "Example Claude", baseUrl: "", apiKey: "test-only", models: ["claude-example"],
         });
-        assert.deepEqual(sent.map(one => one.path), ["/organizations/org-example/agent-runtime/profiles", "/organizations/org-example/agent-runtime/profiles"]);
+        await liveSource.addProviderKey("org-example", {
+            protocol: "google", name: "Example Vertex", baseUrl: "", apiKey: "", models: [],
+            google: { backend: "VERTEX_AI", serviceAccountJson: "{\"type\":\"service_account\"}", vertexLocation: "global" },
+        });
+        await liveSource.addProviderKey("org-example", {
+            protocol: "google", name: "Example Gemini", baseUrl: "", apiKey: "test-only", models: ["gemini-example"],
+            google: { backend: "GEMINI_API", imageModels: [] },
+        });
+        assert.deepEqual(sent.map(one => one.path), Array(4).fill("/organizations/org-example/agent-runtime/profiles"));
         assert.deepEqual(sent[0].body, {
             source: "OPENAI_COMPATIBLE",
             name: "Example route",
@@ -43,6 +51,28 @@ test("a provider key names the kind of profile it is", async context => {
             base_url: null,
             default_model_name: "claude-example",
             model_names: ["claude-example"],
+        });
+        /* Vertex signs in with the key file and sends no API key; an empty
+           model list leaves the choice of Gemini models to the backend. */
+        assert.deepEqual(sent[2].body, {
+            source: "GOOGLE_GENAI",
+            name: "Example Vertex",
+            backend: "VERTEX_AI",
+            default_model_name: null,
+            model_names: [],
+            image_model_names: null,
+            service_account_json: "{\"type\":\"service_account\"}",
+            vertex_project: null,
+            vertex_location: "global",
+        });
+        assert.deepEqual(sent[3].body, {
+            source: "GOOGLE_GENAI",
+            name: "Example Gemini",
+            backend: "GEMINI_API",
+            default_model_name: "gemini-example",
+            model_names: ["gemini-example"],
+            image_model_names: [],
+            api_key: "test-only",
         });
     } finally {
         if (original === undefined) delete process.env.NEXT_PUBLIC_API_URL;

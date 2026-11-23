@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 from supertokens_python.recipe import emailverification
 
 from app.core.cors import get_allowed_cors_origin_regex, get_allowed_cors_origins
 from app.core.config import settings
+from app.modules.identity.infrastructure.supertokens_auth.apple import apple_provider
 from app.modules.identity.infrastructure.supertokens_auth.initialization import (
     build_supertokens_app_info,
     build_thirdparty_providers,
@@ -296,3 +297,118 @@ def test_build_thirdparty_providers_skips_unconfigured_providers():
         identity_settings.microsoft_tenant_id = original_microsoft_tenant_id
 
     assert providers == []
+
+
+def _p8_key() -> str:
+    """A throwaway key in the shape Apple issues: PKCS#8 PEM on P-256."""
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.serialization import (
+        Encoding,
+        NoEncryption,
+        PrivateFormat,
+    )
+
+    return (
+        ec.generate_private_key(ec.SECP256R1())
+        .private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
+        .decode()
+    )
+
+
+def _apple_settings(**values: str | None) -> IdentitySettings:
+    configured: dict[str, str | SecretStr | None] = {
+        "apple_client_id": "com.example.signin",
+        "apple_team_id": "TEAM123456",
+        "apple_key_id": "KEY1234567",
+        "apple_private_key": _p8_key(),
+    }
+    configured.update(values)
+    key = configured["apple_private_key"]
+    configured["apple_private_key"] = SecretStr(key) if isinstance(key, str) else key
+    return IdentitySettings.model_construct(**configured)
+
+
+async def test_apple_provider_signs_its_client_secret_from_the_configured_key():
+    import jwt
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+    from supertokens_python.recipe.thirdparty.providers.apple import Apple
+
+    pem = _p8_key()
+    # How a key usually reaches the environment: one line, newlines escaped.
+    provider = apple_provider(
+        _apple_settings(apple_private_key=pem.replace("\n", "\\n"))
+    )
+
+    assert provider is not None
+    assert provider.config.third_party_id == "apple"
+    [client] = provider.config.clients or []
+    assert client.client_id == "com.example.signin"
+    assert client.scope == ["openid", "email", "name"]
+
+    # The client secret is minted by SuperTokens' own Apple implementation, so
+    # sign one: that is the proof team, key id and key reach it in the shape
+    # it reads them.
+    config = await Apple(provider).get_config_for_client_type(None, {})
+    assert config.client_secret
+    assert jwt.get_unverified_header(config.client_secret)["kid"] == "KEY1234567"
+    public_key = load_pem_private_key(pem.encode(), password=None).public_key()
+    claims = jwt.decode(
+        config.client_secret,
+        public_key,  # type: ignore[arg-type]  # an EC public key; jwt's union is wider
+        algorithms=["ES256"],
+        audience="https://appleid.apple.com",
+    )
+    assert claims["iss"] == "TEAM123456"
+    assert claims["sub"] == "com.example.signin"
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ["apple_client_id", "apple_team_id", "apple_key_id", "apple_private_key"],
+)
+def test_apple_provider_is_absent_without_all_four_values(missing: str):
+    config = _apple_settings(**{missing: None})
+
+    assert config.is_apple_oauth_configured() is False
+    assert apple_provider(config) is None
+
+
+def test_apple_provider_is_absent_when_the_key_is_unusable():
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives.serialization import (
+        Encoding,
+        NoEncryption,
+        PrivateFormat,
+    )
+
+    truncated = _p8_key()[:120]
+    rsa_key = (
+        rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        .private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
+        .decode()
+    )
+
+    for unusable in (truncated, rsa_key, "/secrets/AuthKey_KEY1234567.p8"):
+        config = _apple_settings(apple_private_key=unusable)
+        assert config.is_apple_oauth_configured() is True
+        assert apple_provider(config) is None, unusable
+
+
+def test_build_thirdparty_providers_registers_apple_after_the_others(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(identity_settings, "google_client_id", "google-client-id")
+    monkeypatch.setattr(identity_settings, "google_client_secret", "google-secret")
+    monkeypatch.setattr(identity_settings, "microsoft_client_id", None)
+    monkeypatch.setattr(identity_settings, "apple_client_id", "com.example.signin")
+    monkeypatch.setattr(identity_settings, "apple_team_id", "TEAM123456")
+    monkeypatch.setattr(identity_settings, "apple_key_id", "KEY1234567")
+    monkeypatch.setattr(identity_settings, "apple_private_key", SecretStr(_p8_key()))
+
+    assert [p.config.third_party_id for p in build_thirdparty_providers()] == [
+        "google",
+        "apple",
+    ]
+
+    monkeypatch.setattr(identity_settings, "apple_key_id", None)
+    assert [p.config.third_party_id for p in build_thirdparty_providers()] == ["google"]

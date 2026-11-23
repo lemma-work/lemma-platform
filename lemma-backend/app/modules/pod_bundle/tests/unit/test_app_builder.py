@@ -7,7 +7,9 @@ import io
 import json
 import os
 import shlex
+import shutil
 import subprocess
+import sys
 import zipfile
 from pathlib import Path
 from uuid import uuid4
@@ -35,6 +37,7 @@ from app.modules.pod_bundle.infrastructure.app_builder import (
     slug_candidates,
     zip_dir,
 )
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 _POD = uuid4()
 
@@ -159,6 +162,90 @@ async def test_build_tool_failure_is_terminal():
         await AppSandboxBuilder(_FakeWorkspace(session)).build(
             user_id=uuid4(), pod_id=_POD, app_slug="a", source_zip=b"source"
         )
+
+
+# --- the whole sandbox build, run by a shell ----------------------------------
+
+
+class _ShellSession(_FakeSession):
+    """Runs each command in a real shell whose ``PATH`` holds only ``bin_dir``,
+    so a step that reaches for a tool the sandbox image lacks fails here the
+    way it failed in the sandbox. The sandbox's workspace root is ``root``."""
+
+    def __init__(self, bin_dir: Path, root: Path):
+        super().__init__()
+        self._env = {"PATH": str(bin_dir)}
+        self._bash = shutil.which("bash")
+        self._root = str(root)
+
+    def _local(self, text: str) -> str:
+        return text.replace(WORKSPACE_ROOT, self._root)
+
+    async def exec_command(self, *, cmd: str, timeout=None):
+        del timeout
+        done = subprocess.run(
+            [self._bash, "-c", self._local(cmd)],
+            env=self._env,
+            capture_output=True,
+            text=True,
+        )
+        return {
+            "success": done.returncode == 0,
+            "completed": True,
+            "stdout": done.stdout,
+            "stderr": done.stderr,
+        }
+
+    async def write_file(self, path: str, data: bytes, *, timeout: int):
+        del timeout
+        Path(self._local(path)).write_bytes(data)
+
+    async def read_file(self, path: str, *, timeout: int):
+        del timeout
+        return Path(self._local(path)).read_bytes()
+
+
+def _sandbox_bin(tmp_path: Path) -> Path:
+    """What the Docker workspace image offers the build: coreutils, python3 and
+    a ``pnpm`` -- and neither ``zip`` nor ``unzip``, which it never carried."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for tool in ("rm", "mkdir"):
+        (bin_dir / tool).symlink_to(shutil.which(tool))
+    python3 = bin_dir / "python3"
+    python3.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+    # A build that needs the unpacked source to have kept its folders.
+    pnpm = bin_dir / "pnpm"
+    pnpm.write_text(
+        "#!/bin/sh\n"
+        '[ "$1" = run ] || exit 0\n'
+        "[ -f src/main.js ] || { echo 'no src/main.js' >&2; exit 1; }\n"
+        "mkdir -p dist/assets\n"
+        "printf '<div id=root></div>' > dist/index.html\n"
+        "printf 'built' > dist/assets/main.js\n"
+    )
+    for script in (python3, pnpm):
+        script.chmod(0o755)
+    return bin_dir
+
+
+async def test_a_sandbox_without_zip_or_unzip_still_builds_the_app(tmp_path):
+    source = tmp_path / "source"
+    (source / "src").mkdir(parents=True)
+    (source / "package.json").write_text("{}")
+    (source / "index.html").write_text("<div id=root></div>")
+    (source / "src" / "main.js").write_text("export {}")
+    session = _ShellSession(_sandbox_bin(tmp_path), tmp_path / "workspace")
+
+    dist = await AppSandboxBuilder(_FakeWorkspace(session)).build(
+        user_id=uuid4(), pod_id=_POD, app_slug="my-app", source_zip=zip_dir(source)
+    )
+
+    with zipfile.ZipFile(io.BytesIO(dist)) as archive:
+        files = sorted(n for n in archive.namelist() if not n.endswith("/"))
+        # At the root, as `zip -r dist.zip .` from inside dist/ left them.
+        assert files == ["assets/main.js", "index.html"]
+        assert archive.read("index.html") == b"<div id=root></div>"
 
 
 # --- what a failed build tells the person -------------------------------------
@@ -670,6 +757,101 @@ async def test_a_static_app_ignores_the_bundled_dist_and_serves_its_source(tmp_p
 
     assert dist_bytes == source_bytes
     assert dist_bytes != b"EXPORTED-DIST"
+
+
+# --- a build the bundle ships, stamped with its source --------------------------
+
+
+def _stamped_bundle(resource: Path) -> None:
+    """A Vite app as a plugin ships it: source, its build, and the digest of the
+    source the build came from."""
+    from lemma_pod_bundle import app_source_digest, write_dist_source_digest
+
+    source = resource / "source"
+    (source / "src").mkdir(parents=True, exist_ok=True)
+    (source / "package.json").write_text('{"name":"a"}')
+    (source / "index.html").write_text("<div id=root></div>")
+    (source / "src" / "main.tsx").write_text("render()")
+    (resource / "dist.zip").write_bytes(b"SHIPPED-DIST")
+    write_dist_source_digest(resource, app_source_digest(source))
+
+
+async def test_a_build_stamped_with_this_source_is_deployed_without_a_sandbox(
+    tmp_path,
+):
+    """The whole point: an install builds nothing it was handed built."""
+    resource = tmp_path / "apps" / "deals"
+    _stamped_bundle(resource)
+
+    source_bytes, dist_bytes = await _runner(_ExplodingSandbox())._artifacts(
+        resource, "deals", app_slug="deals", pod_id=_POD, user_id=uuid4()
+    )
+
+    assert dist_bytes == b"SHIPPED-DIST"
+    # The source still goes with it, so the Lemma can change and rebuild it.
+    with zipfile.ZipFile(io.BytesIO(source_bytes)) as zf:
+        assert sorted(zf.namelist()) == ["index.html", "package.json", "src/main.tsx"]
+
+
+async def test_a_build_of_other_source_is_built_again(tmp_path):
+    """Source edited after the build: the source is what the person meant."""
+    resource = tmp_path / "apps" / "deals"
+    _stamped_bundle(resource)
+    (resource / "source" / "src" / "main.tsx").write_text("render(edited)")
+    sandbox = _RecordingSandbox()
+
+    _source_bytes, dist_bytes = await _runner(sandbox)._artifacts(
+        resource, "deals", app_slug="deals", pod_id=_POD, user_id=uuid4()
+    )
+
+    assert dist_bytes == sandbox.result
+    assert sandbox.calls == 1
+
+
+async def test_build_junk_left_in_the_source_does_not_unstamp_it(tmp_path):
+    """node_modules and dist are never part of the stored source, so they are
+    not part of what the digest is of either."""
+    resource = tmp_path / "apps" / "deals"
+    _stamped_bundle(resource)
+    (resource / "source" / "node_modules" / "x").mkdir(parents=True)
+    (resource / "source" / "node_modules" / "x" / "index.js").write_text("1")
+    (resource / "source" / "dist").mkdir()
+    (resource / "source" / "dist" / "index.html").write_text("old")
+
+    _source_bytes, dist_bytes = await _runner(_ExplodingSandbox())._artifacts(
+        resource, "deals", app_slug="deals", pod_id=_POD, user_id=uuid4()
+    )
+
+    assert dist_bytes == b"SHIPPED-DIST"
+
+
+@pytest.mark.parametrize(
+    "stamp", ["", "sha256:", "sha256:" + "z" * 64, "md5:" + "0" * 64, "garbage"]
+)
+async def test_a_stamp_that_does_not_read_is_built_again(tmp_path, stamp):
+    resource = tmp_path / "apps" / "deals"
+    _stamped_bundle(resource)
+    (resource / "dist.source-digest").write_text(stamp)
+    sandbox = _RecordingSandbox()
+
+    _source_bytes, dist_bytes = await _runner(sandbox)._artifacts(
+        resource, "deals", app_slug="deals", pod_id=_POD, user_id=uuid4()
+    )
+
+    assert dist_bytes == sandbox.result
+
+
+async def test_a_stamp_with_no_build_beside_it_is_built(tmp_path):
+    resource = tmp_path / "apps" / "deals"
+    _stamped_bundle(resource)
+    (resource / "dist.zip").unlink()
+    sandbox = _RecordingSandbox()
+
+    _source_bytes, dist_bytes = await _runner(sandbox)._artifacts(
+        resource, "deals", app_slug="deals", pod_id=_POD, user_id=uuid4()
+    )
+
+    assert dist_bytes == sandbox.result
 
 
 # --- an app the pod already has -------------------------------------------------

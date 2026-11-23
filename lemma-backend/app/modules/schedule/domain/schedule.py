@@ -125,10 +125,34 @@ PROVISIONED_CONFIG_KEYS = frozenset({"provider_trigger_id", "installation_id"})
 #: pod, batched fires) always run as the schedule's owner.
 DatastoreRunAs = Literal["ROW_OWNER", "SCHEDULE_OWNER"]
 
+#: Which of a table's changes reach a DATASTORE trigger. ``ALL`` -- the default
+#: -- is every change, and making such a trigger takes ``datastore.table.update``.
+#: ``OWNER_READABLE`` is only the changes to rows the schedule's owner can read
+#: -- on a table where each person has their own rows, the owner's; on a shared
+#: table, every row -- each run as the owner, and making one takes no more than
+#: reading the table's rows: it can observe nothing its owner could not read
+#: and act with no authority but theirs.
+DatastoreRows = Literal["ALL", "OWNER_READABLE"]
 
-def runs_as_row_owner(schedule: "ScheduleEntity") -> bool:
-    """Whether a table change fires this schedule as the changed row's owner."""
+
+def watches_owner_readable_rows(
+    schedule: "ScheduleEntity | ScheduleCreateEntity",
+) -> bool:
+    """Whether a DATASTORE trigger sees only the rows its owner can read."""
     if schedule.schedule_type != ScheduleType.DATASTORE:
+        return False
+    return (schedule.config or {}).get("rows", "ALL") == "OWNER_READABLE"
+
+
+def runs_as_row_owner(schedule: "ScheduleEntity | ScheduleCreateEntity") -> bool:
+    """Whether a table change fires this schedule as the changed row's owner.
+
+    Never for a trigger that sees only its owner's rows: the only row owner
+    it ever meets is its own owner, so every run is theirs.
+    """
+    if schedule.schedule_type != ScheduleType.DATASTORE:
+        return False
+    if watches_owner_readable_rows(schedule):
         return False
     return (schedule.config or {}).get("run_as", "ROW_OWNER") == "ROW_OWNER"
 
@@ -205,6 +229,18 @@ class DatastoreScheduleConfig(ScheduleRunCapConfig):
             "do -- creating or changing such a schedule takes edit access to "
             "the target. SCHEDULE_OWNER: the schedule's owner, for every "
             "change. Rows nobody in the pod owns always run as the owner."
+        ),
+    )
+    rows: DatastoreRows = Field(
+        default="ALL",
+        description=(
+            "Which changes reach the trigger. ALL (the default): every change "
+            "to the table; making the trigger takes `datastore.table.update`. "
+            "OWNER_READABLE: only changes to rows the schedule's owner can "
+            "read -- their own rows on a table where each person has their "
+            "own, every row on a shared table -- each run as the owner; "
+            "making it takes only reading the table's rows, so a member with "
+            "the default role can make one."
         ),
     )
 

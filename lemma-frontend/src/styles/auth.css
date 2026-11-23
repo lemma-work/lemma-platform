@@ -1,331 +1,1039 @@
-/* The portal.
+/* Sign in and sign up, as the step before the way in: the same frame -- who
+ * is speaking on the left, one question on the right -- so making an account
+ * runs straight on into making a first Lemma. Text on Albert Sans, figures on
+ * Inter, weight at 500. Buttons are the kit's (kit.css).
  *
- * It borrows `.screen` wholesale — the same frame the sign-in door, `/connect`
- * and "Nobody here yet" already use — and adds only what a form with a second
- * way in needs. A sign-in page that looked like its own product would be the
- * first thing somebody sees of this one, saying it was assembled from parts.
+ * The left side never reacts to typing. It moves for a real moment only: a
+ * new screen arriving, the cast standing up, the bars rising once when
+ * somebody is in. Asked for less motion, nothing moves at all.
  */
 
-/* ── the two panes ───────────────────────────────────────────────────── */
-
-.portal {
-    display: grid;
-    grid-template-columns: 1.05fr 1fr;
+.auth-frame {
     min-height: 100dvh;
+    display: grid;
+    grid-template-columns: minmax(300px, 38%) minmax(0, 1fr);
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-outcomes), var(--ui);
+    font-size: 14px;
+    line-height: 1.45;
 }
 
-/* The aspirational half. Its own ground, so the form beside it reads as the
-   page and this reads as the window next to it. */
-/* A logo pinned to the corner, and everything else as one centred block.
- *
- * It was `space-between` with a stretched middle, which on a tall window put
- * three hundred pixels of nothing above the cast and three hundred below the
- * copy — the page read as furniture pushed against the walls. The logo is the
- * only thing that belongs in a corner; the rest is one composition and is
- * centred as one. */
-.portal__aside {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 40px;
+.auth-frame b,
+.auth-frame strong {
+    font-weight: 500;
+}
+
+.auth-frame :focus-visible {
+    outline: 2px solid var(--info);
+    outline-offset: 2px;
+}
+
+/* ── who is speaking ─────────────────────────────────────────────────── */
+
+.auth-side {
+    position: sticky;
+    top: 0;
+    height: 100dvh;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    padding: 22px 24px 28px;
     background: var(--chrome);
     border-right: 1px solid var(--line);
-}
-.portal__brand {
-    position: absolute;
-    top: 32px;
-    left: 32px;
+    overflow: hidden;
 }
 
-/* The cast, the line about them, and what they do — one block, tight. */
-.portal__middle {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 16px;
-    text-align: center;
-    max-width: 30rem;
-}
-.portal__headline {
-    margin: 0;
-    max-width: 22ch;
-    font-size: 24px;
-    line-height: 1.25;
-    letter-spacing: -0.01em;
-    color: var(--ink);
-}
-.portal__sub {
-    margin: 0;
-    max-width: 36ch;
-    font-size: 13.5px;
-    line-height: 1.55;
-    color: var(--ink-3);
-    /* Held open: the line swaps between two lengths when the cast turns away,
-       and a box that resized would shuffle everything above it. */
-    min-height: 3.1em;
-}
-
-/* Three jobs a teammate actually holds. Directly under the promise and left
-   aligned inside a centred block: a bulleted list that is itself centred has
-   no edge for the eye to run down. */
-.portal__does {
-    list-style: none;
-    margin: 8px 0 0;
-    padding: 18px 0 0;
-    border-top: 1px solid var(--line);
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    text-align: left;
-    width: 100%;
-    max-width: 24rem;
-}
-.portal__does li {
+.auth-side__brand {
     position: relative;
-    padding-left: 18px;
+    z-index: 1;
+    justify-self: start;
+}
+
+.auth-side__center {
+    min-height: 0;
+    display: grid;
+    align-content: center;
+    justify-items: center;
+    gap: 18px;
+}
+
+.auth-side__foot {
+    justify-self: center;
+    max-width: 30ch;
+    margin: 0;
+    color: var(--ink-3);
     font-size: 12.5px;
-    line-height: 1.5;
-    color: var(--ink-3);
+    text-align: center;
+    text-wrap: balance;
 }
-.portal__does li::before {
-    content: "";
+
+/* The big mark and the words under it. The cast and the preview stand in
+   its place beside the question; on a phone it comes back as the strip. */
+.auth-speaker {
+    width: 100%;
+    display: grid;
+    justify-items: center;
+    gap: 14px;
+}
+
+.auth-side[data-kind="cast"] .auth-speaker,
+.auth-side[data-kind="preview"] .auth-speaker {
+    display: none;
+}
+
+.auth-stage {
+    position: relative;
+    width: min(300px, 100%);
+    aspect-ratio: 1;
+    display: grid;
+    place-items: center;
+}
+
+.auth-glow {
     position: absolute;
-    left: 0;
-    top: 0.55em;
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    background: var(--accent);
-    opacity: 0.55;
+    inset: -30%;
+    background: radial-gradient(farthest-side, color-mix(in srgb, var(--brand-bars) 16%, transparent), transparent 72%);
+    pointer-events: none;
 }
 
-/* The ask. Centred in its own half rather than in the window, so it does not
-   drift as the pane widths change. */
-.portal__pane {
+/* Lemma's bars: still while anybody types. */
+.auth-mark {
+    position: relative;
+    height: 34%;
     display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 40px;
-}
-.portal__form { width: min(100%, 25rem); overflow-wrap: anywhere; }
-.portal__form h2 { margin: 0 0 8px; }
-.portal__lead {
-    margin: 0 0 4px;
-    color: var(--ink-3);
-    font-size: 13.5px;
-    line-height: 1.55;
+    align-items: flex-end;
+    gap: 11px;
 }
 
-.portal__destination {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    width: 100%;
-    max-width: 24rem;
-    box-sizing: border-box;
-    margin: 32px 0 0;
-    padding: 14px 16px;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    text-align: left;
-    font-size: 13px;
-    line-height: 1.5;
-    color: var(--ink-3);
+.auth-mark i {
+    width: 27px;
+    border-radius: 8px;
+    background: var(--brand-bars);
+    transform-origin: 50% 100%;
+    box-shadow: 0 16px 40px color-mix(in srgb, var(--brand-bars) 25%, transparent);
 }
-.portal__destination strong {
+
+.auth-mark i:nth-child(1) { height: 40%; }
+.auth-mark i:nth-child(2) { height: 67%; }
+.auth-mark i:nth-child(3) { height: 100%; }
+
+/* Checking a code or a provider: the bars rise in turn. */
+.auth-side[data-busy] .auth-mark i {
+    animation: auth-rise 1s ease-in-out infinite;
+}
+
+.auth-side[data-busy] .auth-mark i:nth-child(2) { animation-delay: 150ms; }
+.auth-side[data-busy] .auth-mark i:nth-child(3) { animation-delay: 300ms; }
+
+@keyframes auth-rise {
+    0%, 100% { transform: scaleY(1); }
+    50% { transform: scaleY(0.55); }
+}
+
+/* In: they rise once, together. */
+.auth-side[data-done] .auth-mark i {
+    animation: auth-lift 900ms cubic-bezier(0.3, 1.5, 0.5, 1) both;
+}
+
+.auth-side[data-done] .auth-mark i:nth-child(2) { animation-delay: 90ms; }
+.auth-side[data-done] .auth-mark i:nth-child(3) { animation-delay: 180ms; }
+
+@keyframes auth-lift {
+    0% { transform: scaleY(1); }
+    45% { transform: scaleY(1.28); }
+    100% { transform: scaleY(1); }
+}
+
+/* Something other than Lemma asking: the CLI, or an app. */
+.auth-other {
+    position: absolute;
+    inset: 26%;
+    display: grid;
+    place-items: center;
+    border-radius: 30%;
+    background: var(--paper);
     color: var(--ink);
+    box-shadow: 0 0 0 1px var(--line-2), var(--depth-raise);
+    animation: auth-arrive 600ms cubic-bezier(0.34, 1.56, 0.55, 1) both;
+}
+
+.auth-other svg {
+    width: 42%;
+    height: 42%;
+}
+
+.auth-other__initial {
+    font-family: var(--ui);
+    font-size: 44px;
     font-weight: 500;
-    overflow-wrap: anywhere;
+    line-height: 1;
 }
 
-/* One column under a laptop. The aside keeps the logo and the cast and drops
-   the job list — on a phone that list is three lines of scrolling before
-   somebody reaches the thing they came to do. */
-/* On a phone, the logo and nothing else.
- *
- * A shrunken version of the left pane above the form is the worst of both: it
- * costs the whole first screen and still cannot hold a composition. Somebody
- * on a phone came to sign in. They get the mark, so they know whose door this
- * is, and then the form. The cast, the promise and the list are a desktop
- * composition and are simply not there — three rigs running
- * requestAnimationFrame is also not what a phone wants behind a login. */
-@media (max-width: 860px) {
-    .portal { grid-template-columns: 1fr; min-height: 100dvh; align-content: start; }
-    .portal__aside {
-        border-right: 0;
-        padding: 24px 20px 4px;
-        align-items: flex-start;
-        background: none;
-    }
-    .portal__brand { position: static; }
-    .portal__destination { margin: 16px 0 0; text-align: left; }
-    /* Both, and they are siblings — hiding the middle alone left the job list
-       sitting under the logo with its divider, which is the one piece of the
-       composition that makes no sense on its own. */
-    .portal__middle,
-    .portal__does { display: none; }
-    .portal__pane { padding: 20px 20px 40px; align-items: flex-start; }
+@keyframes auth-arrive {
+    from { opacity: 0; scale: 0.6; }
 }
 
-/* The providers come first, because for most people they are the answer, and
-   a form above them reads as the way in with the buttons as an afterthought. */
-.auth__providers {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin: 20px 0 0;
+/* A Lemma's face on its tint: the phone's strip, for a link to a Lemma. */
+.auth-face {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    border-radius: 30%;
 }
-/* The mark sits with the words rather than pinned to the edge: a logo in the
-   far corner of a full-width button reads as a stray icon, not as whose button
-   it is. Centred as a pair, and the gap is the only thing holding them. */
-.auth__provider {
+
+.auth-face img {
+    width: 92%;
+}
+
+.auth-who {
+    display: grid;
+    justify-items: center;
+    gap: 4px;
+    text-align: center;
+}
+
+.auth-who__name {
+    color: var(--ink);
+    font-size: 22px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+}
+
+.auth-who__name[data-quiet] {
+    display: none;
+}
+
+/* Always there, so a screen reader hears it change; empty when there is
+   nothing true to say. */
+.auth-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.auth-status i {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--ok);
+}
+
+.auth-side[data-busy] .auth-status i {
+    background: var(--brand-bars);
+    animation: auth-blink 1.2s ease-in-out infinite;
+}
+
+@keyframes auth-blink {
+    50% { opacity: 0.35; }
+}
+
+/* The cast: three of them standing, and a sentence about what one is. */
+.auth-cast-wrap {
+    width: 100%;
+    display: grid;
+    justify-items: center;
+    gap: 22px;
+}
+
+.auth-cast {
+    position: relative;
+    width: min(320px, 100%);
+    aspect-ratio: 1.25;
+}
+
+.auth-cast__one {
+    position: absolute;
+    aspect-ratio: 1;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    border-radius: 30%;
+    box-shadow: var(--depth-raise);
+    animation: auth-stand 700ms cubic-bezier(0.3, 1.4, 0.5, 1) both;
+    animation-delay: calc(var(--at, 0) * 90ms);
+}
+
+.auth-cast__one img {
+    width: 92%;
+}
+
+.auth-cast__one:nth-child(1) { left: 31%; top: 14%; width: 38%; z-index: 2; }
+.auth-cast__one:nth-child(2) { left: 6%; top: 38%; width: 28%; }
+.auth-cast__one:nth-child(3) { right: 6%; top: 40%; width: 27%; }
+
+@keyframes auth-stand {
+    from { opacity: 0; translate: 0 14px; }
+}
+
+.auth-cast__caption {
+    max-width: 30ch;
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 14.5px;
+    line-height: 1.5;
+    text-align: center;
+    text-wrap: balance;
+}
+
+/* The preview: a small, true picture of where a link was going. */
+.auth-peek {
+    width: min(340px, 100%);
+    display: grid;
+    justify-items: center;
+    gap: 14px;
+}
+
+.auth-peek__win {
+    width: 100%;
+    aspect-ratio: 1.35;
+    display: grid;
+    grid-template-columns: 30% minmax(0, 1fr);
+    overflow: hidden;
+    border-radius: 14px;
+    background: var(--paper);
+    box-shadow: 0 0 0 1px var(--line), var(--depth-raise);
+    animation: auth-stand 600ms cubic-bezier(0.3, 1.4, 0.5, 1) both;
+}
+
+.auth-peek__side {
+    display: grid;
+    align-content: start;
+    gap: 7px;
+    padding: 10px 8px;
+    background: radial-gradient(150% 60% at 0% 0%, var(--peek-tint, transparent), transparent 70%), var(--chrome);
+    border-right: 1px solid var(--line);
+}
+
+.auth-peek__bars {
+    height: 9px;
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 1.5px;
+    margin: 0 0 4px 2px;
+}
+
+.auth-peek__bars i {
+    width: 2.5px;
+    border-radius: 1px;
+    background: var(--brand-bars);
+}
+
+.auth-peek__bars i:nth-child(1) { height: 40%; }
+.auth-peek__bars i:nth-child(2) { height: 67%; }
+.auth-peek__bars i:nth-child(3) { height: 100%; }
+
+.auth-peek__row {
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 10px;
-    width: 100%;
-    padding: 11px 13px;
+    gap: 5px;
 }
-.auth__provider > svg { flex: none; }
 
-/* A rule with a word in it. The word is the point: without it the two halves
-   read as one form somebody has to fill in all of. */
-.auth__or {
+.auth-peek__row b {
+    flex: none;
+    width: 13px;
+    height: 13px;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    border-radius: 30%;
+}
+
+.auth-peek__row b img {
+    width: 92%;
+}
+
+.auth-peek__row i {
+    display: block;
+    height: 5px;
+    border-radius: 3px;
+    background: var(--line-2);
+}
+
+.auth-peek__main {
+    min-width: 0;
+    display: grid;
+    align-content: start;
+    justify-items: center;
+    gap: 8px;
+    padding: 16px 10px;
+}
+
+.auth-peek__face {
+    width: 34%;
+    aspect-ratio: 1;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    border-radius: 30%;
+}
+
+.auth-peek__face img {
+    width: 92%;
+}
+
+.auth-peek__name {
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--ink);
+    font-size: 12px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.auth-peek__apps {
+    display: flex;
+    gap: 6px;
+}
+
+.auth-peek__apps i {
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+}
+
+.auth-peek__text {
+    width: 70%;
+    height: 5px;
+    border-radius: 3px;
+    background: var(--line-2);
+}
+
+.auth-peek__text + .auth-peek__text {
+    width: 52%;
+}
+
+.auth-peek__caption {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 14px;
+    text-align: center;
+}
+
+.auth-peek__caption b {
+    color: var(--ink);
+}
+
+/* ── the question ────────────────────────────────────────────────────── */
+
+.auth-col {
+    min-width: 0;
+    padding: 0 24px;
+}
+
+.auth-body {
+    width: 100%;
+    max-width: 440px;
+    margin: 0 auto;
+    padding-block: clamp(28px, 13vh, 140px) 120px;
+    display: grid;
+    gap: 20px;
+    overflow-wrap: anywhere;
+    animation: auth-enter 420ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+@keyframes auth-enter {
+    from { opacity: 0; transform: translateY(12px); }
+}
+
+.auth-title {
+    margin: 0;
+    color: var(--ink);
+    font-size: 31px;
+    font-weight: 500;
+    line-height: 1.16;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+}
+
+.auth-lede {
+    margin: -8px 0 0;
+    color: var(--ink-2);
+    font-size: 15.5px;
+    line-height: 1.55;
+    text-wrap: pretty;
+}
+
+.auth-lede b {
+    color: var(--ink);
+}
+
+/* "Then on to Renewals": where this goes next, in words. */
+.auth-then {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: -6px 0 0;
+    color: var(--ink-3);
+    font-size: 13px;
+}
+
+.auth-then svg {
+    flex: none;
+}
+
+.auth-then[data-phone] {
+    display: none;
+}
+
+/* A problem, a done, mail on its way: in a circle above the title. */
+.auth-state {
+    width: 52px;
+    height: 52px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--wash-a);
+    color: var(--ink-2);
+}
+
+.auth-state[data-tone="warn"] {
+    background: color-mix(in srgb, var(--warn) 12%, var(--paper));
+    color: var(--warn);
+}
+
+.auth-state[data-tone="ok"] {
+    background: color-mix(in srgb, var(--ok) 12%, var(--paper));
+    color: var(--ok);
+}
+
+.auth-back {
+    justify-self: start;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ink-2);
+    font-size: 14px;
+    text-decoration: none;
+}
+
+.auth-back:hover {
+    color: var(--ink);
+}
+
+/* One big underlined input, its label above. */
+.auth-big {
+    display: grid;
+    gap: 8px;
+}
+
+.auth-big > label {
+    color: var(--ink-2);
+    font-size: 13.5px;
+}
+
+.auth-big__box {
+    position: relative;
+    display: flex;
+}
+
+.auth-big input {
+    flex: 1;
+    width: 100%;
+    min-width: 0;
+    padding: 6px 0 10px;
+    border: 0;
+    border-bottom: 2px solid var(--line-2);
+    border-radius: 0;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: 24px;
+    letter-spacing: -0.01em;
+    outline: none;
+    transition: border-color 200ms;
+}
+
+.auth-big input:focus,
+.auth-big input:focus-visible {
+    border-bottom-color: var(--brand-bars);
+    outline: none;
+}
+
+.auth-big input::placeholder {
+    color: var(--ink-3);
+    opacity: 0.7;
+}
+
+.auth-big input[aria-invalid="true"] {
+    border-bottom-color: var(--bad);
+}
+
+.auth-big[data-secret] input {
+    padding-right: 64px;
+}
+
+/* Edge draws its own eye on a password input; two would be one too many. */
+.auth-big input::-ms-reveal {
+    display: none;
+}
+
+.auth-big__reveal {
+    position: absolute;
+    right: 0;
+    bottom: 10px;
+    padding: 4px 0 4px 8px;
+    border: 0;
+    background: none;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.auth-big__reveal:hover {
+    color: var(--ink);
+}
+
+.auth-big__said {
+    color: var(--bad);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.auth-stack {
+    display: grid;
+    gap: 10px;
+}
+
+.auth-stack--form {
+    gap: 20px;
+}
+
+.auth-wide {
+    width: 100%;
+}
+
+/* Sign in with Apple, in the only two looks Apple allows: black on a light
+   page, white on a dark one, logo and words in the other. It takes the place
+   of a button's kind rather than sitting on one, so no kind's hover can tint
+   it; a tinted fill or edge would be a third look. With `.b`, because kit.css
+   loads after this file and its `.b` border would otherwise win. */
+.b.auth-apple {
+    border-color: var(--apple);
+    background: var(--apple);
+    color: var(--apple-ink);
+}
+
+/* A rule with a word in it. Without the word the two halves read as one form
+   somebody has to fill in all of. */
+.auth-or {
     display: flex;
     align-items: center;
     gap: 12px;
-    margin: 20px 0;
+    margin: 0;
     color: var(--ink-3);
-    font-size: 12px;
+    font-size: 12.5px;
 }
-.auth__or::before,
-.auth__or::after {
+
+.auth-or::before,
+.auth-or::after {
     content: "";
     flex: 1;
     height: 1px;
-    background: var(--line);
+    background: var(--line-2);
+}
+
+/* The quiet way on: underlined words, a button or a link alike. */
+.auth-link {
+    display: inline;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 14px;
+    text-decoration: underline;
+    text-decoration-color: var(--line-2);
+    text-underline-offset: 3px;
+    cursor: pointer;
+}
+
+.auth-link:hover {
+    color: var(--ink);
+    text-decoration-color: currentColor;
+}
+
+.auth-link:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.auth-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 14px;
+}
+
+.auth-row__gap {
+    flex: 1;
+}
+
+.auth-small {
+    margin: 0;
+    color: var(--ink-3);
+    font-size: 12.5px;
+    line-height: 1.5;
+}
+
+.auth-small a {
+    color: inherit;
+}
+
+.auth-foot {
+    margin: 6px 0 0;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.auth-foot a:not([class]) {
+    color: var(--ink);
 }
 
 /* A refusal, against the form rather than above the title: somebody who just
    pressed a button is looking at the button. */
-.auth__problem {
-    margin: 0 0 14px;
+.auth-problem {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 0;
+    color: var(--bad);
+    font-size: 13.5px;
+    line-height: 1.45;
+}
+
+.auth-problem svg {
+    flex: none;
+    margin-top: 1px;
+}
+
+.auth-problem .auth-link {
+    color: var(--bad);
+    font-size: inherit;
+    text-decoration-color: currentColor;
+}
+
+.auth-ok {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0;
+    color: var(--ok);
+    font-size: 14px;
+}
+
+.auth-ok svg {
+    flex: none;
+}
+
+/* The account in play, quietly. */
+.auth-chip {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-radius: 14px;
+    background: var(--wash-a);
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.auth-chip svg {
+    flex: none;
+}
+
+.auth-chip b {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--ink);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.auth-fig {
+    font-family: var(--ui);
+    font-variant-numeric: tabular-nums;
+}
+
+.auth-cmd {
+    padding: 1px 6px;
+    border-radius: 6px;
+    background: var(--wash-a);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 0.9em;
+    white-space: nowrap;
+}
+
+.auth-note {
+    margin: 0;
+    color: var(--ink-3);
     font-size: 13px;
     line-height: 1.5;
-    color: var(--bad);
+}
+
+/* The code: six boxes, filled by typing or pasting, sent when full. */
+.auth-code {
+    max-width: 380px;
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.auth-code input {
+    width: 100%;
+    min-width: 0;
+    height: 62px;
+    padding: 0;
+    border: 1.5px solid var(--line-2);
+    border-radius: 14px;
+    background: var(--paper);
+    color: var(--ink);
+    caret-color: var(--brand-bars);
+    font-family: var(--ui);
+    font-size: 26px;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    outline: none;
+    transition: border-color 160ms, box-shadow 160ms;
+}
+
+.auth-code input:focus,
+.auth-code input:focus-visible {
+    border-color: var(--brand-bars);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-bars) 16%, transparent);
+    outline: none;
+}
+
+.auth-code input:disabled {
+    opacity: 0.6;
+}
+
+.auth-code[data-bad] input {
+    border-color: var(--bad);
+    animation: auth-shake 320ms;
+}
+
+@keyframes auth-shake {
+    25% { translate: -4px 0; }
+    75% { translate: 4px 0; }
+}
+
+/* What an app asks to do, in plain rows. */
+.auth-asks {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--line);
+    list-style: none;
+}
+
+.auth-asks li {
+    display: grid;
+    grid-template-columns: 22px minmax(0, 1fr);
+    gap: 10px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+    color: var(--ink);
+    font-size: 14.5px;
+}
+
+.auth-asks li > svg {
+    margin-top: 1px;
+    color: var(--ok);
+}
+
+.auth-asks li[data-no] {
+    color: var(--ink-2);
+}
+
+.auth-asks li[data-no] > svg {
+    color: var(--ink-3);
+}
+
+.auth-asks small {
+    display: block;
+    margin-top: 2px;
+    color: var(--ink-3);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.auth-asks__choice {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    cursor: pointer;
+}
+
+.auth-asks__choice input {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    margin: 2px 0 0;
+    accent-color: var(--ink);
+    cursor: pointer;
+}
+
+/* What screens outside these pages put in the frame: Lemma Desktop's
+   hand-off and Slack's install draw the kit's older pieces. */
+.auth-body > p:not([class]) {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 15px;
+    line-height: 1.55;
 }
 
 .auth__note {
-    margin: 0 0 14px;
-    font-size: 12.5px;
-    line-height: 1.5;
+    margin: 0;
     color: var(--ink-3);
+    font-size: 13px;
+    line-height: 1.5;
 }
 
 /* A code the person compares character by character against another screen,
    so mono and a touch larger than the note around it. */
 .auth__code {
+    color: var(--ink);
     font-family: var(--mono);
     font-size: 15px;
     font-weight: 500;
     letter-spacing: 0.08em;
-    color: var(--ink);
 }
 
-/* What the server said about one input, under that input. A password rule
-   printed at the top of a form is a rule somebody reads after failing it. */
-.field__said {
-    font-size: 12px;
-    line-height: 1.45;
+.auth__problem {
+    margin: 0;
     color: var(--bad);
+    font-size: 13.5px;
+    line-height: 1.5;
 }
 
-/* The eye, inside the password field at its end, where every other sign-in
-   page has taught people to look for it. The input keeps its full width and
-   pads its right side for the button so a long password never runs under it. */
-.field__secret {
-    position: relative;
-    display: flex;
-}
-.field__secret input {
-    flex: 1;
-    min-width: 0;
-    padding-right: 44px;
-}
-/* Edge draws its own eye on a password input; two would be one too many. */
-.field__secret input::-ms-reveal { display: none; }
-.field__reveal {
-    position: absolute;
-    top: 50%;
-    right: 5px;
-    transform: translateY(-50%);
-    display: grid;
-    place-items: center;
-    width: 34px;
-    height: 34px;
-    border: 0;
-    border-radius: var(--r-sm);
-    background: transparent;
-    color: var(--ink-3);
-    cursor: pointer;
-}
-.field__reveal:hover { color: var(--ink); background: var(--chrome); }
-.field__reveal:focus-visible {
-    outline: 2px solid var(--accent-line);
-    outline-offset: -2px;
-    color: var(--ink);
+/* ── a phone: the speaker is a strip over the question ───────────────── */
+
+@media (max-width: 760px) {
+    .auth-frame {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .auth-side {
+        position: static;
+        height: auto;
+        grid-template-rows: auto;
+        padding: 14px 16px;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+    }
+
+    .auth-side__brand,
+    .auth-side__foot,
+    .auth-cast-wrap,
+    .auth-peek,
+    .auth-glow {
+        display: none;
+    }
+
+    .auth-side__center {
+        justify-items: stretch;
+    }
+
+    .auth-side[data-kind] .auth-speaker {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .auth-stage {
+        flex: none;
+        width: 44px;
+    }
+
+    .auth-mark {
+        height: 50%;
+        gap: 2.5px;
+    }
+
+    .auth-mark i {
+        width: 6px;
+        border-radius: 2px;
+        box-shadow: none;
+    }
+
+    .auth-other,
+    .auth-face {
+        inset: 0;
+        border-radius: 14px;
+    }
+
+    .auth-other {
+        box-shadow: 0 0 0 1px var(--line-2);
+    }
+
+    .auth-other svg {
+        width: 55%;
+        height: 55%;
+    }
+
+    .auth-other__initial {
+        font-size: 20px;
+    }
+
+    .auth-who {
+        min-width: 0;
+        justify-items: start;
+        gap: 1px;
+        text-align: left;
+    }
+
+    .auth-who__name,
+    .auth-who__name[data-quiet] {
+        display: inline;
+        font-size: 16px;
+    }
+
+    .auth-col {
+        padding: 0 16px;
+    }
+
+    .auth-body {
+        padding-block: 28px 80px;
+    }
+
+    .auth-title {
+        font-size: 26px;
+    }
+
+    .auth-then[data-phone] {
+        display: flex;
+    }
+
+    .auth-code {
+        gap: 7px;
+    }
+
+    .auth-code input {
+        height: 54px;
+        font-size: 22px;
+    }
 }
 
-/* ── who is waiting ──────────────────────────────────────────────────── */
-
-.waiting { display: flex; justify-content: center; }
-
-/* They stand in a line and overlap slightly, the way a group photographs
-   rather than the way a toolbar lays out. */
-.waiting__cast {
-    display: flex;
-    justify-content: center;
-}
-.waiting__one {
-    display: block;
-    margin-inline: -10px;
-    transition: transform 320ms cubic-bezier(.2, .7, .3, 1);
-    /* Staggered, so they turn as a group of individuals rather than as one
-       object. The delay is per position, from the inline `--at`. */
-    transition-delay: calc(var(--at, 0) * 45ms);
-}
-
-/* Alive while they are waiting, and only then.
- *
- * Breathing rather than bouncing: a couple of pixels over three seconds, out
- * of phase per position so they are three creatures standing about and not a
- * row of one creature. The animation is on the inner element so it cannot
- * fight the turn, which owns `transform` on the wrapper. */
-.waiting[data-looking] .waiting__one > * {
-    animation: waiting-breathe 3.2s ease-in-out infinite;
-    animation-delay: calc(var(--at, 0) * -900ms);
-}
-@keyframes waiting-breathe {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-3px); }
-}
-
-/* Turned away, while a password is being typed. They rotate out and drop
-   slightly, which reads as looking off rather than as sliding sideways. */
-.waiting:not([data-looking]) .waiting__one:nth-child(odd) {
-    transform: rotate(-26deg) translateY(6%);
-}
-.waiting:not([data-looking]) .waiting__one:nth-child(even) {
-    transform: rotate(24deg) translateY(6%);
-}
-
-/* Somebody who has asked for less motion has asked for less of it. The turn
-   still happens — it carries meaning — but instantly, and nothing breathes. */
 @media (prefers-reduced-motion: reduce) {
-    .waiting__one { transition: none; }
-    .waiting[data-looking] .waiting__one > * { animation: none; }
+    .auth-frame *,
+    .auth-frame *::before,
+    .auth-frame *::after {
+        animation: none !important;
+        transition: none !important;
+    }
 }
 
 /* ── autofill ────────────────────────────────────────────────────────── */
@@ -336,10 +1044,14 @@
    property that overrides it — the only lever is an inset shadow the size of
    the field, plus `-webkit-text-fill-color` for the text, which do beat it.
    The long transition is the other half of the trick: the override is applied
-   on a delay so long it never visibly reverts. */
+   on a delay so long it never visibly reverts. `.field` is the app's older
+   form row, wherever it is used. */
 .field input:-webkit-autofill,
 .field input:-webkit-autofill:hover,
-.field input:-webkit-autofill:focus {
+.field input:-webkit-autofill:focus,
+.auth-big input:-webkit-autofill,
+.auth-big input:-webkit-autofill:hover,
+.auth-big input:-webkit-autofill:focus {
     -webkit-text-fill-color: var(--ink);
     -webkit-box-shadow: 0 0 0 100px var(--paper) inset;
     box-shadow: 0 0 0 100px var(--paper) inset;
@@ -347,31 +1059,47 @@
     transition: background-color 100000s ease-in-out 0s;
 }
 
-/* The consent screen's "what may it do" choice: two radios under a quiet
-   legend, no box — the choice is a sentence, not a form section. */
-.auth__choices {
-    border: 0;
-    margin: 12px 0 4px;
-    padding: 0;
+/* ── Slack's outcome pages ───────────────────────────────────────────── */
+
+/* `/slack/allowed` and `/slack/installed` say which way an install went in
+   the old portal's right half, and still use its classes. Kept as they were. */
+.portal {
     display: grid;
-    gap: 8px;
+    grid-template-columns: 1.05fr 1fr;
+    min-height: 100dvh;
 }
-.auth__choices legend {
-    padding: 0;
-    margin-bottom: 4px;
+
+.portal__pane {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+}
+
+.portal__form {
+    width: min(100%, 25rem);
+    overflow-wrap: anywhere;
+}
+
+.portal__form h2 {
+    margin: 0 0 8px;
+}
+
+.portal__lead {
+    margin: 0 0 4px;
     color: var(--ink-3);
+    font-size: 13.5px;
+    line-height: 1.55;
 }
-.auth__choices label {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    cursor: pointer;
-}
-/* A separate yes beside it: being told about new rows is not a kind of reading. */
-.auth__choice {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    margin: 12px 0 4px;
-    cursor: pointer;
+
+@media (max-width: 860px) {
+    .portal {
+        grid-template-columns: 1fr;
+        align-content: start;
+    }
+
+    .portal__pane {
+        padding: 20px 20px 40px;
+        align-items: flex-start;
+    }
 }

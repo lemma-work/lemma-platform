@@ -66,9 +66,12 @@ IMPORT_GITHUB = "pod_bundle.import_github"
 IMPORT_URL = "pod_bundle.import_url"
 APPLY = "pod_bundle.apply"
 PUBLISH = "pod_bundle.publish"
+#: One bundle of a plugin install, fetched, planned and applied in one item
+#: (``plugin_install.py``).
+INSTALL_PLUGIN = "pod_bundle.install_plugin"
 
 #: Kinds that plan an import: one at a time per import, under one key.
-PLANNING_KINDS = (PLAN, IMPORT_GITHUB, IMPORT_URL)
+PLANNING_KINDS = (PLAN, IMPORT_GITHUB, IMPORT_URL, INSTALL_PLUGIN)
 
 #: What a streaq job got (``JOB_TIMEOUT_SECONDS``). Apply is the long one: app
 #: and function steps build in a sandbox.
@@ -334,13 +337,19 @@ class BundleJobQueue:
         *,
         pod_id: UUID,
         dedup_key: str,
+        delay: timedelta | None = None,
     ) -> bool:
-        """False when an identical job is already queued (the request conflicts)."""
+        """False when an identical job is already queued (the request conflicts).
+
+        ``delay`` orders jobs written in one transaction: they share its
+        ``now()``, and the pod's jobs run one at a time, earliest first.
+        """
         item = await WorkWriter.of(uow).add(
             kind,
             pod_namespace(pod_id),
             payload,
             dedup_key=dedup_key,
+            delay=delay,
             concurrency_key=concurrency_key(pod_id),
         )
         return item is not None
@@ -370,6 +379,7 @@ __all__ = [
     "IMPORT",
     "IMPORT_GITHUB",
     "IMPORT_URL",
+    "INSTALL_PLUGIN",
     "PLAN",
     "PLANNING_KINDS",
     "PUBLISH",

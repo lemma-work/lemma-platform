@@ -5,6 +5,7 @@ from typing import Any
 
 import typer
 from lemma_sdk.openapi_client.models.pod_create_request import PodCreateRequest
+from lemma_sdk.openapi_client.models.pod_update_request import PodUpdateRequest
 from rich import box
 from rich.markup import escape
 from rich.panel import Panel
@@ -21,7 +22,7 @@ from ..context import (
 )
 from ..confirm import confirm_destructive
 from ..io import emit, format_columns, list_items, to_plain
-from ..payload import build_request
+from ..payload import build_request, read_json
 from ..sdk import pod_client
 from ..select import select_from_items
 from .schedules import schedule_target
@@ -46,6 +47,11 @@ SYSTEM_SKILLS_ROOT_PATH = "/skills"
 # Hard bound on name->id pod lookup. No CLI command should page an API an
 # unbounded number of times; 5 x 200 covers any realistic org.
 _MAX_POD_LOOKUP_PAGES = 5
+
+_UPDATE_EXAMPLE = """\
+  lemma pods update Support --name "Customer care"
+  lemma pods update --description "Answers every customer within a day"
+  lemma pods update Support --data '{"config": {"join_policy": "ORG_MEMBERS"}}'"""
 
 
 def _is_uuid(value: str) -> bool:
@@ -352,6 +358,67 @@ def get_pod(ctx: typer.Context, pod: str | None = typer.Argument(None)) -> None:
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx, lambda client, s: client.pods.get(resolve_pod_id(client, s, pod))
+    )
+    if result is not None:
+        emit(state, result)
+
+
+def update_payload(
+    payload: dict[str, Any],
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    icon_url: str | None = None,
+) -> dict[str, Any]:
+    """What `pods update` sends: the JSON payload, with any flag given over it.
+
+    Only what is named is sent, so the rest of the pod stays as it is; naming
+    nothing is a usage error rather than an empty update.
+    """
+    flags = {"name": name, "description": description, "icon_url": icon_url}
+    merged = {
+        **payload,
+        **{key: value for key, value in flags.items() if value is not None},
+    }
+    if not merged:
+        raise typer.BadParameter(
+            "Nothing to change: pass --name, --description, --icon-url, --data or --file."
+        )
+    return merged
+
+
+@app.command("update", epilog=f"Examples:\n\n{_UPDATE_EXAMPLE}")
+def update_pod(
+    ctx: typer.Context,
+    pod: str | None = typer.Argument(None, help="Pod id or name."),
+    name: str | None = typer.Option(None, "--name", help="New name."),
+    description: str | None = typer.Option(None, "--description"),
+    icon_url: str | None = typer.Option(None, "--icon-url"),
+    json_payload: str | None = typer.Option(
+        None,
+        "--data",
+        "-d",
+        help="Raw JSON payload (name, description, icon_url, config).",
+    ),
+    file: Path | None = typer.Option(
+        None, "--file", "-f", exists=True, dir_okay=False, readable=True
+    ),
+) -> None:
+    """Rename a pod or change its description, icon or config."""
+    payload = update_payload(
+        read_json(json_payload, file, required=False),
+        name=name,
+        description=description,
+        icon_url=icon_url,
+    )
+    state = state_from_ctx(ctx)
+    # Only the fields sent change; the rest of the pod stays as it is.
+    result = run_with_client(
+        ctx,
+        lambda client, s: client.pods.update(
+            resolve_pod_id(client, s, pod),
+            build_request(PodUpdateRequest, payload, context="pod"),
+        ),
     )
     if result is not None:
         emit(state, result)
@@ -1430,6 +1497,7 @@ def import_pod(
     """
     state = state_from_ctx(ctx)
     from ...cli_app.pod_bundle import import_pod_bundle
+    from .apps import target_app_env
 
     variables = _parse_import_variables(var, values)
     connector_installations = _parse_slug_pairs(connector, flag="--connector")
@@ -1451,6 +1519,7 @@ def import_pod(
             connector_installations=connector_installations,
             share_accounts=share_accounts,
             create_installations=create_installations,
+            app_env=target_app_env(s),
         ),
     )
     if result is not None:

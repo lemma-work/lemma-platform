@@ -117,6 +117,63 @@ class DevWorkflowTests(unittest.TestCase):
                 frontend.stdout,
             )
 
+    def test_private_apps_open_over_local_http(self):
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            backend = self.run_make(Path(raw_tmp), "-n", "_run-backend")
+            self.assertIn("PRIVATE_APPS_OVER_HTTP=true", backend.stdout)
+
+    def test_default_addresses_stay_on_localhost(self):
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+            backend = self.run_make(tmp, "-n", "_run-backend").stdout
+            self.assertIn("API_URL=http://localhost:8710", backend)
+            self.assertIn("FRONTEND_URL=http://localhost:3000", backend)
+            self.assertIn("SESSION_COOKIE_DOMAIN= ", backend)
+            self.assertIn(
+                """CORS_ORIGINS='["http://localhost:3000","http://127.0.0.1:3000"]'""",
+                backend,
+            )
+            frontend = self.run_make(tmp, "-n", "_run-frontend").stdout
+            self.assertIn("NEXT_PUBLIC_SESSION_TOKEN_DOMAIN= ", frontend)
+
+    def test_one_site_puts_web_api_and_apps_under_lemma_localhost(self):
+        """A framed app is signed in only when it shares a site with the API.
+
+        `localhost` and `<slug>.apps.lemma.localhost` are different sites, so
+        the SameSite=Lax session never reaches an app; under `lemma.localhost`
+        it does. Both ends must move together, or the web app cannot sign in.
+        """
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+            one_site = {"DEV_ONE_SITE": "1"}
+
+            backend = self.run_make(
+                tmp, "-n", "_run-backend", variables=one_site
+            ).stdout
+            for expected in (
+                "API_URL=http://api.lemma.localhost:8710",
+                "FRONTEND_URL=http://lemma.localhost:3000",
+                "AUTH_FRONTEND_URL=http://lemma.localhost:3000",
+                "APP_BASE_DOMAIN=apps.lemma.localhost:8710",
+                "SESSION_COOKIE_DOMAIN=.lemma.localhost",
+                "SESSION_COOKIE_SAME_SITE=lax",
+                "PRIVATE_APPS_OVER_HTTP=true",
+                """CORS_ORIGINS='["http://lemma.localhost:3000",""",
+            ):
+                self.assertIn(expected, backend)
+
+            frontend = self.run_make(
+                tmp, "-n", "_run-frontend", variables=one_site
+            ).stdout
+            for expected in (
+                "NEXT_PUBLIC_API_URL=http://api.lemma.localhost:8710",
+                "NEXT_PUBLIC_SITE_URL=http://lemma.localhost:3000",
+                "NEXT_PUBLIC_AUTH_URL=http://lemma.localhost:3000/auth",
+                "NEXT_PUBLIC_SESSION_TOKEN_DOMAIN=.lemma.localhost",
+                "NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=apps.lemma.localhost",
+            ):
+                self.assertIn(expected, frontend)
+
     def test_fresh_dev_database_imports_native_connector_catalog(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)

@@ -11,6 +11,11 @@
  *  not follow the accent, they do not invert in dark mode, and they are the
  *  same four colours on either ground. `check-design.mjs` reads `src/styles`
  *  only, and says why: a hex in a `.tsx` is usually not a colour declaration.
+ *
+ *  Apple's is the exception the other way. Its rules allow a black or a white
+ *  button with the logo and the title in one colour, so the logo takes the
+ *  button's ink and the pair inverts with the appearance (`--apple` in
+ *  `tokens.css`).
  */
 
 /** Google's "G", as issued. */
@@ -25,6 +30,32 @@ export function GoogleMark({ size = 17 }: { size?: number }) {
     );
 }
 
+/** The few drawings the sign-in screens use: a problem, a tick, the
+ *  arrow on "Then on to", the envelope on "Check your email", a terminal for
+ *  the CLI. One stroke weight, in whatever ink the text around them has. */
+const GLYPHS = {
+    warn: "M12 4 21 19.5H3zM12 10v4.5M12 17h.01",
+    check: "M5 12.5l4.5 4.5L19 7.5",
+    x: "M6 6l12 12M18 6 6 18",
+    arrow: "M5 12h14M13 6l6 6-6 6",
+    back: "M15 5l-7 7 7 7",
+    mail: "M3.5 6.5A2.5 2.5 0 0 1 6 4h12a2.5 2.5 0 0 1 2.5 2.5v11A2.5 2.5 0 0 1 18 20H6a2.5 2.5 0 0 1-2.5-2.5zM4.5 7l7.5 6 7.5-6",
+    term: "M4 5h16v14H4zM7.5 9.5 10.5 12l-3 2.5M12.5 15h4",
+    lock: "M7 11V8a5 5 0 0 1 10 0v3M5.5 11h13v9h-13z",
+    minus: "M6 12h12",
+} as const;
+
+export type GlyphName = keyof typeof GLYPHS;
+
+export function Glyph({ name, size = 16, weight = 1.8 }: { name: GlyphName; size?: number; weight?: number }) {
+    return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={weight}
+            strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+            <path d={GLYPHS[name]} />
+        </svg>
+    );
+}
+
 /** Microsoft's four squares. A gap of one unit, which is the mark — closed up
  *  it reads as a window. */
 export function MicrosoftMark({ size = 16 }: { size?: number }) {
@@ -34,6 +65,15 @@ export function MicrosoftMark({ size = 16 }: { size?: number }) {
             <path fill="#7FBA00" d="M12 1h10v10H12z" />
             <path fill="#00A4EF" d="M1 12h10v10H1z" />
             <path fill="#FFB900" d="M12 12h10v10H12z" />
+        </svg>
+    );
+}
+
+/** Apple's logo, in whatever ink the button sets. */
+export function AppleMark({ size = 16 }: { size?: number }) {
+    return (
+        <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path fill="currentColor" d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701" />
         </svg>
     );
 }

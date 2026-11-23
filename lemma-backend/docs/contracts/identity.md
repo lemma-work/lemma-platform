@@ -146,9 +146,11 @@ included.
   that domain (`EMAIL_DOMAIN`), or invitation-only when another organization
   already holds the domain. Anything else is a workspace of one, named after
   the person ("Ada's workspace", from the address when no name is set, else
-  "My workspace"), invitation-only. Either way a Lemma is made with it: open to
-  the organization's members and joined by every later arrival, named after
-  the organization ("Personal" for a workspace of one), the caller its admin.
+  "My workspace"), invitation-only. Either way a Lemma is made with it, the
+  caller its admin: a company's is open to the organization's members, joined
+  by every later arrival and named after the organization; a workspace of
+  one's is "Personal", invitation-only like any private Lemma, and is not
+  `organization_pod_id`.
   A plan with no room for it leaves the organization without one.
 - **Where they land (`pod_id`):** the pod an accepted invitation named; else
   the organization's Lemma -- its oldest live pod open to members that takes

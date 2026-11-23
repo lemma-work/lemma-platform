@@ -172,7 +172,7 @@ async def test_a_fact_written_once_is_in_the_next_conversations_prompt(
     )
 
     assert "## Your Memory" in brief
-    assert "### Pod (shared) — `/memory/AGENTS.md`" in brief
+    assert "### This Lemma (shared) — `/memory/AGENTS.md`" in brief
     assert "cycle starts on the 3rd" in brief
     # The agent is told its own folders, not left to work the slug out.
     assert "/memory/agents/rememberer/" in brief
