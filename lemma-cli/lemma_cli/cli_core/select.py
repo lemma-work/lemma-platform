@@ -28,11 +28,10 @@ def filter_items(items: list[dict[str, Any]], text: str) -> list[dict[str, Any]]
     return [
         item
         for item in items
-        if needle in item_label(item).lower()
-        or needle in str(item.get("name") or "").lower()
-        or needle in str(item.get("slug") or "").lower()
-        or needle in str(item.get("id") or "").lower()
-        or needle in str(item.get("title") or "").lower()
+        if needle
+        in " ".join(
+            str(item.get(k) or "") for k in ("name", "slug", "id", "title")
+        ).lower()
     ]
 
 
@@ -101,18 +100,18 @@ def _select_with_arrows(
             )
             key = sys.stdin.read(1)
             if key == "\x1b":
-                next_ch = sys.stdin.read(1)
-                key += next_ch
-                if next_ch in {"[", "O"}:
-                    while True:
-                        ch = sys.stdin.read(1)
-                        key += ch
-                        if ch == "~" or ch.isalpha():
-                            break
+                # Drain the rest of the escape sequence (arrows, delete \x1b[3~, home \x1b[1~, etc.)
+                while True:
+                    ch = sys.stdin.read(1)
+                    key += ch
+                    if ch == "~" or ch.isalpha():
+                        break
             if key in {"\r", "\n"}:
                 if filtered:
                     console.print()
                     return filtered[selected]
+                sys.stdout.write("\a")
+                sys.stdout.flush()
                 continue
             if key in {"\x03", "\x04"}:
                 raise typer.Exit(code=1)
@@ -124,11 +123,21 @@ def _select_with_arrows(
                     selected = (selected + 1) % len(filtered)
             elif key in {"\x7f", "\x08", "\b"}:
                 if filter_text:
+                    prev_item = filtered[selected] if filtered else None
                     filter_text = filter_text[:-1]
-                    selected = 0
+                    new_filtered = filter_items(items, filter_text)
+                    if prev_item and prev_item in new_filtered:
+                        selected = new_filtered.index(prev_item)
+                    else:
+                        selected = max(0, min(selected, len(new_filtered) - 1))
             elif key.isprintable() and len(key) == 1:
+                prev_item = filtered[selected] if filtered else None
                 filter_text += key
-                selected = 0
+                new_filtered = filter_items(items, filter_text)
+                if prev_item and prev_item in new_filtered:
+                    selected = new_filtered.index(prev_item)
+                else:
+                    selected = 0
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
