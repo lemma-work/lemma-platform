@@ -23,6 +23,7 @@ pytestmark = pytest.mark.unit
 
 # (field, ENV var, default)
 EXPECTED = [
+    ("apple_app_bundle_id", "APPLE_APP_BUNDLE_ID", None),
     ("apple_client_id", "APPLE_CLIENT_ID", None),
     ("apple_key_id", "APPLE_KEY_ID", None),
     ("apple_private_key", "APPLE_PRIVATE_KEY", None),
