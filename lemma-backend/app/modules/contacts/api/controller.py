@@ -10,7 +10,7 @@ deleting one -- a request to see or to forget a person -- takes a pod admin.
 from __future__ import annotations
 
 import base64
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
 from uuid import UUID
 
@@ -199,19 +199,21 @@ async def _found(uow: UoWDep, *, pod_id: UUID, contact_id: UUID) -> Contact:
     return contact
 
 
-async def _set_blocked(
-    uow: UoWDep, *, pod_id: UUID, contact: Contact, by: UUID | None
+async def _on_current(
+    uow: UoWDep,
+    *,
+    pod_id: UUID,
+    contact: Contact,
+    write: Callable[[UUID], Awaitable[bool]],
 ) -> None:
-    """Block or unblock the contact as they are now. One merged into another
-    since it was read is followed once, to the person they became; a write
-    that still finds nobody is a 409, never a silent miss."""
-    repository = ContactRepository(uow.session)
-    if await repository.set_blocked(pod_id=pod_id, contact_id=contact.id, by=by):
+    """Write to the contact as they are now. The writes refuse a contact
+    merged into another, so one merged since it was read is followed once,
+    to the person they became; a write that still finds nobody is a 409,
+    never a silent miss. One gone altogether is a 404 (``_found``)."""
+    if await write(contact.id):
         return
     now = await _found(uow, pod_id=pod_id, contact_id=contact.id)
-    if now.id == contact.id or not await repository.set_blocked(
-        pod_id=pod_id, contact_id=now.id, by=by
-    ):
+    if now.id == contact.id or not await write(now.id):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             detail="That contact changed while it was being saved. Try again.",
@@ -305,15 +307,25 @@ async def update_contact(
     # A request without `blocked` is a rename, as it always was: even `{}`
     # clears the name.
     if "display_name" in given or "blocked" not in given:
-        if not await repository.rename(
-            pod_id=pod_id, contact_id=contact.id, display_name=request.display_name
-        ):
-            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Contact not found")
-    if request.blocked is not None and request.blocked != (
-        contact.blocked_at is not None
-    ):
-        await _set_blocked(
-            uow, pod_id=pod_id, contact=contact, by=user.id if request.blocked else None
+        await _on_current(
+            uow,
+            pod_id=pod_id,
+            contact=contact,
+            write=lambda current: repository.rename(
+                pod_id=pod_id, contact_id=current, display_name=request.display_name
+            ),
+        )
+    # Written whatever the contact read above said: a merge since then may
+    # have made them somebody whose block stands otherwise.
+    if request.blocked is not None:
+        by = user.id if request.blocked else None
+        await _on_current(
+            uow,
+            pod_id=pod_id,
+            contact=contact,
+            write=lambda current: repository.set_blocked(
+                pod_id=pod_id, contact_id=current, by=by
+            ),
         )
     await uow.commit()
     return await _response(uow, await _found(uow, pod_id=pod_id, contact_id=contact.id))

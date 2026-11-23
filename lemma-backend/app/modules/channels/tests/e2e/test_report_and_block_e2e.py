@@ -204,6 +204,12 @@ async def test_a_contact_the_pod_blocked_gets_nothing_from_an_agent(
         f"/pods/{pod.id}/contacts/{dana}", json={"blocked": False}
     )
     assert viewer.status_code == 403, viewer.text
+    # Blocking her again is written, and keeps when it was first done.
+    again = await pod.client().patch(
+        f"/pods/{pod.id}/contacts/{dana}", json={"blocked": True}
+    )
+    assert again.status_code == 200, again.text
+    assert again.json()["blocked_at"] == stopped.json()["blocked_at"]
     lifted = await pod.client().patch(
         f"/pods/{pod.id}/contacts/{dana}", json={"blocked": False}
     )

@@ -302,9 +302,15 @@ class ContactRepository:
     async def rename(
         self, *, pod_id: UUID, contact_id: UUID, display_name: str | None
     ) -> bool:
+        """Whether it was written: not on a contact merged into another
+        meanwhile, whose name is never shown again."""
         result = await self.session.execute(
             update(ContactModel)
-            .where(ContactModel.id == contact_id, ContactModel.pod_id == pod_id)
+            .where(
+                ContactModel.id == contact_id,
+                ContactModel.pod_id == pod_id,
+                ContactModel.merged_into_id.is_(None),
+            )
             .values(display_name=_clean_name(display_name))
         )
         return bool(result.rowcount)
@@ -498,10 +504,18 @@ class ContactRepository:
         self, *, pod_id: UUID, contact_id: UUID, by: UUID | None
     ) -> bool:
         """Stop the pod's agents answering them (``by`` the member who did),
-        or, ``by`` None, let them answer again. Whether it was written: not on
-        a contact merged into another meanwhile, which holds nothing."""
+        or, ``by`` None, let them answer again. Blocking one already blocked
+        keeps when and by whom it was first done. Whether it was written: not
+        on a contact merged into another meanwhile, which holds nothing."""
         values = (
-            {"blocked_at": datetime.now(timezone.utc), "blocked_by_user_id": by}
+            {
+                "blocked_at": func.coalesce(
+                    ContactModel.blocked_at, datetime.now(timezone.utc)
+                ),
+                "blocked_by_user_id": func.coalesce(
+                    ContactModel.blocked_by_user_id, by
+                ),
+            }
             if by is not None
             else {"blocked_at": None, "blocked_by_user_id": None}
         )
@@ -511,7 +525,6 @@ class ContactRepository:
                 ContactModel.id == contact_id,
                 ContactModel.pod_id == pod_id,
                 ContactModel.merged_into_id.is_(None),
-                ContactModel.merged_into_user_id.is_(None),
             )
             .values(**values)
         )
