@@ -6,6 +6,8 @@ import type { AgentRunResponse } from '../models/AgentRunResponse.js';
 import type { AgentRunStartResponse } from '../models/AgentRunStartResponse.js';
 import type { ApprovalDecisionResponse } from '../models/ApprovalDecisionResponse.js';
 import type { ConversationListResponse } from '../models/ConversationListResponse.js';
+import type { ConversationReportRequest } from '../models/ConversationReportRequest.js';
+import type { ConversationReportResponse } from '../models/ConversationReportResponse.js';
 import type { ConversationRepositoryListResponse } from '../models/ConversationRepositoryListResponse.js';
 import type { ConversationResponse } from '../models/ConversationResponse.js';
 import type { ConversationStatus } from '../models/ConversationStatus.js';
@@ -13,8 +15,6 @@ import type { ConversationType } from '../models/ConversationType.js';
 import type { CreateConversationRequest } from '../models/CreateConversationRequest.js';
 import type { MessageListResponse } from '../models/MessageListResponse.js';
 import type { PendingInteractionListResponse } from '../models/PendingInteractionListResponse.js';
-import type { ReportRequest } from '../models/ReportRequest.js';
-import type { ReportResponse } from '../models/ReportResponse.js';
 import type { ResolveUserApprovalRequest } from '../models/ResolveUserApprovalRequest.js';
 import type { SendMessageRequest } from '../models/SendMessageRequest.js';
 import type { UpdateConversationRequest } from '../models/UpdateConversationRequest.js';
@@ -387,15 +387,15 @@ export class AgentConversationsService {
      * @param conversationId
      * @param messageId
      * @param requestBody
-     * @returns ReportResponse Successful Response
+     * @returns ConversationReportResponse Successful Response
      * @throws ApiError
      */
     public static agentConversationMessageReport(
         podId: string,
         conversationId: string,
         messageId: string,
-        requestBody: ReportRequest,
-    ): CancelablePromise<ReportResponse> {
+        requestBody: ConversationReportRequest,
+    ): CancelablePromise<ConversationReportResponse> {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/pods/{pod_id}/conversations/{conversation_id}/messages/{message_id}/report',

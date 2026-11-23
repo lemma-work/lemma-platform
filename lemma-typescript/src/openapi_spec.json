@@ -4936,6 +4936,54 @@
         "title": "ChannelRef",
         "type": "object"
       },
+      "ChannelReportRequest": {
+        "description": "Why the reader reports this line, and anything they want to add.",
+        "properties": {
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The reader's own words, for the team. Optional.",
+            "title": "Note"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ReportReason",
+            "description": "`OFFENSIVE` offensive or hateful, `HARMFUL` harmful or dangerous, `SEXUAL` sexual, `SPAM` spam or a scam, `OTHER` something else."
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "ChannelReportRequest",
+        "type": "object"
+      },
+      "ChannelReportResponse": {
+        "description": "The report as kept. Reporting the same line again replaces it: the\nsame id comes back.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "created_at"
+        ],
+        "title": "ChannelReportResponse",
+        "type": "object"
+      },
       "ChannelResponse": {
         "properties": {
           "agents_answer": {
@@ -6672,6 +6720,54 @@
           "limit"
         ],
         "title": "ConversationListResponse",
+        "type": "object"
+      },
+      "ConversationReportRequest": {
+        "description": "Why the reader reports this message, and anything they want to add.",
+        "properties": {
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The reader's own words, for the team. Optional.",
+            "title": "Note"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ReportReason",
+            "description": "`OFFENSIVE` offensive or hateful, `HARMFUL` harmful or dangerous, `SEXUAL` sexual, `SPAM` spam or a scam, `OTHER` something else."
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "ConversationReportRequest",
+        "type": "object"
+      },
+      "ConversationReportResponse": {
+        "description": "The report as kept. Reporting the same message again replaces it: the\nsame id comes back.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "created_at"
+        ],
+        "title": "ConversationReportResponse",
         "type": "object"
       },
       "ConversationRepositoryListResponse": {
@@ -21433,54 +21529,6 @@
         ],
         "title": "ReportReason",
         "type": "string"
-      },
-      "ReportRequest": {
-        "description": "Why the reader reports this message, and anything they want to add.",
-        "properties": {
-          "note": {
-            "anyOf": [
-              {
-                "maxLength": 1000,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The reader's own words, for the team. Optional.",
-            "title": "Note"
-          },
-          "reason": {
-            "$ref": "#/components/schemas/ReportReason",
-            "description": "`OFFENSIVE` offensive or hateful, `HARMFUL` harmful or dangerous, `SEXUAL` sexual, `SPAM` spam or a scam, `OTHER` something else."
-          }
-        },
-        "required": [
-          "reason"
-        ],
-        "title": "ReportRequest",
-        "type": "object"
-      },
-      "ReportResponse": {
-        "description": "The report as kept. Reporting the same message again replaces it: the\nsame id comes back.",
-        "properties": {
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "created_at"
-        ],
-        "title": "ReportResponse",
-        "type": "object"
       },
       "ResetRequest": {
         "properties": {
@@ -39913,7 +39961,7 @@
     },
     "/pods/{pod_id}/blocks/{kind}:{person_id}": {
       "delete": {
-        "description": "Lift a block: their lines read as anybody's again, the old ones too.",
+        "description": "Lift a block: their lines read as anybody's again, the old ones too. A\ncontact since merged is unblocked as the one they became, as blocking\nthem was; one since forgotten, by the id given.",
         "operationId": "channel.block.remove",
         "parameters": [
           {
@@ -40016,7 +40064,7 @@
         }
       },
       "put": {
-        "description": "Block a member or a contact, for the reader alone. Blocking somebody\nalready blocked changes nothing.",
+        "description": "Block a member or a contact, for the reader alone. Blocking somebody\nalready blocked changes nothing. A reader keeps at most `MAX_BLOCKS` here\n(409 `BLOCK_LIMIT`).",
         "operationId": "channel.block.add",
         "parameters": [
           {
@@ -43820,7 +43868,7 @@
     },
     "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/report": {
       "post": {
-        "description": "Report a line to the team that runs Lemma: why, and anything to add.\nReporting it again replaces the reader's report. The writer is not told.",
+        "description": "Report a line to the team that runs Lemma: why, and anything to add.\nReporting it again replaces the reader's report. The writer is not told.\nNot a line from somebody the reader blocked, which they are not shown\n(422): they unblock them first.",
         "operationId": "channel.message.report",
         "parameters": [
           {
@@ -43858,7 +43906,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ReportRequest"
+                "$ref": "#/components/schemas/ChannelReportRequest"
               }
             }
           },
@@ -43869,7 +43917,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ReportResponse"
+                  "$ref": "#/components/schemas/ChannelReportResponse"
                 }
               }
             },
@@ -47349,7 +47397,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ReportRequest"
+                "$ref": "#/components/schemas/ConversationReportRequest"
               }
             }
           },
@@ -47360,7 +47408,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ReportResponse"
+                  "$ref": "#/components/schemas/ConversationReportResponse"
                 }
               }
             },

@@ -498,7 +498,8 @@ class ContactRepository:
         self, *, pod_id: UUID, contact_id: UUID, by: UUID | None
     ) -> bool:
         """Stop the pod's agents answering them (``by`` the member who did),
-        or, ``by`` None, let them answer again. Whether the contact is here."""
+        or, ``by`` None, let them answer again. Whether it was written: not on
+        a contact merged into another meanwhile, which holds nothing."""
         values = (
             {"blocked_at": datetime.now(timezone.utc), "blocked_by_user_id": by}
             if by is not None
@@ -506,7 +507,12 @@ class ContactRepository:
         )
         result = await self.session.execute(
             update(ContactModel)
-            .where(ContactModel.id == contact_id, ContactModel.pod_id == pod_id)
+            .where(
+                ContactModel.id == contact_id,
+                ContactModel.pod_id == pod_id,
+                ContactModel.merged_into_id.is_(None),
+                ContactModel.merged_into_user_id.is_(None),
+            )
             .values(**values)
         )
         return bool(result.rowcount)

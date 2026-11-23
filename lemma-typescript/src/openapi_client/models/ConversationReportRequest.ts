@@ -6,7 +6,7 @@ import type { ReportReason } from './ReportReason.js';
 /**
  * Why the reader reports this message, and anything they want to add.
  */
-export type ReportRequest = {
+export type ConversationReportRequest = {
     /**
      * The reader's own words, for the team. Optional.
      */

@@ -9,11 +9,11 @@ from attrs import field as _attrs_field
 from ..models.report_reason import ReportReason
 from ..types import UNSET, Unset
 
-T = TypeVar("T", bound="ReportRequest")
+T = TypeVar("T", bound="ConversationReportRequest")
 
 
 @_attrs_define
-class ReportRequest:
+class ConversationReportRequest:
     """Why the reader reports this message, and anything they want to add.
 
     Attributes:
@@ -60,13 +60,13 @@ class ReportRequest:
 
         note = _parse_note(d.pop("note", UNSET))
 
-        report_request = cls(
+        conversation_report_request = cls(
             reason=reason,
             note=note,
         )
 
-        report_request.additional_properties = d
-        return report_request
+        conversation_report_request.additional_properties = d
+        return conversation_report_request
 
     @property
     def additional_keys(self) -> list[str]:

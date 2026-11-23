@@ -25,12 +25,17 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.channels.api.access import (
     ERRORS,
     CallerDep,
+    conflict,
     missing,
     unprocessable,
 )
 from app.modules.channels.api.schemas import PersonRef, ref
 from app.modules.channels.domain.entities import Principal, SenderKind
-from app.modules.channels.infrastructure.blocks import BlockRepository
+from app.modules.channels.infrastructure.blocks import (
+    MAX_BLOCKS,
+    BlockLimitReached,
+    BlockRepository,
+)
 from app.modules.channels.infrastructure.names import Names
 from app.modules.contacts.contracts import contact_by_id
 from app.modules.pod.contracts.members import pod_member_id
@@ -104,13 +109,21 @@ async def block_person(
     pod_id: UUID, kind: SenderKind, person_id: UUID, uow: UoWDep, caller: CallerDep
 ) -> BlockResponse:
     """Block a member or a contact, for the reader alone. Blocking somebody
-    already blocked changes nothing."""
+    already blocked changes nothing. A reader keeps at most `MAX_BLOCKS` here
+    (409 `BLOCK_LIMIT`)."""
     person = await _person(
         uow, pod_id=pod_id, me=caller.user_id, kind=kind, person_id=person_id
     )
-    made = await BlockRepository(uow.session).block(
-        pod_id=pod_id, user_id=caller.user_id, person=person
-    )
+    try:
+        made = await BlockRepository(uow.session).block(
+            pod_id=pod_id, user_id=caller.user_id, person=person
+        )
+    except BlockLimitReached:
+        raise conflict(
+            f"You've blocked {MAX_BLOCKS} people in this Lemma, as many as it "
+            "keeps. Unblock someone to block another.",
+            code="BLOCK_LIMIT",
+        ) from None
     await uow.commit()
     (shown,) = await _shown(uow, pod_id, [(person, made)])
     return shown
@@ -125,14 +138,16 @@ async def block_person(
 async def unblock_person(
     pod_id: UUID, kind: SenderKind, person_id: UUID, uow: UoWDep, caller: CallerDep
 ) -> None:
-    """Lift a block: their lines read as anybody's again, the old ones too."""
+    """Lift a block: their lines read as anybody's again, the old ones too. A
+    contact since merged is unblocked as the one they became, as blocking
+    them was; one since forgotten, by the id given."""
     if kind is SenderKind.AGENT:
         raise missing("Block")
-    person = (
-        Principal.member(person_id)
-        if kind is SenderKind.MEMBER
-        else Principal.contact(person_id)
-    )
+    if kind is SenderKind.MEMBER:
+        person = Principal.member(person_id)
+    else:
+        contact = await contact_by_id(uow, pod_id=pod_id, contact_id=person_id)
+        person = Principal.contact(contact.id if contact else person_id)
     if not await BlockRepository(uow.session).unblock(
         pod_id=pod_id, user_id=caller.user_id, person=person
     ):

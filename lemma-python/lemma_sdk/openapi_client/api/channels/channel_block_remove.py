@@ -88,7 +88,9 @@ def sync_detailed(
 ) -> Response[Any | ErrorResponse]:
     """Unblock Person
 
-     Lift a block: their lines read as anybody's again, the old ones too.
+     Lift a block: their lines read as anybody's again, the old ones too. A
+    contact since merged is unblocked as the one they became, as blocking
+    them was; one since forgotten, by the id given.
 
     Args:
         pod_id (UUID):
@@ -125,7 +127,9 @@ def sync(
 ) -> Any | ErrorResponse | None:
     """Unblock Person
 
-     Lift a block: their lines read as anybody's again, the old ones too.
+     Lift a block: their lines read as anybody's again, the old ones too. A
+    contact since merged is unblocked as the one they became, as blocking
+    them was; one since forgotten, by the id given.
 
     Args:
         pod_id (UUID):
@@ -157,7 +161,9 @@ async def asyncio_detailed(
 ) -> Response[Any | ErrorResponse]:
     """Unblock Person
 
-     Lift a block: their lines read as anybody's again, the old ones too.
+     Lift a block: their lines read as anybody's again, the old ones too. A
+    contact since merged is unblocked as the one they became, as blocking
+    them was; one since forgotten, by the id given.
 
     Args:
         pod_id (UUID):
@@ -192,7 +198,9 @@ async def asyncio(
 ) -> Any | ErrorResponse | None:
     """Unblock Person
 
-     Lift a block: their lines read as anybody's again, the old ones too.
+     Lift a block: their lines read as anybody's again, the old ones too. A
+    contact since merged is unblocked as the one they became, as blocking
+    them was; one since forgotten, by the id given.
 
     Args:
         pod_id (UUID):

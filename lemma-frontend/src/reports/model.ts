@@ -113,6 +113,11 @@ export function stopAnsweringLine(who: Blockable, lemma: string): string {
     return `${lemma} won’t answer ${who.name} on WhatsApp, Telegram or email, and won’t write to them first. Their messages still come into the chat.`;
 }
 
+/** The block landed, and stopping the Lemma answering them did not. */
+export function stopAnsweringFailed(who: Blockable, lemma: string): string {
+    return `${who.name} is blocked for you, but ${lemma} couldn’t be stopped from answering them.`;
+}
+
 export function memberBlockNote(who: Blockable, lemma: string): string {
     return `${who.name} is in ${lemma}. To take them out, an admin removes them in Settings › People.`;
 }

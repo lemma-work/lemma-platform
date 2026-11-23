@@ -11,9 +11,11 @@ only the chat's owner can open the chat. Split from
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import CurrentUser
 from app.modules.agent.api.controllers.conversation_controller import (
@@ -27,12 +29,13 @@ from app.modules.identity.contracts.profiles import user_profile
 from app.modules.pod.contracts.members import pod_name
 from app.modules.reports.contracts import (
     LINES_BEFORE,
+    MAX_NOTE_CHARS,
+    REASONS_SAID,
     AuthorKind,
     ExcerptLine,
     NewReport,
     ReportPlace,
-    ReportRequest,
-    ReportResponse,
+    ReportReason,
     clean_note,
     file_report,
 )
@@ -41,6 +44,26 @@ router = APIRouter(
     prefix="/pods/{pod_id}/conversations",
     tags=["agent_conversations"],
 )
+
+
+class ConversationReportRequest(BaseModel):
+    """Why the reader reports this message, and anything they want to add."""
+
+    reason: ReportReason = Field(description=REASONS_SAID)
+    note: str | None = Field(
+        default=None,
+        max_length=MAX_NOTE_CHARS,
+        description="The reader's own words, for the team. Optional.",
+    )
+
+
+class ConversationReportResponse(BaseModel):
+    """The report as kept. Reporting the same message again replaces it: the
+    same id comes back."""
+
+    id: UUID
+    created_at: datetime
+
 
 #: How far back to look for the messages said before the reported one: a turn
 #: is mostly tool calls and thinking, which the copy leaves out.
@@ -93,7 +116,7 @@ def _who(
 @router.post(
     "/{conversation_id}/messages/{message_id}/report",
     status_code=status.HTTP_201_CREATED,
-    response_model=ReportResponse,
+    response_model=ConversationReportResponse,
     operation_id="agent.conversation.message.report",
     dependencies=[CONVERSATION_MEMBERSHIP],
     summary="Report Conversation Message",
@@ -111,10 +134,10 @@ async def report_message(
     pod_id: UUID,
     conversation_id: UUID,
     message_id: UUID,
-    request: ReportRequest,
+    request: ConversationReportRequest,
     user: CurrentUser,
     reads: ConversationReadsDep,
-) -> ReportResponse:
+) -> ConversationReportResponse:
     conversation = await reads.get_conversation(
         conversation_id=conversation_id, user_id=user.id, pod_id=pod_id
     )
@@ -172,4 +195,4 @@ async def report_message(
         ),
     )
     await reads.uow.commit()
-    return ReportResponse(id=filed.id, created_at=filed.created_at)
+    return ConversationReportResponse(id=filed.id, created_at=filed.created_at)

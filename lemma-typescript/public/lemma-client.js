@@ -18375,7 +18375,9 @@ var LemmaClient = (() => {
     }
     /**
      * Unblock Person
-     * Lift a block: their lines read as anybody's again, the old ones too.
+     * Lift a block: their lines read as anybody's again, the old ones too. A
+     * contact since merged is unblocked as the one they became, as blocking
+     * them was; one since forgotten, by the id given.
      * @param podId
      * @param kind
      * @param personId
@@ -18403,7 +18405,8 @@ var LemmaClient = (() => {
     /**
      * Block Person
      * Block a member or a contact, for the reader alone. Blocking somebody
-     * already blocked changes nothing.
+     * already blocked changes nothing. A reader keeps at most `MAX_BLOCKS` here
+     * (409 `BLOCK_LIMIT`).
      * @param podId
      * @param kind
      * @param personId
@@ -19055,11 +19058,13 @@ var LemmaClient = (() => {
      * Report Line
      * Report a line to the team that runs Lemma: why, and anything to add.
      * Reporting it again replaces the reader's report. The writer is not told.
+     * Not a line from somebody the reader blocked, which they are not shown
+     * (422): they unblock them first.
      * @param podId
      * @param channelId
      * @param messageId
      * @param requestBody
-     * @returns ReportResponse Successful Response
+     * @returns ChannelReportResponse Successful Response
      * @throws ApiError
      */
     static channelMessageReport(podId, channelId, messageId, requestBody) {

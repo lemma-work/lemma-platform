@@ -2,17 +2,12 @@
 
 The module that holds a message files a report about it (``file_report``),
 in its own unit of work, after it has checked the reporter may read the
-message and taken the copy from its own records. The request and response a
-report route takes are here too, so every place a person can report from
-asks the same thing.
+message and taken the copy from its own records. Each report route defines
+its own request and response at its own boundary (DES-13) and maps them to
+these.
 """
 
 from __future__ import annotations
-
-from datetime import datetime
-from uuid import UUID
-
-from pydantic import BaseModel, Field
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.reports.domain.reports import (
@@ -29,29 +24,11 @@ from app.modules.reports.domain.reports import (
 from app.modules.reports.events.report_email import add_report_email_work
 from app.modules.reports.infrastructure.repository import ReportRepository
 
-
-class ReportRequest(BaseModel):
-    """Why the reader reports this message, and anything they want to add."""
-
-    reason: ReportReason = Field(
-        description=(
-            "`OFFENSIVE` offensive or hateful, `HARMFUL` harmful or dangerous, "
-            "`SEXUAL` sexual, `SPAM` spam or a scam, `OTHER` something else."
-        )
-    )
-    note: str | None = Field(
-        default=None,
-        max_length=MAX_NOTE_CHARS,
-        description="The reader's own words, for the team. Optional.",
-    )
-
-
-class ReportResponse(BaseModel):
-    """The report as kept. Reporting the same message again replaces it: the
-    same id comes back."""
-
-    id: UUID
-    created_at: datetime
+#: What each reason means, for a route's own request schema to say.
+REASONS_SAID = (
+    "`OFFENSIVE` offensive or hateful, `HARMFUL` harmful or dangerous, "
+    "`SEXUAL` sexual, `SPAM` spam or a scam, `OTHER` something else."
+)
 
 
 async def file_report(uow: SqlAlchemyUnitOfWork, report: NewReport) -> FiledReport:
@@ -64,14 +41,14 @@ async def file_report(uow: SqlAlchemyUnitOfWork, report: NewReport) -> FiledRepo
 
 __all__ = [
     "LINES_BEFORE",
+    "MAX_NOTE_CHARS",
+    "REASONS_SAID",
     "AuthorKind",
     "ExcerptLine",
     "FiledReport",
     "NewReport",
     "ReportPlace",
     "ReportReason",
-    "ReportRequest",
-    "ReportResponse",
     "clean_note",
     "file_report",
 ]

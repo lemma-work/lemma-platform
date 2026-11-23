@@ -199,6 +199,25 @@ async def _found(uow: UoWDep, *, pod_id: UUID, contact_id: UUID) -> Contact:
     return contact
 
 
+async def _set_blocked(
+    uow: UoWDep, *, pod_id: UUID, contact: Contact, by: UUID | None
+) -> None:
+    """Block or unblock the contact as they are now. One merged into another
+    since it was read is followed once, to the person they became; a write
+    that still finds nobody is a 409, never a silent miss."""
+    repository = ContactRepository(uow.session)
+    if await repository.set_blocked(pod_id=pod_id, contact_id=contact.id, by=by):
+        return
+    now = await _found(uow, pod_id=pod_id, contact_id=contact.id)
+    if now.id == contact.id or not await repository.set_blocked(
+        pod_id=pod_id, contact_id=now.id, by=by
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="That contact changed while it was being saved. Try again.",
+        )
+
+
 def _encode_cursor(contact: Contact) -> str:
     """The last contact of a page, opaque: ``created_at|id``, base64."""
     raw = f"{contact.created_at.isoformat()}|{contact.id}".encode()
@@ -293,10 +312,8 @@ async def update_contact(
     if request.blocked is not None and request.blocked != (
         contact.blocked_at is not None
     ):
-        await repository.set_blocked(
-            pod_id=pod_id,
-            contact_id=contact.id,
-            by=user.id if request.blocked else None,
+        await _set_blocked(
+            uow, pod_id=pod_id, contact=contact, by=user.id if request.blocked else None
         )
     await uow.commit()
     return await _response(uow, await _found(uow, pod_id=pod_id, contact_id=contact.id))

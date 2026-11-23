@@ -91,7 +91,8 @@ def sync_detailed(
     """Block Person
 
      Block a member or a contact, for the reader alone. Blocking somebody
-    already blocked changes nothing.
+    already blocked changes nothing. A reader keeps at most `MAX_BLOCKS` here
+    (409 `BLOCK_LIMIT`).
 
     Args:
         pod_id (UUID):
@@ -129,7 +130,8 @@ def sync(
     """Block Person
 
      Block a member or a contact, for the reader alone. Blocking somebody
-    already blocked changes nothing.
+    already blocked changes nothing. A reader keeps at most `MAX_BLOCKS` here
+    (409 `BLOCK_LIMIT`).
 
     Args:
         pod_id (UUID):
@@ -162,7 +164,8 @@ async def asyncio_detailed(
     """Block Person
 
      Block a member or a contact, for the reader alone. Blocking somebody
-    already blocked changes nothing.
+    already blocked changes nothing. A reader keeps at most `MAX_BLOCKS` here
+    (409 `BLOCK_LIMIT`).
 
     Args:
         pod_id (UUID):
@@ -198,7 +201,8 @@ async def asyncio(
     """Block Person
 
      Block a member or a contact, for the reader alone. Blocking somebody
-    already blocked changes nothing.
+    already blocked changes nothing. A reader keeps at most `MAX_BLOCKS` here
+    (409 `BLOCK_LIMIT`).
 
     Args:
         pod_id (UUID):

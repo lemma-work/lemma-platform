@@ -9,11 +9,11 @@ from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 from dateutil.parser import isoparse
 
-T = TypeVar("T", bound="ReportResponse")
+T = TypeVar("T", bound="ConversationReportResponse")
 
 
 @_attrs_define
-class ReportResponse:
+class ConversationReportResponse:
     """The report as kept. Reporting the same message again replaces it: the
     same id comes back.
 
@@ -49,13 +49,13 @@ class ReportResponse:
 
         id = UUID(d.pop("id"))
 
-        report_response = cls(
+        conversation_report_response = cls(
             created_at=created_at,
             id=id,
         )
 
-        report_response.additional_properties = d
-        return report_response
+        conversation_report_response.additional_properties = d
+        return conversation_report_response
 
     @property
     def additional_keys(self) -> list[str]:

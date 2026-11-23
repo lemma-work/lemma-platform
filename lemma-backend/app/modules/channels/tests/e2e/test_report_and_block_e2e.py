@@ -10,6 +10,7 @@ writing to them, and leaves members free to.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import TypedDict
 from uuid import UUID
 
 import pytest
@@ -20,7 +21,10 @@ from app.modules.agent.infrastructure.models.conversation import (
     ConversationModel,
     MessageModel,
 )
+from app.modules.channels.contracts import NewLine, Sender, post
 from app.modules.channels.domain.entities import Principal
+from app.modules.channels.tests.e2e.push_support import pushed, waiting
+from app.modules.channels.infrastructure import blocks as blocks_module
 from app.modules.channels.infrastructure.blocks import BlockRepository
 from app.modules.channels.tests.e2e.channel_pod import Pod, contact_place, group, say
 from app.modules.contacts.contracts import IdentityStrength, open_contact
@@ -37,10 +41,27 @@ from app.modules.reports.infrastructure.models import ContentReportModel
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
 
-async def _lines(pod: Pod, channel_id, *, as_user=None) -> list[dict]:
+class ShownLine(TypedDict):
+    """What these tests read of a line in a page."""
+
+    id: str
+    text: str | None
+    blocked: bool
+    withheld: bool
+
+
+async def _lines(pod: Pod, channel_id, *, as_user=None) -> list[ShownLine]:
     read = await pod.client(as_user).get(f"{pod.base}/{channel_id}/messages")
     assert read.status_code == 200, read.text
-    return read.json()["items"]
+    return [
+        ShownLine(
+            id=item["id"],
+            text=item["text"],
+            blocked=item["blocked"],
+            withheld=item["withheld"],
+        )
+        for item in read.json()["items"]
+    ]
 
 
 async def test_a_report_keeps_a_copy_and_is_the_reporters_to_replace(
@@ -270,10 +291,83 @@ async def test_a_block_follows_a_contact_into_the_one_they_turned_out_to_be(
     await blocks.carry(pod_id=UUID(pod.id), merged_id=newer.id, survivor_id=older.id)
     await db_session.commit()
 
-    survivor = await blocks.blockers_of(
-        pod_id=UUID(pod.id), person=Principal.contact(older.id)
+    survivor = await blocks.blockers_among(
+        pod_id=UUID(pod.id),
+        person=Principal.contact(older.id),
+        user_ids=[owner, editor],
     )
     assert survivor == {owner, editor}
-    assert not await blocks.blockers_of(
-        pod_id=UUID(pod.id), person=Principal.contact(newer.id)
+    assert not await blocks.blockers_among(
+        pod_id=UUID(pod.id),
+        person=Principal.contact(newer.id),
+        user_ids=[owner, editor],
     )
+
+
+async def test_a_reader_keeps_as_many_blocks_as_their_lines_honour(
+    pod: Pod, db_session, monkeypatch
+):
+    monkeypatch.setattr(blocks_module, "MAX_BLOCKS", 1)
+    _, dana = await contact_place(db_session, pod)
+    first = await pod.client().put(f"/pods/{pod.id}/blocks/CONTACT:{dana}")
+    assert first.status_code == 200, first.text
+    # Blocking the same person again is not one more.
+    assert (
+        await pod.client().put(f"/pods/{pod.id}/blocks/CONTACT:{dana}")
+    ).status_code == 200
+    over = await pod.client().put(f"/pods/{pod.id}/blocks/MEMBER:{pod.user['id']}")
+    assert over.status_code == 409, over.text
+    assert over.json()["code"] == "BLOCK_LIMIT"
+
+
+async def test_a_line_from_somebody_blocked_is_neither_reported_nor_copied(
+    pod: Pod, db_session
+):
+    source, dana = await contact_place(db_session, pod)
+    (line,) = await _lines(pod, source.channel_id)
+    assert (
+        await pod.client().put(f"/pods/{pod.id}/blocks/CONTACT:{dana}")
+    ).status_code == 200
+    refused = await pod.client().post(
+        f"{pod.base}/{source.channel_id}/messages/{line['id']}/report",
+        json={"reason": "OTHER"},
+    )
+    assert refused.status_code == 422, refused.text
+    # The editor, who did not block her, reports her line in full.
+    theirs = await pod.client(pod.editor).post(
+        f"{pod.base}/{source.channel_id}/messages/{line['id']}/report",
+        json={"reason": "OTHER"},
+    )
+    assert theirs.status_code == 201, theirs.text
+
+
+async def test_a_contact_the_pod_stopped_answering_is_pushed_to_nobody(
+    pod: Pod, db_session
+):
+    source, dana = await contact_place(db_session, pod)
+    uow = SqlAlchemyUnitOfWork(db_session)
+    editor = pod.editor["id"]
+    # The editor writes to her, and so answers her: her lines are theirs to hear.
+    await say(pod, source.channel_id, "On it", as_user=pod.editor)
+
+    async def dana_says(text: str) -> str:
+        line = await post(
+            uow,
+            channel_id=source.channel_id,
+            line=NewLine(sender=Sender.contact(dana), text=text, source_id=source.id),
+        )
+        await db_session.commit()
+        assert line is not None
+        return str(line.id)
+
+    first = await dana_says("Hello?")
+    assert editor in await pushed(first), "whoever answers her hears of her lines"
+    held = await waiting(source.channel_id, editor)
+
+    stopped = await pod.client().patch(
+        f"/pods/{pod.id}/contacts/{dana}", json={"blocked": True}
+    )
+    assert stopped.status_code == 200, stopped.text
+    second = await dana_says("Hello again?")
+    assert editor not in await pushed(second)
+    assert await waiting(source.channel_id, editor) == held

@@ -7,9 +7,9 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.channel_report_request import ChannelReportRequest
+from ...models.channel_report_response import ChannelReportResponse
 from ...models.error_response import ErrorResponse
-from ...models.report_request import ReportRequest
-from ...models.report_response import ReportResponse
 from ...types import Response
 
 
@@ -18,7 +18,7 @@ def _get_kwargs(
     channel_id: UUID,
     message_id: UUID,
     *,
-    body: ReportRequest,
+    body: ChannelReportRequest,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
 
@@ -41,9 +41,9 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> ErrorResponse | ReportResponse | None:
+) -> ChannelReportResponse | ErrorResponse | None:
     if response.status_code == 201:
-        response_201 = ReportResponse.from_dict(response.json())
+        response_201 = ChannelReportResponse.from_dict(response.json())
 
         return response_201
 
@@ -80,7 +80,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[ErrorResponse | ReportResponse]:
+) -> Response[ChannelReportResponse | ErrorResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -95,25 +95,28 @@ def sync_detailed(
     message_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: ReportRequest,
-) -> Response[ErrorResponse | ReportResponse]:
+    body: ChannelReportRequest,
+) -> Response[ChannelReportResponse | ErrorResponse]:
     """Report Line
 
      Report a line to the team that runs Lemma: why, and anything to add.
     Reporting it again replaces the reader's report. The writer is not told.
+    Not a line from somebody the reader blocked, which they are not shown
+    (422): they unblock them first.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
         message_id (UUID):
-        body (ReportRequest): Why the reader reports this message, and anything they want to add.
+        body (ChannelReportRequest): Why the reader reports this line, and anything they want to
+            add.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | ReportResponse]
+        Response[ChannelReportResponse | ErrorResponse]
     """
 
     kwargs = _get_kwargs(
@@ -136,25 +139,28 @@ def sync(
     message_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: ReportRequest,
-) -> ErrorResponse | ReportResponse | None:
+    body: ChannelReportRequest,
+) -> ChannelReportResponse | ErrorResponse | None:
     """Report Line
 
      Report a line to the team that runs Lemma: why, and anything to add.
     Reporting it again replaces the reader's report. The writer is not told.
+    Not a line from somebody the reader blocked, which they are not shown
+    (422): they unblock them first.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
         message_id (UUID):
-        body (ReportRequest): Why the reader reports this message, and anything they want to add.
+        body (ChannelReportRequest): Why the reader reports this line, and anything they want to
+            add.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | ReportResponse
+        ChannelReportResponse | ErrorResponse
     """
 
     return sync_detailed(
@@ -172,25 +178,28 @@ async def asyncio_detailed(
     message_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: ReportRequest,
-) -> Response[ErrorResponse | ReportResponse]:
+    body: ChannelReportRequest,
+) -> Response[ChannelReportResponse | ErrorResponse]:
     """Report Line
 
      Report a line to the team that runs Lemma: why, and anything to add.
     Reporting it again replaces the reader's report. The writer is not told.
+    Not a line from somebody the reader blocked, which they are not shown
+    (422): they unblock them first.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
         message_id (UUID):
-        body (ReportRequest): Why the reader reports this message, and anything they want to add.
+        body (ChannelReportRequest): Why the reader reports this line, and anything they want to
+            add.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | ReportResponse]
+        Response[ChannelReportResponse | ErrorResponse]
     """
 
     kwargs = _get_kwargs(
@@ -211,25 +220,28 @@ async def asyncio(
     message_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: ReportRequest,
-) -> ErrorResponse | ReportResponse | None:
+    body: ChannelReportRequest,
+) -> ChannelReportResponse | ErrorResponse | None:
     """Report Line
 
      Report a line to the team that runs Lemma: why, and anything to add.
     Reporting it again replaces the reader's report. The writer is not told.
+    Not a line from somebody the reader blocked, which they are not shown
+    (422): they unblock them first.
 
     Args:
         pod_id (UUID):
         channel_id (UUID):
         message_id (UUID):
-        body (ReportRequest): Why the reader reports this message, and anything they want to add.
+        body (ChannelReportRequest): Why the reader reports this line, and anything they want to
+            add.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | ReportResponse
+        ChannelReportResponse | ErrorResponse
     """
 
     return (

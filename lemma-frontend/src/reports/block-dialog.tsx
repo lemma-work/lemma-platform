@@ -9,6 +9,7 @@ import {
     blockLine,
     blockTitle,
     memberBlockNote,
+    stopAnsweringFailed,
     stopAnsweringLabel,
     stopAnsweringLine,
     type Blockable,
@@ -30,15 +31,20 @@ export function BlockDialog({ podId, person, lemma, mayStopAnswering, onClose }:
     const cache = useQueryClient();
     const offerStop = mayStopAnswering && person.kind === "CONTACT";
     const [stop, setStop] = useState(false);
+    /* The block is the reader's and lands first: once it has, the chats are
+       read again whatever becomes of stopping the Lemma, and Try again asks
+       only for that. */
+    const [blocked, setBlocked] = useState(false);
     const save = useMutation({
         mutationFn: async () => {
-            await block(podId, person);
+            if (!blocked) {
+                await block(podId, person);
+                setBlocked(true);
+                void cache.invalidateQueries({ queryKey: ["channel", podId] });
+            }
             if (offerStop && stop) await setContactBlocked(podId, person.id, true);
         },
-        onSuccess: () => {
-            void cache.invalidateQueries({ queryKey: ["channel", podId] });
-            onClose();
-        },
+        onSuccess: onClose,
     });
     const busy = save.isPending;
     const close = () => { if (!busy) onClose(); };
@@ -48,9 +54,9 @@ export function BlockDialog({ podId, person, lemma, mayStopAnswering, onClose }:
             narrow
             onClose={close}
             footer={<>
-                <button type="button" className="b b--l b--secondary" disabled={busy} onClick={close}>Cancel</button>
+                <button type="button" className="b b--l b--secondary" disabled={busy} onClick={close}>{blocked ? "Done" : "Cancel"}</button>
                 <button type="button" className="b b--l b--primary" disabled={busy} onClick={() => save.mutate()}>
-                    {busy ? "Blocking…" : "Block"}
+                    {busy ? (blocked ? "Saving…" : "Blocking…") : blocked ? "Try again" : "Block"}
                 </button>
             </>}
         >
@@ -74,7 +80,13 @@ export function BlockDialog({ podId, person, lemma, mayStopAnswering, onClose }:
                     </div>
                 )}
                 {person.kind === "MEMBER" && <p className="kd-small">{memberBlockNote(person, lemma)}</p>}
-                {save.isError && <p className="kd-problem" role="alert">{problemOf(save.error, "Couldn’t block them.")}</p>}
+                {save.isError && (
+                    <p className="kd-problem" role="alert">
+                        {blocked
+                            ? stopAnsweringFailed(person, lemma) + " " + problemOf(save.error, "").trim()
+                            : problemOf(save.error, "Couldn’t block them.")}
+                    </p>
+                )}
             </div>
         </Modal>
     );

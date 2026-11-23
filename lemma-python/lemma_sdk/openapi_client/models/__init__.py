@@ -151,6 +151,8 @@ _NAME_TO_MODULE = {
     'ChannelMessagesResponse': 'channel_messages_response',
     'ChannelPostRequest': 'channel_post_request',
     'ChannelRef': 'channel_ref',
+    'ChannelReportRequest': 'channel_report_request',
+    'ChannelReportResponse': 'channel_report_response',
     'ChannelResponse': 'channel_response',
     'ChannelSourceResponse': 'channel_source_response',
     'ChannelUpdateRequest': 'channel_update_request',
@@ -193,6 +195,8 @@ _NAME_TO_MODULE = {
     'ContactsCapResponse': 'contacts_cap_response',
     'ContactsCapUpdate': 'contacts_cap_update',
     'ConversationListResponse': 'conversation_list_response',
+    'ConversationReportRequest': 'conversation_report_request',
+    'ConversationReportResponse': 'conversation_report_response',
     'ConversationRepositoryListResponse': 'conversation_repository_list_response',
     'ConversationRepositoryResponse': 'conversation_repository_response',
     'ConversationResponse': 'conversation_response',
@@ -616,8 +620,6 @@ _NAME_TO_MODULE = {
     'ReportFeedbackRequest': 'report_feedback_request',
     'ReportFeedbackResponse': 'report_feedback_response',
     'ReportReason': 'report_reason',
-    'ReportRequest': 'report_request',
-    'ReportResponse': 'report_response',
     'ResetRequest': 'reset_request',
     'ResetRequestScopesItem': 'reset_request_scopes_item',
     'ResetResponse': 'reset_response',
@@ -1026,6 +1028,8 @@ if TYPE_CHECKING:
     from .channel_messages_response import ChannelMessagesResponse
     from .channel_post_request import ChannelPostRequest
     from .channel_ref import ChannelRef
+    from .channel_report_request import ChannelReportRequest
+    from .channel_report_response import ChannelReportResponse
     from .channel_response import ChannelResponse
     from .channel_source_response import ChannelSourceResponse
     from .channel_update_request import ChannelUpdateRequest
@@ -1068,6 +1072,8 @@ if TYPE_CHECKING:
     from .contacts_cap_response import ContactsCapResponse
     from .contacts_cap_update import ContactsCapUpdate
     from .conversation_list_response import ConversationListResponse
+    from .conversation_report_request import ConversationReportRequest
+    from .conversation_report_response import ConversationReportResponse
     from .conversation_repository_list_response import ConversationRepositoryListResponse
     from .conversation_repository_response import ConversationRepositoryResponse
     from .conversation_response import ConversationResponse
@@ -1491,8 +1497,6 @@ if TYPE_CHECKING:
     from .report_feedback_request import ReportFeedbackRequest
     from .report_feedback_response import ReportFeedbackResponse
     from .report_reason import ReportReason
-    from .report_request import ReportRequest
-    from .report_response import ReportResponse
     from .reset_request import ResetRequest
     from .reset_request_scopes_item import ResetRequestScopesItem
     from .reset_response import ResetResponse
@@ -1914,6 +1918,8 @@ __all__ = [
     'ChannelMessagesResponse',
     'ChannelPostRequest',
     'ChannelRef',
+    'ChannelReportRequest',
+    'ChannelReportResponse',
     'ChannelResponse',
     'ChannelSourceResponse',
     'ChannelUpdateRequest',
@@ -1956,6 +1962,8 @@ __all__ = [
     'ContactsCapResponse',
     'ContactsCapUpdate',
     'ConversationListResponse',
+    'ConversationReportRequest',
+    'ConversationReportResponse',
     'ConversationRepositoryListResponse',
     'ConversationRepositoryResponse',
     'ConversationResponse',
@@ -2379,8 +2387,6 @@ __all__ = [
     'ReportFeedbackRequest',
     'ReportFeedbackResponse',
     'ReportReason',
-    'ReportRequest',
-    'ReportResponse',
     'ResetRequest',
     'ResetRequestScopesItem',
     'ResetResponse',

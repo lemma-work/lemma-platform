@@ -2,24 +2,28 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Collection
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, delete, func, literal, or_, select
+from sqlalchemy import ColumnElement, delete, func, literal, or_, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.infrastructure.db.transaction_locks import mark_transaction_scoped_lock
 from app.modules.channels.domain.entities import Principal
 from app.modules.channels.infrastructure.block_models import PersonBlockModel
 
-#: The most blocks one member keeps in one pod: what one read returns, and
-#: what a page shows.
+#: The most blocks one member keeps in one pod: what one read returns, so
+#: what ``block`` admits -- a block past it would be kept and never applied.
 MAX_BLOCKS = 500
-#: The most members one read finds who blocked one person: whom a push
-#: leaves out. Past it, a member who blocked them may still be told of a
-#: line -- told, never shown: what the line says stays withheld from them.
-MAX_BLOCKERS = 2000
+#: How many readers one read asks about at once.
+_BATCH = 500
+
+
+class BlockLimitReached(Exception):
+    """The member already blocked ``MAX_BLOCKS`` people in this pod."""
 
 
 def _blocked(row: PersonBlockModel) -> Principal:
@@ -36,12 +40,20 @@ def _is(person: Principal) -> ColumnElement[bool]:
     return b.blocked_contact_id == person.contact_id
 
 
+def _lock_key(pod_id: UUID, user_id: UUID) -> int:
+    digest = hashlib.blake2b(
+        f"{pod_id}:{user_id}".encode(), digest_size=8, person=b"lemma-blocks"
+    ).digest()
+    return int.from_bytes(digest, "big", signed=True)
+
+
 class BlockRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
     async def of_reader(self, *, pod_id: UUID, user_id: UUID) -> frozenset[Principal]:
-        """Everybody this member blocked here."""
+        """Everybody this member blocked here: never more than ``MAX_BLOCKS``,
+        which ``block`` holds to."""
         b = PersonBlockModel
         rows = await self._session.scalars(
             select(b).where(b.pod_id == pod_id, b.user_id == user_id).limit(MAX_BLOCKS)
@@ -61,13 +73,24 @@ class BlockRepository:
         )
         return [(_blocked(row), row.created_at) for row in rows]
 
-    async def blockers_of(self, *, pod_id: UUID, person: Principal) -> set[UUID]:
-        """The members who blocked this person here, up to ``MAX_BLOCKERS``."""
+    async def blockers_among(
+        self, *, pod_id: UUID, person: Principal, user_ids: Collection[UUID]
+    ) -> set[UUID]:
+        """Which of these members blocked this person here -- every one of
+        them asked, a batch at a time, however many there are."""
         b = PersonBlockModel
-        rows = await self._session.scalars(
-            select(b.user_id).where(b.pod_id == pod_id, _is(person)).limit(MAX_BLOCKERS)
-        )
-        return set(rows)
+        readers = sorted(set(user_ids))
+        found: set[UUID] = set()
+        for start in range(0, len(readers), _BATCH):
+            rows = await self._session.scalars(
+                select(b.user_id).where(
+                    b.pod_id == pod_id,
+                    _is(person),
+                    b.user_id.in_(readers[start : start + _BATCH]),
+                )
+            )
+            found.update(rows)
+        return found
 
     async def among(
         self, *, pod_id: UUID, people: Collection[Principal]
@@ -98,9 +121,30 @@ class BlockRepository:
     async def block(
         self, *, pod_id: UUID, user_id: UUID, person: Principal
     ) -> datetime:
-        """Block them; blocking them again changes nothing. When it was made."""
+        """Block them; blocking them again changes nothing. When it was made.
+
+        A member's blocks here are counted and added under one lock for that
+        member and pod, so two at once cannot both take the last place:
+        ``BlockLimitReached`` once ``MAX_BLOCKS`` are kept.
+        """
         b = PersonBlockModel
         await self._session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": _lock_key(pod_id, user_id)},
+        )
+        mark_transaction_scoped_lock(self._session)
+        mine = (b.pod_id == pod_id, b.user_id == user_id)
+        made = await self._session.scalar(
+            select(b.created_at).where(*mine, _is(person))
+        )
+        if made is not None:
+            return made
+        kept = await self._session.scalar(
+            select(func.count()).select_from(b).where(*mine)
+        )
+        if (kept or 0) >= MAX_BLOCKS:
+            raise BlockLimitReached
+        made = await self._session.scalar(
             insert(b)
             .values(
                 pod_id=pod_id,
@@ -108,19 +152,14 @@ class BlockRepository:
                 blocked_user_id=person.user_id,
                 blocked_contact_id=person.contact_id,
             )
-            .on_conflict_do_nothing()
-        )
-        made = await self._session.scalar(
-            select(b.created_at).where(
-                b.pod_id == pod_id, b.user_id == user_id, _is(person)
-            )
+            .returning(b.created_at)
         )
         assert made is not None
         return made
 
     async def carry(self, *, pod_id: UUID, merged_id: UUID, survivor_id: UUID) -> None:
         """A contact turned out to be another: whoever blocked the one blocks
-        the other."""
+        the other. Nobody's count grows: each row moves, or goes."""
         b = PersonBlockModel
         # In one statement, so it holds however many blocked them: each
         # blocker's row for the survivor, unless they had one already.

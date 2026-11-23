@@ -13,6 +13,8 @@ import type { ChannelListResponse } from '../models/ChannelListResponse.js';
 import type { ChannelMessageResponse } from '../models/ChannelMessageResponse.js';
 import type { ChannelMessagesResponse } from '../models/ChannelMessagesResponse.js';
 import type { ChannelPostRequest } from '../models/ChannelPostRequest.js';
+import type { ChannelReportRequest } from '../models/ChannelReportRequest.js';
+import type { ChannelReportResponse } from '../models/ChannelReportResponse.js';
 import type { ChannelUpdateRequest } from '../models/ChannelUpdateRequest.js';
 import type { ContactStatus } from '../models/ContactStatus.js';
 import type { DeliveriesResponse } from '../models/DeliveriesResponse.js';
@@ -23,8 +25,6 @@ import type { MemberUpdateRequest } from '../models/MemberUpdateRequest.js';
 import type { MyMembershipUpdate } from '../models/MyMembershipUpdate.js';
 import type { ReadRequest } from '../models/ReadRequest.js';
 import type { ReadResponse } from '../models/ReadResponse.js';
-import type { ReportRequest } from '../models/ReportRequest.js';
-import type { ReportResponse } from '../models/ReportResponse.js';
 import type { SearchResponse } from '../models/SearchResponse.js';
 import type { SenderKind } from '../models/SenderKind.js';
 import type { TableGrantRequest } from '../models/TableGrantRequest.js';
@@ -62,7 +62,9 @@ export class ChannelsService {
     }
     /**
      * Unblock Person
-     * Lift a block: their lines read as anybody's again, the old ones too.
+     * Lift a block: their lines read as anybody's again, the old ones too. A
+     * contact since merged is unblocked as the one they became, as blocking
+     * them was; one since forgotten, by the id given.
      * @param podId
      * @param kind
      * @param personId
@@ -94,7 +96,8 @@ export class ChannelsService {
     /**
      * Block Person
      * Block a member or a contact, for the reader alone. Blocking somebody
-     * already blocked changes nothing.
+     * already blocked changes nothing. A reader keeps at most `MAX_BLOCKS` here
+     * (409 `BLOCK_LIMIT`).
      * @param podId
      * @param kind
      * @param personId
@@ -843,19 +846,21 @@ export class ChannelsService {
      * Report Line
      * Report a line to the team that runs Lemma: why, and anything to add.
      * Reporting it again replaces the reader's report. The writer is not told.
+     * Not a line from somebody the reader blocked, which they are not shown
+     * (422): they unblock them first.
      * @param podId
      * @param channelId
      * @param messageId
      * @param requestBody
-     * @returns ReportResponse Successful Response
+     * @returns ChannelReportResponse Successful Response
      * @throws ApiError
      */
     public static channelMessageReport(
         podId: string,
         channelId: string,
         messageId: string,
-        requestBody: ReportRequest,
-    ): CancelablePromise<ReportResponse> {
+        requestBody: ChannelReportRequest,
+    ): CancelablePromise<ChannelReportResponse> {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/report',

@@ -7,9 +7,9 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.conversation_report_request import ConversationReportRequest
+from ...models.conversation_report_response import ConversationReportResponse
 from ...models.error_response import ErrorResponse
-from ...models.report_request import ReportRequest
-from ...models.report_response import ReportResponse
 from ...types import Response
 
 
@@ -18,7 +18,7 @@ def _get_kwargs(
     conversation_id: UUID,
     message_id: UUID,
     *,
-    body: ReportRequest,
+    body: ConversationReportRequest,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
 
@@ -41,9 +41,9 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> ErrorResponse | ReportResponse | None:
+) -> ConversationReportResponse | ErrorResponse | None:
     if response.status_code == 201:
-        response_201 = ReportResponse.from_dict(response.json())
+        response_201 = ConversationReportResponse.from_dict(response.json())
 
         return response_201
 
@@ -65,7 +65,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[ErrorResponse | ReportResponse]:
+) -> Response[ConversationReportResponse | ErrorResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -80,8 +80,8 @@ def sync_detailed(
     message_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: ReportRequest,
-) -> Response[ErrorResponse | ReportResponse]:
+    body: ConversationReportRequest,
+) -> Response[ConversationReportResponse | ErrorResponse]:
     """Report Conversation Message
 
      Report a reply of the Lemma's, or a message from somebody outside, to the team that runs Lemma: why,
@@ -91,14 +91,15 @@ def sync_detailed(
         pod_id (UUID):
         conversation_id (UUID):
         message_id (UUID):
-        body (ReportRequest): Why the reader reports this message, and anything they want to add.
+        body (ConversationReportRequest): Why the reader reports this message, and anything they
+            want to add.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | ReportResponse]
+        Response[ConversationReportResponse | ErrorResponse]
     """
 
     kwargs = _get_kwargs(
@@ -121,8 +122,8 @@ def sync(
     message_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: ReportRequest,
-) -> ErrorResponse | ReportResponse | None:
+    body: ConversationReportRequest,
+) -> ConversationReportResponse | ErrorResponse | None:
     """Report Conversation Message
 
      Report a reply of the Lemma's, or a message from somebody outside, to the team that runs Lemma: why,
@@ -132,14 +133,15 @@ def sync(
         pod_id (UUID):
         conversation_id (UUID):
         message_id (UUID):
-        body (ReportRequest): Why the reader reports this message, and anything they want to add.
+        body (ConversationReportRequest): Why the reader reports this message, and anything they
+            want to add.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | ReportResponse
+        ConversationReportResponse | ErrorResponse
     """
 
     return sync_detailed(
@@ -157,8 +159,8 @@ async def asyncio_detailed(
     message_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: ReportRequest,
-) -> Response[ErrorResponse | ReportResponse]:
+    body: ConversationReportRequest,
+) -> Response[ConversationReportResponse | ErrorResponse]:
     """Report Conversation Message
 
      Report a reply of the Lemma's, or a message from somebody outside, to the team that runs Lemma: why,
@@ -168,14 +170,15 @@ async def asyncio_detailed(
         pod_id (UUID):
         conversation_id (UUID):
         message_id (UUID):
-        body (ReportRequest): Why the reader reports this message, and anything they want to add.
+        body (ConversationReportRequest): Why the reader reports this message, and anything they
+            want to add.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | ReportResponse]
+        Response[ConversationReportResponse | ErrorResponse]
     """
 
     kwargs = _get_kwargs(
@@ -196,8 +199,8 @@ async def asyncio(
     message_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: ReportRequest,
-) -> ErrorResponse | ReportResponse | None:
+    body: ConversationReportRequest,
+) -> ConversationReportResponse | ErrorResponse | None:
     """Report Conversation Message
 
      Report a reply of the Lemma's, or a message from somebody outside, to the team that runs Lemma: why,
@@ -207,14 +210,15 @@ async def asyncio(
         pod_id (UUID):
         conversation_id (UUID):
         message_id (UUID):
-        body (ReportRequest): Why the reader reports this message, and anything they want to add.
+        body (ConversationReportRequest): Why the reader reports this message, and anything they
+            want to add.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | ReportResponse
+        ConversationReportResponse | ErrorResponse
     """
 
     return (

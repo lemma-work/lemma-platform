@@ -9,9 +9,12 @@ read them, since the line can be edited or removed afterwards (``reports``).
 
 from __future__ import annotations
 
+from collections.abc import Collection
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, status
+from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import UoWDep
 from app.core.authorization.dependencies import require_action
@@ -40,17 +43,19 @@ from app.modules.channels.domain.entities import (
     Principal,
     SenderKind,
 )
+from app.modules.channels.infrastructure.blocks import BlockRepository
 from app.modules.channels.infrastructure.lines import LineRepository
 from app.modules.channels.infrastructure.names import Names
 from app.modules.pod.contracts.members import pod_organization_id
 from app.modules.reports.contracts import (
     LINES_BEFORE,
+    MAX_NOTE_CHARS,
+    REASONS_SAID,
     AuthorKind,
     ExcerptLine,
     NewReport,
     ReportPlace,
-    ReportRequest,
-    ReportResponse,
+    ReportReason,
     clean_note,
     file_report,
 )
@@ -58,6 +63,26 @@ from app.modules.reports.contracts import (
 router = APIRouter(
     prefix="/pods/{pod_id}/channels", tags=["Channels"], responses=ERRORS
 )
+
+
+class ChannelReportRequest(BaseModel):
+    """Why the reader reports this line, and anything they want to add."""
+
+    reason: ReportReason = Field(description=REASONS_SAID)
+    note: str | None = Field(
+        default=None,
+        max_length=MAX_NOTE_CHARS,
+        description="The reader's own words, for the team. Optional.",
+    )
+
+
+class ChannelReportResponse(BaseModel):
+    """The report as kept. Reporting the same line again replaces it: the
+    same id comes back."""
+
+    id: UUID
+    created_at: datetime
+
 
 _AUTHORS = {
     SenderKind.AGENT: AuthorKind.AGENT,
@@ -89,16 +114,25 @@ def _excerpt(
     reader_id: UUID,
     names: NameMap,
     agents: AgentNames,
+    blocked: Collection[Principal],
 ) -> tuple[ExcerptLine, ...]:
-    """The lines as the reporter read them: withheld or deleted ones say so."""
+    """The lines as the reporter read them: withheld, blocked or deleted ones
+    say so, and carry nothing of what they said."""
     copy: list[ExcerptLine] = []
     for line in [*lines, reported]:
         shown = message_response(
-            line, channel, reader_id=reader_id, names=names, agents=agents
+            line,
+            channel,
+            reader_id=reader_id,
+            names=names,
+            agents=agents,
+            blocked=blocked,
         )
         text = (
             "[deleted]"
             if shown.deleted
+            else "[from somebody they blocked]"
+            if shown.blocked
             else "[not shown to them]"
             if shown.withheld
             else shown.text or ""
@@ -129,19 +163,21 @@ def _title(channel: Channel, names: NameMap) -> str | None:
     "/{channel_id}/messages/{message_id}/report",
     operation_id="channel.message.report",
     status_code=status.HTTP_201_CREATED,
-    response_model=ReportResponse,
+    response_model=ChannelReportResponse,
     dependencies=[require_action(Permissions.CHANNEL_READ)],
 )
 async def report_line(
     pod_id: UUID,
     channel_id: UUID,
     message_id: UUID,
-    request: ReportRequest,
+    request: ChannelReportRequest,
     uow: UoWDep,
     caller: CallerDep,
-) -> ReportResponse:
+) -> ChannelReportResponse:
     """Report a line to the team that runs Lemma: why, and anything to add.
-    Reporting it again replaces the reader's report. The writer is not told."""
+    Reporting it again replaces the reader's report. The writer is not told.
+    Not a line from somebody the reader blocked, which they are not shown
+    (422): they unblock them first."""
     channel = await visible(uow, caller, channel_id)
     line = await LineRepository(uow.session).get(message_id)
     if line is None or line.channel_id != channel.id or line.is_deleted:
@@ -150,6 +186,13 @@ async def report_line(
         raise unprocessable("That is your own message")
     if hidden_from(line, channel, caller.user_id):
         raise unprocessable("Only the member it was made for can read that answer")
+    blocked = await BlockRepository(uow.session).of_reader(
+        pod_id=pod_id, user_id=caller.user_id
+    )
+    if line.sender.principal in blocked:
+        raise unprocessable(
+            "You blocked the person who wrote this. Unblock them to report it."
+        )
     before = await _before(uow, channel, line)
     people = [person for each in [*before, line] for person in message_people(each)]
     if channel.contact_id is not None and channel.kind is ChannelKind.CONTACT:
@@ -186,8 +229,9 @@ async def report_line(
                 reader_id=caller.user_id,
                 names=names,
                 agents=agents,
+                blocked=blocked,
             ),
         ),
     )
     await uow.commit()
-    return ReportResponse(id=filed.id, created_at=filed.created_at)
+    return ChannelReportResponse(id=filed.id, created_at=filed.created_at)

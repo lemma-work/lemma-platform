@@ -12,7 +12,8 @@ question waiting on them; a line in their own channel they did not write; a
 contact's line in a channel assigned to them (seated or not); and, set to ``ALL``, any line
 written in Lemma in a group they are in. Never an agent's line at a platform
 (seen there) or answering in a thread (seen in the app), nor a line withheld
-from them (they could not read it), nor a line from somebody they blocked. ``MENTIONS`` -- a group seat's default --
+from them (they could not read it), nor a line from somebody they blocked;
+nobody hears of a line from a contact the pod stopped answering. ``MENTIONS`` -- a group seat's default --
 keeps only the first two, and so does a note for members only; ``NONE`` and a
 mute stop them all. Somebody named or asked who is not in the channel is told
 too, when they may see it. The first two *call* them: due at once, never held
@@ -51,6 +52,7 @@ from app.modules.channels.infrastructure.questions import QuestionRepository
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.rows import now
 from app.modules.channels.services.viewers import member_sees
+from app.modules.contacts.contracts import contact_by_id
 
 #: The work kind that sends a window once it ends.
 CHANNELS_PUSH_WINDOW = "channels.push_window"
@@ -250,12 +252,20 @@ async def _not_blocking(
     told: dict[UUID, bool],
 ) -> dict[UUID, bool]:
     """Who is told, less whoever blocked the person who wrote it: they hear
-    nothing of that person's lines, whatever the lines say."""
+    nothing of that person's lines, whatever the lines say. A contact the pod
+    stopped answering (``contacts``) is told to nobody: their lines wait in
+    the chat, the way ``hand_to_a_person`` keeps them, with no hand-off."""
     writer = message.sender.principal
     if writer is None or not told:
         return told
-    blockers = await BlockRepository(uow.session).blockers_of(
-        pod_id=channel.pod_id, person=writer
+    if writer.contact_id is not None:
+        contact = await contact_by_id(
+            uow, pod_id=channel.pod_id, contact_id=writer.contact_id
+        )
+        if contact is not None and contact.blocked:
+            return {}
+    blockers = await BlockRepository(uow.session).blockers_among(
+        pod_id=channel.pod_id, person=writer, user_ids=told.keys()
     )
     return {
         user_id: calls for user_id, calls in told.items() if user_id not in blockers

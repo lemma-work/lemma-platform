@@ -3,10 +3,10 @@
 /* tslint:disable */
 /* eslint-disable */
 /**
- * The report as kept. Reporting the same message again replaces it: the
+ * The report as kept. Reporting the same line again replaces it: the
  * same id comes back.
  */
-export type ReportResponse = {
+export type ChannelReportResponse = {
     created_at: string;
     id: string;
 };
