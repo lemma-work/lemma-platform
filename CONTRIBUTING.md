@@ -373,6 +373,21 @@ Merge blockers: generated-client drift, architecture baseline growth, new broad
 `except` clauses, coverage below the committed floor, and unresolved
 high/critical security findings.
 
+## Contributor License Agreement
+
+Before your first pull request can be merged, sign the
+[Contributor License Agreement](CLA.md). You keep the copyright in what you
+write; the agreement lets Folks and Machines, Inc., which makes Lemma, ship it
+in the open-source releases and also where those licences do not fit, such
+as the Apple App Store and Google Play.
+
+Signing takes one comment. A bot asks on your first pull request; reply with
+
+> I have read the CLA Document and I hereby sign the CLA
+
+and it is recorded for every pull request after. If you contribute as part of
+your job, your employer needs to agree too (section 7 of the agreement).
+
 ## Security
 
 Report vulnerabilities privately according to [SECURITY.md](SECURITY.md) —
