@@ -34,7 +34,8 @@ from app.modules.calls.domain.voice import (
     VoiceEngine,
 )
 from app.modules.calls.domain.voice_brief import voice_brief
-from app.modules.calls.services.agents import CallAgents, Party, as_caller
+from app.modules.calls.services.agents import CallAgents
+from app.modules.calls.services.caller import Party, as_caller
 from app.modules.calls.services.engines import build_engine, engines_offered
 from app.modules.calls.services.gate import Caller, route_turn
 from app.modules.calls.services.lease import CallLease
@@ -145,7 +146,7 @@ async def _held(
         return
     agents = CallAgents(call_id=call_id, party=party)
     instructions = voice_brief(
-        teammate=str(start.get("teammate") or "your teammate")[:120],
+        teammate=str(start.get("teammate") or "your Lemma")[:120],
         pod=str(start.get("pod") or "this pod")[:120],
         context=str(start.get("context") or "") or None,
         earlier=await _earlier(agents),

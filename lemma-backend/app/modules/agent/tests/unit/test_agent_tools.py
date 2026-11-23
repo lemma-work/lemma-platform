@@ -9,7 +9,6 @@ from app.modules.agent.infrastructure.harness.lemma.run_options import (
 )
 import pytest
 
-import app.modules.agent.infrastructure.tools.user_interaction.tools as user_interaction_adapter
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
@@ -369,64 +368,6 @@ async def test_display_resource_no_surface_does_not_deliver(monkeypatch):
     assert calls == []
 
 
-@pytest.mark.asyncio
-async def test_display_resource_returns_browser_access_url(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    user_id = uuid4()
-    calls: list[tuple[str, object]] = []
-
-    class FakeWorkspaceSandboxService:
-        async def create_browser_access(
-            self,
-            requested_user_id: UUID,
-            *,
-            ttl_seconds: int,
-            pod_id: UUID,
-            actor_id: UUID | None,
-        ):
-            calls.append(
-                (
-                    "create_browser_access",
-                    (requested_user_id, ttl_seconds, pod_id, actor_id),
-                )
-            )
-            return SimpleNamespace(
-                url="https://browser.example/access-token",
-                expires_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
-            )
-
-        async def close(self):
-            calls.append(("close", None))
-
-    monkeypatch.setattr(
-        user_interaction_adapter,
-        "WorkspaceSandboxService",
-        FakeWorkspaceSandboxService,
-    )
-
-    pod_id = uuid4()
-    agent_id = uuid4()
-    ctx = SimpleNamespace(user_id=user_id, pod_id=pod_id, workload_id=agent_id)
-
-    response = await display_resource(
-        ctx,
-        DisplayResourceRequest(type="browser"),
-    )
-
-    assert response.success is True
-    assert response.message == "BROWSER resource ready for display."
-    assert response.app == "browser"
-    assert response.url == "https://browser.example/access-token"
-    assert response.expires_at == datetime(2030, 1, 1, tzinfo=timezone.utc)
-    assert calls == [
-        # The browser in the run's own pod workspace, beside its shell.
-        # The browser of the agent that asked, not the pod assistant's.
-        ("create_browser_access", (user_id, 1800, pod_id, agent_id)),
-        ("close", None),
-    ]
-
-
 def _payload_error(**kwargs) -> str:
     """Build a request and return its semantic-validation error (or '')."""
     return validate_display_payload(DisplayResourceRequest(**kwargs)) or ""
@@ -568,7 +509,7 @@ def test_display_resource_validates_widget_form_and_table_payloads():
 def test_display_resource_rejects_the_agents_own_sandbox_paths():
     """A workspace path is caught here, where the agent can still fix it.
 
-    `/workspace/...` is the agent's cwd, so it is the path in hand when it
+    `~/lemma/...` is the agent's cwd, so it is the path in hand when it
     decides to show a file it just made. It used to pass validation and fail
     three layers down, where the only thing left was a card whose "Open file"
     button pointed into a pod directory that does not exist.
@@ -1123,7 +1064,7 @@ def test_a_finished_plan_is_shown_as_history_rather_than_as_work():
 
 def test_project_agent_prompt_describes_the_checkout_not_the_scratchpad():
     """On a repo, the scratchpad orientation is not just unhelpful but wrong:
-    there is no sibling `/workspace/c/<date>/<slug>` holding earlier work, and
+    there is no sibling `~/lemma/c/<date>/<slug>` holding earlier work, and
     an empty directory means a failed clone rather than a new conversation."""
 
     conversation = Conversation(pod_id=uuid4(), user_id=uuid4(), agent_id=uuid4())
@@ -1153,15 +1094,15 @@ def test_project_agent_prompt_describes_the_checkout_not_the_scratchpad():
     # A shared checkout: warn before it tidies up someone else's work.
     assert "git status" in prompt
     assert "reset --hard" in prompt
-    assert "list `/workspace/c/`" not in prompt
+    assert f"list `{WORKSPACE_ROOT}/c/`" not in prompt
 
 
 def test_workspace_directory_falls_back_to_the_resolved_location():
     """A context with no cwd still names the directory the tools use.
 
-    This asserted `/workspace/conversations/{id}` — a path shape the platform
+    This asserted `~/lemma/conversations/{id}` — a path shape the platform
     stopped making when the cwd moved into conversation metadata with a
-    `/workspace/c/{date}/{slug}` default. The test was pinning the stale answer
+    `~/lemma/c/{date}/{slug}` default. The test was pinning the stale answer
     in place, so the one section whose job is to say where the agent is pointed
     at a directory that does not exist.
     """

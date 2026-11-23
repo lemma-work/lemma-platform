@@ -77,7 +77,7 @@ def sync_detailed(
 ) -> Response[ErrorResponse | None | PodJoinRequestCreateResponse]:
     """Get My Pod Join Request
 
-     Get the current user's pending join request for this pod
+     Get the current user's pending join request for this pod, or the last one if it was rejected
 
     Args:
         pod_id (UUID):
@@ -108,7 +108,7 @@ def sync(
 ) -> ErrorResponse | None | PodJoinRequestCreateResponse | None:
     """Get My Pod Join Request
 
-     Get the current user's pending join request for this pod
+     Get the current user's pending join request for this pod, or the last one if it was rejected
 
     Args:
         pod_id (UUID):
@@ -134,7 +134,7 @@ async def asyncio_detailed(
 ) -> Response[ErrorResponse | None | PodJoinRequestCreateResponse]:
     """Get My Pod Join Request
 
-     Get the current user's pending join request for this pod
+     Get the current user's pending join request for this pod, or the last one if it was rejected
 
     Args:
         pod_id (UUID):
@@ -163,7 +163,7 @@ async def asyncio(
 ) -> ErrorResponse | None | PodJoinRequestCreateResponse | None:
     """Get My Pod Join Request
 
-     Get the current user's pending join request for this pod
+     Get the current user's pending join request for this pod, or the last one if it was rejected
 
     Args:
         pod_id (UUID):

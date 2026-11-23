@@ -43,8 +43,8 @@ class ScheduleTargetResolver(Protocol):
 
 
 class DatastoreSchedulePolicy(Protocol):
-    async def require_table_update(
-        self, *, pod_id: UUID, table_name: str, ctx: Context
+    async def require_table_watch(
+        self, *, pod_id: UUID, table_name: str, owner_readable_rows: bool, ctx: Context
     ) -> None: ...
 
     async def can_view_all_runs(

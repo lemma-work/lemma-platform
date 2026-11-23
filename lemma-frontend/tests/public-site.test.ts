@@ -90,6 +90,7 @@ test("old links reach their resource rather than the default workspace", () => {
   );
   assert.equal(legacyAddress(["not-a-page"], new URLSearchParams()), null);
   assert.equal(settingsFromQuery("anything"), null);
+  assert.equal(settingsFromQuery("help"), "help", "Help is a section of Settings");
 });
 
 test("analytics never exports private workspace paths or link query payloads", () => {

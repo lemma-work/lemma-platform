@@ -25,6 +25,7 @@ from app.core.log.log import get_logger
 
 from app.modules.agent.domain.background import BackgroundAnswer, BackgroundCall
 from app.modules.agent.domain.ports import ModelProvider
+from app.modules.agent.domain.tools import ImagePart
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 from app.modules.agent.domain.runtime_choice import RuntimePurpose
 from app.modules.agent.services.runtime_resolution import (
@@ -46,7 +47,16 @@ USAGE_SOURCES: dict[RuntimePurpose, str] = {
     RuntimePurpose.TITLE: "conversation_title",
     RuntimePurpose.MEMORY: "agent_memory",
     RuntimePurpose.VISION: "vision",
+    RuntimePurpose.IMAGE: "image_generation",
 }
+#: Recorded against a run but not part of its answer: the conversation's title
+#: and the memory kept once it ended. A run's own token count leaves them out,
+#: so it reads the same before and after they land. Vision is the run reading
+#: an image, and counts.
+AFTER_THE_RUN_SOURCES = (
+    USAGE_SOURCES[RuntimePurpose.TITLE],
+    USAGE_SOURCES[RuntimePurpose.MEMORY],
+)
 
 
 @lru_cache(maxsize=1)
@@ -140,6 +150,23 @@ class BackgroundModel:
         ):
             return await self.provider.run(model, call)
 
+    async def draw(
+        self,
+        model: object,
+        call: BackgroundCall,
+        *,
+        usage: UsageExecutionContext,
+        timeout_seconds: float | None = None,
+    ) -> ImagePart:
+        """One image from ``model``, metered as image generation against
+        ``usage``, the call cut short inside the metering so it is recorded."""
+        source = USAGE_SOURCES[RuntimePurpose.IMAGE]
+        async with (
+            metering_execution(replace(usage, source_type=source)),
+            asyncio.timeout(timeout_seconds),
+        ):
+            return await self.provider.draw(model, call)
+
     async def run(
         self,
         purpose: RuntimePurpose,
@@ -165,4 +192,10 @@ class BackgroundModel:
         return await self.ask(purpose, model, call_for(resolved), usage=usage)
 
 
-__all__ = ["USAGE_SOURCES", "BackgroundModel", "CallFor", "default_model_provider"]
+__all__ = [
+    "AFTER_THE_RUN_SOURCES",
+    "USAGE_SOURCES",
+    "BackgroundModel",
+    "CallFor",
+    "default_model_provider",
+]

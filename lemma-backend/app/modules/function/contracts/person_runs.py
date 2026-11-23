@@ -44,6 +44,8 @@ async def runnable_functions(
             for function in visible
             if function.status is FunctionStatus.READY
             and Permissions.FUNCTION_EXECUTE in function.allowed_actions
+            # Run through the assistant, so not one kept from it.
+            and function.assistant_invoke
         ),
         key=lambda function: function.name.casefold(),
     )

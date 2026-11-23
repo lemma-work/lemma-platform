@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { UserResponse } from "lemma-sdk";
-import { CheckCircleIcon } from "@/ui/icons";
 import { isLocalDeployment } from "@/site/config";
 import { lemma } from "./client";
 import { isCompleteMobileNumber, normalizeMobileNumber, storedMobileNumber } from "./mobile-number";
@@ -12,6 +11,10 @@ import {
     changes, draftOf, hasChanges, localTimezone, problems, timezones,
     type ProfileDraft,
 } from "./profile-edit";
+
+/** The first field of the profile form, for a row above it that offers to
+ *  change the name. */
+export const PROFILE_FIRST_FIELD = "profile-first-name";
 
 /** The profile, edited here rather than sent somewhere else.
  *
@@ -65,23 +68,23 @@ export function ProfilePanel({ user }: { user: UserResponse }) {
 
     return (
         <form
-            className="profile-form"
+            className="kset-form"
             onSubmit={(event) => { event.preventDefault(); if (dirty && !Object.keys(wrong).length) save.mutate(); }}
         >
-            <div className="profile-form__pair">
-                <label className="field">
+            <div className="kset-pair">
+                <label className="kfield">
                     <span>First name</span>
-                    <input value={draft.first_name} onChange={(e) => set("first_name", e.target.value)} autoComplete="given-name" />
+                    <input id={PROFILE_FIRST_FIELD} className="kinput" value={draft.first_name} onChange={(e) => set("first_name", e.target.value)} autoComplete="given-name" />
                 </label>
-                <label className="field">
+                <label className="kfield">
                     <span>Last name</span>
-                    <input value={draft.last_name} onChange={(e) => set("last_name", e.target.value)} autoComplete="family-name" />
+                    <input className="kinput" value={draft.last_name} onChange={(e) => set("last_name", e.target.value)} autoComplete="family-name" />
                 </label>
             </div>
 
-            <label className="field">
-                <span>Timezone</span>
-                <select value={draft.timezone} onChange={(e) => set("timezone", e.target.value)}>
+            <label className="kfield">
+                <span>Time zone</span>
+                <select className="kinput" value={draft.timezone} onChange={(e) => set("timezone", e.target.value)}>
                     <option value="">Not set</option>
                     {/* A zone the server holds that this browser cannot name
                         still has to appear, or opening the form would quietly
@@ -89,45 +92,43 @@ export function ProfilePanel({ user }: { user: UserResponse }) {
                     {draft.timezone && !zones.includes(draft.timezone) && <option value={draft.timezone}>{draft.timezone}</option>}
                     {zones.map((zone) => <option key={zone} value={zone}>{zone}</option>)}
                 </select>
-                {wrong.timezone && <em className="profile-form__problem">{wrong.timezone}</em>}
+                {wrong.timezone && <em className="kset-said--bad">{wrong.timezone}</em>}
                 {here && draft.timezone !== here && (
-                    <button type="button" className="profile-form__hint" onClick={() => set("timezone", here)}>
+                    <button type="button" className="b b--s b--quiet" onClick={() => set("timezone", here)}>
                         Use {here}, where this browser is
                     </button>
                 )}
             </label>
 
-            <div className="profile-form__pair">
-                <label className="field">
+            <div className="kset-pair">
+                <label className="kfield">
                     <span>Country</span>
-                    <input value={draft.country} onChange={(e) => set("country", e.target.value)} autoComplete="country-name" />
+                    <input className="kinput" value={draft.country} onChange={(e) => set("country", e.target.value)} autoComplete="country-name" />
                 </label>
-                <label className="field">
+                <label className="kfield">
                     <span>Date of birth <em>optional</em></span>
-                    <input type="date" value={draft.date_of_birth} onChange={(e) => set("date_of_birth", e.target.value)} />
-                    {wrong.date_of_birth && <em className="profile-form__problem">{wrong.date_of_birth}</em>}
+                    <input className="kinput" type="date" value={draft.date_of_birth} onChange={(e) => set("date_of_birth", e.target.value)} />
+                    {wrong.date_of_birth && <em className="kset-said--bad">{wrong.date_of_birth}</em>}
                 </label>
             </div>
 
-            <label className="field">
+            <label className="kfield">
                 <span>Mobile number</span>
-                <input value={draft.mobile_number} onChange={(e) => set("mobile_number", e.target.value)} autoComplete="tel" inputMode="tel" />
+                <input className="kinput" value={draft.mobile_number} onChange={(e) => set("mobile_number", e.target.value)} autoComplete="tel" inputMode="tel" />
             </label>
 
             {/* Full width beneath the number: a QR and three lines of
                 explanation in a half-width column is a column of one word per
                 line. */}
             {verified ? (
-                <p className="profile-form__verified" role="status">
-                    <CheckCircleIcon size={15} /> This number is verified.
-                </p>
+                <p className="kstatus" role="status">This number is verified</p>
             ) : (
                 <VerifyMobile
                     number={typed}
                     complete={isCompleteMobileNumber(typed)}
                     /* Only where a shared contact verifies a number: a local
                        install, which matches unverified numbers. */
-                    unavailableHint={isLocalDeployment() ? "Share your contact with the Telegram bot to verify it." : undefined}
+                    unavailableHint={isLocalDeployment() ? "Share your contact with Lemma on Telegram to verify it." : undefined}
                     onVerified={(next) => {
                         /* The server wrote the number as part of verifying it,
                            so the box has to be told. Only this field: the rest
@@ -140,15 +141,15 @@ export function ProfilePanel({ user }: { user: UserResponse }) {
                 />
             )}
 
-            <div className="profile-form__actions">
-                <button className="btn btn--primary" type="submit" disabled={!dirty || save.isPending || Object.keys(wrong).length > 0}>
+            <div className="kset-acts">
+                <button className="b b--m b--primary" type="submit" disabled={!dirty || save.isPending || Object.keys(wrong).length > 0}>
                     {save.isPending ? "Saving…" : "Save changes"}
                 </button>
                 {dirty && !save.isPending && (
-                    <button className="btn" type="button" onClick={() => { setDraft(server); save.reset(); }}>Discard</button>
+                    <button className="b b--m b--quiet" type="button" onClick={() => { setDraft(server); save.reset(); }}>Discard</button>
                 )}
-                {save.isError && <span className="profile-form__problem" role="alert">That did not save. {(save.error as Error)?.message}</span>}
-                {saved && !dirty && <span className="profile-form__saved" role="status">Saved</span>}
+                {save.isError && <span className="kset-said kset-said--bad" role="alert">That did not save. {(save.error as Error)?.message}</span>}
+                {saved && !dirty && <span className="kstatus" role="status">Saved</span>}
             </div>
         </form>
     );

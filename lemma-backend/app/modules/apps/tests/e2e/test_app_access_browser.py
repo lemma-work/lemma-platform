@@ -17,6 +17,7 @@ from starlette.middleware.cors import CORSMiddleware
 import uvicorn
 
 from app.core.config import settings
+from app.modules.apps.config import apps_settings
 from app.modules.apps.tests.e2e.test_app_e2e import build_dist_archive
 from app.modules.test_support.e2e.waiters import eventually
 
@@ -37,6 +38,9 @@ pytestmark = pytest.mark.e2e
         "concurrent",
         "blocked-cookies",
         "service-down",
+        # `make dev DEV_ONE_SITE=1`: plain HTTP, every host under lemma.localhost.
+        "local-http",
+        "local-http-workspace",
     ],
 )
 async def test_private_app_browser_direct_and_workspace(
@@ -48,7 +52,21 @@ async def test_private_app_browser_direct_and_workspace(
     tmp_path,
     mode,
 ):
-    workspace = mode.startswith("workspace")
+    workspace = mode.startswith("workspace") or mode.endswith("-workspace")
+    local = mode.startswith("local-http")
+    scheme = "http" if local else "https"
+    if local:
+        api_host, workspace_host, apps_domain = (
+            "api.lemma.localhost",
+            "lemma.localhost",
+            "apps.lemma.localhost",
+        )
+    else:
+        api_host, workspace_host, apps_domain = (
+            "api.example.test",
+            "workspace.example.test",
+            "apps.example.test",
+        )
     cert = tmp_path / "cert.pem"
     key = tmp_path / "key.pem"
     process = await asyncio.create_subprocess_exec(
@@ -73,10 +91,10 @@ async def test_private_app_browser_direct_and_workspace(
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     port = listener.getsockname()[1]
-    api_origin = f"https://api.example.test:{port}"
-    workspace_origin = f"https://workspace.example.test:{port}"
+    api_origin = f"{scheme}://{api_host}:{port}"
+    workspace_origin = f"{scheme}://{workspace_host}:{port}"
     monkeypatch.setattr(settings, "api_url", f"{api_origin}")
-    monkeypatch.setattr(settings, "app_base_domain", f"apps.example.test:{port}")
+    monkeypatch.setattr(settings, "app_base_domain", f"{apps_domain}:{port}")
     monkeypatch.setattr(settings, "frontend_url", f"{workspace_origin}")
     monkeypatch.setattr(
         settings,
@@ -84,6 +102,8 @@ async def test_private_app_browser_direct_and_workspace(
         str(workspace_origin),
     )
     monkeypatch.setattr(settings, "app_api_via_app_origin", False)
+    if local:
+        monkeypatch.setattr(apps_settings, "private_apps_over_http", True)
     middleware = test_app.middleware_stack
     while middleware is not None:
         if isinstance(middleware, CORSMiddleware):
@@ -91,11 +111,11 @@ async def test_private_app_browser_direct_and_workspace(
             monkeypatch.setattr(
                 middleware,
                 "allow_origin_regex",
-                re.compile(rf"https://[a-z0-9-]+\.apps\.example\.test:{port}"),
+                re.compile(rf"{scheme}://[a-z0-9-]+\.{re.escape(apps_domain)}:{port}"),
             )
         middleware = getattr(middleware, "app", None)
     slug = f"browser-{uuid4().hex[:8]}"
-    origin = f"https://{slug}.apps.example.test:{port}"
+    origin = f"{scheme}://{slug}.{apps_domain}:{port}"
     created = await authenticated_client.post(
         f"/pods/{test_pod['id']}/apps",
         json={"name": slug, "public_slug": slug, "visibility": "POD"},
@@ -131,7 +151,7 @@ async def test_private_app_browser_direct_and_workspace(
         if (
             scope["type"] == "http"
             and scope["path"] == "/auth"
-            and (b"host", f"workspace.example.test:{port}".encode()) in scope["headers"]
+            and (b"host", f"{workspace_host}:{port}".encode()) in scope["headers"]
         ):
             await HTMLResponse("<h1>Sign in</h1>")(scope, receive, send)
             return
@@ -141,8 +161,8 @@ async def test_private_app_browser_direct_and_workspace(
         uvicorn.Config(
             browser_hosts,
             lifespan="off",
-            ssl_certfile=str(cert),
-            ssl_keyfile=str(key),
+            ssl_certfile=None if local else str(cert),
+            ssl_keyfile=None if local else str(key),
             access_log=False,
             log_level="error",
         )
@@ -182,6 +202,16 @@ async def test_private_app_browser_direct_and_workspace(
                 "apiOrigin": api_origin,
                 "workspaceOrigin": workspace_origin,
                 "mode": mode,
+                # One site: the session on `.lemma.localhost`, and the access
+                # cookie a local HTTP stack sets, without `__Host-` or Secure.
+                "sessionCookie": {
+                    "domain": ".lemma.localhost" if local else api_host,
+                    "secure": not local,
+                },
+                "accessCookie": {
+                    "name": "lemmaAppAccess" if local else "__Host-lemmaAppAccess",
+                    "secure": not local,
+                },
                 "path": {
                     "html-login-return": "/reports.html?period=current#totals",
                     "nested-html-login-return": "/nested/index.html?period=current#totals",

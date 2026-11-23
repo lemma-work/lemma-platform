@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.authorization.context import ResourceType
+from app.modules.pod_bundle.domain.connector_plan import ConnectorChoice
 from app.modules.pod_bundle.domain.errors import BundleInvalidError
 from app.modules.pod_bundle.domain.state import StepKind
 from app.modules.pod_bundle.infrastructure.connector_grants import (
@@ -79,6 +80,16 @@ async def test_a_connector_the_pod_lacks_but_the_org_installed_is_declared(
     assert "'github'" in warning and "agent 'triage'" in warning
 
 
+async def test_only_the_grants_the_import_writes_are_planned(tmp_path):
+    """An agent the pod already has keeps its own access, so what its bundled
+    copy was granted is neither declared nor a reason to refuse the import."""
+    warnings = await plan_connector_grants(
+        _bundle(tmp_path, "github", "jira"), Directory(), writing=set()
+    )
+
+    assert warnings == []
+
+
 async def test_a_declared_connector_needs_nothing(tmp_path):
     warnings = await plan_connector_grants(
         _bundle(tmp_path, "github"), Directory(declared={"github"})
@@ -108,7 +119,7 @@ class _NothingExists:
         return set()
 
     table_names = function_names = agent_names = _none
-    workflow_names = schedule_names = app_names = surface_names = _none
+    workflow_names = schedule_names = app_names = surface_names = machine_names = _none
 
     async def table_manifest(self, _name):
         return None
@@ -195,6 +206,20 @@ async def test_applying_declares_the_connector_and_grants_on_its_slug(monkeypatc
         "github-2",
         "github-2",
     ]
+
+    # A connector the import left out (optional, nothing to map it to): the
+    # grant on it is dropped and said, not written to fail by name.
+    warnings: list[str] = []
+    kept = await resolve_connector_grants(
+        object(),
+        SimpleNamespace(organization_id=_ORG),
+        pod_id=_POD,
+        grants=[table, _connector_grant("meet"), _connector_grant("gmail")],
+        choices={"meet": ConnectorChoice(skip=True)},
+        warnings=warnings,
+    )
+    assert [g.resource_name for g in kept] == ["tickets", "gmail"]
+    assert warnings == ["A grant on connector 'meet' was dropped: it was left out."]
 
 
 async def test_grants_with_no_connector_are_returned_untouched():

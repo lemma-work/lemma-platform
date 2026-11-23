@@ -24,12 +24,13 @@ from app.modules.calls.domain.voice import (
     TurnDone,
     VoiceEvent,
 )
-from app.modules.calls.services.agents import (
+from app.modules.calls.services.agents import CallAgents
+from app.modules.calls.services.signals import (
     AgentSignal,
-    CallAgents,
     Failed,
     Finished,
     Relay,
+    RunStarted,
     Shown,
     Working,
 )
@@ -458,7 +459,7 @@ async def test_a_request_the_team_cannot_take_says_why_instead_of_asking_again()
     from app.core.domain.errors import DomainError
 
     caller, voice = Caller(), Voice()
-    reason = "This teammate runs on Deepak's own Claude Code, which only they can use."
+    reason = "This Lemma runs on Deepak's own Claude Code, which only they can use."
 
     class Refusing(Agents):
         async def send_turn(self, content: str) -> None:
@@ -641,3 +642,53 @@ async def test_a_transcript_write_cancelled_before_it_ran_is_written_at_the_end(
     await transcript.flush(final=True)
     assert len(recorded) == 1
     assert "Voice: line 0" in recorded[0] and "Voice: line 8" in recorded[0]
+
+
+async def test_every_run_on_the_call_is_sent_to_the_screen_to_follow() -> None:
+    caller, voice, agents = Caller(), Voice(), Agents()
+    running = asyncio.create_task(_session(caller, voice, agents, _gate({})).run())
+    await agents.signals_in.put(Working(running=True))
+    await agents.signals_in.put(RunStarted(agent_run_id="r1"))
+    await agents.signals_in.put(RunStarted(agent_run_id="r2"))
+    await _until(lambda: len(caller.of("run")) == 2)
+    assert caller.of("run") == [
+        {"type": "run", "agent_run_id": "r1"},
+        {"type": "run", "agent_run_id": "r2"},
+    ]
+    caller.inbox.put_nowait(None)
+    await running
+
+
+async def test_a_run_the_streams_never_announced_is_found_by_the_recheck(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.modules.calls.services import session as session_module
+
+    monkeypatch.setattr(session_module, "_WORKING_RECHECK_SECONDS", 0.0)
+    caller, voice, agents = Caller(), Voice(), Agents()
+    agents.working = True
+    session = CallSession(
+        socket=caller,
+        engine=voice,  # type: ignore[arg-type]
+        agents=agents,  # type: ignore[arg-type]
+        gate=_gate({}),
+        limits=CallLimits(max_seconds=30, quiet_window_ms=0),
+        guard_seconds=0.01,
+    )
+    running = asyncio.create_task(session.run())
+    await _until(lambda: {"type": "work", "running": True} in caller.of("work"))
+    agents.working = False
+    await _until(lambda: {"type": "work", "running": False} in caller.of("work"))
+    caller.inbox.put_nowait(None)
+    await running
+
+
+async def test_the_chat_beside_the_call_is_told_when_the_call_writes_into_it() -> None:
+    caller, voice, agents = Caller(), Voice(), Agents()
+    session = _session(caller, voice, agents, _gate({}))
+    running = asyncio.create_task(session.run())
+    for index in range(9):
+        await voice.out.put(Said(f"line {index}", final=True))
+    await _until(lambda: agents.recorded and caller.of("chat"))
+    caller.inbox.put_nowait(None)
+    await running

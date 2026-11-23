@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from e2b import Template, default_build_logger, wait_for_port
 
@@ -28,18 +30,10 @@ GH_VERSION = "2.97.0"
 GH_LINUX_X64_SHA256 = "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112"
 DEFAULT_CPU_COUNT = 1
 DEFAULT_MEMORY_MB = 2048
-
-
-def parse_size(label: str) -> tuple[int, int]:
-    """``{cpu}x{memory_mb}``, the key the backend maps sizes to templates by."""
-    cpu, sep, memory = label.partition("x")
-    try:
-        cpu_count, memory_mb = int(cpu), int(memory)
-    except ValueError as exc:
-        raise ValueError(f"size must be {{cpu}}x{{memory_mb}}, got {label!r}") from exc
-    if not sep or cpu_count < 1 or memory_mb < 1:
-        raise ValueError(f"size must be {{cpu}}x{{memory_mb}}, got {label!r}")
-    return cpu_count, memory_mb
+#: `workspace-docker` runs a compose stack and image builds beside the agent, so
+#: its smallest size is larger than a plain workspace's.
+DEFAULT_DOCKER_CPU_COUNT = 4
+DEFAULT_DOCKER_MEMORY_MB = 8192
 
 
 def _positive_int_environment(name: str, *, default: int) -> int:
@@ -98,6 +92,47 @@ def _install_uv_command() -> str:
     )
 
 
+#: The Go toolchain the streamer is built with in the template, pinned and
+#: checksummed like Node and the GitHub CLI. The same release as the pinned
+#: `golang` image `Dockerfile.workspace` and the streamer's own Dockerfile
+#: build with, so one binary has one compiler on both fabrics
+#: (`test_e2b_templates` holds the two together). Removed again after the
+#: build: the sandbox runs the binary, not the compiler.
+GO_VERSION = "1.25.14"
+GO_LINUX_AMD64_SHA256 = (
+    "a21ae5633a269bcd7e90cf767e48225633795e99d831742cbf3397064fee7712"
+)
+
+#: What the template installs only to build the streamer. x264 and libvpx are
+#: linked statically, so none of it is needed to run it.
+STREAMER_BUILD_PACKAGES = ("gcc", "libc6-dev", "libvpx-dev", "libx264-dev")
+
+
+def _install_go_command() -> str:
+    archive = f"go{GO_VERSION}.linux-amd64.tar.gz"
+    return (
+        f"curl -fsSL https://go.dev/dl/{archive} -o /tmp/go.tgz && "
+        f"echo '{GO_LINUX_AMD64_SHA256}  /tmp/go.tgz' | sha256sum -c - && "
+        "tar -C /usr/local -xzf /tmp/go.tgz && rm /tmp/go.tgz"
+    )
+
+
+def _build_streamer_command() -> str:
+    """The WebRTC streamer, built here as `Dockerfile.workspace` builds it."""
+    return (
+        "cd /tmp/lemma-streamer-src && CGO_ENABLED=1 /usr/local/go/bin/go build "
+        "-trimpath -ldflags='-s -w' -o /usr/local/bin/lemma-streamer "
+        "./cmd/lemma-streamer && "
+        "rm -rf /tmp/lemma-streamer-src /usr/local/go /root/go /root/.cache/go-build && "
+        # Marked automatic rather than purged: autoremove then takes only what
+        # nothing else in the template depends on, so a package that needs
+        # one of these keeps it.
+        f"apt-mark auto {' '.join(STREAMER_BUILD_PACKAGES)} >/dev/null && "
+        "DEBIAN_FRONTEND=noninteractive apt-get autoremove -y && "
+        "rm -rf /var/lib/apt/lists/*"
+    )
+
+
 def workspace_template():
     return (
         Template(file_context_path=REPOSITORY_ROOT)
@@ -145,6 +180,9 @@ def workspace_template():
                 "procps",
                 "ripgrep",
                 "socat",
+                # The tz database's old names (`Asia/Calcutta`). See the note
+                # in Dockerfile.workspace; the two images have to agree on it.
+                "tzdata-legacy",
                 # The human-facing view of the same Xvfb display. See the note
                 # in Dockerfile.workspace; the two images have to agree on
                 # this or the VNC pane connects on one fabric and not the
@@ -158,7 +196,14 @@ def workspace_template():
                 # `xrandr`, for resizing the display to match the pane it is
                 # being watched in.
                 "x11-xserver-utils",
-                "x11vnc",
+                # TigerVNC's scraping server, and the clipboard tool the
+                # WebRTC streamer uses. See Dockerfile.workspace.
+                "tigervnc-scraping-server",
+                "xclip",
+                # Building the WebRTC streamer in the template, against this
+                # template's own libraries, and removed once it is built; see
+                # `_build_streamer_command`.
+                *STREAMER_BUILD_PACKAGES,
                 "xz-utils",
                 "xvfb",
             ],
@@ -234,12 +279,12 @@ def workspace_template():
         # which matters most on exactly the sign-in pages this feature exists
         # for.
         #
-        # `apt install chromium` is not the answer here the way it is in
-        # `Dockerfile.workspace`: this template builds from E2B's Ubuntu-based
-        # `code-interpreter-v1`, where `chromium` is the snap transitional
-        # package and does not run in a container at all. Google's own apt
-        # repository is the one that gives a real, non-testing Chrome on this
-        # base.
+        # This came from Google's apt repository because E2B's
+        # `code-interpreter-v1` was Ubuntu-based when it was written, and there
+        # `chromium` is the snap transitional package, which does not run in a
+        # container. The base is Debian 13 (trixie) now, so that reason has
+        # gone; Chrome stays because swapping the browser is a change of its
+        # own, with its own conformance run, not a side effect of a base bump.
         .run_cmd(
             "install -d -m 0755 /etc/apt/keyrings && "
             "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub "
@@ -448,6 +493,14 @@ def workspace_template():
             "/usr/local/bin/start-vnc-bridge",
             mode=0o755,
         )
+        .run_cmd(_install_go_command(), user="root")
+        .copy("lemma-backend/sandbox-images/streamer", "/tmp/lemma-streamer-src")
+        .run_cmd(_build_streamer_command(), user="root")
+        .copy(
+            "lemma-backend/sandbox-images/scripts/start-streamer.sh",
+            "/usr/local/bin/start-streamer",
+            mode=0o755,
+        )
         .copy(
             "lemma-backend/sandbox-images/scripts/save-webpage.sh",
             "/usr/local/bin/save-webpage",
@@ -466,7 +519,9 @@ def workspace_template():
             {
                 "DISPLAY": ":99",
                 "XDG_RUNTIME_DIR": "/tmp/lemma-browser/runtime",
-                "WORKSPACE_XVFB_SCREEN": "1440x960x24",
+                "WORKSPACE_XVFB_SCREEN": "1280x800x24",
+                # See Dockerfile.workspace: downloads land in the Files view.
+                "AGENT_BROWSER_DOWNLOAD_PATH": "/home/user/lemma/downloads",
                 "AGENT_BROWSER_CONFIG": "/tmp/lemma-browser/config.json",
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/local/bin/workspace-chrome",
                 "AGENT_BROWSER_PROFILE": "/home/user/.lemma/browser/profile",
@@ -514,12 +569,70 @@ def workspace_template():
     )
 
 
+#: What a `workspace-docker` sandbox is ready on. There is deliberately no start
+#: command: the guest boots systemd and the docker-ce package enables
+#: `docker.service`, so dockerd starts on its own, at boot and again on every
+#: filesystem-only resume (which cold-boots the VM). The provider's post-resume
+#: step is `docker info || sudo systemctl start docker`, so a slow boot is
+#: waited out rather than mistaken for a failure. `sudo`, because the ready
+#: check is not a login session and need not see the `docker` group.
+DOCKER_READY_COMMAND = "sudo docker info >/dev/null 2>&1"
+
+
+def _install_docker_command() -> str:
+    """Docker Engine, Compose and Buildx from Docker's own apt repository.
+
+    `linux/debian`, because `code-interpreter-v1` is Debian 13 (trixie); the
+    codename is read from the image so a base bump picks the matching suite.
+    `iptables` is what dockerd programs container networking with, and the
+    base does not carry it.
+
+    `user` joins the `docker` group so plain `docker` works without sudo. The
+    group is root-equivalent inside the VM, but `user` already has passwordless
+    sudo there, so the trust boundary is unchanged: it is the VM.
+    """
+
+    return (
+        "install -d -m 0755 /etc/apt/keyrings && "
+        "curl -fsSL https://download.docker.com/linux/debian/gpg "
+        "-o /etc/apt/keyrings/docker.asc && "
+        "chmod a+r /etc/apt/keyrings/docker.asc && "
+        ". /etc/os-release && "
+        'echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] '
+        'https://download.docker.com/linux/debian ${VERSION_CODENAME} stable" '
+        "> /etc/apt/sources.list.d/docker.list && "
+        "apt-get update && "
+        "DEBIAN_FRONTEND=noninteractive apt-get install -y "
+        "--no-install-recommends docker-ce docker-ce-cli containerd.io "
+        "docker-buildx-plugin docker-compose-plugin iptables && "
+        "rm -rf /var/lib/apt/lists/* && "
+        "usermod -aG docker user"
+    )
+
+
+def workspace_docker_template():
+    """The workspace, plus a Docker daemon a machine can run a stack on.
+
+    Built on `workspace_template()` unchanged, so everything it bakes -- the
+    browser, the Python closure, the overlay floor -- is the same here, and the
+    Docker layers sit on top of its cache.
+    """
+
+    return (
+        workspace_template()
+        .run_cmd(_install_docker_command(), user="root")
+        .set_ready_cmd(DOCKER_READY_COMMAND)
+    )
+
+
 def function_template():
     return (
         Template(file_context_path=REPOSITORY_ROOT)
         .from_python_image("3.14")
         .apt_install(
-            ["bash", "ca-certificates", "curl", "procps"],
+            # `tzdata-legacy`: see Dockerfile.function, which this template
+            # has to agree with on the zone names a function can read.
+            ["bash", "ca-certificates", "curl", "procps", "tzdata-legacy"],
             no_install_recommends=True,
         )
         .copy("lemma-python", "/build/lemma-python")
@@ -572,27 +685,85 @@ def function_template():
     )
 
 
-def build(
+def parse_size(raw: str) -> tuple[int, int]:
+    """`{cpu}x{memory_mb}`, the key the backend's size-template maps use.
+
+    The same spelling on both sides, so the value a build is asked for is the
+    key its template is configured under (`E2B_WORKSPACE_SIZE_TEMPLATES`,
+    `E2B_DOCKER_SIZE_TEMPLATES`).
+    """
+
+    cpu, separator, memory = raw.partition("x")
+    try:
+        if not separator:
+            raise ValueError
+        cpu_count, memory_mb = int(cpu), int(memory)
+    except ValueError as exc:
+        raise ValueError(
+            f"size must be {{cpu}}x{{memory_mb}}, e.g. 2x4096; got {raw!r}"
+        ) from exc
+    if cpu_count < 1 or memory_mb < 1:
+        raise ValueError(f"size must be positive; got {raw!r}")
+    if memory_mb % 1024:
+        raise ValueError(f"memory must be a whole number of GiB; got {raw!r}")
+    return cpu_count, memory_mb
+
+
+def template_name(
+    base: str,
     *,
-    target: str,
+    size: tuple[int, int] | None,
+    default_size: tuple[int, int],
     name_suffix: str = "",
-    size: str | None = None,
-) -> dict[str, dict[str, str]]:
-    if not os.environ.get("E2B_API_KEY"):
-        raise RuntimeError("E2B_API_KEY is required")
-    if size is not None and target != "workspace":
-        raise ValueError("--size sizes a workspace template; pass --target workspace")
-    selected = {
+) -> str:
+    """`lemma-workspace-docker`, `lemma-workspace-docker-8x16`, ...
+
+    A target built at its own default size keeps the bare name, which is what
+    the backend's single-template settings default to. Any other size is named
+    `-{cpu}x{memory_gib}`, so several sizes of one target can live side by side
+    in a team. `name_suffix` goes last, for isolated candidate builds.
+    """
+
+    sized = ""
+    if size is not None and size != default_size:
+        cpu_count, memory_mb = size
+        sized = f"-{cpu_count}x{memory_mb // 1024}"
+    return f"{base}{sized}{name_suffix}"
+
+
+def _targets() -> dict[str, tuple[Callable[[], Any], str, tuple[int, int]]]:
+    """Each target's factory, base name and default size.
+
+    The default size reads the per-target environment overrides, so a
+    deployment that already sets `E2B_WORKSPACE_CPU_COUNT` keeps building the
+    bare-named template at that size.
+    """
+
+    return {
         "workspace": (
             workspace_template,
             "lemma-workspace",
-            _positive_int_environment(
-                "E2B_WORKSPACE_CPU_COUNT",
-                default=DEFAULT_CPU_COUNT,
+            (
+                _positive_int_environment(
+                    "E2B_WORKSPACE_CPU_COUNT", default=DEFAULT_CPU_COUNT
+                ),
+                _positive_int_environment(
+                    "E2B_WORKSPACE_MEMORY_MB", default=DEFAULT_MEMORY_MB
+                ),
             ),
-            _positive_int_environment(
-                "E2B_WORKSPACE_MEMORY_MB",
-                default=DEFAULT_MEMORY_MB,
+        ),
+        "workspace-docker": (
+            workspace_docker_template,
+            "lemma-workspace-docker",
+            (
+                _positive_int_environment(
+                    "E2B_WORKSPACE_DOCKER_CPU_COUNT",
+                    default=DEFAULT_DOCKER_CPU_COUNT,
+                ),
+                _positive_int_environment(
+                    "E2B_WORKSPACE_DOCKER_MEMORY_MB",
+                    default=DEFAULT_DOCKER_MEMORY_MB,
+                ),
             ),
         ),
         # The resident runtime imports each immutable revision once and adds
@@ -601,33 +772,47 @@ def build(
         "function": (
             function_template,
             "lemma-function",
-            _positive_int_environment(
-                "E2B_FUNCTION_CPU_COUNT",
-                default=DEFAULT_CPU_COUNT,
-            ),
-            _positive_int_environment(
-                "E2B_FUNCTION_MEMORY_MB",
-                default=DEFAULT_MEMORY_MB,
+            (
+                _positive_int_environment(
+                    "E2B_FUNCTION_CPU_COUNT", default=DEFAULT_CPU_COUNT
+                ),
+                _positive_int_environment(
+                    "E2B_FUNCTION_MEMORY_MB", default=DEFAULT_MEMORY_MB
+                ),
             ),
         ),
     }
-    if size is not None:
-        # The name is the key `E2B_WORKSPACE_SIZE_TEMPLATES` maps the size to.
-        cpu_count, memory_mb = parse_size(size)
-        selected["workspace"] = (
-            workspace_template,
-            f"lemma-workspace-{cpu_count}x{memory_mb}",
-            cpu_count,
-            memory_mb,
-        )
-    names = tuple(selected) if target == "all" else (target,)
+
+
+TARGETS = ("workspace", "workspace-docker", "function")
+
+
+def build(
+    *,
+    target: str,
+    name_suffix: str = "",
+    size: str | None = None,
+) -> dict[str, dict[str, str]]:
+    if not os.environ.get("E2B_API_KEY"):
+        raise RuntimeError("E2B_API_KEY is required")
+    if size is not None and target == "all":
+        raise ValueError("--size names one target's size; pick a --target")
+    requested = parse_size(size) if size is not None else None
+    selected = _targets()
+    names = TARGETS if target == "all" else (target,)
     result: dict[str, dict[str, str]] = {}
     for name in names:
-        factory, base_template_name, cpu_count, memory_mb = selected[name]
-        template_name = f"{base_template_name}{name_suffix}"
+        factory, base_template_name, default_size = selected[name]
+        cpu_count, memory_mb = requested or default_size
+        built_name = template_name(
+            base_template_name,
+            size=requested,
+            default_size=default_size,
+            name_suffix=name_suffix,
+        )
         built = Template.build(
             factory(),
-            template_name,
+            built_name,
             cpu_count=cpu_count,
             memory_mb=memory_mb,
             on_build_logs=default_build_logger(),
@@ -638,14 +823,24 @@ def build(
             "name": built.name,
             "cpu_count": str(cpu_count),
             "memory_mb": str(memory_mb),
+            # The key this build goes under in the backend's size map.
+            "size_key": f"{cpu_count}x{memory_mb}",
         }
     return result
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--target", choices=(*TARGETS, "all"), default="all")
     parser.add_argument(
-        "--target", choices=("workspace", "function", "all"), default="all"
+        "--size",
+        default=None,
+        help=(
+            "Build one target at {cpu}x{memory_mb}, e.g. 2x4096 or 8x16384. "
+            "A size other than the target's default is named "
+            "-{cpu}x{memory_gib} (lemma-workspace-2x4, "
+            "lemma-workspace-docker-8x16)."
+        ),
     )
     parser.add_argument(
         "--name-suffix",
@@ -653,16 +848,6 @@ def main() -> None:
         help=(
             "Optional suffix for isolated candidate builds; production builds "
             "leave this empty."
-        ),
-    )
-    parser.add_argument(
-        "--size",
-        default=None,
-        help=(
-            "Build a workspace template for one plan size, `{cpu}x{memory_mb}` "
-            "(e.g. 2x4096), named lemma-workspace-{size}. Without it the "
-            "workspace template is built at E2B_WORKSPACE_CPU_COUNT x "
-            "E2B_WORKSPACE_MEMORY_MB, 1x2048 by default."
         ),
     )
     args = parser.parse_args()

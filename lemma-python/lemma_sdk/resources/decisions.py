@@ -31,28 +31,51 @@ class PodDecisions(BoundResource):
                 },
             },
         )
-        result.answers["category"].value  # "billing", or None when unsure
+        answer = result.answers["category"]
+        if answer.value is None:
+            route = "unsure"  # the provider judged the evidence supports none
+        elif answer.confidence is None:
+            route = "unmeasured"  # nothing to compare: route it as you choose
+        elif answer.confidence < 0.7:
+            route = "unsure"
+        else:
+            route = "sure"
 
-    An answer of `None` means the evidence did not support one. A provider that
-    could not answer raises instead (503, or 429 with a Retry-After), so
-    "unsure" and "failed" never look alike.
+    Route an answer by those rules, whichever provider the
+    deployment runs: the language-model provider answers `None` when the
+    evidence did not support an answer, and the `typesafe` provider always
+    answers the value it judged most likely, with that value's probability as
+    `confidence` where it reports one (for several choices, the confidence of
+    the least certain per-option decision, not the probability of the whole
+    selection). A value with no `confidence` carries no measure -- every
+    answer of the language-model provider, and a `typesafe` scale read from its
+    score alone -- so it is its own case, neither sure nor unsure, and where
+    it goes is yours to decide. The threshold is
+    yours too, because what a wrong answer costs differs per question. A provider that could not answer raises instead (503 or 429),
+    so "unsure" and "failed" never look alike.
     """
 
     def make(
         self,
         *,
         instruction: str,
-        evidence: Any,
         schema: Mapping[str, Any],
+        evidence: Any = None,
+        images: Sequence[str] | None = None,
         examples: Sequence[Mapping[str, Any]] | None = None,
         priority: Literal["interactive", "background"] = "background",
     ) -> DecisionResponse:
         body: dict[str, Any] = {
             "instruction": instruction,
-            "evidence": evidence,
             "schema": dict(schema),
             "priority": priority,
         }
+        if evidence is not None:
+            body["evidence"] = evidence
+        # File paths in this Lemma, read with the caller's access; only a
+        # deployment whose decision model reads images answers them.
+        if images:
+            body["images"] = [{"path": path} for path in images]
         if examples:
             body["examples"] = [dict(example) for example in examples]
         return self._call(

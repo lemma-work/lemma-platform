@@ -23,8 +23,13 @@ from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.domain.value_objects import AgentToolset
 
-_POD_INDEX = "/memory/AGENTS.md"
+#: The pod-shared memory folder, and the index in it every agent's brief loads.
+POD_MEMORY_FOLDER = "/memory"
+_POD_INDEX = f"{POD_MEMORY_FOLDER}/AGENTS.md"
+POD_MEMORY_INDEX = _POD_INDEX
 _PERSONAL_INDEX = "/me/AGENTS.md"
+#: The person's own index, in the ``/me`` alias form every agent is shown.
+PERSONAL_MEMORY_INDEX = _PERSONAL_INDEX
 
 # An agent name that slugifies to nothing (empty or all-symbol) still needs a
 # stable, non-colliding folder rather than landing at the bare `.../agents/`.

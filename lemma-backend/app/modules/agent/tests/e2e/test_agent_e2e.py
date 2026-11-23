@@ -2734,11 +2734,13 @@ class TestAgentRuntimeConfigApis:
             json={"config": {"default_profile_id": org_profile_id}},
         )
         assert patched_pod.status_code == 200, patched_pod.text
-        # PodConfig carries join_policy (default INVITE_ONLY) alongside the
-        # default_profile_id, so the serialized config includes both.
+        # PodConfig carries join_policy (default INVITE_ONLY) and
+        # auto_join_new_members (default off) alongside the
+        # default_profile_id, so the serialized config includes all three.
         assert patched_pod.json()["config"] == {
             "default_profile_id": org_profile_id,
             "join_policy": "INVITE_ONLY",
+            "auto_join_new_members": False,
         }
 
         create_agent = await authenticated_client.post(
@@ -3398,6 +3400,7 @@ class TestAgentOpenApi:
             "AGENT_HOST",
             "OPENAI_COMPATIBLE",
             "ANTHROPIC_COMPATIBLE",
+            "GOOGLE_GENAI",
         }
         assert (
             schemas["CreateOpenAICompatibleRuntimeProfileRequest"]["properties"][
@@ -3433,6 +3436,7 @@ class TestAgentOpenApi:
             "AGENT_HOST",
             "OPENAI_COMPATIBLE",
             "ANTHROPIC_COMPATIBLE",
+            "GOOGLE_GENAI",
         }
         # Every field optional: the controller reads which keys were sent to
         # tell "leave alone" from "clear", so a required one would force a
@@ -3441,6 +3445,7 @@ class TestAgentOpenApi:
             "UpdateOpenAICompatibleRuntimeProfileRequest",
             "UpdateAnthropicCompatibleRuntimeProfileRequest",
             "UpdateAgentHostRuntimeProfileRequest",
+            "UpdateGoogleGenAIRuntimeProfileRequest",
         ):
             assert schemas[member].get("required", []) == []
 

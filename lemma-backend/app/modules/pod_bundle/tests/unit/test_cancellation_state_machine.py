@@ -418,7 +418,7 @@ def test_apply_failure_names_what_landed_and_how_to_continue():
     )
     step = state.plan.steps[2]
 
-    message = handlers._apply_failure_message(state, step, RuntimeError("boom"))
+    message = state.apply_failure_message(step, RuntimeError("boom"))
 
     assert "2 of 4" in message
     assert "not undone" in message
@@ -435,8 +435,6 @@ def test_a_failure_before_anything_landed_says_so():
         ],
     )
 
-    message = handlers._apply_failure_message(
-        state, state.plan.steps[0], RuntimeError("boom")
-    )
+    message = state.apply_failure_message(state.plan.steps[0], RuntimeError("boom"))
 
     assert "Nothing was applied" in message

@@ -5,11 +5,11 @@ session and cwd, so the resolution lives here instead of being duplicated. The
 location is the conversation's own columns:
 
 - ``cwd`` — explicit working directory; a fresh root conversation gets a default
-  of ``/workspace/c/{date}/{slug}``. Stamped at creation
+  of ``~/lemma/c/{date}/{slug}``. Stamped at creation
   (``StartConversation._apply_inherited_cwd``) and read back thereafter.
 - ``repo`` — a GitHub repository this conversation works in, as
   ``{owner, repo, ref?}``. It *derives* the cwd: a worktree of the repository
-  of the conversation's own (``/workspace/worktrees/{owner}/{repo}/{slug}``), so
+  of the conversation's own (``~/lemma/worktrees/{owner}/{repo}/{slug}``), so
   picking a project is the same act as picking a directory and there is no
   second source of truth to keep in step.
 - ``workspace_id`` / ``workspace_name`` — selects the workspace; defaults to the
@@ -26,8 +26,8 @@ on one project never write into each other's tree. Conversations from before
 worktrees recorded the clone itself as their cwd, and keep working there.
 
 The pod filesystem's working directory (``/me/{suffix}``) is derived from the
-workspace cwd by swapping the ``/workspace`` prefix for ``/me`` — so an agent's
-scratchpad (``/workspace/c/{date}/{slug}``) and its pod filesystem
+workspace cwd by swapping the ``~/lemma`` prefix for ``/me`` — so an agent's
+scratchpad (``~/lemma/c/{date}/{slug}``) and its pod filesystem
 (``/me/c/{date}/{slug}``) line up under the same short, human-readable path
 instead of a raw conversation UUID. No extra persisted field is needed: the cwd
 already lives on the conversation.
@@ -126,7 +126,7 @@ async def apply_location(
     A child (a sub-agent, or a conversation pinned under a PROJECT) inherits the
     parent's resolved cwd, project, and workspace selection, so it works
     alongside the parent instead of in a directory of its own. A root
-    conversation gets its own ``/workspace/c/{date}/{slug}``. A cwd its opener
+    conversation gets its own ``~/lemma/c/{date}/{slug}``. A cwd its opener
     set always wins over both.
 
     A conversation opened against a ``repo`` gets a worktree of that repository

@@ -7,6 +7,7 @@ class ConnectorPlanStatus(str, Enum):
     NEEDS_ACCOUNT = "NEEDS_ACCOUNT"
     NEEDS_INSTALLATION = "NEEDS_INSTALLATION"
     READY = "READY"
+    SKIPPED = "SKIPPED"
 
     def __str__(self) -> str:
         return str(self.value)

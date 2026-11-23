@@ -11,6 +11,11 @@ reasons:
   build`` inside the importing user's sandbox with the *target* pod's
   values. (A static/no-``package.json`` app needs no rebuild — the host injects
   ``window.__LEMMA_CONFIG__`` at serve time — so its files are deployed as-is.)
+  A bundle whose author built the app to read that config too may ship the
+  build: ``dist.zip`` beside ``source/``, stamped with the digest of the source
+  it came from (``lemma_pod_bundle.app_build``). While the digest names this
+  very source the build is deployed with no sandbox at all. An export writes no
+  stamp -- it cannot tell what an app reads -- so its apps are still rebuilt.
 * **It must hold no DB connection across the build.** The build + storage upload
   take minutes and touch the sandbox and object storage; holding a pooled
   connection across them would violate the pool-safety discipline the whole
@@ -41,10 +46,27 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from lemma_pod_bundle import (
+    APP_DIST_ARCHIVE,
+    APP_DIST_SOURCE_DIGEST,
+    APP_SOURCE_EXCLUDE_DIRS,
+    prebuilt_dist,
+)
+
 from app.core.concurrency.offload import run_blocking
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import AppBuildFailedError
+from app.modules.pod_bundle.domain.state import PlanStep, StepKind
+from app.modules.pod_bundle.infrastructure.app_build_output import (
+    build_failed,
+    build_log_kept_on,
+)
+from app.modules.pod_bundle.infrastructure.app_build_policy import (
+    DEFAULT_PNPM_WORKSPACE,
+    workspace_for,
+)
+from app.modules.pod_bundle.infrastructure.kept_parts import CreatedParts
 from sandbox_runtime.paths import WORKSPACE_ROOT
 
 logger = get_logger(__name__)
@@ -56,20 +78,10 @@ _BUILD_TIMEOUT_SECONDS = int(
 )
 _IO_TIMEOUT_SECONDS = 120
 # Source-tree entries never worth shipping/rebuilding from (mirrors the CLI's
-# _should_exclude_source_path so an export→import round-trips cleanly).
-_SOURCE_EXCLUDE_DIRS = frozenset(
-    {
-        "node_modules",
-        ".git",
-        "dist",
-        "build",
-        ".next",
-        ".turbo",
-        ".cache",
-        "coverage",
-        "__pycache__",
-    }
-)
+# _should_exclude_source_path so an export→import round-trips cleanly). Shared
+# with the bundle format, so a shipped build's source digest is of exactly the
+# files stored here as the app's source.
+_SOURCE_EXCLUDE_DIRS = APP_SOURCE_EXCLUDE_DIRS
 
 
 # --- pure helpers (unit-testable without a DB or a sandbox) -------------------
@@ -137,6 +149,26 @@ def slug_candidates(preferred: str | None, *, pod_id: UUID, app_name: str) -> li
     return candidates
 
 
+def build_script(src_dir: str, *, workspace: str = DEFAULT_PNPM_WORKSPACE) -> str:
+    """The shell that installs and builds the app in ``src_dir`` with pnpm, the
+    sandbox's package manager. An app's own ``pnpm-workspace.yaml`` is left as
+    it is: what it allows is its author's choice. Without one, ``workspace``
+    (``workspace_for``) is written."""
+    default_policy = (
+        "if [ ! -e pnpm-workspace.yaml ]; then "
+        f"printf '%s' {shlex.quote(workspace)} > pnpm-workspace.yaml; "
+        "fi && "
+    )
+    return (
+        f"cd {shlex.quote(src_dir)} && "
+        f"{default_policy}"
+        "if [ -f pnpm-lock.yaml ]; then "
+        "pnpm install --frozen-lockfile; "
+        "else pnpm install --no-frozen-lockfile; fi "
+        "&& pnpm run build"
+    )
+
+
 # --- sandbox build (no DB connection) ---------------------------------------
 
 
@@ -164,6 +196,9 @@ class AppSandboxBuilder:
         pod's ``VITE_*`` env, and return the built ``dist`` archive bytes. Raises
         :class:`AppBuildFailedError` on a non-zero build or a missing
         ``dist/index.html``."""
+        # Before the sandbox: a build policy the app names but cannot be read
+        # fails here, with nothing started.
+        workspace = workspace_for(source_zip)
         env = {
             "VITE_LEMMA_API_URL": settings.api_url,
             "VITE_LEMMA_AUTH_URL": settings.auth_frontend_url,
@@ -186,11 +221,16 @@ class AppSandboxBuilder:
                 f"rm -rf {shlex.quote(build_dir)} && mkdir -p {shlex.quote(src_dir)}",
             )
             await self._upload(session, source_zip, f"{build_dir}/source.zip")
+            # Python's zipfile both ways, not `unzip` and `zip`: every sandbox
+            # image has python3, and the Docker workspace image has neither
+            # tool -- E2B's base happens to -- so every local import of an app
+            # failed here. Nothing is lost against `unzip` restoring modes: the
+            # bundle was unpacked server-side with none (`extract_bundle`).
             await self._sh(
                 session,
-                f"cd {shlex.quote(build_dir)} && unzip -oq source.zip -d src",
+                f"cd {shlex.quote(build_dir)} && python3 -m zipfile -e source.zip src",
             )
-            await self._run_build(session, src_dir)
+            await self._run_build(session, src_dir, workspace=workspace)
             dist_index = f"{src_dir}/dist/index.html"
             check = await session.exec_command(
                 cmd=f"test -f {shlex.quote(dist_index)}",
@@ -200,48 +240,42 @@ class AppSandboxBuilder:
                 raise AppBuildFailedError(
                     f"App '{app_slug}' build produced no dist/index.html."
                 )
+            # `.` is the one path zipfile's CLI names nothing, so the members
+            # land at the archive root, where the host looks for index.html.
             await self._sh(
                 session,
-                f"cd {shlex.quote(src_dir)}/dist && zip -rq {shlex.quote(build_dir)}/dist.zip .",
+                f"cd {shlex.quote(src_dir)}/dist && "
+                f"python3 -m zipfile -c {shlex.quote(build_dir)}/dist.zip .",
             )
             return await self._download(session, f"{build_dir}/dist.zip")
 
-    async def _run_build(self, session: Any, src_dir: str) -> None:
-        # pnpm is the canonical JavaScript package manager in workspace images.
-        script = (
-            f"cd {shlex.quote(src_dir)} && "
-            "if [ -f pnpm-lock.yaml ]; then "
-            "pnpm install --frozen-lockfile; "
-            "else pnpm install --no-frozen-lockfile; fi "
-            "&& pnpm run build"
+    async def _run_build(
+        self, session: Any, src_dir: str, *, workspace: str = DEFAULT_PNPM_WORKSPACE
+    ) -> None:
+        result = await session.exec_command(
+            cmd=build_script(src_dir, workspace=workspace),
+            timeout=_BUILD_TIMEOUT_SECONDS,
         )
-        result = await session.exec_command(cmd=script, timeout=_BUILD_TIMEOUT_SECONDS)
         if not result.get("success"):
-            raise AppBuildFailedError(
-                "App build failed.", details={"log": _tail(result)}
+            raise build_failed("App build failed", result)
+        # A command still running when the wait ends comes back successful but
+        # not completed. Read as a success, it surfaced as "no dist/index.html".
+        if result.get("completed") is False:
+            raise build_failed(
+                f"App build did not finish within {_BUILD_TIMEOUT_SECONDS} seconds",
+                result,
             )
 
     async def _sh(self, session: Any, cmd: str) -> None:
         result = await session.exec_command(cmd=cmd, timeout=_IO_TIMEOUT_SECONDS)
         if not result.get("success"):
-            raise AppBuildFailedError(
-                "App build step failed.", details={"log": _tail(result)}
-            )
+            raise build_failed("App build step failed", result)
 
     async def _upload(self, session: Any, data: bytes, remote_path: str) -> None:
         await session.write_file(remote_path, data, timeout=_IO_TIMEOUT_SECONDS)
 
     async def _download(self, session: Any, remote_path: str) -> bytes:
         return await session.read_file(remote_path, timeout=_IO_TIMEOUT_SECONDS)
-
-
-def _tail(result: dict[str, Any], limit: int = 4000) -> str:
-    text = (
-        (result.get("stderr") or "")
-        or (result.get("stdout") or "")
-        or (result.get("error") or "")
-    )
-    return text[-limit:]
 
 
 # --- step runner (owns the short UoW boundaries) -----------------------------
@@ -264,20 +298,51 @@ class AppStepRunner:
 
     async def run(
         self,
-        step: Any,
+        step: PlanStep,
         *,
         pod_id: UUID,
         user_id: UUID,
         bundle_root: Path,
         replacements: dict[str, str],
+        created: CreatedParts | None = None,
+        resumed: bool = False,
+    ) -> None:
+        with build_log_kept_on(step):
+            await self._run(
+                step,
+                pod_id=pod_id,
+                user_id=user_id,
+                bundle_root=bundle_root,
+                replacements=replacements,
+                created=created,
+                resumed=resumed,
+            )
+
+    async def _run(
+        self,
+        step: PlanStep,
+        *,
+        pod_id: UUID,
+        user_id: UUID,
+        bundle_root: Path,
+        replacements: dict[str, str],
+        created: CreatedParts | None = None,
+        resumed: bool = False,
     ) -> None:
         resource_dir = bundle_root / "apps" / step.name
         manifest = self._load_manifest(resource_dir, step.name, replacements)
+        created = created or CreatedParts()
 
-        # Phase 1 (short UoW): ensure the app exists with a unique slug.
+        # Phase 1 (short UoW): ensure the app exists with a unique slug. One
+        # already there is finished only when this import made it: anyone
+        # else's -- a build that failed, one never deployed -- is kept.
         already_ready, app_slug = await self._ensure_app(
             step.name, manifest, pod_id=pod_id, user_id=user_id
         )
+        if already_ready is None:
+            created.add(StepKind.APP, step.name)
+        else:
+            created.claim(step, resumed=resumed)
         if already_ready:
             # Cheap replay: a prior attempt already created + deployed this app.
             return
@@ -302,11 +367,12 @@ class AppStepRunner:
         *,
         pod_id: UUID,
         user_id: UUID,
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool | None, str]:
         """Create the app if absent (allocating a unique slug); return
-        ``(already_ready, slug)`` where ``already_ready`` is True when it already
-        exists fully deployed (a READY current release) so the caller can skip the
-        rebuild on replay. ``slug`` is the app's deployed public slug."""
+        ``(already_ready, slug)``. ``already_ready`` is None for an app this
+        call created, and for one already there whether it is fully deployed
+        (a READY current release), so a replay can skip the rebuild. ``slug``
+        is the app's deployed public slug."""
         from app.modules.apps.contracts import AppConflictError, AppEntity, AppStatus
         from app.modules.apps.contracts.provisioning import create_app, find_app_by_name
 
@@ -342,7 +408,7 @@ class AppStepRunner:
                         ctx=ctx,
                     )
                     await uow.commit()
-                    return False, (created.public_slug if created else slug)
+                    return None, (created.public_slug if created else slug)
                 except AppConflictError as exc:
                     # The name is free (checked above), so this is a slug collision
                     # — try the next deterministic candidate.
@@ -365,12 +431,13 @@ class AppStepRunner:
         user_id: UUID,
     ) -> tuple[bytes | None, bytes]:
         """Produce ``(source_bytes, dist_bytes)`` for upload. A Vite source is built
-        in a sandbox; a static source is deployed as-is; a bundle carrying only a
-        prebuilt ``dist.zip`` (widget/no-source app) deploys that build as its own
-        source."""
+        in a sandbox -- unless the bundle ships its build, stamped with the digest
+        of this very source, which is deployed as it is; a static source is
+        deployed as-is; a bundle carrying only a prebuilt ``dist.zip``
+        (widget/no-source app) deploys that build as its own source."""
         source_dir = resource_dir / "source"
         html_file = resource_dir / "html.html"
-        dist_zip = resource_dir / "dist.zip"
+        dist_zip = resource_dir / APP_DIST_ARCHIVE
 
         if source_dir.is_dir():
             source_bytes = await run_blocking(zip_dir, source_dir, limiter="cpu_bound")
@@ -378,6 +445,28 @@ class AppStepRunner:
             if tier != "vite":
                 # static: the source *is* the served site.
                 return source_bytes, source_bytes
+            shipped = await run_blocking(
+                prebuilt_dist, resource_dir, limiter="cpu_bound"
+            )
+            if shipped is not None:
+                # Built from exactly this source by whoever made the bundle:
+                # no sandbox, no install, no build. An invalid build still
+                # fails at deploy, as one built here would.
+                logger.info(
+                    "pod_bundle.app_builder.prebuilt_dist_used",
+                    app=name,
+                    app_slug=app_slug,
+                )
+                dist_bytes = await run_blocking(shipped.read_bytes, limiter="cpu_bound")
+                return source_bytes, dist_bytes
+            if dist_zip.is_file() and (resource_dir / APP_DIST_SOURCE_DIGEST).is_file():
+                # Stamped, but for other source (edited after the build) or
+                # unreadable: the source wins, and is built.
+                logger.info(
+                    "pod_bundle.app_builder.prebuilt_dist_stale",
+                    app=name,
+                    app_slug=app_slug,
+                )
             dist_bytes = await self._sandbox.build(
                 user_id=user_id,
                 pod_id=pod_id,

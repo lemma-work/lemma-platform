@@ -2,7 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { LoadingIndicator } from "@/ui/loading";
-import { Screen } from "./screens";
+import { Chip, Screen, type Speaker } from "./frame";
+import { Glyph } from "./marks";
+import { Session } from "./supertokens";
+import { authLink } from "./redirects";
+import { PORTAL_PATH } from "./config";
 import { accountAccess, completionDestination, signedInEmail } from "./completion";
 import {
     asksForCli,
@@ -84,49 +88,80 @@ export function CliLogin() {
         setState("declined");
     };
 
+    /* What is asking, on the left, in place of Lemma's bars. */
+    const speaker = (status?: string, done = false): Speaker => ({
+        kind: "other", name: "Lemma CLI", mark: <Glyph name="term" size={48} weight={1.6} />, status, done,
+    });
+    const command = <code className="auth-cmd">{COMMAND}</code>;
+
     switch (state) {
         case "invalid":
             return (
                 <Screen
+                    speaker={speaker()}
+                    icon={{ glyph: "warn", tone: "warn" }}
                     title="This sign-in link is incomplete"
-                    lead={<>It does not say which terminal to hand the session to. Run <code>{COMMAND}</code> again and use the link it opens.</>}
+                    lead={<>It doesn’t say which terminal to hand the session to. Run {command} again and use the link it opens.</>}
                 />
             );
         case "failed":
             return (
                 <Screen
-                    title="The CLI was not signed in"
-                    lead={said ?? <>Something went wrong on the way. Run <code>{COMMAND}</code> again.</>}
+                    speaker={speaker()}
+                    icon={{ glyph: "warn", tone: "warn" }}
+                    title="The CLI wasn’t signed in"
+                    lead={said ?? <>Something went wrong on the way. Run {command} again.</>}
                 />
             );
         case "declined":
             return (
                 <Screen
+                    speaker={speaker()}
+                    icon={{ glyph: "x" }}
                     title="Nothing was signed in"
-                    lead={<>The CLI was not given your account. If you did not run <code>{COMMAND}</code>, you can close this tab.</>}
+                    lead={<>The CLI wasn’t given your account. If you didn’t run {command}, you can close this tab.</>}
                 />
             );
         case "asking":
             return (
                 <Screen
-                    title={email ? "Sign in to the Lemma CLI as " + email + "?" : "Sign in to the Lemma CLI with this account?"}
-                    lead={<>Only continue if you just ran <code>{COMMAND}</code> on this computer.</>}
+                    speaker={speaker("On this computer")}
+                    title="Sign in the Lemma CLI"
+                    lead="The terminal on this computer asked to sign in as you."
                 >
-                    <div className="screen__actions">
-                        <button className="btn btn--primary" onClick={() => void confirm()}>
-                            Sign in the CLI
+                    {email && (
+                        <Chip email={email} action={
+                            <button type="button" className="auth-link" onClick={() => {
+                                /* The request stays held, so signing in as
+                                   somebody else comes back here. */
+                                void Session.signOut().then(() => window.location.replace(authLink(PORTAL_PATH)))
+                                    .catch(() => window.location.replace(authLink(PORTAL_PATH)));
+                            }}>Not you?</button>
+                        } />
+                    )}
+                    <div className="auth-row">
+                        <button className="b b--l b--primary" onClick={() => void confirm()}>
+                            Sign it in
                         </button>
-                        <button className="btn" onClick={decline}>
+                        <button className="b b--l b--secondary" onClick={decline}>
                             Cancel
                         </button>
                     </div>
+                    <p className="auth-small">Only if you just ran {command} yourself.</p>
                 </Screen>
             );
         case "done":
-            return <Screen title="The CLI is signed in" lead="Go back to your terminal. You can close this tab." />;
+            return (
+                <Screen
+                    speaker={speaker("Signed in", true)}
+                    icon={{ glyph: "check", tone: "ok" }}
+                    title="The CLI is signed in"
+                    lead="Go back to your terminal. You can close this tab."
+                />
+            );
         default:
             return (
-                <Screen title="Signing in the Lemma CLI…">
+                <Screen speaker={speaker()} title={state === "reading" ? "Checking your session…" : "Signing in the Lemma CLI…"}>
                     <LoadingIndicator label={state === "reading" ? "Checking your session" : "Handing your session to the CLI"} />
                 </Screen>
             );

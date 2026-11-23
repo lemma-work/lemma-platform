@@ -62,6 +62,14 @@ Storage uses a stage/commit/promote pattern with cleanup compensation. HTML
 lint is advisory and reports obsolete SDK usage; it does not reject app code.
 Entrypoints are no-cache and receive pod/API/auth context at serve time, while
 hashed static assets use immutable caching and ETags.
+An entrypoint served on the app's own origin is also told the pod's web widgets
+it may embed, as `webWidgets` (`name`, `publicKey`, `scriptUrl`): those switched
+on and allowing that origin, and none while `PUBLIC_WEB_ENABLED` is off. The
+agent surfaces module decides which (`contracts/web_widgets.py`), read on the
+resolving session through `AppRepository.page_web_widgets`, and the list is in
+the ETag, so a widget switched on or off reaches cached pages. A widget's public
+key is publishable, so this holds for every visibility; a pod with no such
+widget adds nothing to the config, and its apps' ETags do not move.
 An app that is not public is served on its hosted HTTPS address only to a
 holder of that host's `__Host-lemmaAppAccess` cookie; anyone else, and any
 absent slug, gets the same sign-in page. The page trades the API session for a
@@ -147,7 +155,7 @@ that are a person's own act (`actor_policy.require_person`: sharing or adding
 their account to the pod and letting it into sandboxes, asking members to
 connect, answering an agent's approval or question, approving a join request,
 opening a function to contacts) refuse an app with `APP_PERSON_ONLY`. The
-person's own sandbox browser socket, `/workspace/browser/view`, refuses any app
+person's own browser socket, `/machines/{ref}/browser/view`, refuses any app
 host's origin. Bearer tokens are never read as an app. The
 authenticated asset route serves an app's files with
 `Content-Security-Policy: sandbox`, so they never run on the API's own origin.

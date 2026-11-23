@@ -1,0 +1,445 @@
+/* needs-page.css: Needs you, and the rows that answer in place wherever
+   they are listed (outcomes/needs.tsx, outcomes/answer.tsx).
+
+   Built from the kit (kit.css): the page header, its chips, buttons,
+   fields, `Calm`, `Problem` and the skeleton. What is here is only what
+   the kit does not say: a row on a hairline (the Lemma's face, its words,
+   how long it has waited, one button), the panel it opens onto, and the
+   green line it leaves on. Leaving is the one thing that moves, and it is
+   still under reduced motion. */
+
+.nyou {
+    padding-bottom: 96px;
+}
+
+.nyou__body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 22px;
+}
+
+/* ── groups ─────────────────────────────────────────────────────────── */
+
+.ngroup {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.ngroup__h {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 10px;
+    margin: 0;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--line);
+    font-size: 15px;
+    font-weight: 500;
+}
+
+.ngroup__h span {
+    color: var(--ink-3);
+    font-size: 13px;
+    font-weight: 400;
+}
+
+.nfoot {
+    margin: 0;
+    color: var(--ink-3);
+    font-size: 13px;
+}
+
+/* ── a row ──────────────────────────────────────────────────────────────
+   Leaving folds its one grid track from its height to nothing, so the
+   rows under it close up rather than jump. */
+
+.nrow {
+    display: grid;
+    grid-template-rows: 1fr;
+    border-bottom: 1px solid var(--line);
+    transition: grid-template-rows 320ms cubic-bezier(0.4, 0, 0.2, 1), opacity 240ms, border-color 320ms;
+}
+
+.nrow__in {
+    min-width: 0;
+    min-height: 0;
+}
+
+.nrow[data-leaving] {
+    grid-template-rows: 0fr;
+    border-bottom-color: transparent;
+    opacity: 0;
+}
+
+.nrow[data-leaving] .nrow__in {
+    overflow: hidden;
+}
+
+/* Listed among other things (Today, a Lemma's own page): on the edge the
+   heading starts on, inside the list's reach. */
+.ox-queue > .nrow {
+    margin: 0 10px;
+}
+
+.nrow__top {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 4px 14px;
+    min-height: 66px;
+    padding: 10px 0;
+}
+
+.nrow[data-face] .nrow__top {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+
+.nface {
+    flex: none;
+}
+
+.nface img {
+    display: block;
+    width: 86%;
+    height: 86%;
+    object-fit: cover;
+    border-radius: inherit;
+}
+
+.nface__glyph {
+    line-height: 1;
+}
+
+.nrow__w {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+
+.nrow__t {
+    justify-self: start;
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--ink);
+    font-size: 14.5px;
+    font-weight: 500;
+    text-decoration: none;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.nrow__t:hover {
+    text-decoration: underline;
+    text-decoration-color: var(--line-2);
+    text-underline-offset: 3px;
+}
+
+.nrow__s {
+    overflow: hidden;
+    color: var(--ink-3);
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.nage {
+    color: var(--ink-3);
+    font-family: var(--ui);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+/* Waiting more than a day. */
+.nage--old {
+    color: var(--warn);
+}
+
+/* What the answer did, across the whole row. */
+.ndone {
+    display: flex;
+    grid-column: 1 / -1;
+    align-items: center;
+    gap: 10px;
+    margin: 0;
+    color: var(--ok);
+    font-size: 14px;
+}
+
+.ndone svg {
+    flex: none;
+}
+
+/* ── what a row opens onto ──────────────────────────────────────────── */
+
+.npanel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+    max-width: var(--w-read);
+    padding: 0 0 22px;
+}
+
+/* Under the words, past the face. */
+.nrow[data-face] .npanel {
+    max-width: calc(var(--w-read) + 44px);
+    padding-left: 44px;
+}
+
+.nnote {
+    margin: 0;
+    color: var(--ink-3);
+    font-size: 13.5px;
+    line-height: 1.45;
+}
+
+.nreading {
+    display: grid;
+    gap: 10px;
+    min-height: 34px;
+}
+
+/* An approval, in full: what it will do, why, and the call's arguments. */
+.nask {
+    display: grid;
+    gap: 12px;
+    padding: 16px 18px;
+    border-radius: 16px;
+    background: var(--wash-a);
+}
+
+.nask__t {
+    margin: 0;
+    font-size: 14.5px;
+    font-weight: 500;
+    overflow-wrap: anywhere;
+}
+
+.nask__what {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 13.5px;
+    line-height: 1.45;
+}
+
+.nask__kv {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 6px 16px;
+    margin: 0;
+    font-size: 14px;
+}
+
+.nask__kv > div {
+    display: contents;
+}
+
+.nask__kv dt {
+    color: var(--ink-3);
+    overflow-wrap: anywhere;
+}
+
+.nask__kv dd {
+    margin: 0;
+    font-weight: 500;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.nask__body {
+    margin: 0;
+    padding-top: 12px;
+    border-top: 1px solid var(--line-2);
+    font-size: 14px;
+    line-height: 1.55;
+}
+
+.nacts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+/* A question: its answers, each one click, and a box for words. */
+.nq {
+    margin: 0;
+    padding: 0;
+    color: var(--ink);
+    font-size: 14.5px;
+    line-height: 1.5;
+}
+
+.nqs {
+    display: grid;
+    gap: 18px;
+}
+
+.nqset {
+    display: grid;
+    gap: 10px;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.nchoices {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.nchoice {
+    display: inline-grid;
+    align-content: center;
+    gap: 2px;
+    max-width: 100%;
+    min-height: 40px;
+    padding: 8px 16px;
+    border: 1px solid var(--line-2);
+    border-radius: 12px;
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+    transition: border-color 140ms, background 140ms;
+}
+
+.nchoice:not(:disabled):hover {
+    border-color: var(--ink-3);
+}
+
+.nchoice:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.nchoice small {
+    color: var(--ink-3);
+    font-size: 12.5px;
+}
+
+.nchoice[aria-pressed="true"] {
+    border-color: var(--info);
+    background: var(--kit-pick);
+}
+
+.nsay {
+    display: flex;
+    gap: 8px;
+}
+
+.nsay .ninput {
+    flex: 1;
+    min-width: 0;
+}
+
+/* The kit's field, at the size a row holds. */
+.kinput.ninput {
+    height: 40px;
+    padding: 0 14px;
+    border-radius: 12px;
+    font-size: 14px;
+}
+
+.kinput.ninput--area {
+    height: auto;
+    padding: 10px 14px;
+    line-height: 1.45;
+    resize: vertical;
+}
+
+.kinput.ninput:disabled {
+    opacity: 0.6;
+}
+
+/* A form: its fields two to a row, the long ones across. */
+.nform {
+    display: grid;
+    gap: 14px;
+}
+
+.nform__fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.nform .nfield > span:first-child {
+    font-size: 13px;
+}
+
+.nfield--wide {
+    grid-column: 1 / -1;
+}
+
+.nfield__check {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--ink);
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.nfield__bad {
+    color: var(--bad);
+    font-size: 12.5px;
+    font-style: normal;
+}
+
+/* ── nothing waiting ────────────────────────────────────────────────── */
+
+.nfaces {
+    display: flex;
+    padding-left: 8px;
+}
+
+.nfaces .nface {
+    margin-right: -8px;
+    box-shadow: 0 0 0 3px var(--paper);
+}
+
+/* ── a phone ────────────────────────────────────────────────────────── */
+
+@media (max-width: 760px) {
+    .nrow__top {
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .nrow[data-face] .nrow__top {
+        grid-template-columns: auto minmax(0, 1fr) auto;
+    }
+
+    .nrow__top > .nrow__go {
+        grid-column: 1 / -1;
+        justify-self: start;
+    }
+
+    .nrow[data-face] .nrow__top > .nrow__go {
+        grid-column: 2 / -1;
+    }
+
+    .nrow[data-face] .npanel {
+        padding-left: 0;
+    }
+
+    .nform__fields {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    /* 16px, or a phone zooms the page in on focus. */
+    .kinput.ninput {
+        font-size: 16px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .nrow,
+    .nchoice {
+        transition: none;
+    }
+}

@@ -355,8 +355,10 @@ def test_voice_follows_the_language_being_spoken():
     assert default_voice_for("es", ()) == "aura-2-celeste-es"
     assert default_voice_for("ja-JP", ()) == "aura-2-uzume-ja"
     assert default_voice_for("en-US", ()) == "aura-2-thalia-en"
-    # Deepgram has no Hindi voice, and saying so is the honest answer.
-    assert default_voice_for("hi", ()) is None
+    # Aura has no Hindi voice; a Flux voice speaks it.
+    assert default_voice_for("hi", ()) == "flux-anjali-hi"
+    # A language no voice speaks: saying so is the honest answer.
+    assert default_voice_for("ta", ()) is None
     assert default_voice_for(None, ()) is None
 
 
@@ -573,3 +575,52 @@ async def test_audio_with_no_existing_transcript_is_still_transcribed(monkeypatc
     assert result.success is True
     assert result.transcript == "a recording from the datastore"
     assert result.message == "Transcribed audio."
+
+
+async def test_hindi_is_spoken_by_a_flux_voice_on_v2(monkeypatch):
+    transport = _patch_transport(monkeypatch, [(200, b"OGG")])
+    audio = await DeepgramSpeechProvider(api_key="k").synthesize(
+        "नमस्ते", output_format="ogg", language="hi"
+    )
+    assert audio == b"OGG"
+    request = transport.requests[0]
+    assert request.url.path == "/v2/speak"
+    assert request.url.params["model"] == "flux-anjali-hi"
+
+
+async def test_a_language_no_voice_speaks_is_refused_not_read_in_english(monkeypatch):
+    from app.modules.agent.infrastructure.tools.speech.provider import (
+        SpeechProviderError,
+    )
+
+    transport = _patch_transport(monkeypatch, [(200, b"AUDIO")])
+    with pytest.raises(SpeechProviderError, match="No voice speaks 'ta'"):
+        await DeepgramSpeechProvider(api_key="k").synthesize("வணக்கம்", language="ta")
+    assert transport.requests == []
+
+
+async def test_text_too_long_to_speak_is_refused_in_words_the_agent_can_use(
+    monkeypatch,
+):
+    from app.modules.agent.infrastructure.tools.speech.provider import (
+        SpeechProviderError,
+    )
+
+    transport = _patch_transport(monkeypatch, [(200, b"AUDIO")])
+    with pytest.raises(SpeechProviderError, match="at most 2000"):
+        await DeepgramSpeechProvider(api_key="k").synthesize("a" * 2001)
+    assert transport.requests == []
+
+
+def test_a_voice_note_surface_gets_ogg_whatever_the_path_says():
+    from app.modules.agent.infrastructure.tools.speech.models import SayRequest
+    from app.modules.agent.infrastructure.tools.speech.speech import _resolve_output
+
+    request = SayRequest(text="hi", output_file_path="/me/speech/reply.mp3")
+    assert _resolve_output(request, "ogg", force=True) == (
+        "/me/speech",
+        "reply.ogg",
+        "ogg",
+    )
+    # Elsewhere the path's own format stands.
+    assert _resolve_output(request, "mp3") == ("/me/speech", "reply.mp3", "mp3")

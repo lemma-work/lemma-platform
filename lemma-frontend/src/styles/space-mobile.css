@@ -397,6 +397,13 @@
     .bhandle {
         display: none;
     }
+    /* A page opened from a conversation lands in the sheet here, and the sheet
+       is the right pane, which keeps wider margins of its own to hold the
+       block handle. A phone hides the handle and has only the sheet's width to
+       spend, so the page takes the same strip it does on the stage. */
+    .pane[data-side="right"] .docspace__page {
+        padding-inline: 18px;
+    }
 }
 
 @media (max-width: 767px) {

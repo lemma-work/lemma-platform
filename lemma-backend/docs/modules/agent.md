@@ -139,11 +139,24 @@ adapter is consolidated.
 | Routes | What they do |
 | --- | --- |
 | `/pods/{pod_id}/agents` | Agent CRUD plus resource permission replacement |
-| `/pods/{pod_id}/conversations` | Create/list/read/update, messages, approvals, send, stream, stop; `/repositories` lists the GitHub repositories one can be opened in |
+| `/pods/{pod_id}/conversations` | Create/list/read/update, messages, approvals, send, stream, stop; `/repositories` lists the GitHub repositories one can be opened in; `/{id}/runs/{run_id}` reads one run back with the model tokens it used |
 | `/organizations/{org}/agent-runtime/profiles` | Discover/create model runtime profiles |
 | `/me/runtime/agent-hosts...`, `/agent-host/link`, `/agent-host/transfers/{id}`, `/agent-host/runs/{run_id}/blobs/{sha256}` | Agent Host pairing and management; the host's link WebSocket (commands, events, harnesses, Lemma MCP), and the host-authenticated HTTP routes its bulk bytes take instead (file chunks, event images) |
 | `/tools/*` | Server-side web search and feedback endpoints used by runtimes |
-| `/public/widgets/serve...`, `/pods/{pod}/widgets...` | Render/submit a tool widget and mint an authenticated embed URL (`/widgets/serve...` is a legacy alias until 2026-11-08) |
+| `/public/widgets/serve...`, `/pods/{pod}/widgets...` | Render/submit a tool widget and mint an authenticated embed URL (`/widgets/serve...` is a legacy alias until 2026-12-15) |
+
+Starting the pod's own assistant (a conversation with no `agent_name`, or
+`pod_default`) is authorized against the pod, not its row
+(`services/conversation_access.py`): the row's id is the pod's, and an
+AGENT-typed check would hand the resource-owner shortcut to whoever made the
+pod. A named function or agent starts it with the pod's `agent.execute`
+granted to it (`{"resource_type": "pod", "resource_name": "/"}` -- the grant a
+pod link holds), still bounded by the person it runs as. A grant written as
+`agent:pod_default:execute` is stored as that same grant
+(`core/authorization/assistant_grants.py`). A conversation an automation
+starts is titled by the schedule's name when a schedule started it, else by
+the agent's display name, so the assistant's reads "Workflow run: Lem", not its
+stored id.
 
 ## Run lifecycle
 
@@ -199,18 +212,25 @@ own code; GitHub not answering is a 503, never a pass, and a selection too long
 to walk is `GITHUB_REPOSITORY_UNCHECKED`, not "not installed". The listing
 shows at most a picker's worth and says `complete: false` past it.
 The repository is stored as GitHub spells it, and the conversation's directory
-is a worktree of it of its own, `/workspace/worktrees/{owner}/{repo}/{slug}` on
+is a worktree of it of its own, `~/lemma/worktrees/{owner}/{repo}/{slug}` on
 branch `lemma/{slug}` (`domain/workspace_location`, `domain/project_repo`). A
 sub-agent inherits its parent's worktree; a run a webhook started, which is not
 stamped at creation, gets one keyed by its conversation id.
 
 Before the agent's first shell or Python call, the sandbox clones the
-repository once per person, at `/workspace/repos/{owner}/{repo}`, with the
+repository once per person, at `~/lemma/repos/{owner}/{repo}`, with the
 person's token -- or fetches it if it is already there -- and then adds this
 conversation's worktree from `origin/<ref>` or `origin/HEAD`
 (`tools/workspace_cli/github_project`). A worktree whose directory was lost is
 made again on its surviving branch. A failed clone, a failed worktree and a
 failed fetch each tell the agent once.
+
+A pull request (`pull/123/head`) is fetched by name into
+`origin/pull/123/head`, since a clone does not fetch `refs/pull`, and checked
+out from there. A run on a shared pod machine already starts in a directory of
+its own (`~/lemma/runs/{agent}/{run}`), and the project goes there instead: a
+detached worktree of the same clone, cleared with the run directory by the
+machine rather than by the sweep below.
 
 So the clone's objects and `origin/*` are shared, and nothing else is: no
 conversation works in another's tree or on another's branch. Conversations from
@@ -233,6 +253,21 @@ output) go with a clean tree. The branch is never deleted: commits that never
 reached GitHub stay in the clone, and a conversation that runs again gets its
 worktree made again on its branch. A worktree whose conversations were deleted
 with their pod is not swept.
+
+### A run's tokens
+
+`GET /pods/{pod}/conversations/{id}/runs/{run_id}` answers one run of a
+conversation the caller may read: status, output, error, and `usage` -- input
+tokens (cache reads included), output tokens, cache reads and writes, and the
+models, summed over every row the usage ledger holds for the run
+(`usage/contracts/run_usage`). A run working through the in-process harness
+has a row per request as it streams; an Agent Host run one when it reports at
+the end. The conversation's title and the memory kept after the run are left
+out (`services/background_model.AFTER_THE_RUN_SOURCES`): they land later, and
+the same run would read differently twice. Tokens only -- what they cost is the
+organization's bill, read through the usage routes. A sub-agent's run is its
+own run, in its own conversation. `last_run_id` on a conversation read names
+the latest run; a send's answer names its run as `agent_run_id`.
 
 ## Prompt context
 
@@ -298,6 +333,10 @@ their own bound, the newest `MAX_FOLDED_MESSAGES`, apart from the newest
 `MAX_UNATTACHED_MESSAGES` of the other two, and the opening notice says when
 it left some out (`domain/folded_turns`).
 
+The functions the assistant's map lists leave out any kept from it
+(`assistant_invoke` false, see [function](function.md)); it is refused one it
+runs by name all the same, so the list and the refusal agree.
+
 Table summaries include primary keys, column types and write constraints,
 foreign keys, RLS, and visibility. Column descriptions are available through
 table inspection rather than repeated in every prompt. Omission counts mark
@@ -309,6 +348,26 @@ declares `__pod_inventory__`, and any committed change to one of its rows
 replaces its pod's token (`app/core/infrastructure/db/pod_inventory.py`), so
 a table an agent has just created is in the next run's brief rather than one a
 TTL later.
+
+### Memory
+
+The four `AGENTS.md` indexes reach every memory-enabled run's brief
+(`services/context_brief/memory.py`); how memory is laid out, written and kept
+is [agent-memory.md](../../../docs/architecture/agent-memory.md). The brief,
+the memory prompts and the file tools' descriptions call the shared scope
+"this Lemma", never "pod", because the model repeats them to people.
+
+A plugin keeps a block between `<!-- plugin:<slug> -->` and
+`<!-- /plugin:<slug> -->` in `/memory/AGENTS.md` and `/me/AGENTS.md`, written
+by its own function through the file API. The agent's writes to those two
+files -- `pod_write_file` and `pod_edit_file`, and so the memory pass, which
+calls the same tool -- are refused unless every complete block in the file now
+is in the new text byte for byte (moving it is fine) and no new block appears
+(`domain/plugin_memory_blocks.check_blocks_kept`). An opening marker with no
+closing one is not a block and locks nothing. The plugin's own writes do not
+pass through these tools, so its set-up can still add, replace and remove its
+block; nor do `lemma files write` from a workspace or the file API, which this
+does not guard.
 
 ## Key dependencies
 

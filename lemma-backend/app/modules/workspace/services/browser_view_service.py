@@ -32,7 +32,7 @@ from app.modules.workspace.services.browser_relay_client import (
 from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
 )
-from typing import TypedDict
+from typing import NamedTuple
 
 from app.modules.workspace.contracts.browser import host_of
 from app.modules.workspace.providers.base import ProviderGone
@@ -53,11 +53,13 @@ def _engine_error() -> type[Exception]:
     return DockerEngineError
 
 
-class BrowserStatus(TypedDict, total=False):
-    """What a pane is told, without anything being started to find out."""
+class ViewUpstream(NamedTuple):
+    """Where a viewer's socket is carried to, and which machine that is."""
 
-    state: str
-    detail: str
+    url: str
+    headers: dict[str, str]
+    #: Names the machine in a WebRTC ticket; see `browser_stream`.
+    provider_id: str
 
 
 #: What a viewer may ask to do. Watching is the default everywhere; driving is
@@ -66,8 +68,24 @@ MODE_VIEW = "view"
 MODE_CONTROL = "control"
 
 
+async def machine_row(service, key: UUID):
+    """The machine ``key`` names: a machine id, or a user's default machine.
+
+    The service's methods still call it ``user_id``: a default machine's id is
+    its user's, and the `/machines` routes pass the machine's own id.
+    """
+    existing = await service.get(key)
+    if existing is not None and existing.kind is SandboxKind.WORKSPACE:
+        return existing
+    return await service.resolve(
+        kind=SandboxKind.WORKSPACE,
+        owner_kind=SandboxOwnerKind.USER,
+        owner_id=key,
+    )
+
+
 class BrowserViewService:
-    """One person's browser, reachable from the API."""
+    """One machine's browser, reachable from the API."""
 
     def __init__(self, workspace: WorkspaceSandboxService | None = None) -> None:
         self._workspace = workspace or WorkspaceSandboxService()
@@ -99,12 +117,14 @@ class BrowserViewService:
 
         with suppress(Exception):
             service = get_sandbox_service()
-            sandbox = await service.resolve(
-                kind=SandboxKind.WORKSPACE,
-                owner_kind=SandboxOwnerKind.USER,
-                owner_id=user_id,
-            )
+            sandbox = await machine_row(service, user_id)
             await service.touch(sandbox.id)
+            # And the provider's own clock. E2B pauses a sandbox it has not
+            # heard from for its timeout, with no clean browser close -- the
+            # one pause that loses a login. An ensure reaches the provider,
+            # which is what re-arms that timeout, so a person watching their
+            # browser for an hour is never paused blind underneath it.
+            await service.ensure(sandbox.id)
 
     async def _relay(
         self, user_id: UUID, *, start: bool, deliver: bool = True
@@ -132,11 +152,7 @@ class BrowserViewService:
         )
 
         service = get_sandbox_service()
-        sandbox = await service.resolve(
-            kind=SandboxKind.WORKSPACE,
-            owner_kind=SandboxOwnerKind.USER,
-            owner_id=user_id,
-        )
+        sandbox = await machine_row(service, user_id)
 
         if not start:
             # Never provisions: a pane asking what to render must not be what
@@ -163,10 +179,13 @@ class BrowserViewService:
             await asyncio.gather(
                 relay.deliver_token(),
                 relay.deliver_browser_proxy(sandbox.id, sandbox.kind),
+                relay.deliver_stream_files(),
             )
         return relay
 
-    async def status(self, user_id: UUID) -> BrowserStatus:
+    async def status(
+        self, user_id: UUID, *, viewer: UUID | None = None
+    ) -> dict[str, object]:
         """What a pane can say without waking anything.
 
         Every failure here is a sentence rather than an exception, because this
@@ -210,7 +229,15 @@ class BrowserViewService:
             logger.warning("workspace.browser_view.relay_absent.degraded")
             return {"state": "unavailable"}
 
-        return {"state": "running" if chrome == "running" else "stopped"}
+        # Here, not at module scope: only a running browser has these to say.
+        from app.modules.workspace.services.browser_stream_status import (
+            stream_details,
+        )
+
+        # The rollout is the viewer's, not the machine's: two people watching
+        # one pod machine may be on different transports.
+        details = await stream_details(relay, viewer or user_id)
+        return {"state": "running" if chrome == "running" else "stopped", **details}
 
     async def open_vnc_session(
         self,
@@ -219,7 +246,9 @@ class BrowserViewService:
         mode: str,
         origin: str | None = None,
         conversation_id: UUID | None = None,
-    ) -> tuple[str, dict[str, str]]:
+        viewer: str | None = None,
+        transport: str = "vnc",
+    ) -> ViewUpstream:
         """Get a browser up, on the right page, and say where to attach a VNC view.
 
         Raises `BrowserRelayUnavailable` with a sentence when the browser will
@@ -272,7 +301,10 @@ class BrowserViewService:
         # here -- see the note on `vnc_socket_url` for why this matters even
         # though VNC does not scope the picture by it.
         session = str(found.get("session") or "") or None
-        return await relay.vnc_socket_url(mode=mode, session=session)
+        url, headers = await relay.vnc_socket_url(
+            mode=mode, session=session, viewer=viewer, transport=transport
+        )
+        return ViewUpstream(url, headers, relay.provider_id)
 
     async def current_page_url(self, user_id: UUID, *, origin: str) -> str | None:
         """What page the browser signing in to `origin` is actually showing.
@@ -298,7 +330,9 @@ class BrowserViewService:
         url = found[0].get("url")
         return str(url) if url else None
 
-    async def resize_display(self, user_id: UUID, *, width: int, height: int) -> str:
+    async def resize_display(
+        self, user_id: UUID, *, width: int, height: int, viewer: str | None = None
+    ) -> str:
         """Fit the display to the pane somebody is watching it in.
 
         `start=False`: this follows a pane that is already open, so it must
@@ -312,7 +346,28 @@ class BrowserViewService:
         per-session displays as the real answer.
         """
         relay = await self._relay(user_id, start=False)
-        return await relay.resize_display(width=width, height=height)
+        return await relay.resize_display(width=width, height=height, viewer=viewer)
+
+    async def browser_command(
+        self, user_id: UUID, action: dict[str, object]
+    ) -> dict[str, object]:
+        """One toolbar command, carried out by the relay; the tabs afterwards.
+
+        `start=False`: the toolbar is above a screen that is already showing,
+        and must not be what wakes a sandbox. The relay validates `action`
+        against its own closed set again, so this side's validation is a
+        courtesy to the caller and not the boundary.
+        """
+        # Delivered, unlike the polls: a toolbar can be the first thing to
+        # reach a resumed sandbox's relay, which then has no token to check.
+        relay = await self._relay(user_id, start=False)
+        response = await relay.request(
+            "POST", "/browser:command", json_body={"action": action}, timeout=40.0
+        )
+        if response.status_code != 200:
+            raise BrowserRelayUnavailable(_relay_detail(response))
+        body = response.json()
+        return body if isinstance(body, dict) else {}
 
     async def viewers(self, user_id: UUID) -> int | None:
         """How many people the sandbox's own relay is serving.
@@ -416,6 +471,17 @@ class BrowserViewService:
         # the agent's own browser afterwards. Nothing is captured now.
         landed = await relay.ensure_browser(origin=origin, session=None, domain=None)
         return landed if report else None
+
+
+def _relay_detail(response: httpx.Response) -> str:
+    """The relay's own sentence for a refusal, or its status if it gave none."""
+    try:
+        detail = response.json().get("detail")
+    except ValueError, AttributeError:
+        detail = None
+    if isinstance(detail, str) and detail:
+        return detail
+    return f"the browser relay answered {response.status_code}"
 
 
 async def _require_private(relay, *, doing: str) -> None:

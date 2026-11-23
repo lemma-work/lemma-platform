@@ -260,6 +260,21 @@ def test_parse_grant_spec_function_and_agent_tools():
         parse_grant_spec("function:cycle_velocity:use")
 
 
+def test_parse_grant_spec_pod_grants_name_the_pod_as_slash():
+    """`pod:/:channel.notify_self`, as the docs write it, parses; so do the
+    friendly verbs. A pod grant on anything but `/` grants nothing."""
+    raw = parse_grant_spec("pod:/:channel.notify_self")
+    assert raw == {
+        "resource_type": "pod",
+        "resource_name": "/",
+        "permission_ids": ["channel.notify_self"],
+    }
+    both = parse_grant_spec("pod:/:notify-self,assistant")
+    assert both["permission_ids"] == ["channel.notify_self", "agent.execute"]
+    with pytest.raises(ScaffoldError):
+        parse_grant_spec("pod:mypod:notify-self")
+
+
 def test_parse_grant_spec_rejects_bad_input():
     with pytest.raises(ScaffoldError):
         parse_grant_spec("tickets")  # no perms
@@ -631,6 +646,35 @@ def test_validate_workflow_accepts_decision_with_explicit_branches():
     )
     # The default edge points at a distinct catch-all -> no same-target misroute.
     assert not [i for i in issues if "silently routes" in i]
+
+
+def test_validate_workflow_does_not_take_a_failure_edge_as_the_default():
+    from lemma_cli.cli_app.scaffold import validate_workflow
+
+    # A failure edge listed first is where the decision goes if it fails, not
+    # its default; the default is the plain edge to a catch-all.
+    issues = validate_workflow(
+        {
+            "start": {"type": "MANUAL"},
+            "nodes": [
+                {
+                    "id": "decide",
+                    "type": "DECISION",
+                    "config": {
+                        "rules": [{"condition": "x == 1", "next_node_id": "approve"}]
+                    },
+                },
+                {"id": "approve", "type": "END"},
+                {"id": "needs_review", "type": "END"},
+            ],
+            "edges": [
+                {"source": "decide", "target": "approve", "kind": "FAILURE"},
+                {"source": "decide", "target": "needs_review"},
+            ],
+        }
+    )
+    assert not [i for i in issues if "silently routes" in i], issues
+    assert any("'needs_review'" in i for i in issues), "the plain edge is the default"
 
 
 def test_validate_workflow_flags_decision_with_no_rules():

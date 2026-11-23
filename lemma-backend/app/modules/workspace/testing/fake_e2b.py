@@ -114,7 +114,7 @@ class FakeE2B:
     # image's own default -- a real directory, so the command succeeds and a
     # fake that dropped the argument could not tell "the provider said where"
     # from "the provider said nothing". It said nothing for `execute_python`,
-    # and that is precisely how the interpreter ended up in `/workspace` while
+    # and that is precisely how the interpreter ended up in the image's default directory while
     # the shell was in the conversation's directory.
     command_cwds: list[str | None] = field(default_factory=list)
     pause_kept_memory: list[bool] = field(default_factory=list)
@@ -211,9 +211,13 @@ class FakeE2B:
                 cwd=None,
                 on_stdout=None,
                 on_stderr=None,
+                stdin=None,
                 timeout=None,
-                **_kwargs,
+                request_timeout=None,
             ):
+                # The SDK's `Commands.run`, keyword for keyword. Taking
+                # `**kwargs` here let a release pass `api_key` through every
+                # test and raise on real E2B.
                 if not world.agent_answers:
                     raise FakeE2BError("the sandbox agent is not answering")
                 world.commands.append(cmd)

@@ -4,7 +4,11 @@
  *  the server sending an old link on — does not carry the plan parser and
  *  the channel model with it. */
 
-export type OutcomeTab = "home" | "plan" | "chats" | "apps" | "made" | "contacts" | "automations" | "settings";
+/** A Lemma's pages. Its row of tabs is the first seven: its home, its chats,
+ *  its apps, its tables, its pages, its files, and About. The rest are parts
+ *  of About -- what it runs, who is in it, who writes in from outside, its
+ *  plan, its settings -- each still a page of its own with its own address. */
+export type OutcomeTab = "home" | "chats" | "apps" | "tables" | "pages" | "files" | "about" | "automations" | "agents" | "memory" | "skills" | "add" | "people" | "contacts" | "settings";
 
 /** What a Lemma runs, in one place: its workflows and their runs, its
  *  schedules, its agents, and the X-ray of all of it. The workspace keeps
@@ -42,11 +46,18 @@ export type View =
     | { name: "connectors" }
     | { name: "chats"; open: ChatOpen }
     | { name: "people" }
+    /** What the reader's Lemmas have been doing: every one of them, or the
+     *  one named. */
+    | { name: "history"; podId: string | null }
+    /** Settings, a page: one section of the reader's or the organization's. */
+    | { name: "settings"; section: string | null }
     /** `section` is a part of a Lemma's settings (its About), or one view
      *  of its automations, on that tab. */
     | { name: "outcome"; podId: string; tab: OutcomeTab; section?: string }
     | { name: "run"; podId: string; runId: string }
-    | { name: "app"; podId: string; app: string }
+    /** `at` is where the app is inside itself: the page for one of its
+     *  records, as a rooted path. Absent on the app's one screen. */
+    | { name: "app"; podId: string; app: string; at?: string }
     | { name: "file"; podId: string; path: string }
     | { name: "table"; podId: string; table: string }
     | { name: "workflow"; podId: string; workflow: string }
@@ -58,7 +69,17 @@ export type View =
     /** Starting a Lemma from scratch, the workspace's own way. */
     | { name: "hire" };
 
-export const OUTCOME_TABS: readonly OutcomeTab[] = ["home", "plan", "chats", "apps", "made", "contacts", "automations", "settings"];
+export const OUTCOME_TABS: readonly OutcomeTab[] = ["home", "chats", "apps", "tables", "pages", "files", "about", "automations", "agents", "memory", "skills", "add", "people", "contacts", "settings"];
+
+/** A Lemma's own pages, each opened from its section on the Lemma's page:
+ *  what it holds and what it does. The rest are parts of About. */
+export const ROW_TABS: readonly OutcomeTab[] = ["home", "chats", "apps", "tables", "pages", "files", "about", "automations", "agents", "memory", "skills", "add"];
+
+/** Whether a page is a part of About rather than a tab of its own: the row
+ *  keeps About lit over it, and the page offers the way back. */
+export function partOfAbout(tab: OutcomeTab): boolean {
+    return !ROW_TABS.includes(tab);
+}
 
 /** A Lemma's page, on its home unless another tab is named. */
 export function outcomeView(podId: string, tab: OutcomeTab = "home", section: string | null = null): View {
@@ -68,6 +89,15 @@ export function outcomeView(podId: string, tab: OutcomeTab = "home", section: st
 /** A chat, open in the main area beside the sidebar that lists it. */
 export function chatView(open: OpenChat): View {
     return { name: "chats", open };
+}
+
+/** An app, at the path inside it the rest of an address names. A part that
+ *  holds a slash of its own, or steps up or stays put, is not a path an app
+ *  could have said it was at, so the address names nothing. */
+function appView(podId: string, app: string, inside: readonly string[]): View | null {
+    if (inside.length === 0) return { name: "app", podId, app };
+    if (inside.some((part) => part === "." || part === ".." || part.includes("/"))) return null;
+    return { name: "app", podId, app, at: "/" + inside.join("/") };
 }
 
 /** The outcome a view is about, when it is about one. */
@@ -119,15 +149,17 @@ function trialChatOf(podId: string, rest: readonly (string | undefined)[]): Chat
 /* ── addresses ──────────────────────────────────────────────────────────
  *
  * Plain words, one noun. The places are words of their own -- `/home`,
- * `/needs`, `/apps`, `/connectors`, `/people`, `/chats` -- and everything
+ * `/needs`, `/apps`, `/connectors`, `/people`, `/chats`, `/history` -- and everything
  * about one Lemma sits under `/l/{id}`, in plural words for its sections
  * and the same word with a name for one thing in it: `/l/{id}/apps` lists
- * them, `/l/{id}/apps/{name}` opens one. `/l` alone is every Lemma.
+ * them, `/l/{id}/apps/{name}` opens one. `/l` alone is every Lemma. What
+ * follows an app's name is the app's to mean -- the page for one of its
+ * records -- and is handed to it as it stands.
  *
  * The workspace's own addresses lived under `/l` before this; where a word
  * is in both, it means the same place, and a word only the workspace used
- * (`conversation`, `file`, `about`…) is not one of these, so an old link is
- * told apart and read the old way (`viewOfAddress`). */
+ * (`conversation`, `file`, a part under `about`…) is not one of these, so an
+ * old link is told apart and read the old way (`viewOfAddress`). */
 
 /** The app's places that are not inside one Lemma. */
 const PLACES: Readonly<Record<string, View>> = {
@@ -156,6 +188,16 @@ export function readView(pathname: string): View | null {
     if (!head) return null;
     /* Its own places only: `/constructor` is not one because every object
        answers to it. */
+    if (head === "settings") {
+        if (after.length === 0) return { name: "settings", section: null };
+        const section = after.length === 1 ? decoded(after[0]) : null;
+        return section ? { name: "settings", section } : null;
+    }
+    if (head === "history") {
+        if (after.length === 0) return { name: "history", podId: null };
+        const of = after.length === 1 ? decoded(after[0]) : null;
+        return of ? { name: "history", podId: of } : null;
+    }
     if (head !== "l") return after.length === 0 && Object.hasOwn(PLACES, head) ? PLACES[head] : null;
     const [id, section, ...tail] = after;
     if (!id) return { name: "outcomes" };
@@ -169,7 +211,10 @@ export function readView(pathname: string): View | null {
     const [one, two] = rest;
     switch (section) {
         case undefined: return outcomeView(podId);
-        case "plan": return rest.length === 0 ? outcomeView(podId, "plan") : null;
+        /* The plan a Lemma kept for a result it owned, before what it is
+           taught lived in its memory: an old link opens About, which says
+           what it has been taught. */
+        case "plan": return rest.length === 0 ? outcomeView(podId, "about") : null;
         case "chats":
             if (rest.length === 0) return outcomeView(podId, "chats");
             return rest.length === 1 ? chatView({ kind: "chat", podId, id: one }) : null;
@@ -181,11 +226,20 @@ export function readView(pathname: string): View | null {
             return rest.length === 1 ? chatView({ kind: "contact", podId, id: one }) : null;
         case "apps":
             if (rest.length === 0) return outcomeView(podId, "apps");
-            return rest.length === 1 ? { name: "app", podId, app: one } : null;
+            return appView(podId, one, rest.slice(1));
+        case "pages": return rest.length === 0 ? outcomeView(podId, "pages") : null;
+        /* About alone is this app's page. With a part named after it, it is
+           the workspace's old address, which its own grammar reads. */
+        case "about": return rest.length === 0 ? outcomeView(podId, "about") : null;
+        case "people": return rest.length === 0 ? outcomeView(podId, "people") : null;
+        case "memory": return rest.length === 0 ? outcomeView(podId, "memory") : null;
+        case "skills": return rest.length === 0 ? outcomeView(podId, "skills") : null;
+        /* Adding an app to it: its own page, not a dialog. */
+        case "add": return rest.length === 0 ? outcomeView(podId, "add") : null;
         case "files":
-            return rest.length === 0 ? outcomeView(podId, "made") : { name: "file", podId, path: "/" + rest.join("/") };
+            return rest.length === 0 ? outcomeView(podId, "files") : { name: "file", podId, path: "/" + rest.join("/") };
         case "tables":
-            if (rest.length === 0) return outcomeView(podId, "made");
+            if (rest.length === 0) return outcomeView(podId, "tables");
             if (rest.length === 1) return { name: "table", podId, table: one };
             return rest.length === 2 ? { name: "record", podId, table: one, recordId: two } : null;
         case "automations": {
@@ -200,7 +254,7 @@ export function readView(pathname: string): View | null {
             if (rest.length === 0) return outcomeView(podId, "automations", "history");
             return rest.length === 1 ? { name: "run", podId, runId: one } : null;
         case "agents":
-            if (rest.length === 0) return outcomeView(podId, "automations", "agents");
+            if (rest.length === 0) return outcomeView(podId, "agents");
             return rest.length === 1 ? { name: "agent", podId, agent: one } : null;
         case "settings":
             return rest.length <= 1 ? outcomeView(podId, "settings", one ?? null) : null;
@@ -216,12 +270,19 @@ const e = encodeURIComponent;
 /** A Lemma's section, as its address names it. */
 const SECTION_WORDS: Readonly<Record<OutcomeTab, string>> = {
     home: "",
-    plan: "plan",
     chats: "chats",
+    pages: "pages",
+    tables: "tables",
+    files: "files",
     apps: "apps",
-    made: "files",
-    contacts: "contacts",
+    about: "about",
     automations: "automations",
+    agents: "agents",
+    memory: "memory",
+    skills: "skills",
+    add: "add",
+    people: "people",
+    contacts: "contacts",
     settings: "settings",
 };
 
@@ -234,6 +295,8 @@ export function writeView(view: View): string {
         case "apps": return "/apps";
         case "connectors": return "/connectors";
         case "people": return "/people";
+        case "history": return "/history" + (view.podId ? "/" + e(view.podId) : "");
+        case "settings": return "/settings" + (view.section ? "/" + e(view.section) : "");
         case "outcomes": return LEMMAS;
         case "hire": return LEMMAS + "/new";
         case "chats": {
@@ -250,7 +313,7 @@ export function writeView(view: View): string {
             return base + "/" + SECTION_WORDS[view.tab] + tail;
         }
         case "run": return LEMMAS + "/" + e(view.podId) + "/runs/" + e(view.runId);
-        case "app": return LEMMAS + "/" + e(view.podId) + "/apps/" + e(view.app);
+        case "app": return LEMMAS + "/" + e(view.podId) + "/apps/" + e(view.app) + (view.at ?? "").split("/").filter(Boolean).map((part) => "/" + e(part)).join("");
         case "table": return LEMMAS + "/" + e(view.podId) + "/tables/" + e(view.table);
         case "record": return LEMMAS + "/" + e(view.podId) + "/tables/" + e(view.table) + "/" + e(view.recordId);
         case "workflow": return LEMMAS + "/" + e(view.podId) + "/workflows/" + e(view.workflow);

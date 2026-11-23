@@ -20,6 +20,15 @@ export interface PublicGitHubReadme {
     markdown: string;
     branch: string;
     repository: PublicGitHubRepository | null;
+    /** The folder the README was read from, `""` for the repository's root:
+     *  what its relative links and images are relative to. */
+    dir: string;
+}
+
+/** What a bundle's own `pod.json` calls it. */
+export interface PublicBundleManifest {
+    name: string | null;
+    description: string | null;
 }
 
 export interface ReadmePresentation {
@@ -223,15 +232,25 @@ function cleanReadmeBody(markdown: string): string {
         .trim();
 }
 
+/** A README's relative reference as a path from the repository's root. A
+ *  leading `/` already is one, as GitHub reads it; anything else is relative
+ *  to the folder the README sits in. */
+function repositoryPath(value: string, dir: string): string {
+    if (value.startsWith("/")) return value.replace(/^\/+/, "");
+    const relative = value.replace(/^\.\//, "").replace(/^\/+/, "");
+    return dir ? dir + "/" + relative : relative;
+}
+
 export function resolveReadmeAssetUrl(
     value: string,
     owner: string,
     repo: string,
     branch: string,
+    dir = "",
 ): string {
     if (/^(?:https?:)?\/\//i.test(value) || value.startsWith("data:"))
         return value;
-    const normalized = value.replace(/^\.\//, "").replace(/^\/+/, "");
+    const normalized = repositoryPath(value, dir);
     return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${normalized}`;
 }
 
@@ -240,6 +259,7 @@ export function resolveReadmeLinkUrl(
     owner: string,
     repo: string,
     branch: string,
+    dir = "",
 ): string {
     if (
         /^(?:https?:)?\/\//i.test(value) ||
@@ -248,7 +268,7 @@ export function resolveReadmeLinkUrl(
     ) {
         return value;
     }
-    const normalized = value.replace(/^\.\//, "").replace(/^\/+/, "");
+    const normalized = repositoryPath(value, dir);
     return `https://github.com/${owner}/${repo}/blob/${branch}/${normalized}`;
 }
 
@@ -333,10 +353,12 @@ export function extractReadmePresentation(
 async function fetchRawReadme(
     owner: string,
     repo: string,
+    dir: string,
 ): Promise<string | null> {
     try {
         const response = await fetchWithTimeout(
-            `https://api.github.com/repos/${owner}/${repo}/readme`,
+            `https://api.github.com/repos/${owner}/${repo}/readme` +
+                (dir ? "/" + dir : ""),
             {
                 headers: {
                     Accept: "application/vnd.github.raw+json",
@@ -354,10 +376,13 @@ async function fetchRawFallback(
     owner: string,
     repo: string,
     branch: string,
+    dir: string,
 ): Promise<string | null> {
     try {
         const response = await fetchWithTimeout(
-            `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/README.md`,
+            `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/` +
+                (dir ? dir + "/" : "") +
+                "README.md",
         );
         if (!response.ok) return null;
         return await response.text();
@@ -366,18 +391,57 @@ async function fetchRawFallback(
     }
 }
 
+/** The README of a repository, or of one folder in it (`dir`). A folder
+ *  with none has none: the repository's own is about the repository, not
+ *  the bundle the folder holds. */
 export async function fetchPublicGitHubReadme(
     owner: string,
     repo: string,
+    dir = "",
 ): Promise<PublicGitHubReadme | null> {
-    const apiReadme = await fetchRawReadme(owner, repo);
+    const apiReadme = await fetchRawReadme(owner, repo, dir);
     const branch = "HEAD";
     const markdown =
         apiReadme ||
-        (await fetchRawFallback(owner, repo, branch)) ||
-        (await fetchRawFallback(owner, repo, "main")) ||
-        (await fetchRawFallback(owner, repo, "master"));
+        (await fetchRawFallback(owner, repo, branch, dir)) ||
+        (await fetchRawFallback(owner, repo, "main", dir)) ||
+        (await fetchRawFallback(owner, repo, "master", dir));
 
     if (!markdown) return null;
-    return { markdown, branch, repository: null };
+    return { markdown, branch, repository: null, dir };
+}
+
+/** A `pod.json` field worth showing: text, trimmed, and short enough to be a
+ *  name or a line rather than whatever a malformed manifest holds. */
+function manifestText(value: unknown, limit: number): string | null {
+    if (typeof value !== "string") return null;
+    const text = value.trim();
+    return text && text.length <= limit ? text : null;
+}
+
+/** The name and description a bundle in a folder gives itself, read from its
+ *  `pod.json`; `null` when it cannot be read. */
+export async function fetchPublicBundleManifest(
+    owner: string,
+    repo: string,
+    dir: string,
+): Promise<PublicBundleManifest | null> {
+    try {
+        const response = await fetchWithTimeout(
+            `https://raw.githubusercontent.com/${owner}/${repo}/HEAD/${dir}/pod.json`,
+        );
+        if (!response.ok) return null;
+        return readBundleManifest(await response.json());
+    } catch {
+        return null;
+    }
+}
+
+export function readBundleManifest(manifest: unknown): PublicBundleManifest | null {
+    if (!manifest || typeof manifest !== "object") return null;
+    const fields = manifest as Record<string, unknown>;
+    return {
+        name: manifestText(fields.name, 80),
+        description: manifestText(fields.description, 300),
+    };
 }

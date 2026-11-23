@@ -11,8 +11,8 @@ with the CLI through the top-level `lemma-pod-bundle` package.
 
 | Contribution | Behavior |
 | --- | --- |
-| API routers | Import/upload/plan/apply/replan/cancel/events, export/status/download, publish/status/events |
-| Work items | `pod_bundle.{export,plan,import_github,import_url,apply,publish}`: admin class, pod namespace, one per pod at a time, written with the job's state row in the request's transaction; `pod_bundle.set_up_lemma` plans and applies a template for a Lemma just started, then starts its setup chat (see [Starting a Lemma](#starting-a-lemma)) |
+| API routers | Import/upload/plan/apply/replan/cancel/events, plugin install/status/retry, export/status/download, publish/status/events |
+| Work items | `pod_bundle.{export,plan,import_github,import_url,apply,publish}`: admin class, pod namespace, one per pod at a time, written with the job's state row in the request's transaction; `pod_bundle.set_up_lemma` plans and applies a template for a Lemma just started, then starts its setup chat (see [Starting a Lemma](#starting-a-lemma)); `pod_bundle.install_plugin` fetches, plans, approves and applies one bundle of a plugin install (see [Installing several plugins](#installing-several-plugins)) |
 | Periodic work | `pod_bundle.staging_sweep` (30 min): sweep expired staging objects, end jobs nothing will run again, delete job rows past retention |
 | Realtime | Redis pub/sub SSE plus polling snapshots |
 | SQL tables | `pod_bundle_jobs`, `pod_bundle_job_steps` |
@@ -47,6 +47,7 @@ CANCELLED if it was cancelling, in the dead transaction.
 | --- | --- |
 | `/pods/{pod_id}/bundle/uploads` | Stage a local zip and mint a signed Lemma URL |
 | `/.../bundle/imports` | Start URL/GitHub planning, poll, replan, approve apply, cancel, or stream SSE. An import is its starter's: anyone else gets 404 (`POD_BUNDLE_IMPORT_NOT_FOUND`), since its plan was computed with the starter's authority and lists their own accounts |
+| `/.../bundle/installs` | Install several plugins in one request, read where each is, retry the failed ones. Each plugin is an import of its own, under `/bundle/imports` too; the install is its starter's, as its imports are |
 | `/.../bundle/exports` | Start/poll an export; authenticated signed-token download is `/pods/bundle/download` |
 | `/.../bundle/publishes` | Start/poll/stream GitHub publication |
 | `/pods/bundle/templates` | The templates that ship with the server, as cards: what a Lemma made from one owns, how it is counted, and the first lines of its plan |
@@ -59,18 +60,122 @@ flowchart LR
     S["Upload or GitHub source"] --> V["Validate zip and limits"]
     V --> O["Stage in object storage"]
     O --> P["Snapshot pod + build diff plan"]
-    P --> H["Human reviews variables/destructive steps"]
+    P --> H["Human reviews what is added and what is kept"]
     H --> A["Apply idempotent steps"]
     A --> C["Redis checkpoint after each DB commit"]
     C --> R["Record recipe + cleanup"]
 ```
 
+**From GitHub.** `kind=GITHUB` fetches the repository's zipball through the
+pod's `github` connector as the importer, or anonymously for a public repository
+(`events/github_import.py`). Without `path` the whole repository is the archive,
+and its bundle is the shallowest `pod.json` in it. A repository that holds
+several bundles, one per folder (`install/<slug>/`), installs one of them with
+`path`: relative, ordinary characters, no `.` or `..` segment
+(`domain/state.BUNDLE_PATH_PATTERN`), and refused with any other kind. The job
+narrows the archive to that folder before staging it
+(`infrastructure/github_folder.py`), looking under GitHub's one wrapping
+`owner-repo-sha/` folder, so planning and applying read that bundle alone, under
+the same extraction checks. A folder that is not there fails the job
+`GITHUB_PATH_NOT_FOUND` (404), and one with no `pod.json` of its own
+`GITHUB_PATH_NOT_A_BUNDLE` (422), both before anything is planned and neither
+retried. The recipe records `path` beside `repo_url`, so the source is named in
+full.
+
 Every non-app apply step opens its own authorization/UoW scope and commits
 before the Redis `DONE` checkpoint. App steps self-scope around a sandbox
-build. A crash between commit and checkpoint replays an idempotent upsert. The
-format handles pod connectors, tables/data, files, functions,
-agents/grants/toolsets, workflows, schedules, apps/source, surfaces, and pod
-metadata.
+build. A crash between commit and checkpoint replays a step that creates only
+what is still missing, so it converges. The format handles pod connectors,
+tables/data, pod machines, files, functions, agents/grants/toolsets, workflows, schedules,
+apps/source, surfaces, and pod metadata.
+
+**An import adds to a pod and never replaces what is there.** A person may have
+changed an app, added a column or rewritten an agent since it arrived, and
+installing another bundle -- a plugin that carries the base it builds on --
+must not undo it (`infrastructure/kept_parts.py`):
+
+| The pod already has | The plan | The apply |
+| --- | --- | --- |
+| A table | `UPDATE` with `detail.columns_to_add` when it lacks some of the bundle's columns, otherwise `SKIP` | Adds those columns. A column the bundle does not mention is never dropped, and one it defines differently is never altered: kept, listed in `detail.columns_kept`, and warned about |
+| A function, agent, workflow, schedule, surface or app, by name | `SKIP` | Not run. Its code, instructions, settings, visibility, grants and the release an app serves stay as they are; no grants step is planned for a kept function or agent |
+| A file or folder, by path | `SKIP` | Not run. What the bundle adds inside a kept folder is still created |
+| A table the bundle seeds | The rows' `TABLE_DATA` step is `SKIP` | Rows load only into a table the import creates: rows without ids would be added twice, and rows with ids would be written over a row someone edited |
+| A pod machine, by name | `SKIP` | Not run. Its template, size and run slots stay as they are; only a machine the import creates is checked against the target's plan |
+| A pod connector of the same connector and mode | `SKIP` (`EXISTS`) | Checked again, never redeclared |
+
+A kept step is planned `SKIP` and marked `SKIPPED`, with the reason in its
+`error` ("already exists here; kept as it is, …"), so the apply loop never runs
+it and the person approving sees why. No plan has a destructive step any more;
+`confirm_destructive` stays on the apply request for compatibility.
+
+**What the import created** is recorded on its state (`ImportState.created`,
+`KIND:name`), checkpointed with each step. The rule holds at apply time
+through it (`kept_parts.CreatedParts`):
+
+- A step that creates a part records it. One that finds its part already there
+  takes it as the import's own when the record has it, or when the step was
+  interrupted while running (its write committed, its checkpoint did not).
+  Otherwise someone made it between plan and apply: the step writes nothing
+  and is marked `SKIPPED` (`POD_BUNDLE_PART_KEPT`), and a table gains nothing
+  either. A function is created only (`create_function_for_import`), decided
+  in the unit of work that resolves the create. An agent is born with its email
+  surface, so when the import created the agent, the bundle's surface of that
+  name is that mailbox: the import's own, and it takes the bundle's settings.
+- A `*_GRANTS` step writes only to a function or agent the import created, and
+  a `TABLE_DATA` step only to a table it created, once.
+- A replan keeps the record of what the discarded plan made, and plans those
+  parts `CREATE` again rather than kept: their steps find them as the import's
+  own, so an agent created before a failure still gets its grants step, and an
+  app left half built is built.
+
+A fresh import of the same bundle has no such record, so a function or agent an
+earlier, unfinished import created is kept with whatever access it holds. The
+plan names each kept function or agent that lacks some of what its bundled
+copy is granted (`grant_planning.plan_kept_access`), and writes nothing to it.
+
+Nothing on this path replaces. A builder redeploying their own pod from a local
+bundle uses lemma-cli's direct import (`lemma pods import`, upsert by default),
+which writes through the API and never reaches this importer.
+
+A pod machine travels as `machines/<name>/<name>.json` — `name`, optional
+`display_name`, `template` (`workspace` | `workspace-docker`), optional `size`
+(`<vcpu>x<GB>`), optional `run_slots`. Its disk and instance do not travel. The
+MACHINE step is planned after tables and before every function, agent and
+`*_GRANTS` step, and creates the machine through
+`workspace.contracts.pod_machines` under the target's machine policy; a machine
+the pod already has is kept, like every other part. An agent's `machine` ref is
+exported portable (`pod:<source pod>:<name>` becomes `pod:<name>`); an agent's
+or function's `machine.use` grant names the machine by `resource_type: machine`.
+
+**Apps** (`infrastructure/app_builder.py`) with a `package.json` are rebuilt in
+the importing user's sandbox, because the build bakes in the pod id: `pnpm
+install` (frozen when the app ships `pnpm-lock.yaml`), then `pnpm run build`
+with the target pod's `VITE_LEMMA_*` values. The sandbox's pnpm fails an install
+on a dependency install script nobody approved, and Vite brings one (esbuild),
+so an app that ships no `pnpm-workspace.yaml` is given one that allows
+esbuild's and lets the install go past the rest without running them. A build
+policy the app gives under `package.json -> pnpm`, which pnpm 11 (the
+sandbox's) no longer reads, is carried into that file as one `allowBuilds` map
+over the default's esbuild (`workspace_for`), with the names in the file
+`onlyBuiltDependenciesFile` points to; a file named there that is missing, not
+a JSON list, or outside the app fails the build before it starts. An app's own
+file is used as it is, and its `package.json` policy is then neither read nor
+checked. A static site, a single `html.html`, or a bundle
+carrying only `dist.zip` deploys as it is.
+
+A failed build fails its step with `POD_BUNDLE_APP_BUILD_FAILED` and an error
+quoting the line of output that says why (`App build failed: <line>`). The end
+of what the build printed -- stdout and stderr, 4,000 characters between them
+-- is kept on the step as `detail.build_log`, which the import status returns
+with the plan; the step event carries only the error. A build still running
+after `LEMMA_POD_BUNDLE_APP_BUILD_TIMEOUT_SECONDS` (600 by default) fails the
+same way. Re-applying the import retries the step and drops the old log.
+
+**A contact-owned table** carries `contact_owned` and `contact_columns` in its
+manifest (written by export only when set), and the TABLE step creates it with
+them. Its `contact_id` is the platform's: a manifest may leave it out of
+`columns`, and the column diff (`lemma_pod_bundle.diff`) never plans to drop it
+from a table the bundle calls contact-owned.
 
 **Pod connectors** (`connectors/<slug>/<slug>.json`) carry the catalog
 connector, mode, `required` and `purpose` -- never the installation or the
@@ -86,6 +191,17 @@ or a slug the pod already uses for another connector (`CONFLICT`) refuses the
 apply with 422; a SHARED connector with no account imports `NEEDS_ACCOUNT`
 with a warning. CONNECTOR steps run first, so every schedule, surface and grant
 naming a slug finds it declared.
+
+A connector the bundle marks optional (`required: false`) that has no
+installation to map to, and that no bundled schedule or surface runs through
+-- only grants name it -- is `SKIPPED` rather than `NEEDS_INSTALLATION`: the
+import goes ahead without it, its CONNECTOR step is marked skipped, and grants
+on it are dropped with a warning (`connector_grants.resolve_connector_grants`).
+Choosing an installation or to create one brings it in. An importer may also
+leave out any other optional connector with `{"skip": true}`; one that is
+required, or that a bundled schedule or surface runs through, cannot be.
+lemma-cli leaves such a connector out the same way (`pod_bundle_connectors.py`),
+and `--create-installations` brings it in; it has no explicit `skip`.
 
 A slug the pod already declares is kept only when it is the same catalog
 connector in the same mode (`EXISTS`); another connector or the other mode is
@@ -106,6 +222,34 @@ them here, or gone -- is planned as skipped with a warning
 the apply is requested for one given as an import variable. The rest of the
 bundle imports.
 
+**One schedule per GLOBAL workflow.** The platform keeps a GLOBAL workflow to
+one schedule per person in a pod and refuses the second when it is created --
+after everything before it had been written. The plan refuses a bundle in which
+two schedules it creates would start one GLOBAL workflow it creates
+(`lemma_pod_bundle.workflow_schedules`, through `infrastructure/one_schedule.py`).
+A manifest with no `mode` is created USER by this import, so only an explicit
+`"mode": "GLOBAL"` counts here; lemma-cli, which creates through the API where
+the default is GLOBAL, asks the same question with that default. Workflows and
+schedules the pod already has, one-time schedules already past, and schedules
+the plan skips (naming an account the importer cannot use) are not counted; a
+schedule whose account is an import variable not yet given is, since the
+variable may come on apply. A schedule or workflow is the one its directory
+names, as both importers create it, whatever its manifest's `name` says.
+
+**The app a pod opens on.** `pod.json -> home_app` names one of the bundle's
+apps (its `apps/<name>` directory); the exporter writes it from the pod's
+`config.home_app`. Once every step has landed, the import sets it on the pod
+(`infrastructure/bundle_home_app.py`, through `pod.contracts.home_app`, as the
+person importing) -- but only on a pod that has not chosen one and had no other
+apps before the import. A pod that already opens somewhere keeps it, and the
+import says so in its warnings; a choice naming an app the pod no longer has is
+no choice. The write is made only if the choice is still the one read, under
+the pod row's lock, so a person who chooses while the import runs keeps theirs;
+a write the pod refuses is a warning, not a failed import. A reader that does
+not know the key skips it, so it does not move the format. lemma-cli does the
+same (`cli_app/pod_bundle_home_app.py`), except that the pod update it calls has
+no conditional write.
+
 **Format version.** `pod.json`'s `format_version` is 4 for a bundle that
 declares a pod connector, and 3 for one that does not
 (`lemma_pod_bundle.bundle_format_version`): 4 added only `connectors/`, so a
@@ -114,13 +258,22 @@ after the connectors. `lemma_pod_bundle.check_format_version` refuses a newer
 one at planning (and in the CLI's direct import) instead of importing a bundle
 with what it added left out.
 
+**Workflow graphs** are judged at planning, by the workflow module's own rules
+(`workflow.contracts.graph_checks.workflow_graph_issues`, called from
+`infrastructure/workflow_graphs.py`): a graph its create would refuse -- a LOOP
+with two outgoing edges, a dangling edge, an expression that does not compile
+-- fails the plan, naming each workflow and why, before anything is written. It
+used to plan cleanly and fail at its WORKFLOW step, after the tables, functions
+and agents before it. `${var}` placeholders are judged with their defaults; one
+with none stands in as a plain identifier.
+
 **Grants** travel in the manifest of the agent or function that holds them
 (`permissions.grants`, by resource name), as a deferred `*_GRANTS` step after
-every resource they could name exists. They are conferral: the plan
+every resource they could name exists, planned only for a function or agent the
+import creates. They are conferral: the plan
 (`infrastructure/grant_planning.py`) asks the conferral bound, as the importer,
-about every grant whose resource already exists -- only what the write adds
-over what the same-named workload already holds, as the apply's
-`replace_grantee_resource_grants` does -- and keeps what fails on its step
+about every grant whose resource already exists, as the apply's
+`replace_grantee_resource_grants` does, and keeps what fails on its step
 (`detail.refused`) and in the plan's warnings. Applying such a plan is refused
 `403 CONFERRAL_EXCEEDS_HOLDER` with the pod untouched; the step itself asks
 again of everything when it writes.
@@ -144,23 +297,86 @@ the service's own trigger, show the weeks it read, and ask for the bar. A
 template whose tables ship with rows (Launch, Audit) starts from those instead.
 
 `POST /pods/start` (`application/start_use_cases.py`) writes a Lemma in one
-transaction: the pod (under a free name), what it owns, a first `/plan.md`, and
-a conversation with the pod's agent opened with the caller's first message.
+transaction: the pod (under a free name), what it owns, a template's own rules
+as a note in its shared memory (`/memory/how-we-work.md`, pointed at from
+`/memory/AGENTS.md`), and a conversation with the pod's agent opened with the caller's first message.
 From the caller's own words the agent's turn is staged with it. From a template
 the archive is staged before anything is written, the conversation is opened
 held -- its run written without its turn -- and `pod_bundle.set_up_lemma` is
 queued: it plans the import, applies it without the confirmation an uploaded
-bundle waits for (a shipped template, into a pod with nothing to overwrite),
+bundle waits for (a shipped template, and an import overwrites nothing),
 and starts the turn in its completion transaction. A plan that would need the
 person after all is left awaiting them, and the turn starts beside it. If the
 item dies, its `on_dead` hook ends the import and starts the turn in the same
 commit, so no setup chat waits on a job that will not run again.
 
+## Installing several plugins
+
+A plugin is a bundle in a folder of a GitHub repository (`install/mail`). The
+sign-up adds a few to a Lemma at once and promises to keep going if the person
+leaves, so the order, the defaults and the stopping rule live on the server
+(`application/install_use_cases.py`, `events/plugin_install.py`,
+`domain/plugin_install.py`):
+
+```text
+POST /pods/{pod_id}/bundle/installs              {"plugins": [{"repo_url", "path", "ref"?}, ...]}  -> 202
+GET  /pods/{pod_id}/bundle/installs/{install_id}                                                   -> 200
+POST /pods/{pod_id}/bundle/installs/{install_id}/retry                                             -> 202
+```
+
+All three answer the same shape: `install_id`, `finished` (every plugin has
+stopped moving), and `plugins` in the order named, each with its `import_id`,
+`name`, `state` (`WAITING`, `INSTALLING`, `INSTALLED`, `NEEDS_ANSWER`,
+`FAILED`, `CANCELLED`), `progress` (plan steps done of all), `current_step`,
+`reason` (the question, or what failed), `error_code`, `connect_url`, `app`
+(the app it put in, once installed) and `warnings`.
+
+**No table of its own.** Each plugin is an ordinary import whose state carries
+its place in the install (`ImportState.install`: install id, position, and the
+question it stopped on). Starting the install writes every import `QUEUED` and
+one `pod_bundle.install_plugin` item per plugin in one transaction, under the
+import's own plan key, so cancelling an import, the stale-job sweep and a dead
+item treat it as any import. The pod's bundle jobs run one at a time, and each
+item is queued a millisecond behind the one before
+(`install_use_cases.install_delay`), so they run in the order named. Reading
+the install reads those rows back by JSON containment on the snapshot
+(`infrastructure/install_reads.py`), at most `MAX_BUNDLES_PER_INSTALL` (10) of
+them; a request may name no more, each plugin once, and each counts as one
+import against the daily import limit.
+
+**The page's defaults.** Each item fetches, plans, then approves the plan as
+the install page would with nobody choosing (`plugin_install.page_defaults`):
+a required free variable is the Lemma's name as a slug, a `pod_member` one is
+left for the apply to fill with the person installing, and a connector with no
+installation gets Lemma's own app where the person may install it. The choices
+go through `application/approval.approve_plan`, the same checks the page's
+apply runs. Where the page would ask -- something already in the Lemma would
+change, a required name it cannot derive, a connector it cannot map, a grant
+the person cannot make -- the import is withdrawn before anything is applied
+(`CANCELLED`, with the question on its install slot) and the next plugin goes
+ahead. A plugin that fails does not stop the others either.
+
+**Retry** puts each `FAILED` plugin back in the queue. One with a plan is the
+same import applied again: approved as before, and steps already applied stay
+applied, so it carries on from the one that failed. A fresh import would find
+its half-made parts, keep them as they are, and leave an app with no build.
+One that failed before its plan was made starts over from the repository,
+since nothing of it was applied.
+
+**Telling the person.** When the last plugin settles, that item's completion
+posts one note from the Lemma in the person's own chat with it
+(`agent_surfaces.contracts.direct_messages.tell_member`), in the same
+transaction: what is ready, and what stopped and why. A dead item's hook does
+the same after ending its import. The note is keyed by what each plugin came
+to, so a re-run says nothing twice and a retry that changes the outcome is
+told again. It stays in the app: a notice is never pushed to a chat app or
+email.
+
 ## Security and limits
 
 Archive extraction is zip-slip and zip-bomb guarded. Import requires pod update;
 export/publish require pod read plus account ownership where applicable.
-Destructive table changes require explicit confirmation. Configurable per-item,
+No import removes or changes what a pod has. Configurable per-item,
 record, data, app, archive, and uncompressed-byte caps bound work, and a Redis
 daily limiter bounds starts. Download URLs are purpose-signed and require a
 logged-in user in addition to the token.
@@ -168,5 +384,6 @@ logged-in user in addition to the token.
 ## Tests and operations
 
 Unit/e2e tests cover format/diff, staging, limits, plan/apply idempotency,
-variables, executable imported resources, apps, surfaces, GitHub import/publish,
-SSE, expiry, and cleanup.
+keeping what a pod already has, variables, executable imported resources, apps,
+surfaces, GitHub import/publish, SSE, expiry, cleanup, and plugin installs run
+with nobody polling (`tests/e2e/test_plugin_install_e2e.py`).

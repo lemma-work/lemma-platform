@@ -9,6 +9,8 @@ import type { fastapi___compat__v2__Body_pod__bundle__upload } from '../models/f
 import type { ImportStartRequest } from '../models/ImportStartRequest.js';
 import type { ImportStatusResponse } from '../models/ImportStatusResponse.js';
 import type { OutcomeTemplateCard } from '../models/OutcomeTemplateCard.js';
+import type { PluginInstallRequest } from '../models/PluginInstallRequest.js';
+import type { PluginInstallResponse } from '../models/PluginInstallResponse.js';
 import type { PublishStartRequest } from '../models/PublishStartRequest.js';
 import type { PublishStatusResponse } from '../models/PublishStatusResponse.js';
 import type { StartLemmaRequest } from '../models/StartLemmaRequest.js';
@@ -53,7 +55,7 @@ export class PodBundleService {
     }
     /**
      * Start a Lemma
-     * Make a pod that owns something, in one transaction: the pod, what it owns, a first /plan.md, and the chat where its agent sets itself up, opened with the caller's first message. From a template (`template`, with `due` for a finish line) it also brings the template's tables, skill and schedules, applied by a worker, and its agent starts once they are in; from the caller's own words (`outcome` and `name`) its agent starts at once. A failure leaves nothing behind. 404 for a template that is not here; 403 outside the organization; 409 when its name collides with one made at the same moment.
+     * Make a pod that owns something, in one transaction: the pod, what it owns, a template's own rules in its shared memory, and the chat where its agent sets itself up, opened with the caller's first message. From a template (`template`, with `due` for a finish line) it also brings the template's tables, skill and schedules, applied by a worker, and its agent starts once they are in; from the caller's own words (`outcome` and `name`) its agent starts at once. A failure leaves nothing behind. 404 for a template that is not here; 403 outside the organization; 409 when its name collides with one made at the same moment.
      * @param requestBody
      * @returns StartLemmaResponse Successful Response
      * @throws ApiError
@@ -122,7 +124,7 @@ export class PodBundleService {
     }
     /**
      * Start Pod Import
-     * Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from POST …/bundle/uploads); kind=GITHUB takes a repo (repo_url or owner+repo), fetched through the pod's `github` connector as the importer, or anonymously for a public repo; kind=TEMPLATE takes the name of a template that ships with Lemma (404 when there is none by that name). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.
+     * Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from POST …/bundle/uploads); kind=GITHUB takes a repo (repo_url or owner+repo), fetched through the pod's `github` connector as the importer, or anonymously for a public repo, and an optional `path` to a folder inside it that holds the bundle; kind=TEMPLATE takes the name of a template that ships with Lemma (404 when there is none by that name). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.
      * @param podId
      * @param requestBody
      * @returns ImportStatusResponse Successful Response
@@ -263,6 +265,79 @@ export class PodBundleService {
             path: {
                 'pod_id': podId,
                 'import_id': importId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Install Plugins
+     * Install several plugins -- bundles in folders of GitHub repositories -- into this pod, in the order named. Returns 202 with an install_id at once; the server fetches, plans and applies each with its install page's defaults, and keeps going when nobody polls. A plugin whose page would ask a question stops before anything is applied (NEEDS_ANSWER) and the next one goes ahead. Each plugin counts as one import against the daily import limit.
+     * @param podId
+     * @param requestBody
+     * @returns PluginInstallResponse Successful Response
+     * @throws ApiError
+     */
+    public static podBundleInstallStart(
+        podId: string,
+        requestBody: PluginInstallRequest,
+    ): CancelablePromise<PluginInstallResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/bundle/installs',
+            path: {
+                'pod_id': podId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Get Plugin Install Status
+     * Where each plugin of an install is: its state, steps done of its plan, the step running, and why it stopped. Only its starter's: anyone else gets 404.
+     * @param podId
+     * @param installId
+     * @returns PluginInstallResponse Successful Response
+     * @throws ApiError
+     */
+    public static podBundleInstallGet(
+        podId: string,
+        installId: string,
+    ): CancelablePromise<PluginInstallResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/bundle/installs/{install_id}',
+            path: {
+                'pod_id': podId,
+                'install_id': installId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Retry Failed Plugins
+     * Put every FAILED plugin of the install back in the queue. One with a plan carries on from the step that failed; the steps already applied stay. One that failed before its plan was made starts over. The others are left as they are.
+     * @param podId
+     * @param installId
+     * @returns PluginInstallResponse Successful Response
+     * @throws ApiError
+     */
+    public static podBundleInstallRetry(
+        podId: string,
+        installId: string,
+    ): CancelablePromise<PluginInstallResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/bundle/installs/{install_id}/retry',
+            path: {
+                'pod_id': podId,
+                'install_id': installId,
             },
             errors: {
                 422: `Validation Error`,

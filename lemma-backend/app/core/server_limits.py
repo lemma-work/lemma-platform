@@ -26,4 +26,24 @@ from __future__ import annotations
 #: The largest websocket message the API server reads: 1 MiB.
 WS_MAX_BYTES = 1024 * 1024
 
-__all__ = ["WS_MAX_BYTES"]
+#: Whether the API negotiates permessage-deflate. Off, and passed by every
+#: launcher beside the cap (``--ws-per-message-deflate false``), because
+#: uvicorn decides it for the whole server and the socket that dominates the
+#: bytes is the browser view: VNC frames that are already JPEG or zlib, which
+#: the API used to inflate from the relay and deflate again for the browser.
+#: The stream bench measured that recompression at tens of milliseconds a frame
+#: for no saving. The JSON sockets give up a compression they barely needed --
+#: a socket carries what changed, which is small.
+#:
+#: Server-wide because it cannot be anything else: uvicorn builds each
+#: connection's protocol with its extensions from this one setting, and the
+#: offer is answered in the handshake, before the ASGI app has seen the path.
+#: The sockets that lose it, checked when it was turned off: the pod's live
+#: socket and the datastore change shim (one changed row a frame, and a burst
+#: too large to send row by row becomes a fresh ``ready``), a process's
+#: output stream, the call socket (audio frames, already compressed), the port
+#: proxy (a machine's own dev-server sockets), and the Agent Host link, whose
+#: Rust client is built without tungstenite's deflate and never offered it.
+WS_PER_MESSAGE_DEFLATE = False
+
+__all__ = ["WS_MAX_BYTES", "WS_PER_MESSAGE_DEFLATE"]

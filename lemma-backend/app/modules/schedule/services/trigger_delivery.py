@@ -7,6 +7,8 @@ main-database transaction, what the trigger does with each:
 
 * not one of the trigger's operations → nothing (its subscription never asked
   for it);
+* for a ``rows: OWNER_READABLE`` trigger, another person's own row → nothing,
+  not even a skip count (``owner_can_see``);
 * a row the ``when`` condition does not hold for, or an outside row the trigger
   does not take → one aggregated ``trigger_skips`` row per page and reason, so
   "why didn't it run" has an answer;
@@ -94,6 +96,11 @@ class TriggerChange:
     previous: Mapping[str, JsonValue] | None = None
     #: The person who owns the changed row (on an RLS table), if anyone does.
     owner_user_id: UUID | None = None
+    #: Whose row it is on a table where each person has their own, whoever
+    #: wrote it -- a row written from outside the pod is stamped with the
+    #: member who opened the table. ``None`` on a shared table. Decides who
+    #: may see the change, never whose authority a run uses.
+    row_user_id: UUID | None = None
     occurred_at: datetime | None = None
     from_outside: bool = False
     metadata: Mapping[str, JsonValue] = field(default_factory=dict)
@@ -124,6 +131,20 @@ def write_mode(
     if intent is WriteIntent.IMPORT:
         return schedule_config.import_writes or TriggerWriteMode.SKIP
     return TriggerWriteMode.EACH
+
+
+def owner_can_see(
+    schedule: ScheduleEntity, config: DatastoreScheduleConfig, change: TriggerChange
+) -> bool:
+    """Whether a ``rows: OWNER_READABLE`` trigger may be handed ``change``.
+
+    The live change feed's rule (``LiveSubscription.wants``): a row that is
+    somebody's reaches only them, and a shared row reaches every reader of
+    the table. A trigger that sees every change is not asked.
+    """
+    if config.rows != "OWNER_READABLE":
+        return True
+    return change.row_user_id is None or change.row_user_id == schedule.user_id
 
 
 def skip_reason(
@@ -161,6 +182,10 @@ def _sort(
     sorted_page = _Sorted()
     for change in sorted(changes, key=lambda c: c.position):
         if config.operations and change.operation not in config.operations:
+            continue
+        if not owner_can_see(schedule, config, change):
+            # Not even counted as a skip: how often other people's rows
+            # change is itself something the owner could not read.
             continue
         if (reason := skip_reason(schedule, config, change)) is not None:
             sorted_page.skips.setdefault(reason, []).append(change)
@@ -303,6 +328,7 @@ async def _fire_batch(
                     "batch_first": str(first),
                     "batch_last": planned.last,
                     "count": len(window),
+                    **_outside_marks(window),
                 },
                 source_occurred_at=window[-1].occurred_at if window else None,
             ),
@@ -311,6 +337,19 @@ async def _fire_batch(
         )
         if outcome in (FireOutcome.STARTED, FireOutcome.FILTERING):
             result.batches += 1
+
+
+def _outside_marks(changes: Sequence[TriggerChange]) -> dict[str, JsonValue]:
+    """A batch holding any row from outside the pod is labelled as that row
+    is: one stranger's row among a member's is still a stranger's words."""
+    for change in changes:
+        if change.from_outside:
+            return {
+                key: change.metadata[key]
+                for key in ("row_origin", "untrusted_row", "row_notice")
+                if key in change.metadata
+            }
+    return {}
 
 
 def _at_or_before(position: ChangePosition, last: str) -> bool:
@@ -362,6 +401,7 @@ __all__ = [
     "TriggerChange",
     "WriteIntent",
     "deliver_page",
+    "owner_can_see",
     "skip_reason",
     "write_mode",
 ]

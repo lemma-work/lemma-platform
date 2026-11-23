@@ -1,8 +1,9 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AuthState, LemmaClient } from "lemma-sdk";
-import { useQueryClient } from "@tanstack/react-query";
+import { onlineManager, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { Modal } from "@/shell/modal";
 import { lemma, hasApiUrl, hasToken } from "./client";
 import { retainWorkspaceOwner, sessionStorageChanged } from "./storage";
 import { portalTrip as sent } from "./portal-trip";
@@ -55,6 +56,17 @@ export interface Session {
     reachable: () => Promise<boolean>;
 }
 
+/** Who this page has shown, once it has shown anybody. Page-wide, because
+ *  every `useSession` watches the session for itself, and one mounted after
+ *  the session ended must not take the ended session for nobody having been
+ *  here -- which would forget what is still on screen. */
+let shown: string | undefined;
+
+/** Whether this page is on its way out on purpose: signing out, or leaving
+ *  after the account went. The session ends under it then too, and that is no
+ *  surprise to tell anybody about. */
+let leaving = false;
+
 /** The SDK's `useAuth`, with an off switch.
  *
  *  Not a gratuitous reimplementation — it is eight lines and it exists for the
@@ -85,15 +97,26 @@ function useAuthState(client: LemmaClient | null, enabled: boolean): AuthState {
     const [state, setState] = useState<AuthState>({ status: "loading", user: null });
     useEffect(() => {
         if (!enabled || !client) return;
-        let previousUser = client.auth.getState().user?.id;
-        return observeAuth(client.auth, askTheApi, next => {
+        shown ??= client.auth.getState().user?.id;
+        const receive = (next: AuthState) => {
             if (next.status !== "loading") {
                 const user = next.user?.id;
-                if (previousUser && previousUser !== user) forgetEverything();
-                try {
-                    if (retainWorkspaceOwner(localStorage, user ?? null)) forgetEverything();
-                } catch { /* Storage may be unavailable; the in-memory boundary still applies. */ }
-                previousUser = user;
+                /* A session that ends under a page somebody is using -- a 401
+                   mid-afternoon -- is not somebody else arriving. What they
+                   were reading stays on screen behind "You've been signed
+                   out", so nothing is forgotten yet: whoever signs in next is
+                   asked about below, and a different person there, or in
+                   another tab (the owner key changes, and every tab clears
+                   and reloads), wipes it all before anything is drawn. Signing
+                   out on purpose forgets everything itself (`forgetHere`). */
+                const ended = Boolean(shown) && next.status !== "authenticated";
+                if (!ended) {
+                    if (shown && shown !== user) forgetEverything();
+                    try {
+                        if (retainWorkspaceOwner(localStorage, user ?? null)) forgetEverything();
+                    } catch { /* Storage may be unavailable; the in-memory boundary still applies. */ }
+                }
+                if (next.status === "authenticated") shown = user;
                 /* The session check is `GET /users/me`, the same answer
                    `["current-user"]` asks for. Handed over here, the shell,
                    the profile and the arrival screen read it rather than
@@ -101,7 +124,16 @@ function useAuthState(client: LemmaClient | null, enabled: boolean): AuthState {
                 if (next.status === "authenticated" && next.user) cache.setQueryData(["current-user"], next.user);
             }
             setState(next);
-        });
+        };
+        /* Ended under this page already, and this is something mounted
+           since -- the next page of the frame, a dialog. Discovery would ask
+           the API again, and could find a session the page has let go of:
+           it is told the state as it is instead. */
+        if (shown && client.auth.getState().status === "unauthenticated") {
+            receive(client.auth.getState());
+            return client.auth.subscribe(receive);
+        }
+        return observeAuth(client.auth, askTheApi, receive);
     }, [client, enabled, cache]);
 
     return state;
@@ -145,13 +177,20 @@ export function useSession(): Session {
     }, [cache]);
 
     const signOut = useCallback(async () => {
-        if (client && !(await client.auth.signOut())) {
-            throw new Error("We couldn’t confirm sign-out. Check your connection and try again.");
+        leaving = true;
+        try {
+            if (client && !(await client.auth.signOut())) {
+                throw new Error("We couldn’t confirm sign-out. Check your connection and try again.");
+            }
+        } catch (error) {
+            leaving = false;
+            throw error;
         }
         await forgetHere("/");
     }, [client, forgetHere]);
 
     const leave = useCallback(async (destination: string) => {
+        leaving = true;
         /* Still asked, for the SDK's own markers; its answer changes nothing. */
         if (client) await client.auth.signOut().catch(() => false);
         await forgetHere(destination);
@@ -185,18 +224,27 @@ function Screen({ children }: { children: ReactNode }) {
 }
 
 /** Taken to the door, rather than shown a picture of one. */
-function ToThePortal({ signIn }: { signIn: () => void }) {
+function ToThePortal({ signIn, screen, ended = false }: { signIn: () => void; screen?: ReactNode; ended?: boolean }) {
     useEffect(() => {
         signIn();
     }, [signIn]);
+    if (screen) return screen;
     /* Named, because this paints for the length of one navigation and an
-       unlabelled blank is indistinguishable from a broken page. */
+       unlabelled blank is indistinguishable from a broken page. A session
+       that ended under the page says why it is going. */
     return (
         <Screen>
             <p className="screen__mark"><LemmaLogo /></p>
-            <p role="status">Taking you to sign in…</p>
+            <p role="status">{ended ? "You’ve been signed out. Taking you to sign in…" : "Taking you to sign in…"}</p>
         </Screen>
     );
+}
+
+/** Where a wait on the API stands: the seconds to its next look, or null
+ *  while it is looking; and the way to look now. */
+export interface Retrying {
+    seconds: number | null;
+    tryNow: () => void;
 }
 
 /** The API did not answer, which is not the same as not knowing you.
@@ -205,38 +253,148 @@ function ToThePortal({ signIn }: { signIn: () => void }) {
  *  it -- came back as "signed out", and the page left for the sign-in portal.
  *  Now only a 401 does that. Here the page waits: it asks the API's liveness
  *  probe on a backoff and checks the session again the moment it answers, and
- *  "Try again" does that at once. The probe, not the session check, is what
+ *  "Try now" does that at once. The probe, not the session check, is what
  *  repeats: every session check can cost a refresh, and a page that spent
- *  them on an outage would trip the refresh breaker and sign itself out. */
-function UnreachableScreen({ retry, reachable }: { retry: () => void; reachable: () => Promise<boolean> }) {
+ *  them on an outage would trip the refresh breaker and sign itself out.
+ *
+ *  The countdown is the back-off's own: the seconds shown are the seconds
+ *  until the probe runs. */
+function useRetrying(retry: () => void, reachable: () => Promise<boolean>): Retrying {
     const [attempt, setAttempt] = useState(0);
+    const [due, setDue] = useState(() => Date.now() + unreachableRetryDelay(0));
+    const [looking, setLooking] = useState(false);
+    const [now, setNow] = useState(() => Date.now());
     useEffect(() => {
         let cancelled = false;
+        /* `due` was set in the same step as `attempt`, so this is the wait
+           the countdown is showing. */
         const timer = setTimeout(async () => {
             if (cancelled) return;
-            if (await reachable()) {
-                if (!cancelled) retry();
+            setLooking(true);
+            const answered = await reachable();
+            if (cancelled) return;
+            if (answered) {
+                retry();
                 return;
             }
-            if (!cancelled) setAttempt(was => was + 1);
-        }, unreachableRetryDelay(attempt));
+            setLooking(false);
+            setDue(Date.now() + unreachableRetryDelay(attempt + 1));
+            setAttempt(attempt + 1);
+        }, Math.max(0, due - Date.now()));
         return () => {
             cancelled = true;
             clearTimeout(timer);
         };
+        /* Not on `due`: it moves only with `attempt`. */
     }, [attempt, reachable, retry]);
+    useEffect(() => {
+        const tick = setInterval(() => setNow(Date.now()), 250);
+        return () => clearInterval(tick);
+    }, []);
+    return {
+        seconds: looking ? null : Math.max(1, Math.ceil((due - now) / 1000)),
+        tryNow: retry,
+    };
+}
+
+function Unreachable({ retry, reachable, render }: {
+    retry: () => void;
+    reachable: () => Promise<boolean>;
+    render?: (retrying: Retrying) => ReactNode;
+}) {
+    const retrying = useRetrying(retry, reachable);
+    if (render) return render(retrying);
     return (
         <Screen>
             <p className="screen__mark"><LemmaLogo /></p>
-            <h2>Can’t reach Lemma right now</h2>
-            <p role="status">Retrying…</p>
+            <h2 role="alert">Can’t reach Lemma right now</h2>
+            <p>
+                Its server isn’t answering, so nothing can load yet.{" "}
+                {retrying.seconds === null ? "Trying again now…" : `Trying again in ${retrying.seconds} s.`}
+            </p>
             <div className="screen__actions">
-                <button className="btn btn--primary" onClick={retry}>
-                    Try again
+                <button className="btn btn--primary" onClick={retrying.tryNow}>
+                    Try now
                 </button>
             </div>
         </Screen>
     );
+}
+
+/** The session ended under a page somebody was using.
+ *
+ *  The page stays -- it is what they were reading, and it is theirs -- with
+ *  this over it. Nothing behind it fetches any more (`holdTheNetwork`), and
+ *  signing in again comes back to the same address. Put away, it leaves a
+ *  small pill at the top of the page that does the same. */
+function SignedOut({ email, signIn, otherAccount }: { email: string | null; signIn: () => void; otherAccount: () => void }) {
+    const [open, setOpen] = useState(true);
+    if (!open) {
+        return (
+            <div className="kout-pill" role="status">
+                <i aria-hidden="true" />
+                <span>Signed out</span>
+                <button type="button" className="b b--s b--primary" onClick={signIn}>Sign in again</button>
+            </div>
+        );
+    }
+    return (
+        <Modal
+            narrow
+            title="You’ve been signed out"
+            subtitle="Your session ended. What’s on screen stays, but nothing new loads or saves until you sign in again. You’ll come back to this page."
+            onClose={() => setOpen(false)}
+            footer={(
+                <>
+                    <button type="button" className="b b--l b--primary" onClick={signIn}>Sign in again</button>
+                    <p className="kout__note">
+                        {email ? <>Last signed in as {email} · </> : null}
+                        <button type="button" className="kout__link" onClick={otherAccount}>Use another account</button>
+                    </p>
+                </>
+            )}
+        >
+            {null}
+        </Modal>
+    );
+}
+
+/** Whether this page has stopped its queries for a session that ended. */
+let held = false;
+
+/** Nothing more from the API, once the session has ended under the page.
+ *
+ *  Every query and mutation in the app goes through the query client, which
+ *  fetches only while its online manager says so: told "offline" -- and no
+ *  longer listening to the browser, which would say "online" again -- nothing
+ *  refetches, nothing polls, nothing new loads and nothing saves; each waits,
+ *  paused, as it would without a network. What was in flight is called off
+ *  and keeps its last answer, so the page stays as it was. A 401 answered
+ *  over and over is how a page trips the refresh breaker, and how a session
+ *  that ended keeps knocking. */
+function holdTheNetwork(cache: QueryClient) {
+    if (held) return;
+    held = true;
+    onlineManager.setEventListener(() => undefined);
+    onlineManager.setOnline(false);
+    void cache.cancelQueries();
+}
+
+/** The session came back in this page: queries go on as before. */
+function releaseTheNetwork() {
+    if (!held) return;
+    held = false;
+    onlineManager.setEventListener((setOnline) => {
+        const on = () => setOnline(true);
+        const off = () => setOnline(false);
+        window.addEventListener("online", on);
+        window.addEventListener("offline", off);
+        return () => {
+            window.removeEventListener("online", on);
+            window.removeEventListener("offline", off);
+        };
+    });
+    onlineManager.setOnline(navigator.onLine !== false);
 }
 
 /** Sent to the portal, came back, still signed out.
@@ -316,9 +474,34 @@ export function SetupScreen() {
  *  against, and gating it would leave nothing to look at without a session —
  *  which is the one thing it exists for.
  */
-export function SessionGate({ children }: { children: ReactNode }) {
+export function SessionGate({ children, starting, unreachable, staysOnSignOut = false }: {
+    children: ReactNode;
+    /** Drawn while the session is asked about, and on the way to sign in;
+     *  `words` says which ("Checking you're signed in"). */
+    starting?: (words: string) => ReactNode;
+    /** Drawn while the API is not answering, with where its next try stands. */
+    unreachable?: (retrying: Retrying) => ReactNode;
+    /** When the session ends under the page, keep the page and say so over it,
+     *  rather than going to sign in. Only a 401 does this
+     *  (`auth-state.ts`, `sessionStatus`). */
+    staysOnSignOut?: boolean;
+}) {
     const session = useSession();
     const cache = useQueryClient();
+    /* Who this gate has let in, kept past the end of their session: the page
+       they were using stays theirs until somebody signs in again. Written
+       while drawing, and only ever to the person the session just named. */
+    const last = useRef<Person | null>(null);
+    if (session.status === "in" && session.user) last.current = session.user;
+    const door = session.status === "out" ? doorFor(hasToken(), sent.recent()) : null;
+    /* A token the API refused is not fixed by signing in again, so it keeps
+       its own screen even mid-use. */
+    const ended = staysOnSignOut && session.status === "out" && last.current !== null && door !== "token";
+
+    useEffect(() => {
+        if (ended) holdTheNetwork(cache);
+        else if (session.status === "in") releaseTheNetwork();
+    }, [ended, session.status, cache]);
 
     useEffect(() => {
         if (source.label === "sample") return;
@@ -336,22 +519,43 @@ export function SessionGate({ children }: { children: ReactNode }) {
         return <SetupScreen />;
     }
 
-    if (session.status === "loading") {
+    /* The page somebody is using stays on screen while the session is asked
+       about again, and while it is on its way out on purpose. Drawn with the
+       same tree whatever happens, so that nothing under it is mounted again. */
+    const person = last.current;
+    const keep = person !== null && (
+        session.status === "in"
+        || session.status === "loading"
+        || (session.status === "out" && (ended || leaving))
+    );
+    if (keep) {
+        const otherAccount = () => void session.leave(window.location.pathname + window.location.search + window.location.hash);
         return (
-            <PageLoading label="Checking your session" />
+            <>
+                <Fragment key={person.id}>{children}</Fragment>
+                {ended && !leaving && <SignedOut email={person.email || null} signIn={session.signIn} otherAccount={otherAccount} />}
+            </>
         );
     }
 
+    if (session.status === "loading") {
+        const words = "Checking you’re signed in";
+        return starting ? starting(words) : <PageLoading label={words} />;
+    }
+
     if (session.status === "unreachable") {
-        return <UnreachableScreen retry={session.retry} reachable={session.reachable} />;
+        return <Unreachable retry={session.retry} reachable={session.reachable} render={unreachable} />;
     }
 
     if (session.status === "out") {
-        const door = doorFor(hasToken(), sent.recent());
         if (door === "token") return <TokenScreen />;
         if (door === "stalled") return <StalledScreen signIn={session.signIn} />;
-        return <ToThePortal signIn={session.signIn} />;
+        return <ToThePortal signIn={session.signIn} screen={starting?.("Taking you to sign in")} ended={person !== null} />;
     }
 
-    return <Fragment key={session.user?.id ?? session.status}>{children}</Fragment>;
+    return (
+        <>
+            <Fragment key={session.user?.id ?? session.status}>{children}</Fragment>
+        </>
+    );
 }

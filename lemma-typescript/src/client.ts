@@ -2,6 +2,7 @@ import {
   resolveConfig,
   type LemmaAppConfig,
   type LemmaConfig,
+  type LemmaWebWidget,
 } from "./config.js";
 import { AuthManager, type AuthState, type AuthListener } from "./auth.js";
 import { GeneratedClientAdapter } from "./generated.js";
@@ -35,11 +36,13 @@ import { TablesNamespace } from "./namespaces/tables.js";
 import { UsersNamespace } from "./namespaces/users.js";
 import { WorkflowsNamespace } from "./namespaces/workflows.js";
 import { WidgetsNamespace } from "./namespaces/widgets.js";
-import { WebLoginsNamespace, WorkspaceNamespace } from "./namespaces/workspace.js";
+import { MachinesNamespace } from "./namespaces/machines.js";
+import { WebLoginsNamespace } from "./namespaces/web-logins.js";
 import { DatastoreNamespace } from "./namespaces/datastore.js";
 
 export type { LemmaConfig };
 export type { LemmaAppConfig };
+export type { LemmaWebWidget };
 export { AuthManager };
 export type { AuthState, AuthListener };
 
@@ -70,7 +73,8 @@ export class LemmaClient {
   readonly workflows: WorkflowsNamespace;
   readonly apps: AppsNamespace;
   readonly widgets: WidgetsNamespace;
-  readonly workspace: WorkspaceNamespace;
+  /** The computers a person and their pods run commands, files and a browser on. */
+  readonly machines: MachinesNamespace;
   readonly webLogins: WebLoginsNamespace;
   readonly connectors: ConnectorsNamespace;
   readonly resourceAccess: ResourceAccessNamespace;
@@ -141,7 +145,10 @@ export class LemmaClient {
     this.workflows = new WorkflowsNamespace(this._generated, this._http, podIdFn);
     this.apps = new AppsNamespace(this._generated, this._http, podIdFn);
     this.widgets = new WidgetsNamespace(this._http, podIdFn);
-    this.workspace = new WorkspaceNamespace(this._http);
+    this.machines = new MachinesNamespace(this._http, {
+      bearerToken: () => this.auth.getBearerToken(),
+      podId: () => this._currentPodId,
+    });
     this.webLogins = new WebLoginsNamespace(this._http);
     this.connectors = new ConnectorsNamespace(this._generated, this._http, podIdFn);
     this.resourceAccess = new ResourceAccessNamespace(this._generated, podIdFn);
@@ -195,6 +202,18 @@ export class LemmaClient {
 
   get app(): LemmaAppConfig | undefined {
     return this._config.app;
+  }
+
+  /**
+   * A web widget this page may embed, as the app host named it: the one called
+   * `name`, or with no name the first. Like `app`, it describes the page, not
+   * whichever pod the client is pointed at. Undefined when the host named none
+   * -- outside a hosted app, while the deployment's public web is off, or when
+   * no switched-on widget of the app's pod allows the app's address.
+   */
+  webWidget(name?: string): LemmaWebWidget | undefined {
+    const widgets = this._config.webWidgets ?? [];
+    return name === undefined ? widgets[0] : widgets.find((widget) => widget.name === name);
   }
 
   /**

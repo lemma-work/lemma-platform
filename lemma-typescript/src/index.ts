@@ -1,5 +1,5 @@
 export { LemmaClient } from "./client.js";
-export type { LemmaAppConfig, LemmaConfig } from "./client.js";
+export type { LemmaAppConfig, LemmaConfig, LemmaWebWidget } from "./client.js";
 export {
   AuthManager,
   buildAuthUrl,
@@ -46,6 +46,41 @@ export { readSSE, parseSSEJson } from "./streams.js";
 export type { SseRawEvent } from "./streams.js";
 export { watchDatastoreChanges } from "./datastore-changes.js";
 export { isEmbeddedInHost } from "./embedded.js";
+export {
+  MachineExecution,
+  machinePathRef,
+} from "./namespaces/machines.js";
+export type {
+  ExecOptions,
+  MachineRunResult,
+  Machine,
+  MachineBrowserAccess,
+  MachineBrowserStatus,
+  MachineFileEntry,
+  MachineFileListResponse,
+  MachineGrants,
+  MachinePolicy,
+  MachinePreview,
+  MachineProcess,
+  MachineProcessEvent,
+  MachineProcessOutput,
+  MachineResetResult,
+  MachineStartup,
+  MachinesNamespace,
+} from "./namespaces/machines.js";
+export {
+  LEMMA_LOCATION_MESSAGE_TYPE,
+  LEMMA_OPEN_MESSAGE_TYPE,
+  LEMMA_OPEN_RESULT_MESSAGE_TYPE,
+  appAddressAt,
+  currentAppPath,
+  isFramedByHost,
+  moveAppTo,
+  normalizeAppPath,
+  openApp,
+  watchAppPath,
+} from "./browser-location.js";
+export type { AppAddressFinder } from "./browser-location.js";
 export type {
   DatastoreChangeFrame,
   ChangeStreamStatus,
@@ -279,11 +314,8 @@ export type { TablesNamespace } from "./namespaces/tables.js";
 export type { UsersNamespace } from "./namespaces/users.js";
 export type { WorkflowsNamespace } from "./namespaces/workflows.js";
 export type {
-  WorkspaceFileEntry,
-  WorkspaceFileListResponse,
   PendingSignIn,
   SignInOutcome,
   WebLogin,
   WebLoginsNamespace,
-  WorkspaceNamespace,
-} from "./namespaces/workspace.js";
+} from "./namespaces/web-logins.js";

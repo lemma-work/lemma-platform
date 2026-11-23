@@ -50,7 +50,7 @@ import { AppsPane } from "@/stage/apps";
 import { lemma } from "@/session/client";
 import { key } from "@/session/storage";
 import { isUnauthorized } from "@/session/auth-state";
-import { AI_MATE, NEW_MATE } from "@/copy";
+import { MATE, NEW_MATE } from "@/copy";
 import { PAGE_TEMPLATES, makePage } from "@/docpages/templates";
 import { renamePage } from "@/docpages/rename";
 import { recordMove } from "@/docpages/moves";
@@ -1455,7 +1455,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                     </>}
                 />
                 {spaceOpen && (
-                    <div className="side__space" role="group" aria-label={(pod?.name ?? "This teammate") + "’s space"}>
+                    <div className="side__space" role="group" aria-label={(pod?.name ?? "This Lemma") + "’s space"}>
                         {pod && <>
                             <div className="side__head">
                                 {/* The top of a space is whose it is, by name alone:
@@ -1651,7 +1651,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                 {!pod ? (access.state === "loading" || (!podId && pods.isPending) ? <WorkspaceLoading embedded /> :
                     access.state === "error" || access.state === "missing" ? (
                         <div className="screen"><div className="screen__inner">
-                            <h2>{access.state === "missing" ? "We couldn’t find this teammate" : "We couldn’t open this teammate"}</h2>
+                            <h2>{access.state === "missing" ? "We couldn’t find this Lemma" : "We couldn’t open this Lemma"}</h2>
                             <p>{access.state === "missing" ? "Check the link, or try again." : "Access could not be verified. Check your connection and try again."}</p>
                             <div className="screen__actions"><button className="btn btn--primary" onClick={() => void linkedPod.refetch()}>Try again</button></div>
                         </div></div>
@@ -1660,7 +1660,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                         <div className="screen__inner">
                             <h2>Nobody here yet</h2>
                             <p>
-                                {"Hire your first " + AI_MATE + " and this is where they will be."}
+                                {"Start your first " + MATE + " and this is where it will be."}
                             </p>
                             {/* A screen that tells somebody what they could do
                                 and gives them no way to do it is a screen that
@@ -1790,8 +1790,8 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                         </button>
                         <div className="crumb">
                             {/* Up one altitude: every teammate in the organization. */}
-                            <button type="button" className="crumb__up crumb__org" title="All teammates" onClick={() => goToTeam(pod.id)}>
-                                {activeOrg?.name ?? "Teammates"}
+                            <button type="button" className="crumb__up crumb__org" title="All Lemmas" onClick={() => goToTeam(pod.id)}>
+                                {activeOrg?.name ?? "Lemmas"}
                             </button>
                             <span className="crumb__sep crumb__sep--org">/</span>
                             {/* By name: the face is already on the rail. Home is

@@ -102,7 +102,7 @@ def connect_home(*, link_url: str, team_name: str | None) -> dict[str, object]:
             {
                 "type": "section",
                 "text": _text(
-                    f"Lemma's teammates answer{where} under their own names. "
+                    f"Your Lemmas answer{where} under their own names. "
                     "Connect your Lemma account to see them and add one."
                 ),
             },
@@ -159,13 +159,13 @@ def roster_home(
     blocks: list[dict[str, object]] = [
         {
             "type": "header",
-            "text": _plain(f"Teammates in {team_name}" if team_name else "Teammates"),
+            "text": _plain(f"Lemmas in {team_name}" if team_name else "Lemmas"),
             # plain_text: no markup to escape.
         },
         {
             "type": "section",
             "text": _text(
-                "Each teammate answers in Slack under its own name. Invite me to a "
+                "Each Lemma answers in Slack under its own name. Invite me to a "
                 "channel and I'll bring in the one you pick."
             ),
         },
@@ -175,7 +175,7 @@ def roster_home(
         blocks.append(
             {
                 "type": "section",
-                "text": _text("You're not on any teammate yet. Hire one in Lemma."),
+                "text": _text("You're not in any Lemma yet. Start one in Lemma."),
             }
         )
     for teammate in teammates[:ROSTER_SHOWN]:
@@ -201,7 +201,7 @@ def roster_home(
         blocks.append(
             {
                 "type": "context",
-                "elements": [_text(f"{more} more teammates are in Lemma.")],
+                "elements": [_text(f"{more} more are in the Lemma app.")],
             }
         )
     blocks += [
@@ -361,7 +361,7 @@ def channel_picker(
     """
     if not teammates:
         text = (
-            f"No teammate is in Slack yet, so there's nobody to bring into "
+            f"No Lemma is in Slack yet, so there's nobody to bring into "
             f"<#{channel_id}>. Add one from my Home tab, then invite me again."
         )
         return text, [{"type": "section", "text": _text(text)}]
@@ -412,7 +412,7 @@ def handed_over(
 def not_handed_over(
     *, channel_id: str, reason: str
 ) -> tuple[str, list[dict[str, object]]]:
-    text = f"I couldn't bring a teammate into <#{channel_id}>: {reason}"
+    text = f"I couldn't bring a Lemma into <#{channel_id}>: {reason}"
     return text, [{"type": "section", "text": _text(text)}]
 
 
@@ -426,7 +426,7 @@ def welcome(
     """
     where = escape(team_name) if team_name else "your workspace"
     text = (
-        f"Lemma is in {where}. Teammates answer here under their own names, and "
+        f"Lemma is in {where}. Your Lemmas answer here under their own names, and "
         "I set them up."
     )
     blocks: list[dict[str, object]] = [{"type": "section", "text": _text(text)}]
@@ -436,7 +436,7 @@ def welcome(
             {
                 "type": "section",
                 "text": _text(
-                    f"*{escape(name)}* is your first teammate. Add it, and it "
+                    f"*{escape(name)}* is your first Lemma. Add it, and it "
                     "answers here."
                 ),
                 "accessory": {
@@ -449,7 +449,7 @@ def welcome(
             }
         )
     blocks.append(
-        {"type": "context", "elements": [_text("My Home tab has every teammate.")]}
+        {"type": "context", "elements": [_text("My Home tab has every Lemma.")]}
     )
     return text, blocks
 
@@ -458,8 +458,8 @@ def manager_reply(*, bot_user_ids: Sequence[str]) -> str:
     """What the manager says when someone talks to it as if it answered."""
     if not bot_user_ids:
         return (
-            "I set teammates up in Slack; I don't answer questions myself. Open my "
+            "I set Lemmas up in Slack; I don't answer questions myself. Open my "
             "Home tab to add one."
         )
     ask = ", ".join(f"<@{bot}>" for bot in bot_user_ids[:10])
-    return f"I set teammates up in Slack; I don't answer questions myself. Ask {ask}."
+    return f"I set Lemmas up in Slack; I don't answer questions myself. Ask {ask}."

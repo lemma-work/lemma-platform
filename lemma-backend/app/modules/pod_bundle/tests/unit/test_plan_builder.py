@@ -30,6 +30,8 @@ class FakeExisting:
         schedules=None,
         apps=None,
         surfaces=None,
+        machines=None,
+        paths=None,
     ):
         self._tables = set(tables or [])
         self._table_manifests = table_manifests or {}
@@ -39,6 +41,11 @@ class FakeExisting:
         self._schedules = set(schedules or [])
         self._apps = set(apps or [])
         self._surfaces = set(surfaces or [])
+        self._machines = set(machines or [])
+        self.refused_templates: set[str] = set()
+        self.machines_checked: list[tuple[str, str, str | None]] = []
+        self._paths = set(paths or [])
+        self.path_lookups = 0
 
     async def table_names(self):
         return self._tables
@@ -63,6 +70,21 @@ class FakeExisting:
 
     async def surface_names(self):
         return self._surfaces
+
+    async def machine_names(self):
+        return self._machines
+
+    async def machine_refusals(self, machines):
+        self.machines_checked = [(m.name, m.template, m.size) for m in machines]
+        return [
+            f"Machine '{m.name}': not on this deployment."
+            for m in machines
+            if m.template in self.refused_templates
+        ]
+
+    async def existing_paths(self, paths):
+        self.path_lookups += len(paths)
+        return self._paths & set(paths)
 
 
 def _write(path: Path, payload: dict) -> None:
@@ -92,7 +114,7 @@ def tmp(tmp_path) -> Path:
     return tmp_path
 
 
-async def test_create_vs_update_classification(tmp):
+async def test_what_the_pod_lacks_is_created_and_what_it_has_is_kept(tmp):
     root = _build_bundle(tmp)
     _write(
         root / "tables" / "leads" / "leads.json",
@@ -111,7 +133,9 @@ async def test_create_vs_update_classification(tmp):
     plan = await PlanBuilder(existing).build_plan(bundle_root=root)
 
     by_name = {(s.kind, s.name): s for s in plan.steps}
-    assert by_name[(StepKind.TABLE, "leads")].action == StepAction.UPDATE
+    # Nothing to add to a table it has: kept, and never run.
+    assert by_name[(StepKind.TABLE, "leads")].action == StepAction.SKIP
+    assert by_name[(StepKind.TABLE, "leads")].status == StepStatus.SKIPPED
     assert by_name[(StepKind.AGENT, "bot")].action == StepAction.CREATE
     assert by_name[(StepKind.FUNCTION, "score")].action == StepAction.CREATE
     assert plan.format_version == 2
@@ -144,9 +168,11 @@ async def test_no_files_dir_yields_no_file_steps(tmp):
     assert not [s for s in plan.steps if s.kind == StepKind.FILE]
 
 
-async def test_destructive_column_drop_flagged(tmp):
+async def test_a_column_the_bundle_does_not_mention_is_never_dropped(tmp):
+    """The bundle's table lacks a column the pod's has -- one a person added,
+    say. That column is the pod's own: nothing is planned to remove it, and
+    nothing about it is destructive or worth a warning."""
     root = _build_bundle(tmp)
-    # Bundle table has fewer columns than the pod's live table -> a drop.
     _write(
         root / "tables" / "leads" / "leads.json",
         _table_manifest("leads", ["id", "name"]),
@@ -158,10 +184,43 @@ async def test_destructive_column_drop_flagged(tmp):
     plan = await PlanBuilder(existing).build_plan(bundle_root=root)
 
     step = next(s for s in plan.steps if s.kind == StepKind.TABLE)
+    assert step.action == StepAction.SKIP
+    assert step.destructive is False
+    assert "columns_to_remove" not in step.detail
+    assert "kept as it is" in (step.error or "")
+    assert plan.has_destructive_steps is False
+    assert not any("score" in w for w in plan.warnings)
+
+
+async def test_a_column_defined_differently_is_kept_and_said_so(tmp):
+    """Same name, another type: the pod's definition stays, and the plan says
+    so, since what the bundle brings may expect its own."""
+    root = _build_bundle(tmp)
+    _write(
+        root / "tables" / "leads" / "leads.json",
+        {
+            "name": "leads",
+            "primary_key_column": "id",
+            "columns": [
+                {"name": "id", "type": "TEXT"},
+                {"name": "score", "type": "INTEGER"},
+                {"name": "stage", "type": "TEXT"},
+            ],
+        },
+    )
+    existing = FakeExisting(
+        tables={"leads"},
+        table_manifests={"leads": _table_manifest("leads", ["id", "score"])},
+    )
+    plan = await PlanBuilder(existing).build_plan(bundle_root=root)
+
+    step = next(s for s in plan.steps if s.kind == StepKind.TABLE)
     assert step.action == StepAction.UPDATE
-    assert step.destructive is True
-    assert "score" in step.detail["columns_to_remove"]
-    assert any("score" in w for w in plan.warnings)
+    assert step.destructive is False
+    assert step.detail == {"columns_kept": ["score"], "columns_to_add": ["stage"]}
+    assert plan.has_destructive_steps is False
+    [warning] = plan.warnings
+    assert "'leads'" in warning and "score" in warning and "kept" in warning
 
 
 async def test_non_destructive_update_when_only_adding_columns(tmp):
@@ -179,7 +238,26 @@ async def test_non_destructive_update_when_only_adding_columns(tmp):
     step = next(s for s in plan.steps if s.kind == StepKind.TABLE)
     assert step.action == StepAction.UPDATE
     assert step.destructive is False
-    assert "score" in step.detail["columns_to_add"]
+    assert step.detail == {"columns_to_add": ["score"]}
+
+
+async def test_seed_rows_go_only_into_a_table_the_import_creates(tmp):
+    """A table that was already here holds rows of its own: seeding it again
+    duplicates rows without ids and writes over edited rows with them."""
+    root = _build_bundle(tmp)
+    for name in ("leads", "notes"):
+        _write(root / "tables" / name / f"{name}.json", _table_manifest(name, ["id"]))
+        (root / "tables" / name / "data.csv").write_text("id\n1\n", encoding="utf-8")
+    existing = FakeExisting(
+        tables={"leads"}, table_manifests={"leads": _table_manifest("leads", ["id"])}
+    )
+    plan = await PlanBuilder(existing).build_plan(bundle_root=root)
+
+    data = {s.name: s for s in plan.steps if s.kind is StepKind.TABLE_DATA}
+    assert data["notes"].action is StepAction.CREATE
+    assert data["leads"].action is StepAction.SKIP
+    assert data["leads"].status is StepStatus.SKIPPED
+    assert "rows are kept" in (data["leads"].error or "")
 
 
 async def test_table_data_step_emitted_after_tables(tmp):
@@ -308,7 +386,7 @@ async def test_surface_of_a_platform_the_pod_already_has_is_still_a_create(tmp):
     assert step.action is StepAction.CREATE
 
 
-async def test_surface_of_the_same_name_is_an_update(tmp):
+async def test_a_surface_of_the_same_name_is_kept(tmp):
     root = _build_bundle(tmp)
     _write(
         root / "surfaces" / "support_bot" / "support_bot.json",
@@ -318,43 +396,89 @@ async def test_surface_of_the_same_name_is_an_update(tmp):
         bundle_root=root
     )
     step = next(s for s in plan.steps if s.kind is StepKind.SURFACE)
-    assert step.action is StepAction.UPDATE
+    assert step.action is StepAction.SKIP
+    assert step.status is StepStatus.SKIPPED
 
 
 async def test_a_named_surface_falls_back_to_its_platform_like_the_applier(tmp):
-    """A legacy manifest with no `name` upserts under the lowercased platform,
-    so the diff has to resolve it the same way."""
+    """A legacy manifest with no `name` is created under the lowercased
+    platform, so the diff has to resolve it the same way."""
     root = _build_bundle(tmp)
     _write(root / "surfaces" / "slack" / "slack.json", {"platform": "SLACK"})
     plan = await PlanBuilder(FakeExisting(surfaces={"slack"})).build_plan(
         bundle_root=root
     )
     step = next(s for s in plan.steps if s.kind is StepKind.SURFACE)
-    assert step.action is StepAction.UPDATE
+    assert step.action is StepAction.SKIP
 
 
-async def test_existing_workflow_and_schedule_are_planned_skip_not_update(tmp):
-    """Both appliers are create-once: they return without touching an existing
-    resource. A plan saying UPDATE reported every step DONE while re-importing
-    an updated bundle changed nothing."""
+async def test_every_part_the_pod_already_has_is_kept_and_never_run(tmp):
+    """An import adds to a pod and never replaces what is there: a person may
+    have changed any of these since it arrived. Each is planned SKIP, says why,
+    and is marked SKIPPED, which is what keeps the apply loop from running it:
+    `next_pending_step` hands back only PENDING/RUNNING steps."""
     root = _build_bundle(tmp)
-    _write(root / "workflows" / "research" / "research.json", {"name": "research"})
+    for directory, name in (
+        ("functions", "score"),
+        ("agents", "bot"),
+        ("workflows", "research"),
+        ("apps", "dashboard"),
+    ):
+        _write(root / directory / name / f"{name}.json", {"name": name})
     _write(
         root / "schedules" / "nightly" / "nightly.json",
         {"name": "nightly", "schedule_type": "CRON"},
     )
+    _write(
+        root / "surfaces" / "support_bot" / "support_bot.json",
+        {"name": "support_bot", "platform": "SLACK"},
+    )
+    _write(root / "files" / "docs" / ".folder.json", {"visibility": "PRIVATE"})
+    (root / "files" / "docs" / "guide.md").write_text("theirs", encoding="utf-8")
     plan = await PlanBuilder(
-        FakeExisting(workflows={"research"}, schedules={"nightly"})
+        FakeExisting(
+            functions={"score"},
+            agents={"bot"},
+            workflows={"research"},
+            schedules={"nightly"},
+            apps={"dashboard"},
+            surfaces={"support_bot"},
+            paths={"/docs", "/docs/guide.md"},
+        )
     ).build_plan(bundle_root=root)
 
-    for kind in (StepKind.WORKFLOW, StepKind.SCHEDULE):
-        step = next(s for s in plan.steps if s.kind is kind)
-        assert step.action is StepAction.SKIP
-        # SKIPPED up front is what keeps the apply loop from running it at all:
-        # `next_pending_step` hands back only PENDING/RUNNING steps.
-        assert step.status is StepStatus.SKIPPED
-        assert "already exists" in (step.error or "")
+    for step in plan.steps:
+        assert step.action is StepAction.SKIP, step
+        assert step.status is StepStatus.SKIPPED, step
+        assert "already exists here; kept as it is" in (step.error or ""), step
+    assert {s.kind for s in plan.steps} == {
+        StepKind.FUNCTION,
+        StepKind.AGENT,
+        StepKind.WORKFLOW,
+        StepKind.SCHEDULE,
+        StepKind.APP,
+        StepKind.SURFACE,
+        StepKind.FILE,
+    }
     assert plan.next_pending_step() is None
+    assert plan.has_destructive_steps is False
+
+
+async def test_a_kept_folder_still_gains_the_files_it_lacks(tmp):
+    root = _build_bundle(tmp)
+    _write(root / "files" / "docs" / ".folder.json", {"visibility": "POD"})
+    (root / "files" / "docs" / "guide.md").write_text("theirs", encoding="utf-8")
+    (root / "files" / "docs" / "new.md").write_text("ours", encoding="utf-8")
+
+    plan = await PlanBuilder(
+        FakeExisting(paths={"/docs", "/docs/guide.md"})
+    ).build_plan(bundle_root=root)
+
+    files = {s.name: s for s in plan.steps if s.kind is StepKind.FILE}
+    assert files["docs"].action is StepAction.SKIP
+    assert files["docs"].detail == {"is_folder": True}
+    assert files["docs/guide.md"].action is StepAction.SKIP
+    assert files["docs/new.md"].action is StepAction.CREATE
 
 
 async def test_absent_workflow_and_schedule_are_still_creates(tmp):
@@ -384,8 +508,38 @@ async def test_an_explicitly_empty_grant_list_still_gets_a_grants_step(tmp):
         root / "agents" / "bot" / "bot.json",
         {"name": "bot", "permissions": {"grants": []}},
     )
-    plan = await PlanBuilder(FakeExisting(agents={"bot"})).build_plan(bundle_root=root)
+    plan = await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
     assert StepKind.AGENT_GRANTS in [s.kind for s in plan.steps]
+
+
+async def test_a_workload_the_pod_already_has_keeps_its_access(tmp):
+    """Its grants are part of it: the bundled copy's would replace them whole.
+    So no grants step is planned, and a connector only those grants name is
+    not one the import must declare -- nor a reason to refuse it, though the
+    organization has not installed it."""
+    root = _build_bundle(tmp)
+    grants = {"grants": [{"resource_type": "connector", "resource_name": "jira"}]}
+    _write(root / "agents" / "bot" / "bot.json", {"name": "bot", "permissions": grants})
+    _write(
+        root / "functions" / "score" / "score.json",
+        {"name": "score", "permissions": grants},
+    )
+
+    class NothingInstalled:
+        async def declares(self, slug):
+            return False
+
+        async def installation_for(self, name):
+            return None
+
+    plan = await PlanBuilder(
+        FakeExisting(agents={"bot"}, functions={"score"}), NothingInstalled()
+    ).build_plan(bundle_root=root)
+
+    kinds = {s.kind for s in plan.steps}
+    assert StepKind.AGENT_GRANTS not in kinds
+    assert StepKind.FUNCTION_GRANTS not in kinds
+    assert not any("importing declares it" in w for w in plan.warnings)
 
 
 async def test_an_agent_with_no_permissions_key_still_gets_no_grants_step(tmp):
@@ -414,9 +568,9 @@ async def test_the_app_step_says_how_the_app_will_be_served(tmp):
     assert by_name["internal"].detail["visibility"] == "PUBLIC"
 
 
-async def test_an_app_the_pod_already_has_carries_no_visibility_claim(tmp):
-    """Update leaves the existing app's visibility alone, so promising one
-    would be the same overstatement in the other direction."""
+async def test_an_app_the_pod_already_has_is_kept_with_no_visibility_claim(tmp):
+    """The app keeps its own visibility and the version it serves, so promising
+    one would be the same overstatement in the other direction."""
     root = _build_bundle(tmp)
     _write(root / "apps" / "dashboard" / "dashboard.json", {"name": "dashboard"})
     plan = await PlanBuilder(FakeExisting(apps={"dashboard"})).build_plan(
@@ -424,7 +578,8 @@ async def test_an_app_the_pod_already_has_carries_no_visibility_claim(tmp):
     )
 
     step = next(s for s in plan.steps if s.kind is StepKind.APP)
-    assert step.action is StepAction.UPDATE
+    assert step.action is StepAction.SKIP
+    assert step.status is StepStatus.SKIPPED
     assert step.detail == {}
 
 
@@ -476,6 +631,25 @@ async def test_a_bundle_within_the_record_caps_still_plans(tmp):
     _csv(root, "leads", 3)
     plan = await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
     assert StepKind.TABLE_DATA in [s.kind for s in plan.steps]
+
+
+async def test_an_oversized_file_tree_is_refused_before_any_path_is_looked_up(tmp):
+    """Planning asks the pod about each bundled path; a bundle over the step
+    cap is refused first, so it costs the cap, not one lookup per file."""
+    from lemma_pod_bundle.limits import MAX_IMPORT_PLAN_STEPS
+
+    from app.modules.pod_bundle.domain.errors import BundleInvalidError
+
+    root = _build_bundle(tmp)
+    files_root = root / "files"
+    files_root.mkdir(parents=True, exist_ok=True)
+    for i in range(MAX_IMPORT_PLAN_STEPS + 1):
+        (files_root / f"f{i}.md").write_text("x", encoding="utf-8")
+    existing = FakeExisting()
+
+    with pytest.raises(BundleInvalidError):
+        await PlanBuilder(existing).build_plan(bundle_root=root)
+    assert existing.path_lookups == 0
 
 
 async def test_a_bundle_declaring_more_steps_than_the_cap_is_refused(tmp):
@@ -608,3 +782,171 @@ async def test_an_import_that_sets_no_outcome_plans_none(tmp):
 
     assert plan.outcome is None
     assert plan.warnings == []
+
+
+async def test_two_schedules_on_one_global_workflow_are_refused_before_writing(tmp):
+    """The platform takes one schedule per person on a GLOBAL workflow and
+    refused the second at its step, after the rest of the bundle had landed."""
+    from app.modules.pod_bundle.domain.errors import BundleInvalidError
+
+    root = _build_bundle(tmp)
+    _write(
+        root / "workflows" / "triage" / "triage.json",
+        {"name": "triage", "mode": "GLOBAL"},
+    )
+    for name in ("on_ticket", "every_morning"):
+        _write(
+            root / "schedules" / name / f"{name}.json",
+            {"name": name, "schedule_type": "TIME", "workflow_name": "triage"},
+        )
+
+    with pytest.raises(BundleInvalidError) as excinfo:
+        await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
+    assert "workflow 'triage'" in str(excinfo.value)
+
+    # With no mode, this import creates the workflow USER: two schedules are fine.
+    _write(root / "workflows" / "triage" / "triage.json", {"name": "triage"})
+    plan = await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
+    assert {s.name for s in plan.steps if s.kind.value == "SCHEDULE"} == {
+        "on_ticket",
+        "every_morning",
+    }
+
+
+async def test_a_schedule_naming_an_account_the_importer_cannot_use_is_not_counted(
+    tmp,
+):
+    """The plan skips it, so it never reaches the GLOBAL workflow it names: the
+    other schedule on that workflow imports."""
+    from uuid import uuid4
+
+    class _Refused:
+        async def refusal(self, account_id):
+            del account_id
+            return "not yours"
+
+    root = _build_bundle(tmp)
+    _write(
+        root / "workflows" / "triage" / "triage.json",
+        {"name": "triage", "mode": "GLOBAL"},
+    )
+    _write(
+        root / "schedules" / "on_ticket" / "on_ticket.json",
+        {"name": "on_ticket", "schedule_type": "TIME", "workflow_name": "triage"},
+    )
+    _write(
+        root / "schedules" / "on_mail" / "on_mail.json",
+        {
+            "name": "on_mail",
+            "schedule_type": "TIME",
+            "workflow_name": "triage",
+            "account_id": str(uuid4()),
+        },
+    )
+
+    plan = await PlanBuilder(FakeExisting(), accounts=_Refused()).build_plan(
+        bundle_root=root
+    )
+
+    actions = {s.name: s.action.value for s in plan.steps if s.kind.value == "SCHEDULE"}
+    assert actions == {"on_ticket": "CREATE", "on_mail": "SKIP"}
+
+
+# --- a replan, and parts the import made -----------------------------------
+
+
+def _bundle_with_everything(tmp: Path) -> Path:
+    root = _build_bundle(tmp)
+    grants = {"grants": [{"resource_type": "table", "resource_name": "leads"}]}
+    _write(root / "tables" / "leads" / "leads.json", _table_manifest("leads", ["id"]))
+    (root / "tables" / "leads" / "data.csv").write_text("id\n1\n", encoding="utf-8")
+    _write(root / "agents" / "bot" / "bot.json", {"name": "bot", "permissions": grants})
+    _write(root / "apps" / "board" / "board.json", {"name": "board"})
+    _write(
+        root / "surfaces" / "support" / "support.json",
+        {"name": "support", "platform": "SLACK"},
+    )
+    return root
+
+
+async def test_a_replan_finishes_what_the_import_made_before(tmp):
+    """The import failed after creating them and was replanned. They are its
+    own, not the pod's: planned CREATE again, so the agent still gets its
+    grants step and the half-built app is finished -- where a fresh look at the
+    pod would keep them and leave the agent with none of its access."""
+    root = _bundle_with_everything(tmp)
+    existing = FakeExisting(
+        tables={"leads"},
+        table_manifests={"leads": _table_manifest("leads", ["id"])},
+        agents={"bot"},
+        apps={"board"},
+        surfaces={"support"},
+    )
+    made = ["TABLE:leads", "AGENT:bot", "APP:board", "SURFACE:support"]
+
+    plan = await PlanBuilder(existing, created=made).build_plan(bundle_root=root)
+
+    steps = {(s.kind, s.name): s for s in plan.steps}
+    for key in (
+        (StepKind.TABLE, "leads"),
+        (StepKind.TABLE_DATA, "leads"),
+        (StepKind.AGENT, "bot"),
+        (StepKind.AGENT_GRANTS, "bot"),
+        (StepKind.APP, "board"),
+        (StepKind.SURFACE, "support"),
+    ):
+        assert steps[key].action is StepAction.CREATE, key
+
+
+async def test_a_replan_does_not_load_rows_twice(tmp):
+    root = _bundle_with_everything(tmp)
+    existing = FakeExisting(
+        tables={"leads"}, table_manifests={"leads": _table_manifest("leads", ["id"])}
+    )
+
+    plan = await PlanBuilder(
+        existing, created=["TABLE:leads", "TABLE_DATA:leads"]
+    ).build_plan(bundle_root=root)
+
+    data = next(s for s in plan.steps if s.kind is StepKind.TABLE_DATA)
+    assert data.status is StepStatus.SKIPPED
+    assert "earlier attempt" in (data.error or "")
+
+
+class _Held:
+    """What each kept workload lacks, by name."""
+
+    def __init__(self, lacking):
+        self._lacking = lacking
+        self.asked = []
+
+    async def lacking(self, grants, *, grantee_type, grantee_name):
+        self.asked.append((grantee_type, grantee_name))
+        return self._lacking.get(grantee_name, [])
+
+
+async def test_a_kept_agent_lacking_its_bundled_access_is_named(tmp):
+    """Imported afresh after an import that never finished, the agent is kept
+    with none of its access, and only the plan can say so: it writes nothing
+    to a part it keeps."""
+    root = _bundle_with_everything(tmp)
+    held = _Held({"bot": ["table.read on table 'leads'"]})
+
+    plan = await PlanBuilder(FakeExisting(agents={"bot"}), held=held).build_plan(
+        bundle_root=root
+    )
+
+    assert held.asked == [("AGENT", "bot")]
+    [warning] = [w for w in plan.warnings if "'bot'" in w]
+    assert "keeps its own access" in warning
+    assert "table.read on table 'leads'" in warning
+
+
+async def test_a_kept_agent_holding_its_access_says_nothing(tmp):
+    root = _bundle_with_everything(tmp)
+
+    plan = await PlanBuilder(FakeExisting(agents={"bot"}), held=_Held({})).build_plan(
+        bundle_root=root
+    )
+
+    assert not [w for w in plan.warnings if "'bot'" in w]

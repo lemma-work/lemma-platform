@@ -109,9 +109,11 @@ Rules:
 - Handler signature is `(ctx: FunctionContext, data: <InputModel>) -> <OutputModel>`,
   async or sync.
 - `FunctionContext` fields: `ctx.pod_id`, `ctx.function_id`, `ctx.user_id`,
-  `ctx.user_email` (the **invoking** user — your delegated identity; both `None`
-  when a contact's conversation called it), `ctx.contact_id` (that contact, else
-  `None`), `ctx.config`, and `ctx.pod` (a ready `Pod` client — see below).
+  `ctx.user_email` and `ctx.user_name` (the **invoking** user — your delegated
+  identity; all `None` when a contact's conversation called it, and `user_name` is
+  also `None` for a person who gave no name, so greet by email then),
+  `ctx.contact_id` (that contact, else `None`), `ctx.config`, and `ctx.pod` (a ready
+  `Pod` client — see below). In the environment: `LEMMA_USER_NAME`.
 - Keep input/output models small and JSON-serializable. Return ids and compact
   summaries, not big record lists.
 - A function is only runnable once it reaches **`READY`**, which happens when it is
@@ -122,8 +124,8 @@ Rules:
 
 The function sandbox is **deliberately minimal**: `httpx`, `lemma-sdk`, `pydantic`,
 `starlette`, `uvicorn`, and OpenTelemetry. `pandas`, `numpy`, `matplotlib` and
-friends are **not** there — that list belongs to the *workspace* (agent code
-execution) image, which is a different environment. `import pandas` in a function
+friends are **not** there — that list belongs to the agent's *machine* image,
+which is a different environment. `import pandas` in a function
 with no `#python_packages` fails at run time.
 
 To use any other PyPI package, declare it in a `#python_packages:` header line:
@@ -149,12 +151,12 @@ from pydantic import BaseModel, ...
   package name therefore fails your **import**, not your first call.
 - Wheels only (`--no-build`), targeting Python 3.14 / `x86_64-manylinux_2_28`. A
   package that ships only a source distribution cannot be installed.
-- This environment is **not** shared with `execute_python`, which lives in the
-  workspace container. Two separate environments.
+- This environment is **not** shared with `execute_python`, which runs on the
+  agent's machine. Two separate environments.
 
 ## The in-function SDK — `ctx.pod`
 
-The sandbox binds a client to the invocation, so the shortest path is the context
+The function sandbox binds a client to the invocation, so the shortest path is the context
 you were handed:
 
 ```python
@@ -187,8 +189,8 @@ and `pod.query(sql)`. Single-record helpers return plain dicts; list/query helpe
 return typed response objects — call `.to_dict()` on those to get plain data. Errors
 raise `LemmaAPIError` with `.status_code`, `.message`, `.code`.
 
-> **Read the SDK source when unsure.** The Python SDK is installed **in the agent
-> workspace**, and its source is readable where the interpreter found it — that
+> **Read the SDK source when unsure.** The Python SDK is installed **on the agent's
+> machine**, and its source is readable where the interpreter found it — that
 > is where you author and inspect it. (Don't shell out to these paths from
 > function code; the function sandbox is a different machine.) When you need an
 > exact method signature, argument name, or response shape, read it directly
@@ -369,9 +371,30 @@ granted to the function (`resource_type: "connector"` — see Permissions below)
 run = pod.workflows.create_run("ticket-intake")
 if run.active_wait and run.active_wait.wait_type == "HUMAN":
     run = pod.workflows.submit_form(str(run.id), node_id=run.active_wait.node_id, inputs={"ticket_id": rid})
+# A run about one record: read as you, it becomes start.payload, as a table
+# trigger's change would. An app does the same with
+# client.workflows.runs.create(name, { about: { table, recordId } }).
+run = pod.workflows.create_run("prepare-meeting", about=("meetings_work", rid))
 conv = pod.conversations.create_for_agent("triage-agent", title="Triage")
 pod.conversations.send(str(conv.id), "Classify ticket " + rid)
+# Tell the person this function runs as (needs pod:/:channel.notify_self):
+pod.channels.notify_me("Three meetings tomorrow; briefs are ready.")
 ```
+
+### Machines (`ctx.machines`)
+
+A function that needs a real computer — a build, a long script, Docker — runs it
+on a pod machine rather than in its own minimal sandbox. `ctx.machines` acts as
+the run, so it reaches only pod machines the function holds a `machine.use`
+grant on, never a person's own `me`:
+
+```python
+result = ctx.machines.run("pod:builder", "npm ci && npm test")
+if result.exit_code != 0:
+    raise RuntimeError(result.output[-2000:])
+```
+
+Paths on a machine are under `/home/user` (projects in `/home/user/lemma`).
 
 ### Decisions (classify, route, triage)
 
@@ -398,17 +421,27 @@ result = pod.decisions.make(
     schema=QUESTIONS,
     examples=[{"evidence": "Refund my last invoice", "answers": {"category": "billing"}}],
 )
-category = result.answers["category"].value   # "billing", or None when unsure
+answer = result.answers["category"]
+unsure = answer.value is None or (answer.confidence is not None and answer.confidence < 0.7)
+category = None if unsure else answer.value     # "billing", or None for a person to look at
 ```
 
 - Each property's `description` is the question. Allowed shapes only: a string
   `enum` (or `oneOf` of `{const, description}`), an array of one with
   `uniqueItems: true`, `boolean`, or `integer` with `minimum`/`maximum` (2-11
   levels). Free text and open-ended numbers are refused (422).
-- `value` is `None` when the evidence did not support an answer — route that to
-  a person rather than guessing. `confidence` is set only by providers that
-  measure it.
+- Unsure is `value is None` **or** `confidence` set and below your threshold —
+  route that to a person rather than guessing. Check both: the default model
+  provider answers `None` when the evidence did not support an answer and never
+  sets `confidence`; the `typesafe` provider always answers its most probable
+  value and sets `confidence` to that value's probability. Pick the threshold
+  per question, by what a wrong answer costs.
 - Evidence over 64 KiB is refused, not cut: send the part that matters.
+- To judge a picture (a receipt photo, a slide), pass `images=["/receipts/0042.jpg"]`
+  — up to 4 files of this Lemma, PNG, JPEG, WebP or GIF — with or without
+  `evidence`. They are read with the function's own access, so it needs a read
+  grant on those files. Only a deployment whose decision model reads images
+  answers; otherwise the call fails with 422 `DECISION_IMAGES_UNSUPPORTED`.
 - Examples are how answers improve: keep corrected cases in a table and pass the
   recent ones in `examples`.
 - 429 and 503 mean ask again later; for a table of rows, loop in a JOB function
@@ -469,6 +502,24 @@ lemma functions permissions get save_expense
 
 A run failing with `MISSING_WORKLOAD_RESOURCE_GRANT` names the resource it tried to
 reach — add exactly that grant and retry.
+
+### Keeping a function from the assistant
+
+A function your app (or workflow) calls only after a check of its own — "claim"
+behind a daily limit, "pay" behind a confirmation — must not be one the Lemma's
+assistant can run by name, or it will step around the check. Set
+`"assistant_invoke": false` (create, `PATCH`, or the bundle JSON):
+
+- the assistant is not shown it, and running it is refused with 403
+  `FUNCTION_NOT_FOR_ASSISTANT`;
+- a person, your apps (in Lemma and framed in an AI tool), workflows, schedules,
+  other functions, and an agent you granted it still run it.
+
+Give the assistant a function that does the checked thing instead (one that checks
+the limit, then claims), or let it open the app. It still reads the function to
+build with it. This narrows what the assistant chooses to do; it is not access
+control, since the assistant acts with the person's access and someone who may edit
+the function can turn it back on. `contacts_invoke` is separate and unaffected.
 
 ### Opening a function to contacts
 

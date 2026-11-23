@@ -54,16 +54,18 @@ export function DeleteTeammate({ pod, orgId, onDeleted }: {
                 <h2>Delete {pod.name}</h2>
                 <p>Everything in {pod.name}’s space goes with it, for everyone here.</p>
             </div>
-            <button className="btn btn--danger" onClick={() => setAsking(true)}>Delete</button>
+            <button type="button" className="b b--m b--secondary b--red" onClick={() => setAsking(true)}>Delete</button>
             {asking && <ConfirmDelete pod={pod} orgId={orgId} onClose={() => setAsking(false)} onDeleted={onDeleted} />}
         </section>
     );
 }
 
-/** Says what stops, in the words of the things people will notice stopping,
- *  then asks for the name. Typing it is the confirmation: a second "are you
- *  sure?" button is pressed by the same hand that pressed the first. */
-function ConfirmDelete({ pod, orgId, onClose, onDeleted }: {
+/** Deleting a Lemma: what goes, in the words of the things people will
+ *  notice going, then its name to type. Typing it is the confirmation: a
+ *  second "are you sure?" button is pressed by the same hand that pressed the
+ *  first. Keep it, or Delete, at the foot; the dialog stays until the server
+ *  answers. Exported for anywhere else that offers to delete one. */
+export function ConfirmDelete({ pod, orgId, onClose, onDeleted }: {
     pod: Pod;
     orgId: string | null;
     onClose: () => void;
@@ -100,25 +102,36 @@ function ConfirmDelete({ pod, orgId, onClose, onDeleted }: {
     /* Closing mid-request would leave the request running with nobody to
        hear how it ended, so the dialog stays until the server answers. */
     const close = () => { if (!busy) onClose(); };
+    const formId = "kd-delete-" + pod.id;
 
     return (
-        <Modal title={"Delete " + pod.name + "?"} narrow onClose={close}>
+        <Modal
+            title={"Delete " + pod.name + "?"}
+            subtitle="This can’t be undone. Everything in it goes, for everyone in it."
+            narrow
+            onClose={close}
+            footer={<>
+                <button type="button" className="b b--l b--secondary" onClick={close} disabled={busy}>Keep it</button>
+                <button type="submit" form={formId} className="b b--l b--danger" disabled={!named || busy}>
+                    {busy ? "Deleting…" : "Delete " + pod.name}
+                </button>
+            </>}
+        >
             <form
-                className="deleteteammate"
+                id={formId}
+                className="kd-stack"
                 onSubmit={(event) => { event.preventDefault(); if (named && !busy) remove.mutate(); }}
             >
-                <p>For everyone here, as soon as you delete {pod.name}:</p>
-                <ul>
-                    <li>Its conversations, pages, tables, files and apps can no longer be opened.</li>
-                    <li>Its standing work stops. Nothing it was scheduled to do will run.</li>
-                    <li>It leaves Slack, WhatsApp and email, and stops answering there.</li>
+                <ul className="kd-gone">
+                    <li>Its chats, pages, tables, files and apps can no longer be opened.</li>
+                    <li>Its automations stop. Nothing it was set to do will run.</li>
+                    <li>It stops answering in Slack, on WhatsApp and by email.</li>
                     <li>Its email address and phone number are released.</li>
                 </ul>
-                <p>There is no undo.</p>
-                <div className="field">
-                    <label htmlFor="delete-teammate-name">Type <span className="deleteteammate__name">{pod.name}</span> to confirm</label>
+                <label className="kfield">
+                    <span>Type <b className="kd-name">{pod.name}</b> to delete it</span>
                     <input
-                        id="delete-teammate-name"
+                        className="kinput"
                         ref={field}
                         value={typed}
                         onChange={(event) => setTyped(event.target.value)}
@@ -126,20 +139,14 @@ function ConfirmDelete({ pod, orgId, onClose, onDeleted }: {
                         spellCheck={false}
                         disabled={busy}
                     />
-                </div>
+                </label>
                 {remove.isError && (
-                    <p className="aboutpage__error" role="alert">
+                    <p className="kd-problem" role="alert">
                         {isForbidden(remove.error)
                             ? "You may not delete " + pod.name + "."
                             : pod.name + " could not be deleted. Try again."}
                     </p>
                 )}
-                <div className="modal__acts">
-                    <button type="button" className="linkish" onClick={close} disabled={busy}>Keep {pod.name}</button>
-                    <button type="submit" className="btn btn--danger" disabled={!named || busy}>
-                        {busy ? "Deleting…" : "Delete " + pod.name}
-                    </button>
-                </div>
             </form>
         </Modal>
     );

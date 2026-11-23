@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +14,48 @@ class TableDiff:
     to_add: list[dict[str, Any]]
     to_remove: list[str]
     incompatible: list[str]
+    #: ENUM columns the bundle offers more options for: column name -> every
+    #: option it should then have, the table's own first. Widening is safe --
+    #: no row holds an option that is not there yet.
+    options_to_add: dict[str, list[str]] = field(default_factory=dict)
+    #: ENUM columns whose table has options the bundle lacks. Those are kept:
+    #: a row may hold one, and dropping it would strand the row.
+    options_kept: dict[str, list[str]] = field(default_factory=dict)
+    #: Columns whose foreign key the bundle no longer declares: dropped.
+    foreign_keys_to_drop: list[str] = field(default_factory=list)
+    #: Columns the bundle gives a foreign key the table's column lacks, or
+    #: another one: an existing column cannot gain one, so the table's stands.
+    foreign_keys_kept: list[str] = field(default_factory=list)
+
+
+def _references(column: dict[str, Any]) -> str | None:
+    """What a column's foreign key points at, or ``None`` when it has none."""
+    key = column.get("foreign_key")
+    if isinstance(key, dict) and key.get("references"):
+        return str(key["references"]).strip()
+    return None
+
+
+def _enum_options(column: dict[str, Any]) -> list[str] | None:
+    """An ENUM column's options, in order, or ``None`` for any other column."""
+    type_name = (column.get("type_params") or {}).get("type") or column.get("type")
+    if str(type_name or "").upper() != "ENUM":
+        return None
+    options = column.get("options") or (column.get("type_params") or {}).get("options")
+    return [str(option) for option in options or []]
+
+
+def _option_changes(
+    existing: dict[str, Any], desired: dict[str, Any]
+) -> tuple[list[str] | None, list[str]]:
+    """``(options to set, options only the table has)`` for one ENUM column;
+    the first is ``None`` when the bundle adds nothing."""
+    have, want = _enum_options(existing), _enum_options(desired)
+    if have is None or want is None:
+        return None, []
+    added = [option for option in want if option not in have]
+    only_here = [option for option in have if option not in want]
+    return ([*have, *added] if added else None), only_here
 
 
 def _is_system_table_column(column: dict[str, Any]) -> bool:
@@ -36,6 +78,16 @@ def _normalize_column_for_diff(
     if primary_key:
         normalized["primary_key"] = True
     return normalized
+
+
+#: The column a contact-owned table always has, added by the platform when the
+#: table is made. A bundle may leave it out of `columns`; it is still the table's.
+CONTACT_COLUMN = "contact_id"
+
+
+def _implied_column(name: str, desired: dict[str, Any]) -> bool:
+    """A column the bundle does not list but still means the table to have."""
+    return name == CONTACT_COLUMN and bool(desired.get("contact_owned"))
 
 
 def diff_table_columns(existing: dict[str, Any], desired: dict[str, Any]) -> TableDiff:
@@ -71,20 +123,47 @@ def diff_table_columns(existing: dict[str, Any], desired: dict[str, Any]) -> Tab
     to_remove = sorted(
         name
         for name in existing_columns.keys() - desired_columns.keys()
-        if name and name != primary_key
+        if name and name != primary_key and not _implied_column(name, desired)
     )
 
+    existing_columns_raw = {
+        str(column.get("name")): column
+        for column in existing.get("columns") or []
+        if not _is_system_table_column(column)
+    }
     incompatible: list[str] = []
+    options_to_add: dict[str, list[str]] = {}
+    options_kept: dict[str, list[str]] = {}
+    foreign_keys_to_drop: list[str] = []
+    foreign_keys_kept: list[str] = []
     for name in sorted(existing_columns.keys() & desired_columns.keys()):
         existing_column = existing_columns[name]
         desired_column = desired_columns[name]
         if existing_column != desired_column:
             incompatible.append(name)
+            continue
+        have = _references(existing_columns_raw[name])
+        want = _references(desired_columns_raw[name])
+        if have is not None and want is None:
+            foreign_keys_to_drop.append(name)
+        elif want is not None and want != have:
+            foreign_keys_kept.append(name)
+        widened, only_here = _option_changes(
+            existing_columns_raw[name], desired_columns_raw[name]
+        )
+        if widened is not None:
+            options_to_add[name] = widened
+        if only_here:
+            options_kept[name] = only_here
 
     return TableDiff(
         to_add=sorted(to_add, key=lambda item: str(item.get("name", ""))),
         to_remove=to_remove,
         incompatible=incompatible,
+        options_to_add=options_to_add,
+        options_kept=options_kept,
+        foreign_keys_to_drop=foreign_keys_to_drop,
+        foreign_keys_kept=foreign_keys_kept,
     )
 
 

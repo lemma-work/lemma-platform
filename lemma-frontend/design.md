@@ -65,6 +65,56 @@ ships). The words are in `src/marketing/product-pages.ts`.
   teammate sits on its closing band. Nothing follows the scroll, and reduced
   motion gets none of it (`lively.tsx`).
 
+The plugin listing (`/templates`) and each plugin's page (`/templates/<slug>`)
+are drawn from one generated file, `src/site/plugins/generated/catalog.json`,
+written with the pictures in `public/plugins/` by the plugins repository's
+`_build/site_catalog.py`. Run it again rather than editing either.
+
+- The built plugins come first and big, each with a real picture of its app
+  on made-up sample data, in the site's light or dark. Never a drawn screen.
+- A plugin's hero puts its first picture beside the words; "Try it" swaps it
+  for the app itself, the plugin's demo on made-up rows, loaded only when
+  asked for and told the site's theme (`lemma-app-theme`) on load, when it
+  says it is listening, and on every change. Its own bar moves between apps,
+  which `next.config.ts` serves folder by folder.
+- How they stack is worked out from what each plugin carries and the shared
+  tables it reads (`src/site/plugins/stack.ts`), not drawn by hand.
+- The plugins not built yet are one line each, in build order by line, and
+  their pages say only what is known: the line, the place in the order, what
+  they will build on.
+- Until a plugin is published its button says "Coming soon"; there is no Add
+  that goes nowhere. Each plugin wears one clay face, small, as its mark.
+- The listing and the older plugin page set their words in Albert Sans, the
+  app frame's face, at every size.
+- Every plugin page and the listing sit in the website's own frame (the
+  routes live in `app/(marketing)/templates/`; `MarketingFrame` in
+  `site/plugins/page/frame.tsx`): the pinned nav, the footer, the warm
+  ground. Their tokens get a dark rendition there (`theme.module.css`)
+  because a plugin's pictures come in light and dark; in light the page is
+  the home page's to the pixel.
+- A plugin whose `listing.json` has `moments` gets a landing page
+  (`page/landing.tsx`), drawn with the product pages' own pieces, not a
+  second system: the centred hero ("Plugins · Mail", the serif promise, how
+  it keeps it, the violet "Try it live" and a quiet "Coming soon") over the
+  plugin's window playing its main job, which "Try it live" swaps for the
+  demo; how it works as the home page's three numbered steps, each ending on
+  its close-up; then each moment as a product-page claim beside its proof:
+  an eyebrow, a serif headline and a short body on one side, and on the
+  other a violet or sand panel holding the capture in the plugin's window,
+  its face in the title bar, with a note in the margin on the one detail the
+  claim is about. Then what builds on it and what stays private in the trust
+  columns, questions as the product pages' points, and the violet close. No
+  tables, notes or other plumbing. The rest keep the older page until
+  theirs are written; its words stay in Albert Sans.
+- Its pictures are captures of the plugin's own demo, made by the plugins'
+  `_kit/bin/moments.mjs` from `.lemma/moments.json`: close-ups at 2x and
+  4 to 10 second loops (mp4 and webm, muted, with a poster), in light and dark,
+  and again in the app's phone layout wherever the wide crop would be too
+  small to read on a phone. Never a whole screen shrunk, never drawn: a
+  close-up keeps the size it was taken at. A crop that cuts through
+  something on purpose runs off the panel's foot. Loops play only while on
+  screen, and with reduced motion they stay on the poster.
+
 Appearance includes Chat text size: Small (14px), Default (15px), and Large
 (17px), with a live preview and a browser-local preference restored before paint.
 Only message prose, its headings, and the composer follow this setting; navigation
@@ -93,6 +143,88 @@ and prepare an editable composer draft without sending it.
 Messages expose Copy on hover or keyboard focus (always on touch screens). Code
 blocks, quotes and tables have separate copy controls with success or failure feedback.
 Email links use the configured mail handler in the current browsing context.
+
+## Alive, and honest
+
+The way in (`src/arrival/`) is where these were worked out; every surface
+follows them. It is one living scene: a Lemma being put together while its
+person answers, so each answer shows where it went.
+
+How it looks and moves:
+
+- A Lemma is its character on its own tint: a rounded tile, never inside a
+  ring or halo. Where a page is about one Lemma it draws the live rig
+  (`CharacterPuppet`, which breathes, blinks, follows the pointer and greets);
+  everywhere else the still. One rig per page.
+- What a person adds attaches to the Lemma where they can see it: apps as
+  round spots around its face, the places it can be reached as badges at its
+  foot, its people beside it. A change made on one side of the screen shows
+  on the other.
+- Motion means something happened. A ticked app flies to its spot; progress
+  fills a ring around the thing in progress, not a bar somewhere else; a real
+  moment (made, first message heard, ready) gets one burst of the logo's
+  bars and a wave. Nothing moves for decoration, and with reduced motion
+  everything is still and nothing breaks.
+- App icons sit in circles, so the ring that says how far along wraps them.
+  A pill holds one short phrase on one line.
+- One centred column for the task, its buttons right under it, never pinned
+  to the bottom of the window. One solid button moves on; a pick is a blue
+  tint with a tick; words are ink; structure is lines.
+- The Lemma speaks for itself, in the first person, by name: "I'll add the
+  apps that fit", "Write to me from anywhere".
+
+How it thinks:
+
+- Nobody waits on the machine. Long work runs on the server, says what it is
+  doing in plain words ("Putting its app together"), and lets the person
+  carry on; the Lemma tells them in their chat when it is done.
+- Show what is possible even where it is not available here, and say why in
+  the row, plainly, with who can fix it. Never hide a capability, and never
+  offer a button that can only fail.
+- Every question ends in a change the person can see. Ask once and remember
+  (a name, a time zone).
+- Land on the payoff: the first app open, the first thing worth asking, the
+  first message answered where it was sent.
+- Say only what is true. Examples are labelled; a step that has not happened
+  is not shown as done.
+
+## States
+
+Loading, failing, missing and signed out are said the same way everywhere,
+in the frame's own look (`outcomes/calm.tsx`, `ui/skeleton.tsx`, the kit's
+`.kcalm`, `.kproblem` and `.ksk`). The approved mock is "Lemma People and
+Dialogs" v8, its States scene.
+
+- Loading: nothing for the first 300ms, so a quick read never flashes; then
+  the shape of what is coming (`SkeletonRows`, `SkeletonCards`) under the
+  page's real header; words only after 2.5s: "Still reading Sales's files.
+  It's slower than usual." Never a spinner alone on a page, never "Loading…".
+- A read that failed: the page's header stays, and under it a warm `Calm`:
+  "Couldn't read Sales's files", what is still true ("Nothing in them
+  changed"), the status code where there is one, and Try again. Never an
+  empty state over a failed read: "No apps yet" or "Nothing needs you" over
+  an error sends somebody away from what is there.
+- One wording: "Couldn't read …" and "Try again". Not "Could not", "Unable
+  to", "did not load", "can't be read", and not "Retry". Said plainly, not by
+  the Lemma: a read failing is the connection's doing, not the Lemma's.
+- An action that failed says so where it happened -- in the row, under the
+  field (`Problem`) -- with Try again, and nothing moves on as if it worked.
+  No toasts.
+- Missing, not allowed and broken are three answers. Not found says what is
+  gone and where to go instead; not in it says whose it is and offers Ask to
+  join; a server error is an error, with Try again. None is a dead end.
+- The connection: offline says "You're offline"; a server that isn't
+  answering says "Can't reach Lemma", counts down to its next try and offers
+  Try now; coming back says the page is up to date, once it has been read
+  again. Never "restarting" for something that isn't.
+- Starting up is one screen: the frame's own shape, quietly loading, with one
+  line ("Checking you're signed in…") only after about two seconds.
+- Signed out while working: a small dialog over the page, which stays
+  readable; Sign in again brings the reader back to the same address.
+- An app opening in the frame: its mark and a thin bar, after 300ms; slow
+  after a few seconds (with "Open in a new tab"); didn't open when nothing
+  answered in 30 seconds, with Try again and "Ask <Lemma> to look"; going in
+  shows its ring and the install's own steps.
 
 ## Teammates and their spaces
 

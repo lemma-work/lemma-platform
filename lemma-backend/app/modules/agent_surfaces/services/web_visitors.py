@@ -29,7 +29,10 @@ from uuid import UUID
 
 import jwt
 
-from app.core.public_web import public_web_altcha_enabled
+from app.core.public_web import (
+    public_web_altcha_enabled,
+    public_web_test_visitor_code,
+)
 from app.core.crypto.factory import get_secret_signer
 from app.core.email.email_sender import EmailNotConfiguredError, EmailSender
 from app.core.email.transactional import render_transactional_email
@@ -469,13 +472,12 @@ class WebVisitors:
             widget_id=widget.id, email=email, address=address
         ):
             raise refused("Too many codes. Try again later.", 429, "rate_limited")
-        try:
-            sender = self.email_sender()
-        except EmailNotConfiguredError as exc:
-            raise refused(
-                "Email is not available here", 503, "email_unavailable"
-            ) from exc
-        code = mint_code()
+        # On a test server the code is one the tester already knows, and the
+        # address they typed reaches nobody: nothing is mailed. Everything else
+        # -- expiry, the guesses counted, the session it is bound to -- holds.
+        test_code = public_web_test_visitor_code()
+        sender = None if test_code else self._code_sender()
+        code = test_code or mint_code()
         session_id = visitor.session.session_id
         async with self.uow_factory() as uow:
             await add_visitor_code(
@@ -487,6 +489,8 @@ class WebVisitors:
             )
             space = await pod_name(uow.session, widget.pod_id) or widget.name
             await uow.commit()
+        if sender is None:
+            return
         sender.from_name = sender_name(widget.name)
         rendered = render_transactional_email(
             preheader=f"Your code is {code}",
@@ -504,6 +508,14 @@ class WebVisitors:
         await sender.send_email(
             email, f"Your code is {code}", rendered.html, rendered.text
         )
+
+    def _code_sender(self) -> EmailSender:
+        try:
+            return self.email_sender()
+        except EmailNotConfiguredError as exc:
+            raise refused(
+                "Email is not available here", 503, "email_unavailable"
+            ) from exc
 
     async def verify_visitor_code(
         self,

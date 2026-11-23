@@ -18,6 +18,7 @@ import {
 import { useRun, useWorkflowGraph, useWorkflowList } from "@/workflow/use-run";
 import { LiveConversation } from "@/thread/live-conversation";
 import { AgentMark } from "./agent-mark";
+import { ConfirmDialog } from "@/shell/confirm-dialog";
 import { isPodDefaultAgent } from "@/data/agent-names";
 import {
     CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, CloseIcon, CodeIcon, ExternalIcon,
@@ -166,19 +167,24 @@ export function RunPage({ pod, runId, label, onBack, onOpenConversation, onOpenR
             )}
 
             {confirming && (
-                <div className="runpage__confirm" role="alertdialog" aria-label="Cancel this run">
-                    <p>Cancel this run? Steps already done stay done; nothing after <b>{nodeName(detail?.currentNodeId ?? null)}</b> will run, and it cannot be resumed — only run again.</p>
-                    <div>
-                        <button className="runpage__danger" disabled={cancel.isPending} onClick={() => cancel.mutate()}>{cancel.isPending ? "Cancelling…" : "Cancel run"}</button>
-                        <button className="runpage__cancel" onClick={() => setConfirming(false)}>Keep it running</button>
-                    </div>
-                </div>
+                <ConfirmDialog
+                    title="Cancel this run?"
+                    line={<>Steps already done stay done; nothing after {nodeName(detail?.currentNodeId ?? null)} will run, and it can’t be resumed, only run again.</>}
+                    confirm="Cancel run"
+                    cancel="Keep it running"
+                    working="Cancelling…"
+                    danger
+                    busy={cancel.isPending}
+                    problem={cancel.isError ? refused : null}
+                    onConfirm={() => cancel.mutate()}
+                    onClose={() => setConfirming(false)}
+                />
             )}
 
             {run.isPending && <p className="runpage__note">Reading the run…</p>}
             {run.isError && <p className="runpage__note" role="alert">Couldn’t load this run. <button className="linkish" onClick={() => void run.refetch()}>Try again</button></p>}
             {run.isSuccess && !detail && <p className="runpage__note">This run can’t be read — it may have been removed, or you may not have access to it.</p>}
-            {refused && <p className="runpage__problem" role="alert">{refused}</p>}
+            {refused && !(confirming && cancel.isError) && <p className="runpage__problem" role="alert">{refused}</p>}
 
             {detail?.status === "FAILED" && (
                 <div className="runpage__failure" role="alert">

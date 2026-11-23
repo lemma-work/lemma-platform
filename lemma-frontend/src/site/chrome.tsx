@@ -15,7 +15,7 @@ export function SiteFooter() {
         {
             title: "Explore",
             links: [
-                ["Examples", "/templates"],
+                ["Plugins", "/templates"],
                 ["Documentation", "/docs"],
                 ["Download", "/download"],
                 ["Changelog", "/changelog"],
@@ -120,14 +120,17 @@ export function JsonLd({ schema }: { schema: Record<string, unknown> }) {
     );
 }
 
-export function SiteHeader() {
+/** `tools` sits between the logo and the links: the docs put their search
+ *  there. Every other page passes nothing and the header is unchanged. */
+export function SiteHeader({ tools }: { tools?: ReactNode }) {
     return (
         <header className="site-header">
             <Link href="/" aria-label="Lemma home">
                 <LemmaLogo />
             </Link>
+            {tools && <div className="site-header__tools">{tools}</div>}
             <nav aria-label="Main navigation">
-                <Link href="/templates">Templates</Link>
+                <Link href="/templates">Plugins</Link>
                 <Link href="/docs">Docs</Link>
                 <HostedOnly><Link href="/download" data-nav="download">Download</Link></HostedOnly>
                 <a href={githubUrl} data-nav="github">GitHub ↗</a>

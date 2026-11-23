@@ -22,6 +22,12 @@ make dev         # infra + backend + frontend
 8710 (backend). `make dev-frontend` runs the frontend alone, for a backend you
 run some other way.
 
+To use pod apps signed in, start it with `make dev DEV_ONE_SITE=1` and open
+http://lemma.localhost:3000. On plain `localhost` the web app and the apps
+(`<slug>.apps.lemma.localhost`) are different sites, so a framed app gets no
+session. In one-site mode a connector's OAuth sign-in returns to
+`api.lemma.localhost`, which the provider must accept as a redirect URI.
+
 ### Toolchain versions
 
 Node is pinned by [`.nvmrc`](.nvmrc) at the repo root, and that file is the only
@@ -101,6 +107,7 @@ Each component has its own setup and its own checks. Run the ones you touched.
 | You changed… | Read | Run before opening a PR |
 |---|---|---|
 | `lemma-backend/` | [backend README](lemma-backend/README.md), [development guidelines](lemma-backend/docs/development.md), [module guide](lemma-backend/docs/modules/README.md) | see below |
+| `lemma-backend/sandbox-images/streamer/` | [streamer README](lemma-backend/sandbox-images/streamer/README.md), [live browser view](docs/architecture/sandbox/live-browser-view.md) | `make streamer-test`, and `test_browser_stream_e2e.py` (workspace e2e: a real image, coturn and `streamcheck`) for a change to capture, input or signalling |
 | `lemma-frontend/` | [frontend README](lemma-frontend/README.md) | `npm run check && npm test && npm run build` |
 | `lemma-cli/` | [CLI README](lemma-cli/README.md), [conventions](lemma-cli/CONVENTIONS.md) | `make test && make lint` |
 | `lemma-typescript/` | [SDK README](lemma-typescript/README.md) | `npm run build && npm test` |

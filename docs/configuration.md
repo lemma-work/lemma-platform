@@ -290,6 +290,10 @@ E2B_METADATA_NAMESPACE=
 E2B_WORKSPACE_SIZE_TEMPLATES=
 # The size E2B_WORKSPACE_TEMPLATE was built at; the builder's default.
 E2B_WORKSPACE_TEMPLATE_SIZE=1x2048
+# The template behind `workspace-docker` machines (dockerd, compose, buildx),
+# and its sizes the same way. A size with no entry uses E2B_DOCKER_TEMPLATE.
+E2B_DOCKER_TEMPLATE=lemma-workspace-docker
+E2B_DOCKER_SIZE_TEMPLATES=
 ```
 
 These seven are the whole backend-side E2B surface. In particular:
@@ -394,10 +398,90 @@ WORKSPACE_CALLBACK_FRONTEND_URL=http://frontend:8080
 FUNCTION_RUNTIME_GATEWAY_URL=http://backend:8000
 ```
 
-`WORKSPACE_PORT_ACCESS_URL` publishes a port a workspace opened, for previewing
-something running inside it. It is a base URL (default `API_URL`); the signed
-URL is `<base>/public/workspace-ports/<grant>/`, unauthenticated by design,
-since the grant in the path is the credential.
+`WORKSPACE_PORT_ACCESS_URL` publishes a port a machine opened, for previewing
+something running on it. It is a base URL (default `API_URL`); the signed
+URL is `<base>/public/machine-ports/<grant>/`, unauthenticated by design,
+since the grant in the path is the credential. Previews a person or agent
+creates on purpose are served differently — on their own subdomain, below.
+
+## Machines
+
+A machine is a workspace sandbox seen from the product: every person's default
+machine, and the shared machines a pod's editors create. What a machine is, who
+may use one and how its compute is counted is in
+[architecture/machines.md](architecture/machines.md); these are the settings
+that decide which parts of it a deployment turns on.
+
+```dotenv
+# Serve /machines. Off answers every machine route with 404.
+MACHINES_API_ENABLED=true
+# Let pod editors create machines the pod's agents share.
+POD_MACHINES_ENABLED=true
+# Stop work at a compute allowance. Metering is always on; this decides
+# whether reaching 100% refuses new work and releases running machines.
+COMPUTE_BILLING_ENABLED=false
+# Move default machines still on the legacy 1x2 size to the plan's default
+# size on their next idle release, home and logins included.
+MACHINE_SIZE_MIGRATION_ENABLED=false
+```
+
+### Previews
+
+A preview turns a port on a machine into a URL people can open, each on its own
+origin so hot reload and root-absolute assets work:
+`<MACHINE_PREVIEW_SCHEME>://p-<id>.<MACHINE_PREVIEW_DOMAIN>/`.
+
+```dotenv
+# Unset (the default) turns previews off; the API says so in a sentence.
+# A registrable domain of its own, never a subdomain of Lemma's (see below).
+MACHINE_PREVIEW_DOMAIN=previews.example-usercontent.com
+# https, or http for a local stack on *.localhost.
+MACHINE_PREVIEW_SCHEME=https
+# The longest a `link` preview lives before it stops answering.
+MACHINE_PREVIEW_MAX_TTL_SECONDS=86400
+```
+
+The domain needs a wildcard DNS record and a wildcard certificate, both pointing
+at the API. A `private` preview asks the visitor to be signed in to Lemma and
+allowed on the machine; a `link` preview works for anyone until it expires.
+Either can be revoked, and a revoked one answers 404 at once.
+
+**Serve previews from a registrable domain of their own**, the way GitHub
+serves user content from `githubusercontent.com` rather than a subdomain of
+`github.com`. A preview runs whatever JavaScript is on the machine — anything
+anyone with use of it put there, or a page an agent fetched. Under a subdomain
+of Lemma's own domain (`machines.example.com` beside `app.example.com`), that
+script is *same-site* with Lemma: the browser sends Lemma's `SameSite`
+cookies with its requests to the API, it can set cookies on the parent domain
+that Lemma then reads (cookie tossing), and every same-site check treats it
+as a sibling. On a domain of its own, every preview is cross-site to Lemma.
+Listing that domain on the [Public Suffix List](https://publicsuffix.org/)
+also makes previews cross-site to each other. `machines.localhost` under
+`make dev` is a local exception.
+
+### Shared machines' disk
+
+A pod machine is shared by many runs on one disk, which on E2B is fixed in size.
+The disk janitor, a background job every few minutes, keeps it usable without
+touching anything protected (the browser profile, a running service) or any
+run still in progress:
+
+```dotenv
+# Prune finished runs, then Docker images and build cache, from this fraction.
+MACHINE_DISK_PRUNE_FRACTION=0.75
+# Refuse new runs on the machine from this fraction.
+MACHINE_DISK_REFUSE_FRACTION=0.9
+```
+
+### Services
+
+A named service (a dev server behind a preview) keeps its machine awake only
+while it writes output. Past this much silence the idle sweep may release the
+machine; the service starts again, with a fresh token, when the machine does.
+
+```dotenv
+MACHINE_SERVICE_IDLE_SECONDS=14400
+```
 
 ## Function execution
 
@@ -503,8 +587,21 @@ revalidate every use and shared caches keep nothing.
 This needs only what serving apps already needs: the wildcard app host routed to
 the API, credentialed CORS for the app origins, and a sign-in page that honours
 `redirect_uri`. `AUTH_WEBSITE_BASE_PATH` is appended to an `AUTH_FRONTEND_URL`
-with no path of its own. Private apps are not served this way on plain HTTP
-(the desktop), where only public apps open at the app address.
+with no path of its own.
+
+On plain HTTP only public apps open at the app address -- the desktop and the
+Docker install among them -- unless the stack sets `PRIVATE_APPS_OVER_HTTP=true`.
+That is for a local development stack only: it is refused outside
+`ENVIRONMENT=local`/`testing`, and applies only to app hosts under `.localhost`,
+which never leave the machine. There a private app opens by the same ticket and
+checks, and the cookie is a host-only `lemmaAppAccess` without `Secure`, which
+the `__Host-` name requires. `make dev` sets it.
+
+An app framed in the web app is signed in only if the web app, the API and the
+app are one site to the browser. `localhost` and `<slug>.apps.lemma.localhost`
+are not, so with `make dev`'s default addresses the access page asks you to
+sign in. `make dev DEV_ONE_SITE=1` serves the web app at `lemma.localhost`, the
+API at `api.lemma.localhost` and the session cookie on `.lemma.localhost`.
 
 ## Outside MCP clients
 
@@ -549,6 +646,19 @@ protection of your own:
 
 ```dotenv
 PUBLIC_WEB_ALTCHA_ENABLED=false
+```
+
+On a server people test pages on, a visitor's email-code step can't be
+finished: the addresses testers type reach no inbox. Name the code instead, and
+every code a visitor is sent is those six digits and nothing is mailed. Expiry,
+the five-guess limit and rate limits still apply. Anybody who knows it can
+confirm any address on that server's widgets, so startup refuses it when
+`ENVIRONMENT=production`. Unset by default; a local stack with
+`EMAIL_TRANSPORT=filesystem` needs none, since the code lands in
+`EMAIL_OUTPUT_DIR`.
+
+```dotenv
+PUBLIC_WEB_TEST_VISITOR_CODE=424242
 ```
 
 ## Authentication and email
@@ -784,11 +894,12 @@ durable state, not configuration.
 
 ## Models
 
-Lemma talks to any OpenAI-compatible or Anthropic-compatible endpoint. There is
-no provider-specific logic beyond those two shapes.
+Lemma talks to any OpenAI-compatible or Anthropic-compatible endpoint, and to
+Google's Gen AI API (Gemini) on either of its hosts. There is no
+provider-specific logic beyond those three shapes.
 
 ```dotenv
-LEMMA_DEFAULT_MODEL_TYPE=openai_compat   # openai_compat | anthropic_compat
+LEMMA_DEFAULT_MODEL_TYPE=openai_compat   # openai_compat | anthropic_compat | google_genai
 LEMMA_OPENAI_API_KEY=
 LEMMA_OPENAI_BASE_URL=https://api.openai.com/v1
 LEMMA_OPENAI_DEFAULT_MODEL=
@@ -803,6 +914,20 @@ LEMMA_OPENAI_REASONING_MODEL_NAMES=
 
 LEMMA_ANTHROPIC_API_KEY=
 LEMMA_ANTHROPIC_DEFAULT_MODEL=claude-sonnet-4-5
+
+# Google (LEMMA_DEFAULT_MODEL_TYPE=google_genai). With a project set, models run
+# on Vertex AI as a service account: the key file below if given, else the
+# identity the server runs as (Workload Identity on GKE, or
+# `gcloud auth application-default login` on a laptop), which needs
+# roles/aiplatform.user. Without a project, the Gemini API with its API key.
+LEMMA_GOOGLE_VERTEX_PROJECT=
+LEMMA_GOOGLE_VERTEX_LOCATION=global
+LEMMA_GOOGLE_SERVICE_ACCOUNT_JSON=
+LEMMA_GOOGLE_API_KEY=
+LEMMA_GOOGLE_DEFAULT_MODEL=gemini-4-hydrogen
+LEMMA_GOOGLE_MODEL_NAMES=gemini-4-hydrogen,gemini-4-argon,gemini-4-carbon,gemini-3.8-flash
+# Image models, for the generate_image tool. Never an agent's chat model.
+LEMMA_GOOGLE_IMAGE_MODEL_NAMES=gemini-3.1-flash-image
 
 # Embeddings and reranking for datastore search. `local` runs in-process and
 # needs no key; the dimension must match what your index was built with.
@@ -841,11 +966,17 @@ runs drive their own model loop and ignore these settings.
 
 `POST /pods/{pod_id}/decisions` answers closed questions -- a choice, several
 choices, yes or no, a point on a scale -- about some evidence. One provider
-answers them for the whole deployment. By default it is the language model
-configured above, so decisions need no setting at all.
+answers them for the whole deployment. By default it is Google's Decisions API
+when `LEMMA_GOOGLE_API_KEY` is set, and the language model configured above when
+it is not, so decisions need no setting at all.
 
 ```dotenv
-DECISION_PROVIDER=model       # model | typesafe
+DECISION_PROVIDER=gemini      # gemini | model | typesafe
+# Google's decision model. It is served on the Gemini API only, which refuses
+# service accounts, so it takes LEMMA_GOOGLE_API_KEY even where models run on
+# Vertex AI. Without the key the `model` provider answers instead.
+GEMINI_DECISION_MODEL=gemini-decision-1
+GEMINI_DECISION_PRICE_PER_MILLION_INPUT_TOKENS_USD=0.10
 # The model the `model` provider asks, by public name. Empty: the default model.
 # A small, fast model is a good choice; decisions are short.
 DECISION_MODEL=
@@ -863,8 +994,9 @@ DECISION_BACKGROUND_TIMEOUT_SECONDS=25
 DECISION_RATE_LIMIT_PER_MINUTE=600   # per organization and priority; 0 for none
 ```
 
-Choosing `typesafe` sends the evidence of every decision to Typesafe, so list it
-wherever your deployment names the processors its users' data reaches.
+Choosing `typesafe` sends the evidence of every decision to Typesafe, and a
+Google key with the `gemini` default sends it to Google, so list whichever
+applies wherever your deployment names the processors its users' data reaches.
 
 Live voice calls ask one decision of this API per finished turn, with
 `priority: interactive`: whether it is conversation for the voice alone or
@@ -897,9 +1029,11 @@ OPENAI_REALTIME_VOICE=marin
 
 # cascade: Deepgram listens and speaks, a Lemma model answers.
 DEEPGRAM_API_KEY=
-CASCADE_STT_MODEL=flux-general-en        # flux-general-multi for other languages
+CASCADE_STT_MODEL=flux-general-multi     # ten languages incl. Hindi; flux-general-en for English only
+CASCADE_STT_LANGUAGE_HINTS=[]            # e.g. ["hi","en"]; empty detects freely
 CASCADE_EAGER_EOT_THRESHOLD=0.5          # empty waits for the confirmed end of turn
-CASCADE_TTS_VOICE=aura-2-thalia-en
+CASCADE_TTS_VOICE=aura-2-thalia-en       # the default voice
+CASCADE_TTS_VOICES={"hi":"flux-anjali-hi"}  # voice per caller language; Flux voices speak Hindi
 CASCADE_TALKER_MODEL=                    # public name; empty: the default model
 CASCADE_TALKER_REASONING_EFFORT=none
 
@@ -954,6 +1088,26 @@ USAGE_ORG_LIMIT_OVERRIDES_JSON=
 An override entry looks like `{"slug": "acme", "monthly_limit_usd": 5.0}`, or
 `{"slug_prefix": "trial-", "monthly_limit_usd": 0}` to cap a family of
 organizations at once. Slugs are organization handles, not display names.
+
+Machine time is metered in **compute units**: one CU is one hour of a 2 vCPU /
+4 GB machine, and other sizes accrue them in proportion to their vCPUs (a 4x8
+machine, two an hour). A default
+machine's time counts against its person; a pod machine's against the
+organization. Set a price and it counts in the USD limits above, beside model
+calls; set an allowance and it is limited on its own as well.
+
+```dotenv
+# USD per compute unit. Unset records machine time at no cost.
+USAGE_COMPUTE_UNIT_USD=
+# Monthly allowances in compute units. Unset means none beyond the USD limits.
+USAGE_USER_MONTHLY_COMPUTE_UNITS=
+USAGE_ORG_MONTHLY_COMPUTE_UNITS=
+```
+
+An allowance is only enforced with `COMPUTE_BILLING_ENABLED=true` (see
+[Machines](#machines)): warnings at 80% and 95%, and at 100% no new processes,
+then a grace period, then the machine is released with its browser closed
+cleanly.
 
 Answering people outside an organization -- contacts, and strangers in groups --
 has a ceiling of its own, which an organization owner sets in Usage. Until one

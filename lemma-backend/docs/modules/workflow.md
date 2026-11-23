@@ -88,32 +88,95 @@ in its fenced completion picks the route from the flow as it is then and
 resumes the run there. The node's output is
 `{answer, confidence, provider, model, route}`.
 
-No failure takes a branch. A provider that did not answer, or a rate limit, is
-retried with backoff (at least the limit's `retry_after_seconds`) up to six
-attempts, then the run fails naming the cause. An invalid question, a spent
-usage limit, too much evidence for one decision (`token_limit`) or no configured
-provider (`not_configured`) fail the run at once, as does an answer with no
-route and no default edge. A cancelled run's job finds no active wait and does
-nothing. A job whose workers keep dying goes dead and fails the run.
+No failure takes an answer's branch. A provider that did not answer, or a rate
+limit, is retried with backoff (at least the limit's `retry_after_seconds`) up
+to six attempts, then the node fails naming the cause. An invalid question, a
+spent usage limit, too much evidence for one decision (`token_limit`) or no
+configured provider (`not_configured`) fail it at once, as does an answer with
+no route and no default edge. A failed node fails the run unless it has a
+FAILURE edge (below). A cancelled run's job finds no active wait and does
+nothing. A job whose workers keep dying goes dead and fails the node.
+
+## Failure edges
+
+An edge has a `kind`: `NEXT` (the default, and every edge saved before kinds
+existed) is followed when its source finishes; `FAILURE` is followed when its
+source fails, instead of failing the run. A graph with no FAILURE edge behaves
+exactly as one did before they existed.
+
+| Rule (checked on save) | Why |
+| --- | --- |
+| At most one FAILURE edge per node | One place for a failure to go |
+| None from an END | Nothing runs after it |
+| Not back to its own source | A retry with no limit |
+| FAILURE edges alone never lead back to where they started (`a` → `b` → `a`) | The same retry, spread over steps |
+| FAILURE edges do not count as branching, and are never a decision's default edge or a loop's one outgoing edge | They are not a way on from a node that finished |
+
+What counts as a node failing: its executor raising (a required input that
+resolves to nothing, an agent it may not run), or its wait failing -- the
+function run or agent conversation failed or vanished, the decision could not
+be asked, the wait outlived its ceiling, the form expired. Not a failure: a
+cancelled run, the database being unavailable (the work item retries the step),
+a cycle past `MAX_STEPS_PER_ADVANCE`, or a node missing from the graph.
+
+When a node fails, `RunStepper.divert_failure` looks for a FAILURE edge on the
+node, then on each enclosing LOOP from the innermost out:
+
+- The step is recorded `FAILED` with its reason, and the node's output becomes
+  its partial output (a failed agent's, say) plus `error`, so the branch reads
+  `<node_id>.error`. The run's `error` and `failed_node_id` stay empty.
+- Caught by an enclosing loop, that loop -- and any inside it -- ends where it
+  stood: its output is `{results, count, error, failed_node_id}` (the completed
+  iterations' results, and which body node failed), and the run goes on at the
+  loop's FAILURE target. A body node's own FAILURE edge pointing back at its
+  loop node skips that item instead, as any edge back to the loop ends an
+  iteration.
+- The branch is ordinary nodes. A node on it that fails is handled the same
+  way, so a failure with nowhere left to go fails the run there.
+
+A wait's failure (`execution/wait_failure.py`) continues the run down the
+branch in the same transaction that fails the wait, as the run's owner, the way
+a resume does; an expired form's question is closed first. With no FAILURE
+edge the run fails as before. The debug views draw a FAILURE edge labelled "on
+failure".
 
 ## API groups
 
 `/pods/{pod_id}/workflows` provides CRUD, graph replacement, manual run
-creation, run history, and definition visualization. `/pods/{pod_id}/workflow-runs`
+creation, run history, and definition visualization.
+`contracts/graph_checks.workflow_graph_issues` answers, for another module,
+whether a graph as a manifest carries it would be accepted -- the node models
+and `WorkflowGraphValidator`, nothing else -- so a bundle import can refuse one
+at planning rather than fail part-way through its apply. `/pods/{pod_id}/workflow-runs`
 provides assigned waits, form submission, cancellation, detail, and run
 visualization.
+
+A run takes no free-form input; inputs arrive through FORM nodes. A person
+starting one may name the one record it is about (`POST .../runs` with
+`{"about": {"table": "deals", "record_id": "<the record's key>"}}`,
+`api/run_about.py`): the record is read as them, through the table permission
+and row scope the datastore applies
+(`datastore.contracts.event_reads.read_record_as`), and handed to the run as a
+table change would hand it -- its fields in `start.payload`, `table_name` and
+`record_id` in `start.metadata` -- so one workflow serves a table trigger and an
+app's button about one row. A record they cannot read is a 404, the same as
+none. Like a run a table trigger started, the run then carries the record's
+fields as they were read: whoever can read the run sees them in its start.
+A retry with the same `Idempotency-Key` returns that run before the record is
+read again, so a record changed or deleted since does not turn the retry into
+a 404 or a second run. A `record_id` the table's key cannot hold is a 400.
 
 ## Execution flow
 
 ```mermaid
 stateDiagram-v2
     [*] --> RUNNING: manual/event/schedule start
-    RUNNING --> RUNNING: decision/loop/end step, or an agent/function/time/decision-question wait and its terminal event
+    RUNNING --> RUNNING: decision/loop/end step, or an agent/function/time/decision-question wait and its terminal event, or a failure down a FAILURE edge
     RUNNING --> WAITING: form step
-    WAITING --> RUNNING: human submission
+    WAITING --> RUNNING: human submission, or form expired with a FAILURE edge
     RUNNING --> COMPLETED: end output
-    RUNNING --> FAILED: validation/executor error
-    WAITING --> FAILED: form expired
+    RUNNING --> FAILED: validation/executor error with no FAILURE edge
+    WAITING --> FAILED: form expired with no FAILURE edge
     RUNNING --> CANCELLED: cancel API
     WAITING --> CANCELLED: cancel API
 ```

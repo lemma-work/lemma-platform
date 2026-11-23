@@ -21,6 +21,25 @@ class DatastoreValidationError(DatastoreDomainError):
         )
 
 
+class DatastoreColumnChangeRefusedError(DatastoreDomainError):
+    """A well-formed change to an existing column that the column cannot take.
+
+    422 rather than the 400 a malformed request gets: the request parses and
+    names a real column, and what it asks for -- options on a column that has
+    none, or fewer options than the rows may already hold -- is what is
+    refused. The message says which, so the caller can send the change that
+    would be accepted.
+    """
+
+    def __init__(self, message: str, details: object | None = None):
+        super().__init__(
+            message,
+            code="DATASTORE_COLUMN_CHANGE_REFUSED",
+            status_code=422,
+            details=details,
+        )
+
+
 class DatastoreAccessDeniedError(DatastoreDomainError):
     def __init__(self, message: str = "Access denied", details: object | None = None):
         super().__init__(

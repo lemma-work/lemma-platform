@@ -16,7 +16,7 @@ A function reaches it through the SDKs (`pod.decisions.make(...)`,
 
 | Route | Behavior |
 | --- | --- |
-| `POST /pods/{pod_id}/decisions` | Check the questions, evidence and examples; admit against the organization's rate; ask the configured provider under the caller's usage metering; check the answers; return one per question |
+| `POST /pods/{pod_id}/decisions` | Read any images it names from the Lemma's files as the caller; check the questions, evidence and examples; admit against the organization's rate; ask the configured provider under the caller's usage metering; check the answers; return one per question |
 
 The module owns no tables, events or workers. Its only state is a per-minute
 counter per organization and priority in Redis.
@@ -38,11 +38,28 @@ refused with a 422 listing every problem. A closed answer can be checked, routed
 on and counted; an open one is extraction, and free text is where evidence gets
 copied into whatever reads the answer next.
 
-Every answer is `{value, confidence}`. `value` is `null` when the evidence did
-not support an answer -- an answer, not a failure. `confidence` is the
-provider's probability for the value when it measures one, and `null` when it
-does not (a language model's self-report is not used). A provider that could
-not answer at all is an error: 503 `DECISION_PROVIDER_UNAVAILABLE`, retryable.
+Every answer is `{value, confidence}`. `confidence` is the provider's
+probability for the value when it measures one, and `null` when it does not (a
+language model's self-report is not used). For several choices it is the
+confidence of the least certain per-option decision, not the probability of
+the whole selection: two options chosen at 0.9 each answer 0.9, not 0.81. A provider that could not answer at
+all is an error: 503 `DECISION_PROVIDER_UNAVAILABLE`, retryable.
+
+How a provider says "not sure" differs. The `model` provider answers `null`
+when it judges the evidence does not support an answer -- an answer, not a
+failure. `typesafe` never answers `null`: it answers the value it judged most
+likely and, where it reports one, that value's calibrated probability as
+`confidence` (`null` for a scale read from its score alone; for several
+choices, the least certain of its per-option decisions). A caller that
+wants to route "not sure" somewhere treats an answer as unsure when `value` is
+`null`, or `confidence` is not `null` and below its own threshold -- one rule
+that holds on either provider. A value whose `confidence` is `null` carries no
+measure to compare -- every answer of the `model` provider, and a `typesafe`
+scale read from its score alone -- so it is a case of its own, neither sure nor
+unsure, and where it goes is the caller's call per question. The threshold is the caller's because what a
+wrong answer costs differs per question; a cut-off inside the provider would be
+one number nobody could tune per question, it would hide the best guess, and
+answering `null` would change what existing `typesafe` callers get back.
 
 The instruction is the asker's and is trusted. The evidence and any examples
 are not: they are capped (64 KiB of evidence, 20 examples totalling 32 KiB) and
@@ -53,14 +70,17 @@ from the instruction.
 
 `DECISION_PROVIDER` picks one per deployment. Each provider answers every kind;
 there is no fallback from one to another when a provider fails, so a caller
-retries the same judgement rather than getting a different one. `typesafe`
-chosen without `TYPESAFE_API_KEY` is not a failure but a deployment that cannot
+retries the same judgement rather than getting a different one. `gemini` or
+`typesafe` chosen without its key is not a failure but a deployment that cannot
 use it: the `model` provider answers instead, and
-`decisions.registry.typesafe_unconfigured.degraded` is logged once.
+`decisions.registry.gemini_unconfigured.degraded` (or `.observed`, when
+`gemini` is only the default) or `decisions.registry.typesafe_unconfigured.degraded`
+is logged once.
 
 | Provider | How it answers | Confidence |
 | --- | --- | --- |
-| `model` (default) | The deployment's language model -- `DECISION_MODEL`, else the system profile's default, else the workspace's -- via `agent.contracts.model_runtime`, with structured output checked against the questions and one correction on a background decision | `null` |
+| `gemini` (default) | Google's Decisions API, `gemini-decision-1` (`LEMMA_GOOGLE_API_KEY`), mapped as for `typesafe` with Gemini's keys: a multi-choice option is `<key>-<index>`. Google serves it on the Gemini API only, which refuses service accounts, so it takes a key even where models run on Vertex AI | The probability of the chosen value |
+| `model` | The deployment's language model -- `DECISION_MODEL`, else the system profile's default, else the workspace's -- via `agent.contracts.model_runtime`, with structured output checked against the questions and one correction on a background decision | `null` |
 | `typesafe` | Typesafe System One (`TYPESAFE_API_KEY`): a choice as `choice`, yes or no as `noul`, a scale as `score`, a multi-choice as one `noul` per option | The probability of the chosen value |
 
 Adding a provider is an adapter implementing `DecisionProvider`
@@ -83,17 +103,62 @@ sequenceDiagram
     S-->>C: one answer per question
 ```
 
+## Images
+
+A decision can look at images as well as text: a receipt photo on an expense
+claim, a slide, a screenshot. The request names them as files of the Lemma,
+`"images": [{"path": "/receipts/0042.jpg"}]`, and `evidence` may then be left
+out. Nothing else is accepted: bytes in the body would be megabytes of base64
+in a route bounded at 512 KiB, and a URL this server fetched would let anyone
+who can ask a decision make it request any address it can reach, internal
+ones included.
+
+- **Read as the caller** (`api/images.py`). Each path is resolved through
+  `datastore.contracts.pod_files` with the request's own context -- a member's
+  access, or a function's or agent's grants -- so a decision shows a model
+  nothing the caller could not open. A file that is missing or not theirs to
+  read gets the same answer. The files are read in one short unit of work,
+  closed before anything is decoded or a model is asked. A file that cannot be
+  used refuses the request (422, every such file listed by
+  `images[i].path` or `images[i]`) before the rest of it is checked.
+- **Sized for the model** (`infrastructure/image_payload.py`, off the event
+  loop). A file is what its bytes say: PNG, JPEG, WebP or GIF, still (an
+  animation is refused, not judged on its first frame), at most 10 MiB and 50
+  megapixels. One larger than 1568 pixels a side -- what models shrink to on
+  arrival -- or over 3 MiB is shrunk and sent as JPEG, transparency laid on
+  white.
+- **Bounded** (`domain/request.py`, which also holds a backend caller handing
+  bytes in directly): at most 4 images of at most 3 MiB each as sent.
+- **Inside the evidence.** The `model` provider sends each image as image
+  content between the evidence markers, after a line naming it (`Image 1 of 2
+  (receipt.jpg):`), and the system prompt says text inside an image is
+  evidence, never instructions. The token ceiling grows by 3,000 input tokens
+  per image. Metering is the model call's own: images are billed as input
+  tokens.
+- **Only to a model that reads them.** The `model` provider sends images only
+  to a model whose runtime profile declares `VISION` (an Anthropic-compatible
+  system profile always does; an OpenAI-compatible one for the names in
+  `LEMMA_OPENAI_VISION_MODEL_NAMES`; a workspace model as marked in Settings).
+  Any other model, `typesafe` and `gemini`, refuse the request with 422
+  `DECISION_IMAGES_UNSUPPORTED` before anything is asked: a text-only model
+  handed an image refuses the whole call, which would otherwise reach the
+  caller as a 503 to retry. Typesafe System One takes images only as an opt-in
+  preview, so this provider does not send them yet; nor does `gemini`.
+
+Examples stay text only.
+
 ## Limits and metering
 
 | Setting | Meaning |
 | --- | --- |
 | `DECISION_INTERACTIVE_TIMEOUT_SECONDS` / `DECISION_BACKGROUND_TIMEOUT_SECONDS` | End-to-end deadline per priority; `interactive` also gets no second model attempt |
 | `DECISION_RATE_LIMIT_PER_MINUTE` | Decisions per organization per clock minute, counted separately for `interactive` and `background`, so a schedule's backlog never leaves a live call unrouted; fails open when Redis does not answer within 0.25 s |
+| `GEMINI_DECISION_PRICE_PER_MILLION_INPUT_TOKENS_USD` | Google's price for decisions (default 0.10; output is free) |
 | `TYPESAFE_PRICE_PER_MILLION_INPUT_TOKENS_USD` | System One's price, so its calls count toward spend limits |
 
-Model decisions are metered like any model call. System One calls are metered
-through `usage.contracts.metering.metered_request` under the model name
-`typesafe:<model>`. Both are recorded with `source_type` `decision` (or the
+Model decisions are metered like any model call. Gemini and System One calls are
+metered through `usage.contracts.metering.metered_request` under the model name
+`gemini:<model>` or `typesafe:<model>`. All are recorded with `source_type` `decision` (or the
 internal caller's own source) and attributed to the person, and to the function
 or agent when one is asking with a delegated token.
 
@@ -101,7 +166,11 @@ or agent when one is asking with a delegated token.
 
 Unit tests cover the schema subset, request bounds, the prompt's trust split,
 both providers against scripted models and a mock transport, the service's error
-mapping and answer check, the rate window, and the route. E2E tests cover a
-member asking, a function asking in its own pod and refused in another, a
-colleague outside the pod refused, metering, 422s, an unreachable provider (503)
-and the rate limit (429).
+mapping and answer check, the rate window, and the route; for images, the
+bounds, their place between the markers, the vision check on both providers,
+sizing a file by its bytes, and the reader listing every file it cannot use. E2E
+tests cover a member asking, a function asking in its own pod and refused in
+another, a colleague outside the pod refused, metering, 422s, an unreachable
+provider (503) and the rate limit (429); and a decision on an uploaded photo,
+the 422 from a model that cannot read images, and another member's private
+file refused.

@@ -7,7 +7,8 @@ channel that answer every line, and in the member's own channel the pod's
 agent); this module does the answering. A line heard on a platform is
 answered at its door by the bot it came through (``agent_surfaces``); any
 other agent the rule names for it starts here, and answers at its place. Each agent answers in
-the member's own conversation with it in that channel -- with the member's
+the member's own conversation with it at the line's place -- Lemma itself for
+a line typed here, the platform place for one heard there -- with the member's
 access, like any turn they start -- and its answer comes back as a line in the
 thread of the line it answers, said for them.
 
@@ -82,6 +83,7 @@ from app.modules.channels.contracts import (
     ChannelMessage,
     SenderKind,
     channel_by_id,
+    source_by_id,
 )
 from app.modules.channels.contracts.answers import start_answering
 from app.modules.channels.contracts.backgrounds import (
@@ -168,6 +170,8 @@ async def _answer_as(
     agent_id: UUID,
     agent_name: str,
 ) -> UUID | None:
+    """Have this agent answer a member's channel line in their conversation on
+    the line's platform, as the member; the conversation answered, or None."""
     pod_id, user_id = channel.pod_id, line.sender.user_id
     assert user_id is not None
     context = await create_authorization_data_service(uow).build_user_context(
@@ -186,6 +190,7 @@ async def _answer_as(
         conversation_id = await _members_conversation(
             uow,
             channel=channel,
+            line=line,
             user_id=user_id,
             agent_id=agent_id,
             agent_name=agent_name,
@@ -285,22 +290,29 @@ async def _members_conversation(
     uow: SqlAlchemyUnitOfWork,
     *,
     channel: Channel,
+    line: ChannelMessage,
     user_id: UUID,
     agent_id: UUID,
     agent_name: str,
 ) -> UUID:
+    """The member's conversation with the agent on the line's platform: the
+    one a heard line came from, or Lemma itself for one typed here -- never
+    the one they keep with it on WhatsApp or by email."""
+    platform = await _heard_on(uow, line)
     seats = ChannelConversations(uow)
     await seats.lock_person(
         channel_id=channel.id,
         pod_id=channel.pod_id,
         agent_id=agent_id,
         person_id=user_id,
+        platform=platform,
     )
     found = await seats.in_channel(
         channel_id=channel.id,
         pod_id=channel.pod_id,
         agent_id=agent_id,
         person_id=user_id,
+        platform=platform,
     )
     if found is not None:
         return found
@@ -313,8 +325,17 @@ async def _members_conversation(
         origin=ConversationOrigin.CHANNEL,
         require_execute_grant=False,
         channel_id=channel.id,
+        platform=platform,
     )
     return opened.id
+
+
+async def _heard_on(uow: SqlAlchemyUnitOfWork, line: ChannelMessage) -> str | None:
+    """The platform a line was heard on; None for one typed in Lemma."""
+    if not line.heard_outside or line.source_id is None:
+        return None
+    source = await source_by_id(uow, line.source_id)
+    return source.platform if source is not None else None
 
 
 def turn_metadata(

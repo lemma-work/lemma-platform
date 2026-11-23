@@ -69,6 +69,13 @@ case "$tool" in
   agent-browser)
     pattern='*/node_modules/agent-browser/bin/agent-browser.js'
     ensure_browser_started "${1:-}"
+    # Somebody watching is told the agent is driving while its commands keep
+    # coming (`browser_relay/app.py`, `agent_active_seconds`). The relay runs
+    # this wrapper too -- for its keepalive and the toolbar -- and says so, so
+    # a person's own click is never shown as the agent's.
+    if [ -z "${LEMMA_BROWSER_ACTOR:-}" ]; then
+      mkdir -p /tmp/lemma-browser 2>/dev/null && : > /tmp/lemma-browser/agent-active 2>/dev/null || true
+    fi
     ;;
   lit|liteparse)
     pattern='*/node_modules/@llamaindex/liteparse/dist/cli.js'
@@ -88,6 +95,52 @@ entrypoint="$(
 if [ -z "$entrypoint" ]; then
   echo "Lemma Node tool is not installed: $tool" >&2
   exit 127
+fi
+
+# The session `agent-browser` would act in: `--session` wins over the
+# environment, as it does in the CLI.
+browser_session() {
+  local previous=""
+  for argument in "$@"; do
+    if [ "$previous" = "--session" ]; then
+      printf '%s' "$argument"
+      return 0
+    fi
+    previous="$argument"
+  done
+  printf '%s' "${AGENT_BROWSER_SESSION:-default}"
+}
+
+# Whether that session's daemon is up, by its own pid file.
+daemon_is_up() {
+  local pid_file pid
+  pid_file="${XDG_RUNTIME_DIR:-/tmp/lemma-browser/runtime}/agent-browser/$1.pid"
+  pid="$(cat "$pid_file" 2>/dev/null)" || return 1
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+# One daemon start at a time, per session, across every caller.
+#
+# A CLI that finds no daemon starts one. Two at once -- the relay opening the
+# view while `lemma-ensure-display` opens about:blank, an agent's command
+# beside the keepalive -- each start a daemon and a Chrome on the same
+# profile. The second Chrome hands off to the first and, leaving, takes the
+# profile's DevToolsActivePort with it, so the browser that is running can no
+# longer be found; the orphaned daemon later exits and deletes the live one's
+# socket, and the next command starts the cycle again. Measured on Docker and
+# on E2B. The relay's own lock covers only the relay.
+#
+# So a command that would start a daemon waits its turn, and looks again once
+# it has it: whoever went first has usually started the daemon by then. With a
+# daemon up, nothing waits. `-o`, because the lock must not pass to the daemon
+# the CLI forks -- it would hold it for its whole life.
+if [ "$tool" = "agent-browser" ] && command -v flock >/dev/null 2>&1; then
+  session="$(browser_session "$@")"
+  if ! daemon_is_up "$session"; then
+    locks="${XDG_RUNTIME_DIR:-/tmp/lemma-browser/runtime}/agent-browser"
+    mkdir -p "$locks" 2>/dev/null || true
+    exec flock -o -w 240 "$locks/$session.start.lock" "$NODE_BINARY" "$entrypoint" "$@"
+  fi
 fi
 
 exec "$NODE_BINARY" "$entrypoint" "$@"

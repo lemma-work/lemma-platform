@@ -124,7 +124,8 @@ async def fold_back(
 ) -> None:
     """A push held while the member had the app open: its lines wait in
     their window of the channel, to go with the next push from it -- no sooner
-    than ``hold_for`` unless a line calls them meanwhile."""
+    than ``hold_for`` unless a line calls them meanwhile. A question it asks
+    them still calls them when it goes: it leads, and may go by email."""
     if delivery.recipient_user_id is None:
         return
     channel = await ChannelRepository(uow.session).get(delivery.channel_id)
@@ -136,7 +137,7 @@ async def fold_back(
         folds=[
             Fold(
                 user_id=delivery.recipient_user_id,
-                urgent=False,
+                urgent=delivery.urgent,
                 from_seq=delivery.from_seq or delivery.seq,
                 seq=delivery.seq,
                 lines=delivery.lines,

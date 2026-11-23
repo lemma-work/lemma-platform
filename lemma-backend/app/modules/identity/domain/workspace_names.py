@@ -4,22 +4,25 @@ Ported from the web app's onboarding helpers, which did all of this in
 TypeScript because signing up through the app was the only way in. Chat
 surfaces onboard people who never load the app at all, and a second copy of
 "what is this workspace called" would drift from the first inside one release
--- so this is the implementation, and the web onboarding is being moved onto it
-rather than kept beside it.
+-- so this is the implementation, and the web onboarding calls it rather than
+keeping its own.
 
-The generated names are deterministic on the address, not random. Someone whose
-first attempt half-failed and who tries again lands on the same name, instead of
-collecting a second differently-named workspace; and a name in a support ticket
-can be reproduced from the email that made it.
+A company's organization is named after the company its work domain names. A
+workspace of one is named after its person -- "Ada's workspace" -- and never
+after a generated phrase: a name that says whose it is beats one that is merely
+unique, and the handle, not the name, is what has to be unique.
 
-The hash is FNV-1a as JavaScript computes it -- 32-bit wrapping, `Math.imul`
-semantics, an unsigned shift for the noun and a signed value for the adjective.
-Kept bit-exact rather than merely similar, because the two implementations have
-to agree on the name for the same person for as long as both exist.
+The generated adjective-noun names survive only as the last rung of the company
+ladder. They are deterministic on the address, not random, so a retry lands on
+the same name. The hash is FNV-1a as JavaScript computes it -- 32-bit wrapping,
+`Math.imul` semantics, an unsigned shift for the noun and a signed value for the
+adjective -- kept bit-exact so the expected values in the unit tests stay the
+ones the TypeScript produced.
 """
 
 from __future__ import annotations
 
+import re
 import unicodedata
 
 _ADJECTIVES = (
@@ -140,14 +143,59 @@ def organization_name_from_work_domain(domain: str) -> str | None:
     return to_title_case(label.replace("-", " ").replace("_", " ")) or None
 
 
-def personal_organization_name(full_name: str | None) -> str | None:
-    """ "Ada's workspace", or ``None`` when there is no name to use.
+#: Where a local part splits into words: "ada.lovelace", "ada_l", "ada-l".
+_LOCAL_PART_SEPARATORS = re.compile(r"[._-]")
+
+#: What a workspace of one is called when nothing says whose it is.
+UNNAMED_PERSONAL_ORGANIZATION = "My workspace"
+
+#: The Lemma made with a workspace of one.
+PERSONAL_LEMMA_NAME = "Personal"
+
+#: The Lemma made with a team's organization, when its name folds to nothing a
+#: pod may be called -- an organization named entirely in a non-Latin script.
+UNNAMED_TEAM_LEMMA = "Everyone"
+
+
+def first_name_from_address(email: str | None) -> str | None:
+    """A first name an address spells out, or ``None`` when it spells none.
+
+    A mailbox is not a name -- the web once offered somebody "ada0196+99's
+    workspace" -- so a local part counts only when its first word reads as one:
+    letters and nothing else, at least two of them, before any ``+tag``, dot,
+    underscore or hyphen.
+    """
+    said = (email or "").strip()
+    at = said.rfind("@")
+    if at < 1:
+        return None
+    first = _LOCAL_PART_SEPARATORS.split(said[:at].split("+")[0])[0]
+    if len(first) < 2 or not first.isalpha():
+        return None
+    return first[:1].upper() + first[1:].lower()
+
+
+def personal_organization_name(full_name: str | None, email: str | None = None) -> str:
+    """ "Ada's workspace": the name they gave, else one their address spells.
 
     A personal workspace is named after its person, never numbered: the web
     onboarding once produced "Personal 5", which says nothing about whose it is.
     """
-    first = (full_name or "").strip().split(" ")[0]
-    return f"{first}'s workspace" if first else None
+    words = (full_name or "").split()
+    first = words[0] if words else first_name_from_address(email)
+    return f"{first}'s workspace" if first else UNNAMED_PERSONAL_ORGANIZATION
+
+
+def organization_lemma_name(organization_name: str, *, team: bool) -> str:
+    """What the Lemma made with a new organization is called.
+
+    A team's is called what the team is, folded to the characters a pod name
+    allows; a workspace of one has one Lemma, and it is that person's.
+    """
+    if not team:
+        return PERSONAL_LEMMA_NAME
+    # A pod name starts and ends with a letter or digit.
+    return _pod_name_safe(organization_name).strip(" _-") or UNNAMED_TEAM_LEMMA
 
 
 def organization_name_candidate(
@@ -161,16 +209,15 @@ def organization_name_candidate(
 
     Later attempts exist because the name may already be taken: the company
     name, then the bare domain, then numbered, and finally a generated name that
-    no company will collide with. Without a company, the person's own name
-    comes first, and a generated name only when there is none.
+    no company will collide with. Without a company it is the person's own
+    workspace, named after them on every attempt -- a name is a label two
+    organizations may share, so there is nothing to walk away from.
     """
     company_name = (
         organization_name_from_work_domain(work_domain) if work_domain else None
     )
     if not company_name:
-        return personal_organization_name(full_name) or generated_organization_name(
-            email, attempt
-        )
+        return personal_organization_name(full_name, email)
 
     if attempt == 0:
         return company_name

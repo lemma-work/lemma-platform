@@ -40,6 +40,10 @@ class WorkspaceBrowserNotRunning(WorkspaceRuntimeError):
     """
 
 
+class WorkspaceRuntimePathProtected(WorkspaceRuntimeError):
+    """The runtime refused a change to the browser's profile (HTTP 423)."""
+
+
 class WorkspaceRuntimeFileRejected(WorkspaceRuntimeError):
     def __init__(self, message: str, *, status_code: int) -> None:
         super().__init__(message)
@@ -86,5 +90,6 @@ _FILESYSTEM_STATUS_ERRORS: Mapping[int, type[WorkspaceRuntimeError]] = {
     409: WorkspaceRuntimeFileConflict,
     413: WorkspaceRuntimeFileRejected,
     422: WorkspaceRuntimeFileRejected,
+    423: WorkspaceRuntimePathProtected,
     507: WorkspaceRuntimeFileRejected,
 }

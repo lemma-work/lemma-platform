@@ -41,11 +41,13 @@
     "@tiptap/react": "^3.31.3",
     "@tiptap/starter-kit": "^3.32.2",
     "@tiptap/suggestion": "^3.32.2",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "github-slugger": "^2.0.0",
     "gray-matter": "^4.0.3",
     "js-yaml": "^4.3.2",
     "lemma-sdk": "file:../lemma-typescript",
-    "next": "^16.4.3",
+    "next": "^16.4.5",
     "next-mdx-remote": "^6.0.0",
     "posthog-js": "^1.444.0",
     "react": "^19.3.1",
@@ -72,12 +74,12 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@types/three": "^0.187.0",
-    "eslint": "^10.14.0",
+    "eslint": "^10.15.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "jsdom": "^29.1.1",
     "playwright": "^1.64.1",
     "typescript": "^5.9.2",
-    "typescript-eslint": "^8.72.1"
+    "typescript-eslint": "^8.73.0"
   },
   "engines": {
     "node": ">=24 <25"

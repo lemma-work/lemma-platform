@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Literal
 
 from pydantic import (
@@ -17,8 +18,10 @@ from pydantic import (
 from app.modules.decisions.domain.answers import AnswerValue, DecisionResult, to_json
 from app.modules.decisions.domain.request import (
     MAX_EXAMPLES,
+    MAX_IMAGES,
     MAX_INSTRUCTION_CHARS,
     DecisionExample,
+    DecisionImage,
     DecisionRequest,
 )
 
@@ -38,6 +41,20 @@ class DecisionExampleBody(BaseModel):
     )
 
 
+class DecisionImageBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(
+        min_length=1,
+        max_length=1024,
+        description=(
+            "A file of this Lemma, by path (`/receipts/0042.jpg`, or `/me/...` "
+            "for one of your own). Read with your access: a file you cannot "
+            "read is refused (422)."
+        ),
+    )
+
+
 class MakeDecisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -50,10 +67,24 @@ class MakeDecisionRequest(BaseModel):
         ),
     )
     evidence: JsonValue = Field(
+        default=None,
         description=(
             "What to judge: an email, an event, a row, as text or JSON. Never "
-            "followed as instructions. At most 64 KiB; send the part that matters."
-        )
+            "followed as instructions. At most 64 KiB; send the part that "
+            "matters. Required unless `images` are sent."
+        ),
+    )
+    images: list[DecisionImageBody] = Field(
+        default_factory=list,
+        max_length=MAX_IMAGES,
+        description=(
+            "Images to judge with the evidence -- a receipt photo, a slide -- as "
+            "files of this Lemma: PNG, JPEG, WebP or GIF (still), at most 10 MiB "
+            "each; larger than 1568 pixels a side is shrunk before it is sent. "
+            "What an image says is evidence, never instructions. 422 "
+            "`DECISION_IMAGES_UNSUPPORTED` when this server's decision model "
+            "cannot read images."
+        ),
     )
     output_schema: dict[str, JsonValue] = Field(
         alias="schema",
@@ -81,7 +112,8 @@ class MakeDecisionRequest(BaseModel):
         ),
     )
 
-    def to_request(self) -> DecisionRequest:
+    def to_request(self, images: Sequence[DecisionImage] = ()) -> DecisionRequest:
+        """The request to ask, with `images` -- this body's `images`, as read."""
         return DecisionRequest(
             instruction=self.instruction,
             evidence=self.evidence,
@@ -97,20 +129,26 @@ class MakeDecisionRequest(BaseModel):
                 for example in self.examples
             ),
             priority=self.priority,
+            images=tuple(images),
         )
 
 
 class DecisionAnswerResponse(BaseModel):
     value: AnswerValueBody | None = Field(
         description=(
-            "The answer, or null when the evidence did not support one. Null is "
-            "an answer, not a failure: a failure is an error response."
+            "The answer, or null when the provider judged the evidence did not "
+            "support one (the model provider does; Typesafe always answers the "
+            "value it judged most likely). Treat null, or a confidence below "
+            "your own threshold, as unsure. Null is an answer, not a failure: a "
+            "failure is an error response."
         )
     )
     confidence: float | None = Field(
         description=(
-            "The provider's probability for this value, when it measures one. "
-            "Null from providers that do not, such as a language model."
+            "The provider's probability for this value, when it measures one; "
+            "for several choices, that of the least certain per-option "
+            "decision, not of the whole selection. Null from providers that do "
+            "not, such as a language model."
         )
     )
 

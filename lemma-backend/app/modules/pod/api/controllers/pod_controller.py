@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from uuid import UUID
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.api.dependencies import CurrentUser, UoWDep
@@ -9,6 +9,7 @@ from app.core.authorization.dependencies import PodContextDep
 from app.core.authorization.service import AuthorizationDataService
 from app.modules.identity.contracts import OrganizationRole
 from app.modules.pod.api.dependencies import (
+    PodAddressServiceDep,
     PodServiceDep,
     PodJoinRequestServiceDep,
     PodViewerDep,
@@ -16,6 +17,9 @@ from app.modules.pod.api.dependencies import (
     PodAdminDep,
 )
 from app.modules.pod.api.schemas.pod_schemas import (
+    JoinablePodListResponse,
+    JoinablePodResponse,
+    NamedPodResponse,
     PodCreateRequest,
     PodUpdateRequest,
     PodResponse,
@@ -68,6 +72,35 @@ async def create_pod(
 
 
 @router.get(
+    "/by-name",
+    status_code=status.HTTP_200_OK,
+    operation_id="pod.find_by_name",
+    summary="Find a Pod by Name",
+    description=(
+        "Which pod a web address spelled in names means "
+        "(`/l/{organization}/{pod}/...`): `organization` is the organization's "
+        "handle, `pod` the pod's name as one word of an address -- lower case, "
+        "letters and digits, a hyphen for every other run. Answers only for a "
+        "pod the caller could already see by name or walk into without asking: "
+        "one they are in, any pod for the organization's owner, a pod open to "
+        "everyone, and a pod open to the organization for anyone in it or free "
+        "to join it. Every other name, an unknown handle, and a word two pods "
+        "share are one 404. Open the pod, or ask to join it, by the id."
+    ),
+    response_model=NamedPodResponse,
+)
+async def find_pod_by_name(
+    pod_address_service: PodAddressServiceDep,
+    user: CurrentUser,
+    organization: str = Query(min_length=1, max_length=255),
+    pod: str = Query(min_length=1, max_length=255),
+) -> NamedPodResponse:
+    """Find the pod an address in names means."""
+    pod_id = await pod_address_service.find(organization, pod, user.id)
+    return NamedPodResponse(pod_id=pod_id)
+
+
+@router.get(
     "/{pod_id}",
     dependencies=[PodViewerDep],
     status_code=status.HTTP_200_OK,
@@ -92,14 +125,24 @@ async def get_pod(
     return PodResponse.model_validate(pod)
 
 
-@router.put(
+@router.patch(
     "/{pod_id}",
     dependencies=[PodEditorDep],
     status_code=status.HTTP_200_OK,
     operation_id="pod.update",
     summary="Update Pod",
-    description="Update pod details",
+    description="Update pod details; only the fields sent change",
     response_model=PodResponse,
+)
+# PUT predates PATCH and has always been a partial update, so it stays for
+# clients built against it but leaves the schema: one operation per action.
+@router.put(
+    "/{pod_id}",
+    dependencies=[PodEditorDep],
+    status_code=status.HTTP_200_OK,
+    operation_id="pod.update.put",
+    response_model=PodResponse,
+    include_in_schema=False,
 )
 async def update_pod(
     pod_id: UUID,
@@ -156,6 +199,42 @@ async def list_pods_by_organization(
 
     return PodListResponse(
         items=[PodResponse.model_validate(pod) for pod in pods],
+        limit=limit,
+        total=len(pods),
+        next_page_token=cursor,
+    )
+
+
+@organization_router.get(
+    "/joinable",
+    status_code=status.HTTP_200_OK,
+    operation_id="pod.list_joinable",
+    summary="List Pods the Caller Can Join",
+    description=(
+        "The organization's pods the caller is not in and may join without "
+        "asking: those open to the organization (ORG_MEMBERS) or to everyone "
+        "(PUBLIC). Join one with `POST /pods/{pod_id}/join`. Empty for an "
+        "organization owner, who already opens every pod. 403 for someone "
+        "outside the organization."
+    ),
+    response_model=JoinablePodListResponse,
+)
+async def list_joinable_pods(
+    organization_id: UUID,
+    pod_service: PodServiceDep,
+    user: CurrentUser,
+    limit: int = Query(default=100, ge=1, le=1000),
+    page_token: str | None = None,
+) -> JoinablePodListResponse:
+    """List the pods the caller may join."""
+    parse_uuid_page_token(page_token)
+
+    pods, cursor = await pod_service.list_joinable_pods(
+        organization_id, user.id, limit, page_token
+    )
+
+    return JoinablePodListResponse(
+        items=[JoinablePodResponse.model_validate(pod) for pod in pods],
         limit=limit,
         total=len(pods),
         next_page_token=cursor,

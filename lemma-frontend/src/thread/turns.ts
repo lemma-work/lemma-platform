@@ -318,7 +318,7 @@ export function humanMarks(
     if (meta.source === "pod_ask") {
         const name = typeof meta.ask_from_pod_name === "string" ? meta.ask_from_pod_name.trim() : "";
         marks.askedBy = {
-            name: name || "Another teammate",
+            name: name || "Another Lemma",
             podId: typeof meta.ask_from_pod_id === "string" ? meta.ask_from_pod_id : "",
             conversationId: typeof meta.ask_from_conversation_id === "string" ? meta.ask_from_conversation_id : "",
             forYou: meta.ask_mode !== "LINK",
@@ -328,7 +328,7 @@ export function humanMarks(
     if (meta.source === "pod_ask_answer") {
         const name = typeof meta.asked_pod_name === "string" ? meta.asked_pod_name.trim() : "";
         marks.answeredBy = {
-            name: name || "Another teammate",
+            name: name || "Another Lemma",
             podId: typeof meta.asked_pod_id === "string" ? meta.asked_pod_id : "",
             conversationId: typeof meta.ask_conversation_id === "string" ? meta.ask_conversation_id : "",
             /* Strict: an answer from before the mode was written down links
@@ -478,7 +478,7 @@ export function relayedAnswerText(raw: string, answeredBy: AnsweredBy, offset: u
         case "UNFINISHED":
             return name + " couldn’t finish this request. You can ask again.";
         case "DISCONNECTED":
-            return name + " was disconnected before it answered, so its answer wasn’t passed back. Someone needs to connect the two teammates again before it can be asked.";
+            return name + " was disconnected before it answered, so its answer wasn’t passed back. Someone needs to connect the two Lemmas again before it can be asked.";
     }
 }
 

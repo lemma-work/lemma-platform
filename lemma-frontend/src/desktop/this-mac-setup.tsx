@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircleIcon, CopyIcon, ExternalIcon, RefreshIcon } from "@/ui/icons";
+import { CopyIcon, ExternalIcon, RefreshIcon } from "@/ui/icons";
 import { useOAuthRedirectUri } from "@/data/oauth-redirect";
 import { copyText } from "./clipboard";
 import { openExternal } from "./open-external";
@@ -22,6 +22,7 @@ import { sendTestEmail } from "./server-setup-email";
 import { TelegramBotCard } from "./telegram-bot-card";
 import { useThisMacAvailability, useThisMacSnapshot } from "./this-mac-settings";
 import { ThisMacDiagnostics } from "./this-mac-advanced";
+import { NOT_A_LOGIN, SecretInput } from "@/ui/form";
 
 /** Settings → This Mac → Server setup.
  *
@@ -39,14 +40,16 @@ import { ThisMacDiagnostics } from "./this-mac-advanced";
 
 type Said = { text: string; bad?: boolean } | null;
 
+/** A capability's standing, as the kit's dot and word. */
 function Status({ snapshot, id }: { snapshot: ThisMacSnapshot; id: Capability }) {
     const status = capabilityStatus(snapshot, id);
-    const tone = status.state === "ready" ? "ok" : status.state === "needs-setup" ? "warn" : "muted";
-    return <span className={"mrow__state mrow__state--" + tone}><i aria-hidden="true" />{status.label}</span>;
+    const tone = status.state === "ready" ? "kstatus" : status.state === "needs-setup" ? "kstatus kstatus--warn" : "kstatus kstatus--off";
+    return <span className={tone}>{status.label}</span>;
 }
 
-/** One capability. Closed until asked for, except the one that still needs
- *  setting up, so the page opens on the work that is left. */
+/** One capability, as a row that opens to its form on the same hairline.
+ *  Closed until asked for, except the one that still needs setting up, so
+ *  the page opens on the work that is left. */
 function Card({ id, snapshot, open, children }: { id: Capability; snapshot: ThisMacSnapshot; open: boolean; children: ReactNode }) {
     const spec = CAPABILITIES.find((one) => one.id === id)!;
     const ref = useRef<HTMLDetailsElement>(null);
@@ -55,25 +58,26 @@ function Card({ id, snapshot, open, children }: { id: Capability; snapshot: This
     }, [open]);
     const needs = capabilityStatus(snapshot, id).state === "needs-setup";
     return (
-        <details className="setup-card" id={"server-setup-" + id} ref={ref} open={open || needs || undefined}>
-            <summary>
-                <span className="thismac-row__text">
-                    <span className="thismac-row__name">{spec.title}{spec.required ? " · required" : ""}</span>
-                    <span className="thismac-row__said">{spec.unlocks}</span>
+        <details className="kset-fold" id={"server-setup-" + id} ref={ref} open={open || needs || undefined}>
+            <summary className="krow">
+                <span className="krow__v kset-wrap">
+                    <b>{spec.title}{spec.required ? " · required" : ""}</b>
+                    <span>{spec.unlocks}</span>
                 </span>
-                <Status snapshot={snapshot} id={id} />
+                <span className="krow__end"><Status snapshot={snapshot} id={id} /></span>
             </summary>
-            <div className="setup-card__body">{children}</div>
+            <div className="kset-fold__body">{children}</div>
         </details>
     );
 }
 
+/** How to get what a form needs, with the link to where it is got. */
 function Hint({ steps, url, label }: { steps: string; url: string | null; label: string }) {
     return (
-        <p className="thismac-said setup-hint">
+        <p className="kset-note">
             {steps}{" "}
             {url && (
-                <button type="button" className="linkish" onClick={() => void openExternal(url)}>
+                <button type="button" className="kset-link" onClick={() => void openExternal(url)}>
                     {label} <ExternalIcon size={11} />
                 </button>
             )}
@@ -81,9 +85,10 @@ function Hint({ steps, url, label }: { steps: string; url: string | null; label:
     );
 }
 
+/** What the last Save or Test found. */
 function Said({ said }: { said: Said }) {
     if (!said) return null;
-    return <p className={"thismac-said" + (said.bad ? " thismac-said--bad" : "")} role={said.bad ? "alert" : "status"}>{said.text}</p>;
+    return <p className={"kset-said" + (said.bad ? " kset-said--bad" : "")} role={said.bad ? "alert" : "status"}>{said.text}</p>;
 }
 
 /** A secret field: empty when stored ("Saved — type to replace"), with an
@@ -95,20 +100,18 @@ function SecretField({ id, label, name, snapshot, intent, onChange }: {
     const isStored = stored(snapshot, name);
     const removing = intent?.action === "remove";
     return (
-        <div className="field">
+        <div className="kfield">
             <label htmlFor={id}>{label}</label>
-            <input
+            <SecretInput
                 id={id}
-                type="password"
-                autoComplete="new-password"
-                spellCheck={false}
+                label={label}
                 disabled={removing}
                 placeholder={removing ? "Will be removed" : isStored ? "Saved — type to replace" : ""}
                 value={intent?.action === "replace" ? intent.value : ""}
                 onChange={(event) => onChange({ action: "replace", value: event.target.value })}
             />
             {isStored && (
-                <button type="button" className="linkish thismac-form__remove"
+                <button type="button" className="b b--s b--quiet"
                     onClick={() => onChange(removing ? { action: "keep" } : { action: "remove" })}>
                     {removing ? "Keep it" : "Remove"}
                 </button>
@@ -207,25 +210,25 @@ function AiModel({ snapshot }: { snapshot: ThisMacSnapshot }) {
     };
 
     return (
-        <form className="setup-form" onSubmit={(event) => { event.preventDefault(); save.mutate(); }}>
-            <fieldset disabled={busy}>
-                <div className="theme__modes" role="radiogroup" aria-label="Provider">
+        <form className="kset-form" onSubmit={(event) => { event.preventDefault(); save.mutate(); }}>
+            <fieldset className="kset-form" disabled={busy}>
+                <div className="kset-range" role="radiogroup" aria-label="Provider">
                     {AI_PRESETS.map((one) => {
                         const detected = found.data?.some((server) => server.baseUrl === one.baseUrl);
                         return (
-                            <button key={one.id} type="button" role="radio" className="theme__mode"
+                            <button key={one.id} type="button" role="radio" className="kchip"
                                 aria-checked={preset?.id === one.id} aria-pressed={preset?.id === one.id} onClick={() => choose(one.id)}>
                                 {one.name}{detected ? " · found" : ""}
                             </button>
                         );
                     })}
                 </div>
-                {!preset && <p className="thismac-said">Choose where the model runs: a provider’s API, or a model server on this computer.</p>}
+                {!preset && <p className="kset-note">Choose where the model runs: a provider’s API, or a model server on this computer.</p>}
                 {preset && <Hint steps={preset.hint} url={preset.keyUrl} label={"Get a " + preset.name + " key"} />}
                 {preset?.id === "other" && (
-                    <div className="theme__modes" role="radiogroup" aria-label="API style">
+                    <div className="kset-range" role="radiogroup" aria-label="API style">
                         {(["openai_compat", "anthropic_compat"] as const).map((protocol) => (
-                            <button key={protocol} type="button" role="radio" className="theme__mode"
+                            <button key={protocol} type="button" role="radio" className="kchip"
                                 aria-checked={draft.protocol === protocol} aria-pressed={draft.protocol === protocol}
                                 onClick={() => setDraft({ ...draft, protocol, models: [] })}>
                                 {protocol === "openai_compat" ? "OpenAI-compatible" : "Anthropic-compatible"}
@@ -234,13 +237,13 @@ function AiModel({ snapshot }: { snapshot: ThisMacSnapshot }) {
                     </div>
                 )}
                 {preset && <>
-                <div className="field">
+                <div className="kfield">
                     <label htmlFor="server-setup-ai-url">Address</label>
-                    <input id="server-setup-ai-url" value={draft.baseUrl} spellCheck={false} placeholder="https://…/v1"
+                    <input className="kinput" id="server-setup-ai-url" value={draft.baseUrl} spellCheck={false} placeholder="https://…/v1"
                         onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value, models: [] })} />
                 </div>
                 {privateHttp && (
-                    <label className="check">
+                    <label className="kset-check">
                         <input type="checkbox" checked={draft.allowPrivateNetwork}
                             onChange={(event) => setDraft({ ...draft, allowPrivateNetwork: event.target.checked })} />
                         <span>This address is on a network I trust (it is not encrypted)</span>
@@ -249,51 +252,51 @@ function AiModel({ snapshot }: { snapshot: ThisMacSnapshot }) {
                 {!local && (
                     <SecretField id="server-setup-ai-key" label="API key" name="ai.api_key" snapshot={snapshot} intent={key} onChange={setKey} />
                 )}
-                <div className="setup-form__acts">
-                    <button type="button" className="btn" onClick={() => list.mutate()}>
-                        <RefreshIcon size={13} className={list.isPending ? "spin" : undefined} /> {draft.models.length ? "List models again" : "List models"}
+                <div className="kset-acts">
+                    <button type="button" className="b b--s b--secondary" onClick={() => list.mutate()}>
+                        <RefreshIcon className={list.isPending ? "spin" : undefined} /> {draft.models.length ? "List models again" : "List models"}
                     </button>
                 </div>
                 {draft.models.length > 0 && <>
-                    <div className="field">
+                    <div className="kfield">
                         <label htmlFor="server-setup-ai-model">Default model</label>
-                        <select id="server-setup-ai-model" value={draft.defaultModel} onChange={(event) => setDraft({ ...draft, defaultModel: event.target.value })}>
+                        <select className="kinput" id="server-setup-ai-model" value={draft.defaultModel} onChange={(event) => setDraft({ ...draft, defaultModel: event.target.value })}>
                             {draft.models.map((model) => <option key={model} value={model}>{model}</option>)}
                         </select>
                     </div>
                     {draft.protocol !== "anthropic_compat" && (
-                        <div className="field">
+                        <div className="kfield">
                             <label htmlFor="server-setup-ai-image">Model that reads images</label>
-                            <select id="server-setup-ai-image" value={draft.imageModel} onChange={(event) => setDraft({ ...draft, imageModel: event.target.value })}>
+                            <select className="kinput" id="server-setup-ai-image" value={draft.imageModel} onChange={(event) => setDraft({ ...draft, imageModel: event.target.value })}>
                                 <option value="">None — images are not read</option>
                                 {draft.models.map((model) => <option key={model} value={model}>{model}</option>)}
                             </select>
-                            <span className="thismac-said">Choose one only if it accepts images; the provider’s list does not say which do.</span>
+                            <small>Choose one only if it accepts images; the provider’s list does not say which do.</small>
                         </div>
                     )}
-                    <div className="field">
+                    <div className="kfield">
                         <label htmlFor="server-setup-ai-fast">Fast model, for titles and summaries</label>
-                        <select id="server-setup-ai-fast" value={draft.fastModel} onChange={(event) => setDraft({ ...draft, fastModel: event.target.value })}>
+                        <select className="kinput" id="server-setup-ai-fast" value={draft.fastModel} onChange={(event) => setDraft({ ...draft, fastModel: event.target.value })}>
                             <option value="">Same as the default model</option>
                             {draft.models.map((model) => <option key={model} value={model}>{model}</option>)}
                         </select>
                     </div>
                 </>}
-                <div className="modal__acts">
-                    <button type="button" className="btn" disabled={Boolean(problem)} title={problem ?? undefined} onClick={() => test.mutate()}>
+                <div className="kset-acts">
+                    <button type="button" className="b b--s b--secondary" disabled={Boolean(problem)} title={problem ?? undefined} onClick={() => test.mutate()}>
                         {test.isPending ? "Testing…" : "Test"}
                     </button>
-                    <button className="btn btn--primary" type="submit" disabled={Boolean(problem)} title={problem ?? undefined}>
+                    <button className="b b--s b--primary" type="submit" disabled={Boolean(problem)} title={problem ?? undefined}>
                         {save.isPending ? "Saving…" : "Save"}
                     </button>
                 </div>
                 </>}
             </fieldset>
-            {preset && problem && !said && <p className="thismac-said">{problem}</p>}
+            {preset && problem && !said && <p className="kset-note">{problem}</p>}
             <Said said={said} />
-            <p className="thismac-said">
+            <p className="kset-note">
                 Models your organization adds in{" "}
-                <button type="button" className="linkish" onClick={() => openSettings("models")}>Models</button> work too.
+                <button type="button" className="kset-link" onClick={() => openSettings("models")}>Models</button> work too.
                 {" "}This one is {noun}’s own, and the one the server uses for its own work.
             </p>
         </form>
@@ -348,17 +351,17 @@ function Email({ snapshot }: { snapshot: ThisMacSnapshot }) {
     });
 
     return (
-        <form className="setup-form" onSubmit={(event) => { event.preventDefault(); save.mutate(); }}>
-            <fieldset disabled={save.isPending || test.isPending}>
-                <div className="theme__modes" role="radiogroup" aria-label="Send email with">
+        <form className="kset-form" onSubmit={(event) => { event.preventDefault(); save.mutate(); }}>
+            <fieldset className="kset-form" disabled={save.isPending || test.isPending}>
+                <div className="kset-range" role="radiogroup" aria-label="Send email with">
                     {([["none", "Not set up"], ["resend", "Resend"], ["smtp", "SMTP server"]] as const).map(([provider, name]) => (
-                        <button key={provider} type="button" role="radio" className="theme__mode"
+                        <button key={provider} type="button" role="radio" className="kchip"
                             aria-checked={draft.provider === provider} aria-pressed={draft.provider === provider}
                             onClick={() => setDraft({ ...draft, provider })}>{name}</button>
                     ))}
                 </div>
                 {draft.provider === "none" && (
-                    <p className="thismac-said">Nobody is emailed from {noun}. Invitations still work by sharing their link, and you can chat on Telegram by sharing your contact with the bot.</p>
+                    <p className="kset-note">Nobody is emailed from {noun}. Invitations still work by sharing their link, and you can chat on Telegram by sharing your contact there.</p>
                 )}
                 {draft.provider !== "none" && <Hint {...EMAIL_HINTS[draft.provider]} />}
                 {draft.provider === "resend" && (
@@ -366,48 +369,48 @@ function Email({ snapshot }: { snapshot: ThisMacSnapshot }) {
                         intent={secrets["surfaces.resend_api_key"]} onChange={(intent) => setSecret("surfaces.resend_api_key", intent)} />
                 )}
                 {draft.provider === "smtp" && <>
-                    <div className="field">
+                    <div className="kfield">
                         <label htmlFor="server-setup-smtp-host">SMTP host</label>
-                        <input id="server-setup-smtp-host" value={draft.smtpHost} spellCheck={false} placeholder="smtp.example.com"
+                        <input className="kinput" id="server-setup-smtp-host" value={draft.smtpHost} spellCheck={false} placeholder="smtp.example.com"
                             onChange={(event) => setDraft({ ...draft, smtpHost: event.target.value })} />
                     </div>
-                    <div className="field">
+                    <div className="kfield">
                         <label htmlFor="server-setup-smtp-port">Port</label>
-                        <input id="server-setup-smtp-port" inputMode="numeric" value={draft.smtpPort}
+                        <input className="kinput" id="server-setup-smtp-port" inputMode="numeric" value={draft.smtpPort}
                             onChange={(event) => setDraft({ ...draft, smtpPort: event.target.value })} />
                     </div>
-                    <div className="field">
+                    <div className="kfield">
                         <label htmlFor="server-setup-smtp-user">User name</label>
-                        <input id="server-setup-smtp-user" value={draft.smtpUser} spellCheck={false} autoComplete="off"
+                        <input className="kinput" id="server-setup-smtp-user" value={draft.smtpUser} spellCheck={false} autoComplete="off"
                             onChange={(event) => setDraft({ ...draft, smtpUser: event.target.value })} />
                     </div>
                     <SecretField id="server-setup-smtp-password" label="Password" name="email.smtp_password" snapshot={snapshot}
                         intent={secrets["email.smtp_password"]} onChange={(intent) => setSecret("email.smtp_password", intent)} />
-                    <label className="check">
+                    <label className="kset-check">
                         <input type="checkbox" checked={draft.smtpUseTls} onChange={(event) => setDraft({ ...draft, smtpUseTls: event.target.checked })} />
                         <span>Encrypt the connection (TLS)</span>
                     </label>
                 </>}
                 {draft.provider !== "none" && (
-                    <div className="field">
+                    <div className="kfield">
                         <label htmlFor="server-setup-from">Send from</label>
-                        <input id="server-setup-from" type="email" value={draft.fromEmail} spellCheck={false} placeholder="lemma@yourdomain.com"
+                        <input className="kinput" id="server-setup-from" type="email" value={draft.fromEmail} spellCheck={false} placeholder="lemma@yourdomain.com"
                             onChange={(event) => setDraft({ ...draft, fromEmail: event.target.value })} />
                     </div>
                 )}
-                <div className="modal__acts">
+                <div className="kset-acts">
                     {draft.provider !== "none" && (
-                        <button type="button" className="btn" disabled={unsaved} title={unsaved ? "Save first, then send a test." : undefined}
+                        <button type="button" className="b b--s b--secondary" disabled={unsaved} title={unsaved ? "Save first, then send a test." : undefined}
                             onClick={() => test.mutate()}>
                             {test.isPending ? "Sending…" : "Send a test email"}
                         </button>
                     )}
-                    <button className="btn btn--primary" type="submit" disabled={Boolean(problem) || !unsaved} title={problem ?? undefined}>
+                    <button className="b b--s b--primary" type="submit" disabled={Boolean(problem) || !unsaved} title={problem ?? undefined}>
                         {save.isPending ? "Saving…" : "Save"}
                     </button>
                 </div>
             </fieldset>
-            {problem && !said && <p className="thismac-said">{problem}</p>}
+            {problem && !said && <p className="kset-note">{problem}</p>}
             <Said said={said} />
         </form>
     );
@@ -421,15 +424,15 @@ function Email({ snapshot }: { snapshot: ThisMacSnapshot }) {
 function RedirectUri() {
     const uri = useOAuthRedirectUri();
     const [copied, setCopied] = useState<Said>(null);
-    if (!uri) return <p className="thismac-said">Reading the redirect URL this app must allow…</p>;
+    if (!uri) return <p className="kset-note">Reading the redirect URL this app must allow…</p>;
     return (
-        <p className="thismac-said">
+        <p className="kset-note">
             Redirect URL the app must allow: <code>{uri}</code>{" "}
-            <button type="button" className="linkish" onClick={() => void copyText(uri).then(
+            <button type="button" className="b b--s b--quiet" onClick={() => void copyText(uri).then(
                 () => setCopied({ text: "Copied." }),
                 () => setCopied({ text: "Couldn’t copy. Select the address and copy it.", bad: true }),
-            )}><CopyIcon size={12} /> Copy</button>
-            {copied && <span className={copied.bad ? "thismac-said--bad" : undefined} role={copied.bad ? "alert" : "status"}> {copied.text}</span>}
+            )}><CopyIcon /> Copy</button>
+            {copied && <span className={copied.bad ? "kset-said--bad" : undefined} role={copied.bad ? "alert" : "status"}> {copied.text}</span>}
         </p>
     );
 }
@@ -496,30 +499,32 @@ function CredentialForm({ spec, snapshot, open }: { spec: CredentialFormSpec; sn
     const configured = formConfigured(snapshot, spec.form);
     const testable = spec.test && (stored(snapshot, spec.test.field) || meaningfulIntent(secrets[spec.test.field])?.action === "replace");
     return <>
-        <details className="thismac-form" ref={ref} open={open || unsaved || undefined} id={"this-mac-" + spec.form}>
-            <summary>
-                <span className="thismac-row__text">
-                    <span className="thismac-row__name">{spec.title}</span>
-                    <span className="thismac-row__said">{spec.use}{spec.needsPublicLink ? " Needs Public sharing." : ""}</span>
+        <details className="kset-fold" ref={ref} open={open || unsaved || undefined} id={"this-mac-" + spec.form}>
+            <summary className="krow">
+                <span className="krow__v kset-wrap">
+                    <b>{spec.title}</b>
+                    <span>{spec.use}{spec.needsPublicLink ? " Needs Public sharing." : ""}</span>
                 </span>
-                <span className={"mrow__state mrow__state--" + (unsaved ? "warn" : configured ? "ok" : "muted")}>
-                    <i aria-hidden="true" />{unsaved ? "Unsaved changes" : configured ? "Set up" : "Not set up"}
+                <span className="krow__end">
+                    <span className={unsaved ? "kstatus kstatus--warn" : configured ? "kstatus" : "kstatus kstatus--off"}>
+                        {unsaved ? "Unsaved changes" : configured ? "Set up" : "Not set up"}
+                    </span>
                 </span>
             </summary>
-            <form className="thismac-form__body" onSubmit={(event) => { event.preventDefault(); setSaid(null); save.mutate(); }}>
-                <fieldset disabled={save.isPending || test.isPending}>
+            <form className="kset-fold__body" onSubmit={(event) => { event.preventDefault(); setSaid(null); save.mutate(); }}>
+                <fieldset className="kset-form" disabled={save.isPending || test.isPending}>
                     <Hint {...spec.hint} />
                     {spec.needsPublicLink && (
-                        <p className="thismac-said">
+                        <p className="kset-note">
                             Its messages arrive at a webhook on the internet, so it works only while Lemma is shared publicly.{" "}
-                            <button type="button" className="linkish" onClick={() => openSettings("this-mac-sharing")}>Sharing</button>
+                            <button type="button" className="kset-link" onClick={() => openSettings("this-mac-sharing")}>Sharing</button>
                         </p>
                     )}
                     {spec.fields.map((field) => {
                         const id = "this-mac-" + spec.form + "-" + field.key.replace(/\W/g, "-");
                         if (field.kind === "toggle") {
                             return (
-                                <label className="check" key={field.key}>
+                                <label className="kset-check" key={field.key}>
                                     <input type="checkbox" checked={draft[field.key] === true}
                                         onChange={(event) => setDraft((was) => ({ ...was, [field.key]: event.target.checked }))} />
                                     <span>{field.label}</span>
@@ -533,17 +538,17 @@ function CredentialForm({ spec, snapshot, open }: { spec: CredentialFormSpec; sn
                             );
                         }
                         return (
-                            <div className="field" key={field.key}>
+                            <div className="kfield" key={field.key}>
                                 <label htmlFor={id}>{field.label}</label>
-                                <input id={id} value={String(draft[field.key] ?? "")} spellCheck={false}
+                                <input className="kinput" id={id} value={String(draft[field.key] ?? "")} spellCheck={false} autoComplete="off" {...NOT_A_LOGIN}
                                     onChange={(event) => setDraft((was) => ({ ...was, [field.key]: event.target.value }))} />
                             </div>
                         );
                     })}
                     {spec.redirect && <RedirectUri />}
-                    <div className="modal__acts">
+                    <div className="kset-acts">
                         {unsaved && (
-                            <button type="button" className="linkish" onClick={() => {
+                            <button type="button" className="b b--s b--quiet" onClick={() => {
                                 drafts.delete(spec.form);
                                 setUnsaved(false);
                                 setSecretsState({});
@@ -552,11 +557,11 @@ function CredentialForm({ spec, snapshot, open }: { spec: CredentialFormSpec; sn
                             }}>Discard changes</button>
                         )}
                         {spec.test && (
-                            <button type="button" className="btn" disabled={!testable} onClick={() => { setSaid(null); test.mutate(); }}>
+                            <button type="button" className="b b--s b--secondary" disabled={!testable} onClick={() => { setSaid(null); test.mutate(); }}>
                                 {test.isPending ? "Testing…" : "Test"}
                             </button>
                         )}
-                        <button className="btn btn--primary" type="submit">{save.isPending ? "Saving…" : "Save"}</button>
+                        <button className="b b--s b--primary" type="submit">{save.isPending ? "Saving…" : "Save"}</button>
                     </div>
                 </fieldset>
                 <Said said={said} />
@@ -568,13 +573,16 @@ function CredentialForm({ spec, snapshot, open }: { spec: CredentialFormSpec; sn
     </>;
 }
 
+/** A capability's credential forms, as a list of rows that open. */
 function Forms({ group, snapshot, focus }: { group: SetupGroup; snapshot: ThisMacSnapshot; focus: string | null }) {
     const focused = formFromFocus(focus);
-    return <>
-        {CREDENTIAL_FORMS.filter((spec) => spec.group === group).map((spec) => (
-            <CredentialForm key={spec.form} spec={spec} snapshot={snapshot} open={focused === spec.form} />
-        ))}
-    </>;
+    return (
+        <div className="klist">
+            {CREDENTIAL_FORMS.filter((spec) => spec.group === group).map((spec) => (
+                <CredentialForm key={spec.form} spec={spec} snapshot={snapshot} open={focused === spec.form} />
+            ))}
+        </div>
+    );
 }
 
 /* ── the page ──────────────────────────────────────────────────────── */
@@ -595,38 +603,41 @@ export function ThisMacServerSetup({ focus }: { focus: string | null }) {
     useEffect(() => {
         if (card === "advanced") advanced.current?.scrollIntoView({ block: "start" });
     }, [card]);
-    if (snapshot.isPending) return <p className="empty-row" role="status">Reading this computer’s settings…</p>;
+    if (snapshot.isPending) return <p className="kset-note" role="status">Reading this computer’s settings…</p>;
     if (snapshot.isError) {
         return (
-            <div className="thismac-problem" role="alert">
-                <p>{friendlyError(snapshot.error)}</p>
-                <button className="btn" onClick={() => void snapshot.refetch()}><RefreshIcon size={13} /> Try again</button>
-            </div>
+            <p className="kset-said kset-said--bad" role="alert">
+                {friendlyError(snapshot.error)}
+                <button type="button" className="b b--s b--secondary" onClick={() => void snapshot.refetch()}><RefreshIcon /> Try again</button>
+            </p>
         );
     }
     const data = snapshot.data;
     const allReady = needsSetup(data).length === 0;
     return (
-        <div className="thismac">
-            <p className={"thismac-health thismac-health--" + (allReady ? "running" : "starting")} role="status">
-                <i aria-hidden="true" />
+        <div className="kset-stack">
+            <p className={allReady ? "kstatus kset-state" : "kstatus kstatus--warn kset-state"} role="status">
                 {allReady ? "This server has what it needs. The rest is optional." : "Set up an AI model so work can start."}
             </p>
-            <p className="thismac-said">
+            <p className="kset-note">
                 Saving restarts Lemma’s server: running agents stop, and open chats reconnect when it is back.
             </p>
-            <Card id="ai" snapshot={data} open={card === "ai"}><AiModel snapshot={data} /></Card>
-            <Card id="email" snapshot={data} open={card === "email"}><Email snapshot={data} /></Card>
-            <Card id="connectors" snapshot={data} open={card === "connectors"}><Forms group="connectors" snapshot={data} focus={focus} /></Card>
-            <Card id="channels" snapshot={data} open={card === "channels"}><Forms group="channels" snapshot={data} focus={focus} /></Card>
-            <Card id="voice" snapshot={data} open={card === "voice"}><Forms group="voice" snapshot={data} focus={focus} /></Card>
-            <Card id="search" snapshot={data} open={card === "search"}>
-                <p className="thismac-said"><CheckCircleIcon size={12} /> Built-in search (DuckDuckGo) works with no key.</p>
-                <Forms group="search" snapshot={data} focus={focus} />
-            </Card>
-            <div ref={advanced} id="server-setup-advanced">
-                <h4 className="thismac-heading setup-advanced">Advanced</h4>
-                <ThisMacDiagnostics snapshot={data} />
+            <div className="klist">
+                <Card id="ai" snapshot={data} open={card === "ai"}><AiModel snapshot={data} /></Card>
+                <Card id="email" snapshot={data} open={card === "email"}><Email snapshot={data} /></Card>
+                <Card id="connectors" snapshot={data} open={card === "connectors"}><Forms group="connectors" snapshot={data} focus={focus} /></Card>
+                <Card id="channels" snapshot={data} open={card === "channels"}><Forms group="channels" snapshot={data} focus={focus} /></Card>
+                <Card id="voice" snapshot={data} open={card === "voice"}><Forms group="voice" snapshot={data} focus={focus} /></Card>
+                <Card id="search" snapshot={data} open={card === "search"}>
+                    <p className="kstatus">Built-in search (DuckDuckGo) works with no key</p>
+                    <Forms group="search" snapshot={data} focus={focus} />
+                </Card>
+            </div>
+            <div ref={advanced} id="server-setup-advanced" className="kset-stack">
+                <p className="ksub">Advanced <span>Where Lemma keeps its state, its addresses and its logs</span></p>
+                <div className="klist">
+                    <ThisMacDiagnostics snapshot={data} />
+                </div>
             </div>
         </div>
     );

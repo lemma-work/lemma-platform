@@ -10,6 +10,8 @@ import pytest
 from app.core.domain.errors import BadRequestError, DomainError
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.pod_bundle.domain.state import PlanStep, StepAction, StepKind
+from app.modules.pod_bundle.domain.errors import PartKeptError
+from app.modules.pod_bundle.infrastructure.kept_parts import CreatedParts
 from app.modules.pod_bundle.infrastructure.applier import (
     BundleApplier,
     StepNotApplicableError,
@@ -111,8 +113,11 @@ class FakeTableOperations:
         enable_rls,
         visibility,
         ctx,
+        contact_owned=False,
+        contact_columns=None,
     ):
         self.created.append((name, [c.name for c in columns]))
+        self.contact_owned = (contact_owned, contact_columns)
 
     async def add_table_column(self, uow, *, pod_id, table_name, column, ctx):
         self.added.append(column.name)
@@ -243,6 +248,40 @@ async def test_table_create_calls_service(tmp_path, monkeypatch):
     assert fake.created == [("leads", ["id", "title"])]
 
 
+async def test_table_create_keeps_contact_ownership(tmp_path, monkeypatch):
+    # Dropped before: the table arrived as an ordinary one, so the contact
+    # policy never existed and a re-import saw `contact_id` as a stray column.
+    root = tmp_path / "bundle"
+    _write(
+        root / "tables" / "visitors" / "visitors.json",
+        {
+            "name": "visitors",
+            "primary_key_column": "id",
+            "enable_rls": False,
+            "contact_owned": True,
+            "contact_columns": ["title"],
+            "columns": [
+                {"name": "id", "type": "UUID"},
+                {"name": "title", "type": "TEXT"},
+            ],
+        },
+    )
+    fake = FakeTableOperations().patch(monkeypatch)
+    await _applier(root).apply_step(_step(StepKind.TABLE, "visitors"))
+    assert fake.contact_owned == (True, ["title"])
+
+
+async def test_table_create_defaults_to_not_contact_owned(tmp_path, monkeypatch):
+    root = tmp_path / "bundle"
+    _write(
+        root / "tables" / "leads" / "leads.json",
+        {"name": "leads", "columns": [{"name": "id", "type": "UUID"}]},
+    )
+    fake = FakeTableOperations().patch(monkeypatch)
+    await _applier(root).apply_step(_step(StepKind.TABLE, "leads"))
+    assert fake.contact_owned == (False, None)
+
+
 async def test_table_update_adds_new_columns_only(tmp_path, monkeypatch):
     class Existing:
         primary_key_column = "id"
@@ -276,6 +315,113 @@ async def test_table_update_adds_new_columns_only(tmp_path, monkeypatch):
     assert fake.created == []
 
 
+async def test_a_table_never_loses_a_column_whatever_the_step_says(
+    tmp_path, monkeypatch
+):
+    """The column the bundle lacks is the pod's own -- one a person added, say.
+
+    ``destructive`` is how a plan used to ask for the drop, and one planned
+    before an import kept what exists can still carry it."""
+
+    class _C:
+        def __init__(self, name):
+            self.name = name
+
+    existing = SimpleNamespace(
+        primary_key_column="id", columns=[_C("id"), _C("title"), _C("score")]
+    )
+    root = tmp_path / "bundle"
+    _write(
+        root / "tables" / "leads" / "leads.json",
+        {
+            "name": "leads",
+            "primary_key_column": "id",
+            "columns": [
+                {"name": "id", "type": "UUID"},
+                {"name": "title", "type": "TEXT"},
+            ],
+        },
+    )
+    fake = FakeTableOperations().patch(monkeypatch)
+    fake._existing["leads"] = existing
+
+    await _applier(root).apply_step(
+        _step(StepKind.TABLE, "leads", action=StepAction.UPDATE, destructive=True)
+    )
+
+    assert fake.removed == []
+    assert fake.added == []
+    assert fake.created == []
+
+
+async def test_a_table_made_since_the_plan_is_kept_whole(tmp_path, monkeypatch):
+    """Planned missing and here when its step runs: someone else's, so it
+    gains nothing either -- and its rows get none of the bundle's."""
+
+    class _C:
+        def __init__(self, name):
+            self.name = name
+
+    root = tmp_path / "bundle"
+    _write(
+        root / "tables" / "leads" / "leads.json",
+        {
+            "name": "leads",
+            "primary_key_column": "id",
+            "columns": [
+                {"name": "id", "type": "UUID"},
+                {"name": "stage", "type": "TEXT"},
+            ],
+        },
+    )
+    fake = FakeTableOperations().patch(monkeypatch)
+    fake._existing["leads"] = SimpleNamespace(
+        primary_key_column="id", columns=[_C("id")]
+    )
+    created = CreatedParts()
+
+    with pytest.raises(PartKeptError):
+        await _applier(root, created=created).apply_step(_step(StepKind.TABLE, "leads"))
+    with pytest.raises(PartKeptError, match="rows are kept"):
+        await _applier(root, created=created).apply_step(
+            _step(StepKind.TABLE_DATA, "leads")
+        )
+
+    assert fake.added == []
+
+
+async def test_rows_load_once_into_a_table_this_import_made(tmp_path, monkeypatch):
+    root = tmp_path / "bundle"
+    _write(
+        root / "tables" / "leads" / "leads.json",
+        {"name": "leads", "primary_key_column": "id", "columns": []},
+    )
+    (root / "tables" / "leads" / "data.csv").write_text("title\nAcme\n", "utf-8")
+    seeded: list[list[dict[str, object]]] = []
+
+    async def _get_table(uow, *, pod_id, name, ctx):
+        return SimpleNamespace(name=name)
+
+    async def _seed(uow, *, pod_id, table, rows, user_id):
+        seeded.append(rows)
+        return len(rows)
+
+    monkeypatch.setattr(f"{_DATASTORE}.get_table", _get_table)
+    monkeypatch.setattr(f"{_DATASTORE}.seed_table_rows", _seed)
+    created = CreatedParts(["TABLE:leads"])
+
+    await _applier(root, created=created).apply_step(
+        _step(StepKind.TABLE_DATA, "leads")
+    )
+    with pytest.raises(PartKeptError, match="earlier attempt"):
+        await _applier(root, created=created).apply_step(
+            _step(StepKind.TABLE_DATA, "leads")
+        )
+
+    assert seeded == [[{"title": "Acme"}]]
+    assert created.made(StepKind.TABLE_DATA, "leads")
+
+
 # --- grants ------------------------------------------------------------------
 
 
@@ -294,13 +440,16 @@ class _FakeUow:
 _IMPORTER_CTX = object()
 
 
-def _grant_applier(root: Path) -> BundleApplier:
+def _grant_applier(root: Path, *, made: tuple[str, ...] = ()) -> BundleApplier:
+    """``made``: the parts this import created, as ``KIND:name``. A grants step
+    writes only to a function or agent the import created."""
     return BundleApplier(
         uow=_FakeUow(),
         ctx=_IMPORTER_CTX,
         pod_id=_UUID,
         user_id=_UUID,
         bundle_root=root,
+        created=CreatedParts(list(made)),
     )
 
 
@@ -450,7 +599,7 @@ async def test_agent_grants_step_applies_grants(tmp_path, monkeypatch):
     _patch_agent_lookup(monkeypatch)
     calls = _patch_grant_layer(monkeypatch)
 
-    await _grant_applier(root).apply_step(
+    await _grant_applier(root, made=("AGENT:support",)).apply_step(
         _step(StepKind.AGENT_GRANTS, "support", action=StepAction.UPDATE)
     )
 
@@ -523,6 +672,77 @@ async def test_an_imported_agent_carries_the_toolsets_its_grant_is_derived_from(
     assert seen.get("ctx") is not None
 
 
+def _agent_writes(tmp_path, monkeypatch) -> tuple[Path, list[dict[str, object]]]:
+    """A bundled `support` agent, a pod that has one, and every write to it."""
+    root = tmp_path / "bundle"
+    _write(
+        root / "agents" / "support" / "support.json",
+        {"name": "support", "instruction": "The bundle's words."},
+    )
+    _patch_agent_lookup(monkeypatch)
+    written: list[dict[str, object]] = []
+
+    async def _written(uow, **kwargs):
+        written.append(kwargs)
+
+    monkeypatch.setattr(f"{_AGENTS}.create_agent", _written)
+    monkeypatch.setattr(f"{_AGENTS}.update_agent", _written)
+    return root, written
+
+
+async def test_an_agent_someone_else_made_is_kept_and_said_so(tmp_path, monkeypatch):
+    """Planned missing, here when its step runs: made between the plan and
+    now. Its instructions, toolsets and runtime are its maker's, so the step
+    writes nothing and is skipped with the reason."""
+    root, written = _agent_writes(tmp_path, monkeypatch)
+    created = CreatedParts()
+
+    with pytest.raises(PartKeptError, match="kept as it is"):
+        await _applier(root, created=created).apply_step(
+            _step(StepKind.AGENT, "support")
+        )
+
+    assert written == []
+    assert not created.made(StepKind.AGENT, "support")
+
+
+async def test_an_agent_this_import_made_before_a_crash_is_its_own(
+    tmp_path, monkeypatch
+):
+    """Interrupted after its write committed and before its checkpoint: the
+    step runs again, finds the agent, and counts it as made here, so its
+    grants step still writes."""
+    root, written = _agent_writes(tmp_path, monkeypatch)
+    created = CreatedParts()
+
+    await _applier(root, created=created, resumed=True).apply_step(
+        _step(StepKind.AGENT, "support")
+    )
+
+    assert written == []
+    assert created.made(StepKind.AGENT, "support")
+
+
+async def test_a_grants_step_leaves_alone_an_agent_this_import_did_not_make(
+    tmp_path, monkeypatch
+):
+    """The bundle's grant list would replace its access whole."""
+    root = tmp_path / "bundle"
+    _write(
+        root / "agents" / "support" / "support.json",
+        {"name": "support", "permissions": {"grants": []}},
+    )
+    _patch_agent_lookup(monkeypatch)
+    calls = _patch_grant_layer(monkeypatch)
+
+    with pytest.raises(PartKeptError, match="access is kept"):
+        await _grant_applier(root).apply_step(
+            _step(StepKind.AGENT_GRANTS, "support", action=StepAction.CREATE)
+        )
+
+    assert calls == {}
+
+
 async def test_the_grants_step_puts_the_derived_memory_grant_back(
     tmp_path, monkeypatch
 ):
@@ -552,7 +772,7 @@ async def test_the_grants_step_puts_the_derived_memory_grant_back(
     _patch_agent_lookup(monkeypatch)
     calls = _patch_grant_layer(monkeypatch)
 
-    await _grant_applier(root).apply_step(
+    await _grant_applier(root, made=("AGENT:support",)).apply_step(
         _step(StepKind.AGENT_GRANTS, "support", action=StepAction.UPDATE)
     )
 
@@ -612,7 +832,7 @@ async def test_a_grant_naming_something_the_pod_lacks_fails_terminally(
     )
 
     with pytest.raises(DomainError) as raised:
-        await _grant_applier(root).apply_step(
+        await _grant_applier(root, made=("AGENT:support",)).apply_step(
             _step(StepKind.AGENT_GRANTS, "support", action=StepAction.UPDATE)
         )
 
@@ -663,7 +883,7 @@ async def test_function_grants_are_a_deferred_step(tmp_path, monkeypatch):
     )
     calls = _patch_grant_layer(monkeypatch)
 
-    await _grant_applier(root).apply_step(
+    await _grant_applier(root, made=("FUNCTION:maybe_rewrite_lesson",)).apply_step(
         _step(
             StepKind.FUNCTION_GRANTS, "maybe_rewrite_lesson", action=StepAction.UPDATE
         )
@@ -1093,6 +1313,75 @@ async def test_a_bundled_surface_naming_an_account_runs_as_its_connector(
     assert any("deprecated" in w and "support-slack" in w for w in warnings)
 
 
+async def test_a_surface_the_pod_has_is_kept_as_it_is(tmp_path, monkeypatch):
+    """Nothing is written over its settings, and the account its bundled copy
+    names is not turned into a pod connector it would never use."""
+    root = tmp_path / "bundle"
+    _account_surface(root)
+    asked = []
+
+    async def serving(_uow, _ctx, *, pod_id, account_id):
+        asked.append(account_id)
+        return SimpleNamespace(slug="support-slack", pod_account_id=uuid4())
+
+    monkeypatch.setattr(
+        "app.modules.connectors.contracts.pod_connectors.pod_connector_for_account",
+        serving,
+    )
+    surface_fake = FakeSurfaceService(existing=SimpleNamespace(id=uuid4(), config={}))
+    _patch_surface_operations(monkeypatch, surface_fake)
+    warnings: list[str] = []
+    applier = _applier(
+        root, replacements={"slack_account": str(uuid4())}, warnings=warnings
+    )
+
+    with pytest.raises(PartKeptError):
+        await applier.apply_step(_step(StepKind.SURFACE, "slack"))
+
+    assert surface_fake.created is None
+    assert surface_fake.updated is None
+    assert asked == []
+    assert warnings == []
+
+
+async def test_the_mailbox_an_imported_agent_was_born_with_takes_the_bundle(
+    tmp_path, monkeypatch
+):
+    """An agent is born with its email surface. When the import created the
+    agent, the bundle's surface of that name is that mailbox -- the import's
+    own -- and takes the bundle's settings rather than being kept."""
+    root = tmp_path / "bundle"
+    _write(
+        root / "surfaces" / "resend-reporter" / "resend-reporter.json",
+        {
+            "name": "resend-reporter",
+            "platform": "RESEND",
+            "default_agent_name": "Reporter",
+            "is_enabled": False,
+        },
+    )
+    mailbox = SimpleNamespace(id=uuid4(), pod_id=_UUID, agent_id=_AGENT_ID, config={})
+    surface_fake = FakeSurfaceService(existing=mailbox)
+    _patch_surface_operations(monkeypatch, surface_fake)
+    _patch_agent_lookup(monkeypatch)
+
+    async def _settled_config(uow, **kwargs):
+        return {"settled": True}
+
+    monkeypatch.setattr(f"{_SURFACES}.apply_surface_config", _settled_config)
+    created = CreatedParts(["AGENT:Reporter"])
+
+    await _applier(root, created=created).apply_step(
+        _step(StepKind.SURFACE, "resend-reporter")
+    )
+
+    assert surface_fake.created is None
+    assert surface_fake.updated is not None
+    assert surface_fake.updated["surface_id"] == mailbox.id
+    assert surface_fake.updated["is_active"] is False
+    assert created.made(StepKind.SURFACE, "resend-reporter")
+
+
 async def test_a_bundled_surface_with_no_account_given_says_so(tmp_path, monkeypatch):
     """Without an account the surface still imports, on the platform's own
     bot -- and the import says that, rather than nothing."""
@@ -1286,7 +1575,7 @@ async def test_an_explicitly_empty_grant_list_clears_the_target_s_grants(
     _patch_agent_lookup(monkeypatch)
     calls = _patch_grant_layer(monkeypatch)
 
-    await _grant_applier(root).apply_step(
+    await _grant_applier(root, made=("AGENT:support",)).apply_step(
         _step(StepKind.AGENT_GRANTS, "support", action=StepAction.UPDATE)
     )
 
@@ -1306,7 +1595,7 @@ async def test_an_agent_manifest_without_permissions_leaves_grants_alone(
     _patch_agent_lookup(monkeypatch)
     calls = _patch_grant_layer(monkeypatch)
 
-    await _grant_applier(root).apply_step(
+    await _grant_applier(root, made=("AGENT:support",)).apply_step(
         _step(StepKind.AGENT_GRANTS, "support", action=StepAction.UPDATE)
     )
 

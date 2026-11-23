@@ -15,7 +15,6 @@ from pydantic import BaseModel, Field
 from app.core.api.dependencies import CurrentUser
 from app.core.domain.errors import DomainError
 from app.modules.apps.api.app_access import (
-    ACCESS_COOKIE,
     PRIVATE_NO_STORE,
     private_app_host,
     private_error,
@@ -112,17 +111,19 @@ async def redeem_app_access(request: Request, data: AppAccessRedeemRequest) -> R
     )
     # A connection's ticket only opens a framed app, and a framed app only
     # takes a connection's ticket: the two cookies are not interchangeable.
-    if claims is None or data.embedded != (claims.grant_id is not None):
+    if host is None or claims is None or data.embedded != (claims.grant_id is not None):
         return private_error(AppAccessInvalidError())
     cookie = replace(claims, expires_at=int(time.time()) + COOKIE_TTL_SECONDS)
     response = JSONResponse(
         {"expires_in_seconds": COOKIE_TTL_SECONDS}, headers=PRIVATE_NO_STORE
     )
     response.set_cookie(
-        ACCESS_COOKIE,
+        host.cookie,
         mint_app_access_token(AppAccessPurpose.COOKIE, cookie),
         max_age=COOKIE_TTL_SECONDS,
-        secure=True,
+        # Not Secure only on a local HTTP stack (`private_app_host`). A framed
+        # one keeps it: SameSite=None is refused without Secure.
+        secure=host.secure or data.embedded,
         httponly=True,
         # Framed in another site's page, a Lax cookie is never sent. None is,
         # and Partitioned keeps it to that one embedding: the same app opened

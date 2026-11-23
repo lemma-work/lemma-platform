@@ -2248,114 +2248,117 @@
     min-height: 0;
     height: 100%;
 }
-.connectors {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-    gap: 10px;
-}
-.connector {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 12px;
-    border: 1px solid var(--line);
-    border-radius: var(--r-md);
-    font-size: 13px;
-    color: var(--ink-2);
-}
-.connector__logo {
-    width: 20px;
-    height: 20px;
-    border-radius: var(--r-sm);
-    object-fit: contain;
-    flex: none;
-}
-.connector__logo--blank {
-    background: var(--chrome);
-}
-.connector__name {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
 /* ── modal ─────────────────────────────────────────────────────────── */
+/* Every dialog is one object (kit.css): a big title, one plain line, the
+   body, and at its foot two equal buttons -- Cancel, then the action. It
+   rises 12px from 98% over a dimmed, softened page. On a phone it rises
+   from the foot of the screen. */
 .modal {
     position: fixed;
     inset: 0;
     z-index: 200;
     display: grid;
+    grid-template: minmax(0, 1fr) / minmax(0, 1fr);
     place-items: center;
-    padding: 32px;
-    background: rgb(22 21 27 / 0.32);
-    backdrop-filter: blur(2px);
+    padding: 24px;
+    background: rgb(22 21 27 / 0.3);
+    backdrop-filter: blur(5px);
 }
-/* Every panel is a panel. The narrow variant only narrows it — when the
+/* Every panel is a panel. The narrow variant only narrows it -- when the
    chrome lived on the modifier instead, any dialog that was not narrow had
-   no background, no border and no shadow, and its header sat on whatever
-   page was behind it. */
+   no background, no border and no shadow. */
 .modal__panel {
-    width: min(100%, 520px);
-    max-height: 80vh;
+    position: relative;
+    width: min(100%, var(--w-dialog, 560px));
+    max-height: 100%;
     display: flex;
     flex-direction: column;
     background: var(--paper);
-    border: 1px solid var(--line);
-    border-radius: var(--r-xl);
-    box-shadow: var(--shadow-lift);
+    border-radius: 26px;
+    box-shadow: 0 30px 80px rgb(0 0 0 / 0.22), 0 0 0 1px var(--line);
     outline: none;
 }
-/* The panel takes focus so a dialog opens with the keyboard inside it, and
-   every click on its blank space focuses it again. It is not a control: the
-   blanket `[tabindex]:focus-visible` ring outranked the line above and drew a
-   bright outline round the whole dialog on each click, which read as an input
-   grabbing focus. Specific enough to win whatever order the sheets load in. */
+/* The panel takes focus so a dialog opens with the keyboard inside it; it
+   is not a control, so it draws no ring of its own. */
 .modal__panel[tabindex]:focus,
 .modal__panel[tabindex]:focus-visible {
     outline: none;
 }
 .modal__panel--narrow {
-    width: min(100%, 412px);
+    width: min(100%, var(--w-dialog-small, 460px));
 }
 .modal__head {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
     gap: 16px;
-    padding: 20px 22px 14px;
-    border-bottom: 1px solid var(--line);
+    padding: 30px 72px 6px 34px;
 }
 .modal__head h2 {
     margin: 0;
-    font-size: var(--t-lead);
-    letter-spacing: -0.02em;
+    font-size: 25px;
+    font-weight: 500;
+    line-height: 1.2;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
 }
 .modal__head p {
-    margin: 3px 0 0;
-    font-size: 13px;
-    color: var(--ink-3);
+    margin: 6px 0 0;
+    font-size: 14.5px;
+    line-height: 1.5;
+    color: var(--ink-2);
 }
 .modal__close {
-    border: 0;
-    background: none;
-    color: var(--ink-3);
-    cursor: pointer;
-    font-size: 14px;
-    width: 30px;
-    height: 30px;
-    border-radius: var(--r-sm);
-    flex: none;
-}
-.modal__close:hover {
-    background: var(--chrome);
-    color: var(--ink);
+    position: absolute;
+    top: 22px;
+    right: 22px;
 }
 .modal__body {
     overflow-y: auto;
-    padding: 18px 22px 22px;
+    padding: 18px 34px 30px;
     min-height: 0;
+}
+.modal__body--footed {
+    padding-bottom: 8px;
+}
+.modal__foot {
+    display: grid;
+    grid-auto-columns: minmax(0, 1fr);
+    grid-auto-flow: column;
+    gap: 14px;
+    padding: 18px 34px 30px;
+}
+/* Its buttons are the kit's large ones, whatever class they came with. */
+.modal__foot > .btn,
+.modal__foot > .ox-btn,
+.modal__foot > .b {
+    min-height: 52px;
+    height: 52px;
+    border-radius: 14px;
+    font-size: 16px;
+}
+@media (max-width: 640px) {
+    .modal {
+        place-items: end center;
+        padding: 0;
+    }
+    .modal__panel {
+        width: 100%;
+        max-height: 92%;
+        border-radius: 26px 26px 0 0;
+    }
+    .modal__head {
+        padding: 26px 64px 4px 22px;
+    }
+    .modal__body {
+        padding: 16px 22px 26px;
+    }
+    .modal__body--footed {
+        padding-bottom: 8px;
+    }
+    .modal__foot {
+        padding: 16px 22px max(26px, env(safe-area-inset-bottom, 0px));
+    }
 }
 .addpeople--modal {
     background: none;
@@ -2418,6 +2421,11 @@
 .addpeople__row--pending:hover { color: var(--ink-3); }
 .addpeople__you { color: var(--ink-3); }
 .addpeople__access { font-size: var(--t-meta); color: var(--ink-3); white-space: nowrap; }
+/* A manager's row: its access as a picker, and the way out. */
+.addpeople__manage, .addpeople__confirm { display: flex; align-items: center; gap: 10px; margin-left: auto; font-size: var(--t-meta); color: var(--ink-2); white-space: nowrap; }
+.addpeople__row--pending .linkish { margin-left: 4px; font-size: var(--t-meta); }
+.addpeople__drop { border: 0; background: none; padding: 0; font: inherit; color: var(--bad); cursor: pointer; }
+.addpeople__drop:disabled { opacity: .5; cursor: default; }
 .addpeople__section { margin: 16px 0 0; font-size: var(--t-meta); color: var(--ink-3); }
 .quiet__detail {
     font-family: var(--mono);
@@ -3329,97 +3337,7 @@ button.filecard__open {
     box-shadow: var(--shadow-lift);
     padding: 10px;
 }
-.theme__label {
-    font-size: 10.5px;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-    color: var(--ink-3);
-    padding: 4px 6px 7px;
-}
-.theme__label + .theme__accents,
-.theme__modes + .theme__label {
-    margin-top: 6px;
-}
-.theme__modes {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 4px;
-}
-.theme__mode {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 5px;
-    padding: 9px 4px;
-    border: 1px solid var(--line);
-    border-radius: var(--r-md);
-    background: none;
-    color: var(--ink-3);
-    cursor: pointer;
-    font-size: 11.5px;
-}
-.theme__mode:hover {
-    color: var(--ink-2);
-    border-color: var(--line-2);
-}
-.theme__mode[aria-current="true"] {
-    color: var(--accent);
-    border-color: var(--accent-line);
-    background: var(--accent-soft);
-}
-.theme__accents {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 4px;
-}
-.theme__accent {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 7px 9px;
-    border: 1px solid var(--line);
-    border-radius: var(--r-md);
-    background: none;
-    color: var(--ink-2);
-    cursor: pointer;
-    font-size: 12.5px;
-    text-align: left;
-}
-.theme__accent:hover {
-    border-color: var(--line-2);
-    color: var(--ink);
-}
-.theme__accent[aria-current="true"] {
-    border-color: var(--accent-line);
-    background: var(--accent-soft);
-    color: var(--ink);
-}
-.theme__swatch {
-    width: 14px;
-    height: 14px;
-    border-radius: 9999px;
-    flex: none;
-    box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.12);
-}
 
-/* A corner option shows its own shape rather than describing it. */
-.theme__cornerbox {
-    width: 16px;
-    height: 16px;
-    border: 1.5px solid currentColor;
-}
-.theme__corner--sharp .theme__cornerbox {
-    border-radius: 1px;
-}
-.theme__corner--soft .theme__cornerbox {
-    border-radius: 5px;
-}
-.theme__corner--round .theme__cornerbox {
-    border-radius: 9999px;
-}
-.theme__accents {
-    grid-template-columns: 1fr 1fr;
-}
 .theme__menu {
     min-width: 244px;
     max-height: 70vh;
@@ -3432,7 +3350,6 @@ button.filecard__open {
 .resource__caption {
     line-height: 1.5;
 }
-
 
 /* ── profile ───────────────────────────────────────────────────────── */
 /* The teammate's own page: a profile on the left, a badge on the right.
@@ -3808,7 +3725,6 @@ button.filecard__open {
    sized in `cqw` against the card's own width, because a badge is an object
    with proportions rather than a layout with breakpoints — the same rules
    draw it at 268px in the profile aside and at 300px on a phone. */
-
 
 /* The scene ------------------------------------------------------------
    A lit surface with the badge hanging in it. The ground is constant in
@@ -4847,7 +4763,6 @@ button.filecard__open {
 @media (max-width: 520px) { .profile-form__pair { grid-template-columns: 1fr; } }
 .profile-form__problem { font-style: normal; font-size: 12px; color: var(--bad); }
 .profile-form__hint-line { margin: 0; font-size: 12.5px; color: var(--ink-2); }
-.profile-form__saved { font-size: 12.5px; color: var(--ok); }
 /* The stamp, not a badge: it states a fact about the field above it and has
    nothing to click, so it is a line of text in the affirmative colour rather
    than a pill pretending to be a control. */
@@ -4859,145 +4774,6 @@ button.filecard__open {
     font-size: 12.5px;
     color: var(--ok);
 }
-/* An offer, not a control: it is there only while the stated zone differs from
-   the one this browser is actually in. */
-.profile-form__hint {
-    align-self: flex-start;
-    font-size: 12px;
-    color: var(--accent);
-    padding: 0;
-    background: none;
-    border: 0;
-    cursor: pointer;
-}
-.profile-form__hint:hover { text-decoration: underline; }
-.profile-form__actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
-
-/* Usage: the allowance and the history, on one screen but answered apart. */
-.usage-panel { display: flex; flex-direction: column; gap: 22px; text-align: left; }
-.usage-block { display: flex; flex-direction: column; gap: 10px; }
-.usage-block h4 { font-size: 13px; font-weight: 500; color: var(--ink); margin: 0; }
-.usage-block__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.usage-quiet { font-size: 12.5px; color: var(--ink-3); margin: 0; }
-
-.usage-window { display: flex; flex-direction: column; gap: 4px; }
-.usage-window__line { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--ink-2); }
-.usage-window__line > span:first-child { flex: 1; }
-.usage-window__much { font-variant-numeric: tabular-nums; }
-.usage-window__bar { display: block; height: 4px; border-radius: 999px; background: var(--line-2); overflow: hidden; }
-.usage-window__bar i { display: block; height: 100%; background: var(--accent); }
-.usage-window[data-blocked="true"] .usage-window__bar i { background: var(--bad); }
-.usage-window[data-blocked="true"] .usage-window__much { color: var(--bad); }
-.usage-window small { font-size: 11.5px; color: var(--ink-3); }
-
-.usage-ranges { display: flex; gap: 4px; }
-.usage-range {
-    font-size: 11.5px; padding: 3px 9px; border-radius: 999px;
-    border: 1px solid var(--line-2); background: var(--paper); color: var(--ink-3); cursor: pointer;
-}
-.usage-range[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-
-.usage-totals { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 2px 0 0; }
-.usage-totals dt { font-size: 11.5px; color: var(--ink-3); }
-.usage-totals dd { margin: 2px 0 0; font-size: 15px; color: var(--ink); font-variant-numeric: tabular-nums; }
-
-/* One column per day, scaled to the busiest in the window. */
-.usage-days { display: flex; align-items: flex-end; gap: 2px; height: 46px; margin-top: 4px; }
-.usage-days i { flex: 1; min-width: 2px; background: var(--accent); opacity: .55; border-radius: 2px 2px 0 0; }
-
-.usage-breakdown { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.usage-breakdown li { display: flex; gap: 10px; font-size: 12.5px; color: var(--ink-2); }
-.usage-breakdown li > span:first-child { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.usage-breakdown__cost { color: var(--ink-3); font-variant-numeric: tabular-nums; }
-.usage-breakdown__cost a { color: var(--accent); }
-
-/* Plans, as things to choose between rather than a table to read.
-   One card per tier, equal height so the prices land on one line and the
-   highlights under them can be compared down a column. */
-.plans { display: flex; flex-direction: column; gap: 14px; text-align: left; }
-.plans__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(196px, 1fr)); gap: 10px; }
-.plan {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 14px;
-    border: 1px solid var(--line-2);
-    border-radius: var(--r-md);
-    background: var(--paper);
-}
-.plan[data-current="true"] { border-color: var(--accent); }
-.plan h5 { margin: 0; font-size: 13px; font-weight: 500; color: var(--ink); }
-.plan__price { margin: 0; font-size: 15px; color: var(--ink); font-variant-numeric: tabular-nums; }
-.plan__blurb { margin: 0; font-size: 12px; color: var(--ink-3); }
-.plan__list { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
-.plan__list li { display: flex; gap: 6px; align-items: flex-start; font-size: 12px; color: var(--ink-2); }
-.plan__list svg { flex: none; margin-top: 2px; color: var(--ok); }
-/* Pushed to the floor of the card, so the buttons line up across tiers whose
-   highlight lists are different lengths. */
-.plan .btn, .plan__here { margin-top: auto; align-self: flex-start; }
-/* Nothing in `base.css` dims a disabled button, and this is the panel where it
-   shows: three "Choose" buttons that cannot be pressed — in the sample
-   workspace, or for a member whose owner does the buying — read as three live
-   offers otherwise. Scoped here rather than made global, which is a decision
-   about every button in the app. */
-.plan .btn:disabled { color: var(--ink-3); border-color: var(--line); box-shadow: none; cursor: not-allowed; }
-.plan .btn:disabled:hover { border-color: var(--line); box-shadow: none; }
-.plan__here { padding-top: 10px; font-size: 12px; color: var(--accent); }
-
-/* The wait after a checkout opens. Tinted rather than outlined: it is the only
-   thing on the panel that is still happening. */
-.plans__waiting {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    align-items: flex-start;
-    padding: 14px;
-    border: 1px solid var(--accent-line);
-    border-radius: var(--r-md);
-    background: var(--accent-soft);
-}
-.plans__waiting p { margin: 0; font-size: 12.5px; color: var(--ink-2); }
-.plans__wait { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-3); }
-.plans__problem { margin: 0; font-size: 12.5px; color: var(--bad); }
-.plans__give-up {
-    align-self: flex-start;
-    padding: 0;
-    font-size: 12px;
-    background: none;
-    border: 0;
-    color: var(--ink-3);
-    cursor: pointer;
-}
-.plans__give-up:hover { color: var(--ink-2); text-decoration: underline; }
-
-/* What is in force now, above the choice. */
-.plan-now { display: flex; flex-direction: column; gap: 2px; }
-.plan-now strong { font-size: 15px; font-weight: 500; color: var(--ink); }
-.plan-now__price { font-size: 12.5px; color: var(--ink-2); }
-.plan-now small { font-size: 11.5px; color: var(--ink-3); }
-.plan-note { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-2); }
-.plan-note[data-bad="true"] { color: var(--bad); }
-.plan-seats { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-2); }
-/* The seats bought and the people present differ, and only the difference is
-   worth a colour. */
-.plan-seats em { font-style: normal; color: var(--warn); }
-
-.plan-stop { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
-.plan-stop p { margin: 0; font-size: 12.5px; color: var(--ink-2); }
-.plan-stop__actions { display: flex; gap: 8px; flex-wrap: wrap; }
-/* Quiet until it is asked for. Stopping a subscription is not something to
-   offer at the same weight as choosing one. */
-.plan-stop__ask {
-    align-self: flex-start;
-    margin-top: 12px;
-    padding: 0;
-    font-size: 12px;
-    background: none;
-    border: 0;
-    color: var(--ink-3);
-    cursor: pointer;
-}
-.plan-stop__ask:hover { color: var(--bad); text-decoration: underline; }
 
 /* Two questions about the same account, kept apart. */
 .account-tabs { display: flex; gap: 4px; align-self: stretch; margin: 4px 0 2px; }
@@ -5007,10 +4783,6 @@ button.filecard__open {
     border-radius: 999px;
 }
 .account-tabs button[aria-selected="true"] { border-color: var(--accent); color: var(--accent); }
-
-/* Appearance, laid out as a section rather than a dropdown. */
-.appearance { display: flex; flex-direction: column; gap: 18px; }
-.appearance__group { display: flex; flex-direction: column; gap: 8px; }
 
 /* Settings is wide because it holds a list of sections beside a pane, not
    because its content is large.
@@ -5140,45 +4912,6 @@ button.filecard__open {
     .settings-pane__inner { padding: 18px 18px 26px; }
 }
 
-.settings-account { display: flex; flex-direction: column; gap: 18px; align-items: flex-start; }
-.settings-who { display: flex; align-items: center; gap: 12px; }
-.settings-who strong { display: block; font-weight: 500; font-size: 15px; }
-.settings-who small { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-3); margin-top: 2px; }
-.settings-account .profile-form { align-self: stretch; }
-.settings-account .profile-telegram { align-self: stretch; margin-bottom: 0; }
-.profile-telegram .btn { align-self: flex-start; display: inline-flex; align-items: center; gap: 7px; }
-.profile-telegram__accounts { list-style: none; margin: 0 0 4px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.profile-telegram__accounts li { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13.5px; color: var(--ink); }
-.profile-telegram__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.profile-telegram__when { flex: none; font-size: 12.5px; color: var(--ink-3); }
-.profile-telegram__accounts .linkish { flex: none; margin: 0 0 0 auto; }
-/* Signing out is separated from the form so it is not read as one of the
-   things Save applies to. */
-.settings-leave {
-    align-self: stretch;
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    flex-wrap: wrap;
-    padding-top: 16px;
-    border-top: 1px solid var(--line);
-}
-
-/* Deleting the account sits below signing out, under its own rule, so the
-   two are never read as one row of choices. */
-.settings-delete {
-    align-self: stretch;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 14px;
-    flex-wrap: wrap;
-    padding-top: 16px;
-    border-top: 1px solid var(--line);
-}
-.settings-delete strong { display: block; font-weight: 500; font-size: 13px; }
-.settings-delete p { margin: 2px 0 0; max-width: 46ch; font-size: 12.5px; color: var(--ink-3); }
-
 .delete-account { display: flex; flex-direction: column; gap: 14px; text-align: left; }
 .delete-account__what { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; line-height: 1.5; color: var(--ink-2); }
 .delete-account .field { margin-bottom: 0; }
@@ -5290,47 +5023,6 @@ button.filecard__open {
 .invite__unsent { display: grid; gap: 6px; margin-top: 8px; justify-items: start; }
 .invite__unsent .invite__row { width: 100%; }
 
-
-
-/* A catalogue entry is a name and a reason, and one line is enough of the
-   reason to decide. Unclamped, six suggestions became a wall of vendor
-   marketing two lines deep and the search above them stopped being the
-   obvious way through. */
-.connector--brief .connector__blurb {
-    display: -webkit-box;
-    -webkit-line-clamp: 1;
-    line-clamp: 1;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-}
-
-/* The slices of the connector catalogue, with their counts.
-   The number is the informative part — "69 available" says more about what is
-   possible here than any six of them picked off the top of an alphabet. */
-.slices { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0 14px; }
-.slices .chip {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 6px;
-    padding: 5px 11px;
-    border: 1px solid var(--line-2);
-    border-radius: 999px;
-    background: var(--paper);
-    color: var(--ink-2);
-    font: inherit;
-    font-size: 12.5px;
-    cursor: pointer;
-    transition: border-color var(--dur-control, 140ms), color var(--dur-control, 140ms);
-}
-.slices .chip b { font-weight: 400; font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
-.slices .chip:hover { border-color: var(--ink-3); }
-.slices .chip[aria-selected="true"] { border-color: var(--accent); color: var(--accent); }
-.slices .chip[aria-selected="true"] b { color: inherit; }
-/* Attention is the one slice worth colouring, and only while it has anything
-   in it — the pill is not rendered at all when nothing is wrong. */
-.slices .chip--bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, transparent); }
-.slices .chip--bad[aria-selected="true"] { border-color: var(--bad); color: var(--bad); }
-
 .profile__load-error { grid-column: 1 / -1; }
 
 /* Profile navigation and readable section hierarchy. */
@@ -5362,17 +5054,10 @@ a.reach { text-decoration: none; }
 .msg__body .md h1 { font-size: 1.4em }
 .msg__body .md h2 { font-size: 1.2em }
 .msg__body .md h3, .msg__body .md h4 { font-size: 1.05em }
-.theme__mode[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line) }
-.appearance__hint { margin: 0; font-size: 12px; color: var(--ink-3) }
-.appearance__chat-preview { border: 1px solid var(--line); border-radius: var(--r-md); padding: 16px; background: var(--paper) }
-.appearance__chat-preview > span { font-size: 12px; color: var(--accent) }
-.appearance__chat-preview > p { font-size: var(--chat-text-size); line-height: 1.68; margin: 8px 0 0 }
 @media (pointer: coarse) {
     /* Keep mobile browsers from zooming the viewport when the composer receives focus. */
     .composer__input { font-size: max(16px, var(--chat-text-size)) }
 }
-
-.appearance__group .theme__mode[aria-pressed] { min-height: 44px }
 
 .copy-section { position: relative; }
 .copy-control { display: inline-flex; }
@@ -5438,7 +5123,6 @@ a.reach { text-decoration: none; }
 .copy-section > table th { background: var(--chrome); }
 .copy-section > table th:last-child { padding-right: 40px; }
 .copy-section > table tr:last-child td { border-bottom: 0; }
-
 
 .apps-pane { padding: 28px clamp(20px, 3vw, 40px); }
 .apps-pane__content { max-width: 1240px; margin: 0 auto; }
@@ -5512,16 +5196,15 @@ a.reach { text-decoration: none; }
 .surface-setup summary { min-height: 44px; }
 .surface-setup__route.record-form__field { flex-direction: row; }
 .surface-setup__route.record-form__field select { width: auto; min-height: 44px; }
-.surface-setup .connect-check { min-height: 44px; }
 
 /* Keep settings content and focus backgrounds inside the rounded panel. */
 .modal__panel--wide { overflow: hidden; min-width: 0; }
 .modal__panel--wide > .modal__head { flex-shrink: 0; }
-.settings-who { min-width: 0; max-width: 100%; }
-.settings-who > div { min-width: 0; overflow-wrap: anywhere; }
 
-/* The server is not answering: one line across the top of the workspace, above
-   everything, until it does. Not dismissable -- it goes away on its own. */
+/* The connection (shell/reconnect-strip.tsx): one pill at the top centre of
+   the page, above everything, until it is back. Not dismissable -- it goes
+   away on its own. A warm dot while offline or unreached, a green one for
+   the moment it is back. */
 .reconnect-strip {
     position: fixed;
     top: 12px;
@@ -5531,14 +5214,53 @@ a.reach { text-decoration: none; }
     display: flex;
     align-items: center;
     gap: 10px;
+    box-sizing: border-box;
+    /* One line where it fits, wrapping inside the pill where it
+       doesn't: a fixed box at left 50% would otherwise wrap at half the
+       window. */
+    width: max-content;
     max-width: calc(100vw - 32px);
-    padding: 8px 14px;
+    min-height: 38px;
+    padding: 4px 6px 4px 14px;
     background: var(--paper);
-    color: var(--ink-2);
-    border: 1px solid var(--line-2);
-    border-radius: var(--r-md);
-    box-shadow: var(--depth-raise);
-    font-size: 13px;
+    color: var(--ink);
+    border-radius: 19px;
+    box-shadow: 0 10px 28px -12px rgb(0 0 0 / 0.3), 0 0 0 1px var(--line);
+    font-size: 13.5px;
+    line-height: 1.35;
+    animation: reconnect-strip-in 260ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+.reconnect-strip:not(:has(.b)) { padding-right: 16px; }
+.reconnect-strip > i {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--warn);
+}
+.reconnect-strip--ok > i { background: var(--ok); }
+.reconnect-strip > span { min-width: 0; padding: 5px 0; }
+.reconnect-strip > .b { flex: none; }
+.reconnect-strip__n { font-variant-numeric: tabular-nums; }
+/* In the frame, centred over the page rather than the window: beside the
+   sidebar, or its rail. */
+.ox > .reconnect-strip { left: calc(50% + 136px); max-width: calc(100vw - 272px - 32px); }
+.ox--railed > .reconnect-strip { left: calc(50% + 26px); max-width: calc(100vw - 52px - 32px); }
+@keyframes reconnect-strip-in {
+    from { opacity: 0; translate: 0 -8px; }
+}
+@media (max-width: 760px) {
+    /* The sidebar slides over here, so the page is the whole width; under
+       the frame's bar on top, which holds the menu. */
+    .ox > .reconnect-strip,
+    .ox--railed > .reconnect-strip {
+        top: 56px;
+        left: 50%;
+        max-width: calc(100vw - 32px);
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .reconnect-strip { animation: none; }
 }
 
 /* Keep each view in the same DOM position when it changes sides, preserving

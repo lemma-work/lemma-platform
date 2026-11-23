@@ -34,6 +34,7 @@ and it is not always the schedule's creator:
 | `WEBHOOK` | the schedule's configured user |
 | `DATASTORE` on an **RLS** table | the **owner of the row that changed** (default `run_as: "ROW_OWNER"`) |
 | `DATASTORE` with `config.run_as: "SCHEDULE_OWNER"` | the schedule's configured user, for every change |
+| `DATASTORE` with `config.rows: "OWNER_READABLE"` | the schedule's configured user, for the rows they can read (below) |
 | `DATASTORE` on a **shared** table, a batched fire, or a row nobody in the pod owns | the schedule's configured user |
 
 The RLS row-owner rule is the useful one: each member's write starts a run scoped
@@ -46,6 +47,23 @@ table**, not just permission to write records to it — and, while it runs as ro
 owners (the default), **edit access to the target** too (`agent.update` /
 `workflow.update`; for `POD_DEFAULT`, `pod.update`), because its instruction runs
 with other people's access.
+
+**A member's own trigger: `config.rows: "OWNER_READABLE"`.** A member with the
+default role holds neither of those, so an app that turns on per-person work
+("my booking page", "my follow-ups") sets this. The trigger is then handed only
+the rows its owner can read — **their own rows** on an RLS table, **every row**
+on a shared table — and runs every change **as its owner**. Making one takes
+only `datastore.record.read` on the table (plus `schedule.create` and execute on
+the target, as always); no table or target edit access. Other members' rows on
+an RLS table never reach it, not even as skip counts. Narrow it further with
+`when` (e.g. `{"page_id": "<theirs>"}` on a shared table).
+
+```json
+{ "schedule_type": "DATASTORE", "workflow_name": "booking-confirm",
+  "config": { "table_name": "booking_request", "operations": ["INSERT"],
+              "when": { "page_id": "<page id>" }, "rows": "OWNER_READABLE" },
+  "include_outside_rows": true }
+```
 
 The triggering event becomes the run's **start payload**. Design the first workflow
 node (or the agent's instruction) around that exact shape — see *Event payloads*.
@@ -195,7 +213,7 @@ Bundle JSON (`schedules/<name>/<name>.json`) — `name` is the stable upsert key
   authorizes the *person*; a scheduled run is a delegated workload and is
   refused unless the **agent** also holds `connector.use` on the connector
   (`lemma agents permissions add <agent> connector:<slug>:use`). Without it the run still
-  starts and the repository is still bound — the sandbox simply has no
+  starts and the repository is still bound — the machine simply has no
   credentials, and `git clone` fails with `could not read Username`.
 
 Scaffold with `lemma schedules init <name>` (writes a commented TIME schedule, set
@@ -404,7 +422,7 @@ Both make something happen later, so be precise about which you want:
 | "I filed the invoice; finish once it's approved" | Ask the user and end the turn, or wait and re-check on wake |
 
 **Reacting to a row changing is always a trigger.** `wait_for` waits on a time, a
-sandbox process or a sub-agent run — it deliberately has no record-watching mode,
+process on the agent's machine or a sub-agent run — it deliberately has no record-watching mode,
 so there is exactly one way to react to data changing and it is a trigger.
 
 They differ in kind, not just scope. A trigger is a pod resource: it persists, it

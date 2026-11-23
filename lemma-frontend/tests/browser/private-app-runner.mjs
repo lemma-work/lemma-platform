@@ -6,6 +6,10 @@ for await (const chunk of process.stdin) input += chunk;
 const config = JSON.parse(input);
 const loginReturn = config.mode.endsWith("login-return");
 const destination = config.origin + config.path;
+// Hosted: the session on the API host and a `__Host-` access cookie, both
+// Secure. A local HTTP stack says otherwise (`sessionCookie`, `accessCookie`).
+const sessionCookie = config.sessionCookie ?? { domain: "api.example.test", secure: true };
+const accessCookie = config.accessCookie ?? { name: "__Host-lemmaAppAccess", secure: true };
 const browser = await chromium.launch({
     headless: true,
     channel: process.env.LEMMA_TEST_BROWSER_CHANNEL || undefined,
@@ -13,7 +17,7 @@ const browser = await chromium.launch({
 });
 try {
     const context = await browser.newContext({ ignoreHTTPSErrors: true });
-    if (!config.mode?.endsWith("signed-out") && !loginReturn) await context.addCookies([{ name: "sAccessToken", value: config.token, domain: "api.example.test", path: "/", secure: true, httpOnly: true, sameSite: "Lax" }]);
+    if (!config.mode?.endsWith("signed-out") && !loginReturn) await context.addCookies([{ name: "sAccessToken", value: config.token, domain: sessionCookie.domain, path: "/", secure: sessionCookie.secure, httpOnly: true, sameSite: "Lax" }]);
     const isTicket = url => url.pathname === "/apps/access/tickets";
     const tickets = [];
     const redemptions = [];
@@ -104,11 +108,11 @@ try {
         assert.deepEqual(redemptions, [200, 200]);
     }
     const cookies = await context.cookies();
-    assert.equal(cookies.find(cookie => cookie.name === "sAccessToken").domain, "api.example.test");
-    const access = cookies.find(cookie => cookie.name === "__Host-lemmaAppAccess");
+    assert.equal(cookies.find(cookie => cookie.name === "sAccessToken").domain, sessionCookie.domain);
+    const access = cookies.find(cookie => cookie.name === accessCookie.name);
     assert.equal(access?.domain, new URL(config.origin).hostname);
     assert.equal(access?.httpOnly, true);
-    assert.equal(access?.secure, true);
+    assert.equal(access?.secure, accessCookie.secure);
     assert.equal(access?.sameSite, "Lax");
     assert.ok(response);
     }

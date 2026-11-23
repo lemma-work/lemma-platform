@@ -13,7 +13,6 @@ Reach pod tables and files with the `pod_*` tools, not the `lemma` CLI.
 | Find a file by meaning | `pod_search_files` |
 | See a document's pages | `pod_view_document_pages` |
 | Share a link or embed an image | `pod_get_file_url` |
-| Set what the pod owns, and the measure that counts it | `set_what_you_own` |
 
 They return structured results, page through large ones, and report permission
 failures as errors you can act on. The CLI returns text you then have to parse,
@@ -49,8 +48,8 @@ check. Several changes to one file go in one call.
 
 ## Iterating on code
 
-Write and revise code in the workspace, not through `pod_write_file`. The
-workspace applies a diff: changing one line of a 600-line file touches that
+Write and revise code on your machine, not through `pod_write_file`. Editing
+there applies a diff: changing one line of a 600-line file touches that
 line. `pod_write_file` takes `content` and replaces the file, so the same edit
 means reproducing all 600 lines, and every further round costs the whole file
 again. `pod_read_file` caps what you can read back, so re-deriving a long file

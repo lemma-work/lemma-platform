@@ -20,14 +20,14 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | API lifespan | Starts local embeddings when configured. Nothing that reads stored data: the query role is ensured lazily |
 | Worker lifespan | Runs the change-log handoff (LISTEN on the datastore database plus a poll), which turns a watched write's wake row into a `changes.deliver` item |
 | Change-log work kinds | `changes.sync_subscribers`, `changes.deliver` (`events`), `changes.retention` (hourly, `admin`); see [Record change log](#record-change-log) |
-| Outcome work | `datastore.outcome_week` (`admin`) reads one pod's measure into its week, written by the `PodOutcomeChanged` fact and by the `datastore.outcome_weeks` periodic every `DATASTORE_OUTCOME_READ_INTERVAL_MINUTES`; see [What a pod owns](#what-a-pod-owns) |
+| Outcome work | `datastore.outcome_week` (`admin`) reads one pod's measure into its week, written by the `PodOutcomeChanged` fact and, when `DATASTORE_OUTCOME_SWEEP_ENABLED` is set (off by default, since nothing shows what a pod owns), by the `datastore.outcome_weeks` periodic every `DATASTORE_OUTCOME_READ_INTERVAL_MINUTES`; see [What a pod owns](#what-a-pod-owns) |
 
 ## Storage model
 
 | Storage | Meaning |
 | --- | --- |
 | `datastore_tables` | Registry and JSON column schema for each logical table |
-| `datastore_public_rows` | Tables open to people outside the pod: one grant per table saying who may add rows (`contacts` or `anyone`), which columns, and the member who opened it. Rows are added as that member, through `RecordService`. A form is any page that adds such a row; see `domain/public_rows.py` and `PUT /pods/{pod_id}/datastore/tables/{table}/public-rows` |
+| `datastore_public_rows` | Tables open to people outside the pod: one grant per table saying who may add rows (`contacts` or `anyone`), which columns, and the member who opened it. Rows are added as that member, through `RecordService`. A form is any page that adds such a row; see `domain/public_rows.py` and `PUT /pods/{pod_id}/datastore/tables/{table}/public-rows`. Columns people outside fill: TEXT, INTEGER, FLOAT, BOOLEAN, DATE, DATETIME, ENUM and UUID, plus FILE_PATH where the page can upload. Never a USER column (the write checks it names a member, so the answer would say who belongs), JSON, VECTOR, or anything the table fills itself; a unique or foreign-key column opens to confirmed contacts only. A refused opening is 422 `TABLE_OPENING_REFUSED`, naming each column and why |
 | `datastore_channel_grants` | Tables a group in channels was given: one grant per (table, group) naming the columns everybody in the group may read and the columns they may fill in a new row, and the member who granted it. A guest's run reads and adds as that member, their access rebuilt on every call, so a grant goes inert when they lose the table or leave the pod. Granting asks the table's settings and its rows (and writing them, to give adding) of a person, never an agent. Per-user (RLS) tables are refused, and closed if made per-user later; on a contact-owned table a guest reads and adds only their own rows, and reads only the columns contacts are shown. No unique or foreign-key column is one a guest fills, and a value for a column not granted refuses the row. Reads are rows, never SQL, filtered by equality on the read columns only, and say how many matched. See `services/channel_grants.py` and `PUT /pods/{pod_id}/channels/{channel_id}/table-grants/{table}` |
 | Per-pod PostgreSQL schema | Physical record tables, constraints, indexes, and RLS policies. Born readable by the ad-hoc query role (schema `USAGE` plus a per-schema default privilege for its tables); a schema from before that heals on its first query |
 | `datastore_files` | Hierarchical metadata, ownership, processing status, Markdown/index metadata |
@@ -36,11 +36,24 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | `pod_outcome_weeks` | One row per pod and week: the last reading of the pod's measure that week, its target then, why it could not be read, and the measure's digest |
 | Search tables/indexes | Per pod schema: `search_files` (one row per indexed file: path, sha256, chunk count) and `reserved_chunks` (stored `tsv`, `UNIQUE(file_id, chunk_index)`, HNSW). Versioned by `public.lemma_pod_schema_versions`; see `pod_schema_migrations.py`. Search reads either version and never runs DDL |
 
+### JSON column values
+
+A JSON column (`JSONB`) takes any JSON value — object, array, number,
+boolean, string — and returns the same value. `ValueConverter.serialize_for_sql`
+encodes every value to JSON text, since the driver binds a JSONB parameter as
+text and encodes nothing itself; `null` is SQL `NULL`. A string is stored as a
+JSON string, except one that is an object or array written as JSON
+(`'{"a": 1}'`), which is stored as that object or array: the column always read
+such a string that way and clients that serialize a payload before sending rely
+on it. So `"42"` stays the string `"42"`, and there is no way to store a string
+that is itself a JSON object's text. Reads return what the driver decoded and
+never parse a string a second time.
+
 ## API groups
 
 | Routes | What they do |
 | --- | --- |
-| `/pods/{pod_id}/datastore/tables` | Create/list/get/update/delete tables and add/remove columns |
+| `/pods/{pod_id}/datastore/tables` | Create/list/get/update/delete tables; add and remove columns, add options to an ENUM column, and drop a foreign key (see [Changing a column](#changing-a-column)) |
 | `/.../tables/{table}/records` | CRUD, filter/sort/page, and bulk create/update/delete records |
 | `/pods/{pod_id}/datastore/query` | Restricted ad-hoc datastore query under the RLS subject role |
 | `/pods/{pod_id}/outcome/standing`, `/history` | What the pod owns, its measure read now, and its last weeks |
@@ -48,6 +61,41 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | `/public/datastore/files`, `/public/s/{code}` | Signed file delivery paths (`/s/{code}` is a legacy alias until 2026-10-17) |
 | `/pods/{pod_id}/live` | The pod's live socket ([live.md](live.md)); this module provides its `records` topic (see below) |
 | `/pods/{pod_id}/datastore/changes` | The previous one-table change socket, kept for one release as one implicit subscription on the same hub |
+
+### Changing a column
+
+`PATCH /pods/{pod_id}/datastore/tables/{table}/columns/{column}`
+(`table.column.update`, body `{"options": [...]}`, `{"drop_foreign_key":
+true}`, or both) adds options to an ENUM column and drops a column's foreign
+key, and changes nothing else about a column. It needs
+`datastore.table.update` on the table, as adding a column does, and answers
+the table as `table.get` does.
+
+- **Widening only.** `options` must contain every current option; one left out
+  is refused with 422 (`DATASTORE_COLUMN_CHANGE_REFUSED`) naming it, because
+  rows may hold it. A column that is not ENUM, or is computed, is refused the
+  same way, and any other field, or neither, is a 422 from validation.
+  Sending the current options changes nothing.
+- **A foreign key is dropped, never added.** `drop_foreign_key` removes the
+  column's foreign key constraint (found the same way, contype `f`) and its
+  declaration; the values stay and stop having to name a row of the other
+  table. A column with none is left as it is. Adding one would have to decide
+  what becomes of rows that already point nowhere, so it is not offered:
+  `lemma pods import` drops a foreign key its bundle no longer declares and
+  warns about one it adds.
+- **Enforced by PostgreSQL.** An ENUM column is `TEXT` with an inline
+  `CHECK (col IN (...))`. The change finds that check in `pg_constraint` by
+  the one column it constrains (PostgreSQL named it, so the name is not
+  guessed), drops it and adds the new one in one transaction under the table's
+  lock. Adding the check validates existing rows, so a row outside the new
+  options refuses the change. The change waits at most five seconds for the
+  lock (`lock_timeout`; every later query on the table would queue behind it)
+  and is refused with a 409 when the table stays in use; the scan itself is
+  not bounded.
+- **Database first, then the declared schema.** Interrupted between the two,
+  the check accepts an option the declared schema does not list yet, which the
+  record API still refuses; sending the same options again finishes it. The
+  change emits `datastore.table.column.updated`.
 
 ## Live socket
 

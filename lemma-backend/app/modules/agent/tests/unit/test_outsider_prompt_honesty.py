@@ -67,7 +67,7 @@ def _instructions(audience: Audience) -> str:
         ctx=SimpleNamespace(
             audience=audience,
             pod_cwd="/me/c/2026-10-28/ab12cd34",
-            workspace_cwd="/workspace/c/2026-10-28/ab12cd34",
+            workspace_cwd="/home/user/lemma/c/2026-10-28/ab12cd34",
         ),
     )
     # Prompt files wrap their lines; what the model reads is the words.

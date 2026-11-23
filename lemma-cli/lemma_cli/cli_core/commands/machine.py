@@ -1,0 +1,714 @@
+"""Machines: run commands on yours and your pods', copy files, share a port.
+
+A machine is named by a ref rather than a bare name, because the same name can
+be a pod's machine or one of your own:
+
+  me                     your default machine
+  pod:<pod>:<name>       a pod's machine, the pod by id or name
+                         (pod:<name> for the selected pod)
+  <machine-id>
+
+`exec` and `shell` follow the process over a socket, so what it prints shows up
+as it prints it, and `exec` exits with the command's own exit code.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import shlex
+import sys
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+import typer
+
+from ..confirm import confirm_destructive
+from ..io import emit, to_plain
+from ..state import err_console, fail, run_with_client, state_from_ctx
+
+if TYPE_CHECKING:
+    from lemma_sdk import Lemma
+
+    from ..state import CliState
+
+app = typer.Typer(
+    help="Run commands, copy files and share ports on your machines and your pods'.",
+    no_args_is_help=True,
+)
+preview_app = typer.Typer(
+    help="Share a port a machine is serving on, as a URL.", no_args_is_help=True
+)
+logins_app = typer.Typer(
+    help="Sites a machine's browser is signed in to.", no_args_is_help=True
+)
+grants_app = typer.Typer(
+    help="Which agents and functions may use a pod's machine.", no_args_is_help=True
+)
+app.add_typer(preview_app, name="preview")
+app.add_typer(logins_app, name="logins")
+app.add_typer(grants_app, name="grants")
+
+_REF_HELP = "Which machine: me, pod:<pod>:<name>, pod:<name> or an id."
+
+#: Exit code for a command whose exit status the machine never reported (it
+#: was cancelled, or timed out): the shell's convention for "killed".
+_NO_EXIT_CODE = 137
+
+_POD_REF_HELP = (
+    "The pod's machine: pod:<name> for the selected pod (or --pod), or "
+    "pod:<pod>:<name> with the pod's id or name."
+)
+_TEMPLATES = ("workspace", "workspace-docker")
+
+_RESET_SCOPES = ("processes", "runs", "caches", "browser-session", "docker", "home")
+_WORK_LOSING_SCOPES = frozenset({"docker", "home"})
+
+
+def _ref_option(default: str = "me") -> Any:
+    return typer.Argument(default, help=_REF_HELP)
+
+
+# -- list ---------------------------------------------------------------------
+
+
+@app.command("list")
+def list_machines(
+    ctx: typer.Context,
+    pod: str | None = typer.Option(
+        None, "--pod", help="Only this pod's machines (id or name)."
+    ),
+) -> None:
+    """List the machines you can use: your own, and the selected pod's."""
+    state = state_from_ctx(ctx)
+
+    def call(client: Lemma, cli_state: CliState) -> object:
+        from ..context import selected_pod
+        from .pods import resolve_pod_id
+
+        # The pod the command is bound to (`--pod`, LEMMA_POD_ID, or the stored
+        # default) when this command's own --pod is not given: without it the
+        # list was only ever the person's own machine.
+        if pod is None and selected_pod(cli_state, required=False) is None:
+            return client.machines.list()
+        return client.machines.list(pod_id=resolve_pod_id(client, cli_state, pod))
+
+    result = run_with_client(ctx, call)
+    if result is not None:
+        emit(state, result)
+
+
+# -- a pod's machines ---------------------------------------------------------
+
+
+def split_pod_ref(ref: str) -> tuple[str | None, str]:
+    """``(pod, name)`` for ``pod:<name>``, ``pod:<pod>:<name>`` or the older
+    ``pod:<pod>/<name>``; ``pod`` is None when the ref leaves it to context."""
+    if not ref.startswith("pod:"):
+        raise typer.BadParameter(
+            f"{ref!r} is not a pod's machine; write pod:<name> or pod:<pod>:<name>",
+            param_hint="REF",
+        )
+    pod, sep, name = ref[len("pod:") :].replace("/", ":", 1).rpartition(":")
+    if not name:
+        raise typer.BadParameter(f"{ref!r} names no machine", param_hint="REF")
+    return (pod or None) if sep else None, name
+
+
+def _pod_option() -> Any:
+    return typer.Option(
+        None, "--pod", help="The pod, when the ref does not name one (id or name)."
+    )
+
+
+def _resolved(
+    client: Lemma, cli_state: CliState, ref: str, pod: str | None
+) -> tuple[str, str]:
+    """``(pod_id, name)``: the ref's own pod first, then --pod, then the
+    selected pod."""
+    from .pods import resolve_pod_id
+
+    named, name = split_pod_ref(ref)
+    return resolve_pod_id(client, cli_state, named or pod), name
+
+
+@app.command(
+    "create",
+    epilog=(
+        "Examples:\n\n"
+        "  lemma machine create pod:ci --template workspace-docker --size 4x8\n"
+        "  lemma machine create pod:research:qa --size 2x4"
+    ),
+)
+def create_machine(
+    ctx: typer.Context,
+    ref: str = typer.Argument(..., help=_POD_REF_HELP),
+    template: str = typer.Option(
+        "workspace", "--template", help=f"One of {', '.join(_TEMPLATES)}."
+    ),
+    size: str | None = typer.Option(
+        None, "--size", help="<vcpu>x<memory GB>, like 2x4. Default: the plan's."
+    ),
+    run_slots: int | None = typer.Option(
+        None, "--run-slots", help="Agent runs it takes at once."
+    ),
+    display_name: str | None = typer.Option(None, "--display-name"),
+    pod: str | None = _pod_option(),
+) -> None:
+    """Create a machine for a pod."""
+    if template not in _TEMPLATES:
+        raise typer.BadParameter(
+            f"use {' or '.join(_TEMPLATES)}", param_hint="--template"
+        )
+    split_pod_ref(ref)
+    state = state_from_ctx(ctx)
+
+    def call(client: Lemma, cli_state: CliState) -> object:
+        pod_id, name = _resolved(client, cli_state, ref, pod)
+        return client.machines.create(
+            name,
+            pod_id=pod_id,
+            template=template,  # type: ignore[arg-type]
+            size=size,
+            run_slots=run_slots,
+            display_name=display_name,
+        )
+
+    result = run_with_client(ctx, call)
+    if result is not None:
+        emit(state, result)
+
+
+@app.command("update")
+def update_machine(
+    ctx: typer.Context,
+    ref: str = typer.Argument(..., help=_POD_REF_HELP),
+    size: str | None = typer.Option(
+        None, "--size", help="<vcpu>x<memory GB>; takes effect when it next starts."
+    ),
+    run_slots: int | None = typer.Option(None, "--run-slots"),
+    display_name: str | None = typer.Option(None, "--display-name"),
+    pod: str | None = _pod_option(),
+) -> None:
+    """Change a pod machine's size, run slots or display name."""
+    split_pod_ref(ref)
+    if size is None and run_slots is None and display_name is None:
+        raise typer.BadParameter("pass --size, --run-slots or --display-name")
+    state = state_from_ctx(ctx)
+
+    def call(client: Lemma, cli_state: CliState) -> object:
+        pod_id, name = _resolved(client, cli_state, ref, pod)
+        return client.machines.update(
+            name,
+            pod_id=pod_id,
+            size=size,
+            run_slots=run_slots,
+            display_name=display_name,
+        )
+
+    result = run_with_client(ctx, call)
+    if result is not None:
+        emit(state, result)
+
+
+@app.command("delete")
+def delete_machine(
+    ctx: typer.Context,
+    ref: str = typer.Argument(..., help=_POD_REF_HELP),
+    pod: str | None = _pod_option(),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt."
+    ),
+) -> None:
+    """Delete a pod's machine and its disk."""
+    split_pod_ref(ref)
+    state = state_from_ctx(ctx)
+    confirm_destructive(f"Delete machine {ref} and everything on its disk?", yes)
+
+    def call(client: Lemma, cli_state: CliState) -> dict[str, object]:
+        pod_id, name = _resolved(client, cli_state, ref, pod)
+        client.machines.delete(name, pod_id=pod_id)
+        return {"pod_id": pod_id, "name": name, "deleted": True}
+
+    result = run_with_client(ctx, call)
+    if result is not None:
+        emit(state, result)
+
+
+@grants_app.command("list")
+def list_grants(
+    ctx: typer.Context,
+    ref: str = typer.Argument(..., help=_POD_REF_HELP),
+    pod: str | None = _pod_option(),
+) -> None:
+    """Show which agents and functions may use a pod machine."""
+    split_pod_ref(ref)
+    state = state_from_ctx(ctx)
+
+    def call(client: Lemma, cli_state: CliState) -> object:
+        pod_id, name = _resolved(client, cli_state, ref, pod)
+        return client.machines.grants(name, pod_id=pod_id)
+
+    result = run_with_client(ctx, call)
+    if result is not None:
+        emit(state, result)
+
+
+@grants_app.command("set")
+def set_grants(
+    ctx: typer.Context,
+    ref: str = typer.Argument(..., help=_POD_REF_HELP),
+    agent: list[str] | None = typer.Option(
+        None, "--agent", help="An agent that may use it; repeatable."
+    ),
+    function: list[str] | None = typer.Option(
+        None, "--function", help="A function that may use it; repeatable."
+    ),
+    pod: str | None = _pod_option(),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt."
+    ),
+) -> None:
+    """Replace which agents and functions may use a pod machine."""
+    split_pod_ref(ref)
+    agents, functions = list(agent or []), list(function or [])
+    state = state_from_ctx(ctx)
+    granted = ", ".join(agents + functions) or "nothing"
+    confirm_destructive(f"Let {granted} use {ref}, replacing its current grants?", yes)
+
+    def call(client: Lemma, cli_state: CliState) -> object:
+        pod_id, name = _resolved(client, cli_state, ref, pod)
+        return client.machines.set_grants(
+            name, pod_id=pod_id, agents=agents, functions=functions
+        )
+
+    result = run_with_client(ctx, call)
+    if result is not None:
+        emit(state, result)
+
+
+# -- exec / shell -------------------------------------------------------------
+
+
+def _command_line(command: list[str]) -> str:
+    """One argument is a shell line as written; several are quoted words."""
+    if len(command) == 1:
+        return command[0]
+    return shlex.join(command)
+
+
+def _parse_env(pairs: list[str] | None) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for pair in pairs or []:
+        key, sep, value = pair.partition("=")
+        if not sep or not key:
+            raise typer.BadParameter(f"{pair!r} is not KEY=VALUE", param_hint="--env")
+        env[key] = value
+    return env
+
+
+def _exit_code_of(stream: Any) -> int:
+    code = getattr(stream, "exit_code", None)
+    if isinstance(code, int):
+        return code
+    return 0 if getattr(stream, "state", None) == "succeeded" else _NO_EXIT_CODE
+
+
+@app.command(
+    "exec",
+    context_settings={"allow_interspersed_args": False},
+    epilog=(
+        "Examples:\n\n"
+        "  lemma machine exec me ls -la\n"
+        "  lemma machine exec pod:builder 'npm ci && npm test'\n"
+        "  lemma machine exec --cwd /home/user/src me make\n\n"
+        "Options go before the ref: everything after it is the command."
+    ),
+)
+def exec_command(
+    ctx: typer.Context,
+    ref: str = typer.Argument(..., help=_REF_HELP),
+    command: list[str] = typer.Argument(
+        ..., help="The command. One argument runs as a shell line."
+    ),
+    cwd: str | None = typer.Option(
+        None, "--cwd", help="Directory to run in, inside the machine's home."
+    ),
+    env: list[str] | None = typer.Option(
+        None, "--env", "-e", help="KEY=VALUE for the command's environment; repeatable."
+    ),
+    timeout: int | None = typer.Option(
+        None, "--time-limit", help="Stop the command after this many seconds."
+    ),
+) -> None:
+    """Run a command on a machine, stream its output, and exit with its code."""
+    state = state_from_ctx(ctx)
+    line = _command_line(command)
+    environment = _parse_env(env)
+    as_json = state.output == "json"
+
+    def call(client: Lemma, _state: CliState) -> dict[str, object]:
+        stream = client.machines.exec(
+            ref, line, cwd=cwd, env=environment or None, timeout_seconds=timeout
+        )
+        stdout: list[str] = []
+        stderr: list[str] = []
+        try:
+            for chunk in stream:
+                into_err = chunk.channel == "stderr"
+                if as_json:
+                    (stderr if into_err else stdout).append(chunk.data)
+                    continue
+                target = sys.stderr if into_err else sys.stdout
+                target.write(chunk.data)
+                target.flush()
+        except KeyboardInterrupt:
+            stream.kill()
+            raise typer.Exit(code=130) from None
+        return {
+            "process_id": getattr(stream, "process_id", None),
+            "state": getattr(stream, "state", None),
+            "exit_code": _exit_code_of(stream),
+            "stdout": "".join(stdout),
+            "stderr": "".join(stderr),
+        }
+
+    result = run_with_client(ctx, call)
+    if result is None:
+        return
+    if as_json:
+        emit(state, result)
+    code = result["exit_code"]
+    raise typer.Exit(code=code if isinstance(code, int) else 1)
+
+
+@app.command("shell")
+def shell(
+    ctx: typer.Context,
+    ref: str = _ref_option(),
+    command: str = typer.Option(
+        "bash -l", "--command", "-c", help="What to run in the terminal."
+    ),
+) -> None:
+    """Open an interactive terminal on a machine."""
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        fail(
+            "`lemma machine shell` needs a terminal. To run one command, use "
+            f"`lemma machine exec {ref} <command>`."
+        )
+    try:
+        import termios  # noqa: F401
+    except ImportError:
+        fail("`lemma machine shell` needs a POSIX terminal; use `lemma machine exec`.")
+
+    def call(client: Lemma, _state: CliState) -> int:
+        from ..machine_shell import run_shell
+
+        return run_shell(client, ref, command)
+
+    code = run_with_client(ctx, call)
+    raise typer.Exit(code=code if isinstance(code, int) else 1)
+
+
+# -- processes ----------------------------------------------------------------
+
+
+@app.command("ps")
+def list_processes(ctx: typer.Context, ref: str = _ref_option()) -> None:
+    """Show what is running on a machine."""
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx, lambda client, _s: client.machines.processes.list(ref)
+    )
+    if result is not None:
+        emit(state, result)
+
+
+@app.command("kill")
+def kill_process(
+    ctx: typer.Context,
+    ref: str = typer.Argument(..., help=_REF_HELP),
+    process_id: str = typer.Argument(..., help="The process, from `lemma machine ps`."),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt."
+    ),
+) -> None:
+    """Stop a process on a machine."""
+    state = state_from_ctx(ctx)
+    confirm_destructive(f"Stop process {process_id} on {ref}?", yes)
+    result = run_with_client(
+        ctx,
+        lambda client, _s: client.machines.processes.kill(ref, process_id) or True,
+    )
+    if result is not None:
+        emit(state, {"process_id": process_id, "stopped": True})
+
+
+# -- cp -------------------------------------------------------------------------
+
+
+#: A machine's name, as the API's ref grammar has it: no colon, no slash.
+_MACHINE_NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?")
+
+
+def split_machine_path(spec: str) -> tuple[str, str] | None:
+    """``(ref, path)`` for ``<ref>:<path>``, or None for a local path.
+
+    Split by the ref grammar, not at a colon: a ref may hold colons
+    (``pod:<pod>:<name>``) and so may a path. ``me``, ``mine:<name>`` and a
+    machine id end at a fixed colon, since a name never holds one. After
+    ``pod:`` the older ``<pod>/<name>`` ends at the colon after it; otherwise
+    ``pod:<a>:<b>:<path>`` is the pod-named form when ``<b>`` is a machine
+    name, and ``pod:<a>:<path>`` -- the pod in context -- when it is not, which
+    an absolute path never is. So a relative path with a colon in it after
+    ``pod:<name>`` must be written absolute, or with the pod named.
+    """
+    if spec.startswith(("me:", "default:")):
+        ref, _, path = spec.partition(":")
+        return ref, path
+    if spec.startswith("mine:"):
+        name, sep, path = spec[len("mine:") :].partition(":")
+        if not sep:
+            raise _no_path(spec)
+        return f"mine:{name}", path
+    if spec.startswith("pod:"):
+        return _split_pod_path(spec)
+    head, sep, path = spec.partition(":")
+    if sep and _is_uuid(head):
+        return head, path
+    return None
+
+
+def _split_pod_path(spec: str) -> tuple[str, str]:
+    first, sep, rest = spec[len("pod:") :].partition(":")
+    if not sep:
+        raise _no_path(spec)
+    if "/" in first:
+        return f"pod:{first}", rest
+    second, sep, path = rest.partition(":")
+    if sep and _MACHINE_NAME.fullmatch(second):
+        return f"pod:{first}:{second}", path
+    return f"pod:{first}", rest
+
+
+def _no_path(spec: str) -> typer.BadParameter:
+    return typer.BadParameter(
+        f"{spec!r} names a machine but no path: write {spec}:<path>"
+    )
+
+
+def _is_uuid(value: str) -> bool:
+    import uuid
+
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
+
+
+@app.command(
+    "cp",
+    epilog=(
+        "Examples:\n\n"
+        "  lemma machine cp ./report.csv me:/home/user/lemma/report.csv\n"
+        "  lemma machine cp pod:builder:/home/user/lemma/dist/app.zip ./app.zip"
+    ),
+)
+def copy(
+    ctx: typer.Context,
+    source: str = typer.Argument(
+        ..., help="A local path, or <ref>:<path> on a machine."
+    ),
+    destination: str = typer.Argument(
+        ..., help="A local path, or <ref>:<path> on a machine."
+    ),
+) -> None:
+    """Copy a file between this computer and a machine."""
+    state = state_from_ctx(ctx)
+    remote_source = split_machine_path(source)
+    remote_destination = split_machine_path(destination)
+    if (remote_source is None) == (remote_destination is None):
+        fail(
+            "Exactly one side must be on a machine, written <ref>:<path> "
+            "(for example me:/home/user/lemma/notes.txt)."
+        )
+
+    if remote_destination is not None:
+        local = Path(source).expanduser()
+        if not local.is_file():
+            fail(f"{source} is not a file. Copy one file at a time.")
+        ref, path = remote_destination
+        if not path or path.endswith("/"):
+            path = f"{path}{local.name}"
+
+        def upload(client: Lemma, _state: CliState) -> object:
+            with local.open("rb") as handle:
+                return client.machines.files.write(ref, path, handle)
+
+        result = run_with_client(ctx, upload)
+    else:
+        assert remote_source is not None
+        ref, path = remote_source
+        target = Path(destination).expanduser()
+        if target.is_dir() or destination.endswith(("/", os.sep)):
+            target = target / (path.rstrip("/").rpartition("/")[2] or "download")
+
+        def download(client: Lemma, _state: CliState) -> object:
+            saved = client.machines.files.download_to(ref, path, target)
+            return {"path": str(saved), "size_bytes": Path(saved).stat().st_size}
+
+        result = run_with_client(ctx, download)
+    if result is not None:
+        emit(state, result)
+
+
+# -- preview --------------------------------------------------------------------
+
+
+@preview_app.command("create")
+def create_preview(
+    ctx: typer.Context,
+    ref: str = typer.Argument(..., help=_REF_HELP),
+    port: int = typer.Option(..., "--port", "-p", help="The port to share."),
+    visibility: str = typer.Option(
+        "private",
+        "--visibility",
+        help="private: people who may use the machine. link: anyone with the URL.",
+    ),
+    ttl: int | None = typer.Option(
+        None, "--ttl", help="Seconds until the URL stops working."
+    ),
+) -> None:
+    """Share a port a machine is serving on."""
+    if visibility not in ("private", "link"):
+        raise typer.BadParameter("use private or link", param_hint="--visibility")
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx,
+        lambda client, _s: client.machines.previews.create(
+            ref, port, visibility=visibility, ttl_seconds=ttl
+        ),
+    )
+    if result is not None:
+        emit(state, result)
+
+
+@preview_app.command("list")
+def list_previews(ctx: typer.Context, ref: str = _ref_option()) -> None:
+    """List a machine's shared ports."""
+    state = state_from_ctx(ctx)
+    result = run_with_client(ctx, lambda client, _s: client.machines.previews.list(ref))
+    if result is not None:
+        emit(state, result)
+
+
+@preview_app.command("revoke")
+def revoke_preview(
+    ctx: typer.Context,
+    ref: str = typer.Argument(..., help=_REF_HELP),
+    preview_id: str = typer.Argument(
+        ..., help="The preview, from `lemma machine preview list`."
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt."
+    ),
+) -> None:
+    """Stop sharing a port; its URL stops working."""
+    state = state_from_ctx(ctx)
+    confirm_destructive(f"Revoke preview {preview_id} on {ref}?", yes)
+    result = run_with_client(
+        ctx,
+        lambda client, _s: client.machines.previews.revoke(ref, preview_id) or True,
+    )
+    if result is not None:
+        emit(state, {"preview_id": preview_id, "revoked": True})
+
+
+# -- reset ----------------------------------------------------------------------
+
+
+@app.command("reset")
+def reset(
+    ctx: typer.Context,
+    ref: str = typer.Argument(..., help=_REF_HELP),
+    scope: list[str] = typer.Option(
+        ...,
+        "--scope",
+        "-s",
+        help=f"What to clean; repeatable: {', '.join(_RESET_SCOPES)}.",
+    ),
+    confirm: bool = typer.Option(
+        False,
+        "--confirm",
+        help="Allow the scopes that discard work (home, docker).",
+    ),
+    forget_logins: bool = typer.Option(
+        False, "--forget-logins", help="Also sign the browser out of every site."
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt."
+    ),
+) -> None:
+    """Clean a machine: stop processes, clear caches, or wipe its home."""
+    unknown = sorted(set(scope) - set(_RESET_SCOPES))
+    if unknown:
+        raise typer.BadParameter(
+            f"{', '.join(unknown)}: use {', '.join(_RESET_SCOPES)}",
+            param_hint="--scope",
+        )
+    losing = sorted(set(scope) & _WORK_LOSING_SCOPES)
+    if losing and not confirm:
+        fail(f"Resetting {', '.join(losing)} discards work; pass --confirm to do it.")
+    state = state_from_ctx(ctx)
+    confirm_destructive(f"Reset {', '.join(scope)} on {ref}?", yes)
+    result = run_with_client(
+        ctx,
+        lambda client, _s: client.machines.reset(
+            ref, scope, confirm=confirm, forget_logins=forget_logins
+        ),
+    )
+    if result is not None:
+        emit(state, result)
+
+
+# -- logins ---------------------------------------------------------------------
+
+
+@logins_app.command("list")
+def list_logins(
+    ctx: typer.Context,
+    ref: str = _ref_option(),
+    wake: bool = typer.Option(
+        False, "--wake", help="Start the machine if it is asleep."
+    ),
+) -> None:
+    """List the sites a machine's browser holds cookies for."""
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx, lambda client, _s: client.machines.browser.logins(ref, wake=wake)
+    )
+    if result is not None:
+        emit(state, result)
+
+
+@logins_app.command("forget")
+def forget_login(
+    ctx: typer.Context,
+    ref: str = typer.Argument(..., help=_REF_HELP),
+    site: str = typer.Argument(..., help="The site, such as app.example.com."),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt."
+    ),
+) -> None:
+    """Sign a machine's browser out of a site."""
+    state = state_from_ctx(ctx)
+    confirm_destructive(f"Sign {ref}'s browser out of {site}?", yes)
+    result = run_with_client(
+        ctx, lambda client, _s: client.machines.browser.forget_login(ref, site)
+    )
+    if result is not None:
+        emit(state, to_plain(result) or {"site": site, "forgotten": True})
+
+
+__all__ = ["app", "err_console", "split_machine_path", "split_pod_ref"]

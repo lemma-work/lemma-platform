@@ -69,7 +69,13 @@ class ChannelSeats(Protocol):
     ) -> None: ...
 
     async def lock_person(
-        self, *, channel_id: UUID, pod_id: UUID, agent_id: UUID | None, person_id: UUID
+        self,
+        *,
+        channel_id: UUID,
+        pod_id: UUID,
+        agent_id: UUID | None,
+        person_id: UUID,
+        platform: str | None,
     ) -> None: ...
 
     async def conversation_in_channel(
@@ -80,6 +86,7 @@ class ChannelSeats(Protocol):
         agent_id: UUID | None,
         user_id: UUID,
         contact_id: UUID | None,
+        platform: str | None,
     ) -> UUID | None: ...
 
     async def direct_channel(self, *, pod_id: UUID, user_id: UUID) -> UUID: ...
@@ -132,6 +139,7 @@ async def find_or_open[R](
     seats: ChannelSeats,
     *,
     channel_id: UUID,
+    platform: str | None,
     pod_id: UUID,
     agent_id: UUID | None,
     user_id: UUID,
@@ -139,9 +147,10 @@ async def find_or_open[R](
     found: Callable[[UUID], Awaitable[R | None]],
     opening: Callable[[], Awaitable[R]],
 ) -> R:
-    """A person's one conversation with an agent in a channel, opened if new.
+    """A person's one conversation with an agent on a platform of a channel,
+    opened if new. ``platform`` is the one they wrote on; None is Lemma.
 
-    Serialised on the person and the channel, so two first messages open one:
+    Serialised on the person and the platform, so two first messages open one:
     the lock is taken, the conversation looked for under it, and opened under
     it. ``found`` says what a conversation already there comes to -- ``None``
     where the caller may not keep it -- and ``opening`` opens one. The lock
@@ -153,6 +162,7 @@ async def find_or_open[R](
         pod_id=pod_id,
         agent_id=agent_id,
         person_id=contact_id or user_id,
+        platform=platform,
     )
     existing = await seats.conversation_in_channel(
         channel_id=channel_id,
@@ -160,6 +170,7 @@ async def find_or_open[R](
         agent_id=agent_id,
         user_id=user_id,
         contact_id=contact_id,
+        platform=platform,
     )
     if existing is not None and (kept := await found(existing)) is not None:
         return kept
@@ -181,7 +192,13 @@ class ChannelSeatsInDatabase:
         await places.addressed_at(self.uow, source_id, delivery_ref)
 
     async def lock_person(
-        self, *, channel_id: UUID, pod_id: UUID, agent_id: UUID | None, person_id: UUID
+        self,
+        *,
+        channel_id: UUID,
+        pod_id: UUID,
+        agent_id: UUID | None,
+        person_id: UUID,
+        platform: str | None,
     ) -> None:
         await agent_channels.lock_person_in_channel(
             self.uow,
@@ -189,6 +206,7 @@ class ChannelSeatsInDatabase:
             pod_id=pod_id,
             agent_id=agent_id,
             person_id=person_id,
+            platform=platform,
         )
 
     async def conversation_in_channel(
@@ -199,6 +217,7 @@ class ChannelSeatsInDatabase:
         agent_id: UUID | None,
         user_id: UUID,
         contact_id: UUID | None,
+        platform: str | None,
     ) -> UUID | None:
         return await agent_channels.conversation_in_channel(
             self.uow,
@@ -207,6 +226,7 @@ class ChannelSeatsInDatabase:
             agent_id=agent_id,
             user_id=user_id,
             contact_id=contact_id,
+            platform=platform,
         )
 
     async def direct_channel(self, *, pod_id: UUID, user_id: UUID) -> UUID:

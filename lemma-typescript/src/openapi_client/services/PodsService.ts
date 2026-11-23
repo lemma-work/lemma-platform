@@ -2,6 +2,8 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { JoinablePodListResponse } from '../models/JoinablePodListResponse.js';
+import type { NamedPodResponse } from '../models/NamedPodResponse.js';
 import type { OutcomeInput } from '../models/OutcomeInput.js';
 import type { OutcomeSetResponse } from '../models/OutcomeSetResponse.js';
 import type { PodCreateRequest } from '../models/PodCreateRequest.js';
@@ -43,6 +45,35 @@ export class PodsService {
         });
     }
     /**
+     * List Pods the Caller Can Join
+     * The organization's pods the caller is not in and may join without asking: those open to the organization (ORG_MEMBERS) or to everyone (PUBLIC). Join one with `POST /pods/{pod_id}/join`. Empty for an organization owner, who already opens every pod. 403 for someone outside the organization.
+     * @param organizationId
+     * @param limit
+     * @param pageToken
+     * @returns JoinablePodListResponse Successful Response
+     * @throws ApiError
+     */
+    public static podListJoinable(
+        organizationId: string,
+        limit: number = 100,
+        pageToken?: (string | null),
+    ): CancelablePromise<JoinablePodListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/organizations/{organization_id}/pods/joinable',
+            path: {
+                'organization_id': organizationId,
+            },
+            query: {
+                'limit': limit,
+                'page_token': pageToken,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * Create Pod
      * Create a new pod
      * @param requestBody
@@ -57,6 +88,30 @@ export class PodsService {
             url: '/pods',
             body: requestBody,
             mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Find a Pod by Name
+     * Which pod a web address spelled in names means (`/l/{organization}/{pod}/...`): `organization` is the organization's handle, `pod` the pod's name as one word of an address -- lower case, letters and digits, a hyphen for every other run. Answers only for a pod the caller could already see by name or walk into without asking: one they are in, any pod for the organization's owner, a pod open to everyone, and a pod open to the organization for anyone in it or free to join it. Every other name, an unknown handle, and a word two pods share are one 404. Open the pod, or ask to join it, by the id.
+     * @param organization
+     * @param pod
+     * @returns NamedPodResponse Successful Response
+     * @throws ApiError
+     */
+    public static podFindByName(
+        organization: string,
+        pod: string,
+    ): CancelablePromise<NamedPodResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/by-name',
+            query: {
+                'organization': organization,
+                'pod': pod,
+            },
             errors: {
                 422: `Validation Error`,
             },
@@ -106,7 +161,7 @@ export class PodsService {
     }
     /**
      * Update Pod
-     * Update pod details
+     * Update pod details; only the fields sent change
      * @param podId
      * @param requestBody
      * @returns PodResponse Successful Response
@@ -117,7 +172,7 @@ export class PodsService {
         requestBody: PodUpdateRequest,
     ): CancelablePromise<PodResponse> {
         return __request(OpenAPI, {
-            method: 'PUT',
+            method: 'PATCH',
             url: '/pods/{pod_id}',
             path: {
                 'pod_id': podId,

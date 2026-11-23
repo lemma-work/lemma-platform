@@ -38,6 +38,24 @@ export interface ContentFrontmatter {
     pod?: string;
     /** Drafts render in development and are withheld everywhere else. */
     draft: boolean;
+    /**
+     * Changelog only. Set when the entry's section for API, SDK and CLI users
+     * says a route, a field or a value is gone, so code written against the
+     * last release stops working. What's new marks the entry "Breaking".
+     */
+    breaking?: boolean;
+    /**
+     * Changelog only. The release shipped a Lemma Desktop build. The newest
+     * entry that says so offers the download, because `/download` serves the
+     * latest build and nothing older.
+     */
+    desktop?: boolean;
+    /**
+     * Changelog only. The heading of the section written for API, SDK and CLI
+     * users, when it is not the usual "What changes for API, SDK and CLI
+     * users". What's new shows that section in a panel of its own.
+     */
+    developer?: string;
 }
 
 export interface ContentDoc {

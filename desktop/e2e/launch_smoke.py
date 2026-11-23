@@ -468,6 +468,8 @@ async def start_stack(
             "websockets-sansio",
             "--ws-max-size",
             "1048576",
+            "--ws-per-message-deflate",
+            "false",
         ],
         env=backend_env,
         cwd=BACKEND,

@@ -12,13 +12,14 @@ from collections.abc import Callable, Sequence
 from typing import Any, cast
 
 from pydantic_ai import Agent as PydanticAIAgent
-from pydantic_ai import BinaryContent, UsageLimits, capture_run_messages
+from pydantic_ai import BinaryContent, BinaryImage, UsageLimits, capture_run_messages
 from pydantic_ai.agent import AgentRunResult
-from pydantic_ai.exceptions import ModelHTTPError, UsageLimitExceeded
+from pydantic_ai.exceptions import AgentRunError, ModelHTTPError, UsageLimitExceeded
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelRequest, ToolReturnPart, UserContent
 from pydantic_ai.models import Model
 
+from app.core.log.log import get_logger
 from app.modules.agent.domain.background import (
     BackgroundAnswer,
     BackgroundCall,
@@ -28,6 +29,7 @@ from app.modules.agent.domain.background import (
     ToolReturnRecord,
 )
 from app.modules.agent.domain.tools import ImagePart
+from app.modules.agent.domain.vision import ImageGenerationError
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 from app.modules.agent.infrastructure.harness.lemma.toolset_adapter import (
@@ -40,6 +42,9 @@ from app.modules.agent.infrastructure.providers import (
 
 #: A strict endpoint refuses a request field it does not know with one of these.
 _REFUSED_FIELD = (400, 422)
+
+
+logger = get_logger(__name__)
 
 
 class PydanticAIModelProvider:
@@ -112,6 +117,10 @@ class PydanticAIModelProvider:
             tool_returns=_tool_returns(result.all_messages()),
         )
 
+    async def draw(self, model: object, call: BackgroundCall) -> ImagePart:
+        """One image from an image model: its output is the picture."""
+        return await _draw(cast(Model, model), call)
+
     @staticmethod
     async def _ask(
         agent: PydanticAIAgent[Any, Any],
@@ -174,6 +183,31 @@ def _usage_limits(model: Model | str, limits: BackgroundLimits) -> UsageLimits:
     if isinstance(model, str):
         return wanted
     return runtime_model_factory.usage_limits_for(model, wanted)
+
+
+async def _draw(model: Model, call: BackgroundCall) -> ImagePart:
+    agent: PydanticAIAgent[None, BinaryImage] = PydanticAIAgent(
+        model, output_type=BinaryImage, instructions=call.instructions
+    )
+    try:
+        result = await agent.run(
+            _prompt(call.prompt),
+            usage_limits=_usage_limits(model, call.limits),
+            model_settings=runtime_model_factory.provider_model_settings(
+                call.model_settings
+            ),
+        )
+    except AgentRunError as exc:
+        # A refusal, a safety block or text where a picture was asked for:
+        # the provider's own words stay in the log, the caller gets a reason.
+        logger.warning(
+            "agent.providers.background.image_not_drawn.degraded", exc_info=True
+        )
+        raise ImageGenerationError(
+            "The image model could not make that image. It may have declined "
+            "the request; try describing it differently."
+        ) from exc
+    return ImagePart(data=result.output.data, media_type=result.output.media_type)
 
 
 def _prompt(prompt: str | Sequence[PromptPart]) -> str | list[UserContent]:

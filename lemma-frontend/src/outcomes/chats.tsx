@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { source, NEW_CONVERSATION, type ConversationRef, type Pod } from "@/data";
 import { lemma } from "@/session/client";
@@ -20,19 +20,21 @@ import type { Channel } from "@/channels/model";
 import { ChannelIcon } from "@/shell/channels";
 import { useSurfaces } from "@/shell/surfaces";
 import { useMaySeeContacts } from "@/space/contact-queries";
-import { NEW_CHAT, broughtSaid, chatView, outcomeView, type ChatOpen, type Fill, type Go, type Handoff, type OpenChat, type View } from "./model";
+import { NEW_CHAT, chatView, outcomeView, type ChatOpen, type Fill, type Go, type Handoff, type OpenChat, type View } from "./model";
 import { closeMenu } from "./lemma-bar";
 import { pinKey, retitlePin, togglePin, unpin, usePins } from "./pins";
 import type { Calls } from "./calls";
 import { useVoiceConfigured } from "@/call/voice-config";
 import { ConnectBanner } from "@/connect/pod-connect";
-import { Empty, Icon, to } from "./parts";
-import { useSetup } from "./data";
+import { Icon, to } from "./parts";
+import { Calm } from "./calm";
 import type { FrameActions } from "./actions";
 import { BesidePane, type Beside } from "./beside";
 import { PaneDivider } from "@/shell/pane-divider";
 import { clampPaneWidth } from "@/shell/split-tabs";
 import { key as storageKey } from "@/session/storage";
+import { dropIntoComposer } from "@/thread/composer";
+import { TeammateFace } from "@/space/teammate-face";
 
 const NOOP = () => undefined;
 
@@ -137,7 +139,15 @@ export function ChatPane({ pods, open, activity, go, actions, calls, handoff, on
         );
     }
     const pod = pods.find((one) => one.id === open.podId) ?? null;
-    if (!pod) return <div className="ox-thread__none"><Empty title="This chat is with a Lemma you can’t open."><p>It may have been removed, or you were never added to it.</p></Empty></div>;
+    if (!pod) {
+        return (
+            <div className="ox-thread__none">
+                <Calm icon="lock" title="This chat is with a Lemma you can’t open" actions={<a className="b b--m b--secondary" {...to({ name: "today" }, go)}>Start a new chat</a>}>
+                    It may have been removed, or you were never added to it.
+                </Calm>
+            </div>
+        );
+    }
     if (open.kind === "chat") {
         const title = activity.get(pod.id)?.find((one) => one.id === open.id)?.title ?? null;
         return <ChatThread pod={pod} id={open.id} title={title} go={go} actions={actions} calls={calls} handoff={handoff} onHandoffSent={onHandoffSent} fill={fill} onFilled={onFilled} />;
@@ -212,15 +222,29 @@ function ChatThread({ pod, id, title, go, actions, calls, handoff, onHandoffSent
        it and the thread -- keeps a column of its own, and the pane runs the
        full height beside it under a bar of its own: one header to each, side
        by side, not one stacked over the other. */
+    const drop = useChatDrop();
     return (
         <div className={"ox-thread" + (beside ? " ox-thread--beside" : "")} style={beside ? { ["--split-position" as string]: width + "%" } : undefined}>
-            <div className="ox-thread__main">
+            <div className="ox-thread__main" {...drop.handlers}>
+                {drop.over && (
+                    <div className="ox-drop" aria-hidden="true">
+                        <span className="ox-drop__i"><Icon name="upload" size={22} /></span>
+                        <span className="ox-drop__t">Drop to give these to {pod.name}</span>
+                        <span className="ox-drop__s">They go with your next message, and stay in its files</span>
+                    </div>
+                )}
                 <header className="ox-thread__head">
+                    <a className="ox-thread__lemma" {...to(outcomeView(pod.id), go)} title={`Back to ${pod.name}`}>
+                        <TeammateFace pod={pod} size={22} />
+                        <span>{pod.name}</span>
+                    </a>
+                    <span className="ox-thread__sep" aria-hidden="true">/</span>
                     {fresh ? <p className="ox-thread__t">New chat</p> : <ChatHead pod={pod} open={{ kind: "chat", podId: pod.id, id }} title={title} go={go} onComputer={() => open({ kind: "computer" })} />}
                 </header>
                 <ConnectBanner key={pod.id} pod={pod} />
-                <SetupStrip pod={pod} />
-                {!threaded ? <p className="ox-loading">Opening {pod.name}…</p> : (
+                {/* A new chat that has nothing to send yet goes to the Lemma's
+                    page at once: nothing to draw in between. */}
+                {!threaded ? null : (
                     <div className="ox-thread__body">
                         <div className="split">
                             <div className="convo-host">
@@ -258,26 +282,39 @@ function ChatThread({ pod, id, title, go, actions, calls, handoff, onHandoffSent
     );
 }
 
-/** Over a Lemma's first chat, while its template is coming in: what it
- *  brings, and that its agent starts once it is in. Gone once it is. */
-function SetupStrip({ pod }: { pod: Pod }) {
-    const setup = useSetup(pod.id);
-    if (!setup) return null;
-    const brought = broughtSaid(setup.plan?.steps ?? []);
-    const status = setup.status as string;
-    const said = status === "COMPLETED"
-        ? `Brought in ${brought || "what it starts with"}.`
-        : status === "FAILED"
-            ? `Couldn’t bring in everything${setup.error ? `: ${setup.error}` : ""}. ${pod.name} starts with what is here.`
-            : status === "AWAITING_CONFIRMATION"
-                ? "What it brings is waiting for a person to confirm it."
-                : `Bringing in ${brought || "its tables, skills and automations"}…`;
-    return (
-        <p className="ox-setup" role="status">
-            <span className="ox-setup__t">Setting up {pod.name}</span>
-            <span className="ox-setup__items">{said}</span>
-        </p>
-    );
+/** Files dragged over a chat light all of it, not only its box: a drop
+ *  anywhere goes to the box, which checks and attaches them. Counted, so
+ *  moving over the chat's own parts does not flicker it off. */
+function useChatDrop() {
+    const [over, setOver] = useState(false);
+    const depth = useRef(0);
+    const files = (event: { dataTransfer: DataTransfer | null }) => Array.from(event.dataTransfer?.types ?? []).includes("Files");
+    return {
+        over,
+        handlers: {
+            onDragEnter: (event: DragEvent) => {
+                if (!files(event)) return;
+                event.preventDefault();
+                depth.current += 1;
+                setOver(true);
+            },
+            onDragOver: (event: DragEvent) => {
+                if (files(event)) event.preventDefault();
+            },
+            onDragLeave: (event: DragEvent) => {
+                if (!files(event)) return;
+                depth.current = Math.max(0, depth.current - 1);
+                if (depth.current === 0) setOver(false);
+            },
+            onDrop: (event: DragEvent) => {
+                if (!files(event)) return;
+                event.preventDefault();
+                depth.current = 0;
+                setOver(false);
+                dropIntoComposer(Array.from(event.dataTransfer.files));
+            },
+        },
+    };
 }
 
 /** A chat's name, and in a menu under it what can be done with the chat,

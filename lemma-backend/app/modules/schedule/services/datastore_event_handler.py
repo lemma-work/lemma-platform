@@ -192,6 +192,7 @@ def trigger_change(change: Change, *, table_name: str) -> TriggerChange:
         owner_user_id=None
         if change.outside_actor is not None
         else change.owner_user_id,
+        row_user_id=change.owner_user_id,
         occurred_at=change.at,
         from_outside=change.outside_actor is not None,
         metadata=metadata,

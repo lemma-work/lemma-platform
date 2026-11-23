@@ -194,7 +194,7 @@
                     id: edge.id,
                     source: edge.source,
                     target: edge.target,
-                    label: edge.condition || ''
+                    label: edge.kind === 'FAILURE' ? 'on failure' : (edge.label || '')
                 }
             });
         });

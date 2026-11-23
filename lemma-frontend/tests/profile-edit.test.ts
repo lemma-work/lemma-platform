@@ -122,3 +122,20 @@ test("somebody with no name is still called something", () => {
     assert.equal(displayName(user()), "sam");           // falls back to the email's local part
     assert.equal(displayName(null), "Your profile");
 });
+
+test("the zone a profile starts from, and every zone offered, goes by its current name", () => {
+    const was = process.env.TZ;
+    try {
+        process.env.TZ = "Asia/Calcutta";
+        assert.equal(localTimezone(), "Asia/Kolkata", "the name a browser gives India is one a database on current zone data refuses");
+        assert.equal(timezones().includes("Asia/Calcutta"), false);
+        assert.equal(timezones().filter((zone) => zone === "Asia/Kolkata").length, 1, "and it is listed once");
+    } finally {
+        if (was === undefined) delete process.env.TZ; else process.env.TZ = was;
+    }
+});
+
+test("a zone saved under its old name is shown by its current one", () => {
+    assert.equal(draftOf(user({ timezone: "Asia/Calcutta" })).timezone, "Asia/Kolkata");
+    assert.equal(draftOf(user({ timezone: "Europe/London" })).timezone, "Europe/London");
+});

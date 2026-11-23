@@ -6,6 +6,7 @@ from typing import Any, TypeVar, cast
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
+from ..models.workflow_edge_kind import WorkflowEdgeKind
 from ..types import UNSET, Unset
 
 T = TypeVar("T", bound="WorkflowEdge")
@@ -19,12 +20,14 @@ class WorkflowEdge:
         id (str):
         source (str):
         target (str):
+        kind (WorkflowEdgeKind | Unset): What an edge is followed on.
         label (None | str | Unset):
     """
 
     id: str
     source: str
     target: str
+    kind: WorkflowEdgeKind | Unset = UNSET
     label: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -34,6 +37,10 @@ class WorkflowEdge:
         source = self.source
 
         target = self.target
+
+        kind: str | Unset = UNSET
+        if not isinstance(self.kind, Unset):
+            kind = self.kind.value
 
         label: None | str | Unset
         if isinstance(self.label, Unset):
@@ -50,6 +57,8 @@ class WorkflowEdge:
                 "target": target,
             }
         )
+        if kind is not UNSET:
+            field_dict["kind"] = kind
         if label is not UNSET:
             field_dict["label"] = label
 
@@ -64,6 +73,13 @@ class WorkflowEdge:
 
         target = d.pop("target")
 
+        _kind = d.pop("kind", UNSET)
+        kind: WorkflowEdgeKind | Unset
+        if isinstance(_kind, Unset):
+            kind = UNSET
+        else:
+            kind = WorkflowEdgeKind(_kind)
+
         def _parse_label(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -77,6 +93,7 @@ class WorkflowEdge:
             id=id,
             source=source,
             target=target,
+            kind=kind,
             label=label,
         )
 

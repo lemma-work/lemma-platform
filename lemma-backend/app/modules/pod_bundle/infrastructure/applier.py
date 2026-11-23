@@ -1,9 +1,11 @@
 """Apply one plan step to the pod.
 
-Every applier is an **idempotent upsert against the pod's current state, not the
-plan**: it re-checks existence by name at apply time and creates or updates
-accordingly. That is what makes a crash between a step's DB commit and its Redis
-checkpoint safe to replay — re-running the step converges instead of duplicating.
+Every applier **creates what is missing against the pod's current state, not
+the plan**: it re-checks existence by name at apply time and leaves whatever is
+already there as it is -- a table only gains the columns it lacks. That is what
+makes a crash between a step's DB commit and its Redis checkpoint safe to
+replay, and it holds the rule the plan states (``kept_parts``) even for a part
+that appeared between plan and apply: an import never replaces anything.
 
 Each ``apply_step`` runs inside a short UoW + ``Context`` opened by the job; the
 applier never opens its own transaction.
@@ -22,15 +24,21 @@ from lemma_pod_bundle.layout import TABLE_DATA_FILE
 
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
-from app.modules.pod_bundle.domain.errors import PodBundleDomainError
+from app.modules.pod_bundle.domain.errors import (
+    PartKeptError,
+    PodBundleDomainError,
+    StepNotApplicableError,
+)
 from app.modules.pod_bundle.infrastructure.connector_grants import (
     resolve_connector_grants,
 )
 from app.modules.pod_bundle.domain.connector_plan import ConnectorChoice
 from app.modules.pod_bundle.infrastructure.connector_apply import apply_connector
+from app.modules.pod_bundle.infrastructure.agent_apply import apply_agent, apply_machine
 from app.modules.pod_bundle.infrastructure.schedule_apply import apply_schedule
 from app.modules.pod_bundle.infrastructure.surface_apply import apply_surface
-from app.modules.pod_bundle.domain.state import PlanStep, StepKind
+from app.modules.pod_bundle.domain.state import PlanStep, StepAction, StepKind
+from app.modules.pod_bundle.infrastructure import kept_parts
 from app.modules.pod_bundle.infrastructure.grants import (
     GrantInput as _GrantInput,
     apply_grants,
@@ -39,14 +47,6 @@ from app.modules.pod_bundle.infrastructure.grants import (
 )
 
 logger = get_logger(__name__)
-
-
-class StepNotApplicableError(PodBundleDomainError):
-    """A step kind this slice does not yet apply (app/surface/grants). Marked
-    SKIPPED with a reason rather than failing the whole import."""
-
-    def __init__(self, message: str):
-        super().__init__(message, code="POD_BUNDLE_STEP_UNSUPPORTED", status_code=422)
 
 
 class BundleApplier:
@@ -61,8 +61,14 @@ class BundleApplier:
         replacements: dict[str, str] | None = None,
         warnings: list[str] | None = None,
         connector_choices: dict[str, ConnectorChoice] | None = None,
+        created: kept_parts.CreatedParts | None = None,
+        resumed: bool = False,
     ):
         self._uow = uow
+        #: What this import created; a step finding its part there asks it.
+        self._created = created or kept_parts.CreatedParts()
+        #: Whether this step was interrupted while running, and runs again.
+        self._resumed = resumed
         self._connector_choices = connector_choices or {}
         self._ctx = ctx
         self._pod_id = pod_id
@@ -86,6 +92,7 @@ class BundleApplier:
             StepKind.WORKFLOW: self._apply_workflow,
             StepKind.SURFACE: self._surface_step,
             StepKind.FILE: self._apply_file,
+            StepKind.MACHINE: self._apply_machine,
         }.get(step.kind)
         if handler is None:
             # APP and FUNCTION are applied by self-scoped runners because they
@@ -108,12 +115,7 @@ class BundleApplier:
 
     async def _apply_table(self, step: PlanStep) -> None:
         from app.modules.datastore.contracts import ColumnSchema
-        from app.modules.datastore.contracts.provisioning import (
-            add_table_column,
-            create_table,
-            get_table,
-            remove_table_column,
-        )
+        from app.modules.datastore.contracts import provisioning as tables
 
         payload = self._load("tables", step.name)
         columns = [
@@ -121,11 +123,11 @@ class BundleApplier:
             for c in payload.get("columns") or []
             if not _is_system_column(c)
         ]
-        existing = await get_table(
+        existing = await tables.get_table(
             self._uow, pod_id=self._pod_id, name=step.name, ctx=self._ctx
         )
         if existing is None:
-            await create_table(
+            await tables.create_table(
                 self._uow,
                 pod_id=self._pod_id,
                 name=step.name,
@@ -135,31 +137,25 @@ class BundleApplier:
                 enable_rls=bool(payload.get("enable_rls", True)),
                 visibility=payload.get("visibility"),
                 ctx=self._ctx,
+                contact_owned=bool(payload.get("contact_owned", False)),
+                contact_columns=payload.get("contact_columns"),
             )
+            self._created.add(StepKind.TABLE, step.name)
             return
-        # Update: add any new columns; drop removed columns only when the plan
-        # marked this step destructive (i.e. the importer confirmed).
+        if step.action is StepAction.CREATE:
+            # Planned missing and here now: the import's own, or kept whole.
+            self._created.claim(step, resumed=self._resumed)
+        # The table gains the bundle's columns it lacks, and no column is
+        # dropped, retyped or altered -- whatever the step says, since a plan
+        # made before this rule could still carry `destructive`.
         existing_names = {c.name for c in existing.columns}
-        desired_names = {c.name for c in columns}
         for column in columns:
             if column.name not in existing_names:
-                await add_table_column(
+                await tables.add_table_column(
                     self._uow,
                     pod_id=self._pod_id,
                     table_name=step.name,
                     column=column,
-                    ctx=self._ctx,
-                )
-        if step.destructive:
-            pk = existing.primary_key_column
-            for name in existing_names - desired_names:
-                if name == pk or _is_system_column({"name": name}):
-                    continue
-                await remove_table_column(
-                    self._uow,
-                    pod_id=self._pod_id,
-                    table_name=step.name,
-                    column_name=name,
                     ctx=self._ctx,
                 )
 
@@ -169,6 +165,9 @@ class BundleApplier:
             seed_table_rows,
         )
 
+        self._created.require(StepKind.TABLE, step.name, kept_parts.ROWS_KEPT)
+        if self._created.made(StepKind.TABLE_DATA, step.name):
+            raise PartKeptError(kept_parts.ROWS_LOADED)
         data_path = self._root / "tables" / step.name / TABLE_DATA_FILE
         if not data_path.is_file():
             return
@@ -190,6 +189,7 @@ class BundleApplier:
             rows=rows,
             user_id=self._user_id,
         )
+        self._created.add(StepKind.TABLE_DATA, step.name)
 
     # --- files -----------------------------------------------------------
 
@@ -248,54 +248,34 @@ class BundleApplier:
             visibility=meta.get("visibility") or "POD",
         )
 
-    # --- agents ----------------------------------------------------------
+    # --- machines and agents ---------------------------------------------
+
+    async def _apply_machine(self, step: PlanStep) -> None:
+        """The dispatch table's uniform shape over `agent_apply.apply_machine`."""
+        await apply_machine(
+            step,
+            uow=self._uow,
+            pod_id=self._pod_id,
+            user_id=self._user_id,
+            load=self._load,
+        )
 
     async def _apply_agent(self, step: PlanStep) -> None:
-        from app.modules.agent.contracts.provisioning import (
-            create_agent,
-            get_agent,
-            update_agent,
+        """The dispatch table's uniform shape over `agent_apply.apply_agent`:
+        an agent it made is this import's own; one it found already there is
+        claimed, or refused when someone else made it (`kept_parts`)."""
+        made = await apply_agent(
+            step,
+            uow=self._uow,
+            ctx=self._ctx,
+            pod_id=self._pod_id,
+            user_id=self._user_id,
+            load=self._load,
         )
-
-        payload = self._load("agents", step.name)
-        runtime = _agent_runtime(payload)
-        # Toolsets are what let an imported agent actually *use* tools (POD,
-        # WEB_SEARCH, …). Without them, a granted agent still can't act — so they
-        # travel with the agent, not the deferred grants step.
-        toolsets = _agent_toolsets(payload)
-        common = {
-            "description": payload.get("description"),
-            "icon_url": payload.get("icon_url"),
-            "agent_runtime": runtime,
-            "toolsets": toolsets,
-            "input_schema": payload.get("input_schema"),
-            "output_schema": payload.get("output_schema"),
-            "metadata": payload.get("metadata"),
-        }
-        existing = await get_agent(
-            self._uow, pod_id=self._pod_id, name=step.name, ctx=self._ctx
-        )
-        if existing is None:
-            await create_agent(
-                self._uow,
-                pod_id=self._pod_id,
-                user_id=self._user_id,
-                name=step.name,
-                instruction=str(payload.get("instruction") or ""),
-                visibility=payload.get("visibility"),
-                ctx=self._ctx,
-                **common,
-            )
+        if made:
+            self._created.add(StepKind.AGENT, step.name)
         else:
-            await update_agent(
-                self._uow,
-                pod_id=self._pod_id,
-                name=step.name,
-                instruction=payload.get("instruction"),
-                user_id=self._user_id,
-                ctx=self._ctx,
-                **common,
-            )
+            self._created.claim(step, resumed=self._resumed)
 
     async def _connector_step(self, step: PlanStep) -> None:
         """The dispatch table's uniform shape over `connector_apply`."""
@@ -319,11 +299,14 @@ class BundleApplier:
             pod_id=self._pod_id,
             load=self._load,
             warnings=self._warnings,
+            created=self._created,
+            resumed=self._resumed,
         )
 
     async def _apply_function_grants(self, step: PlanStep) -> None:
         """Deferred grant step: replace a function's resource permission grants
-        once every resource it references has been applied.
+        once every resource it references has been applied. Planned only for a
+        function this import creates; one the pod had keeps its own.
 
         Functions used to have their grants written inline by the FUNCTION step's
         own runner, which runs before agents, apps, and files. A function granted
@@ -336,6 +319,7 @@ class BundleApplier:
         while one with no ``permissions`` key leaves them alone."""
         from app.modules.function.contracts.provisioning import get_function
 
+        self._created.require(StepKind.FUNCTION, step.name, kept_parts.ACCESS_KEPT)
         payload = self._load("functions", step.name)
         if not _has_grants(payload):
             return
@@ -373,9 +357,11 @@ class BundleApplier:
         explicitly empty grant list clears them — see `_apply_function_grants`."""
         from app.modules.agent.contracts.provisioning import (
             get_agent,
+            sync_agent_machine_grant,
             sync_agent_memory_grant,
         )
 
+        self._created.require(StepKind.AGENT, step.name, kept_parts.ACCESS_KEPT)
         payload = self._load("agents", step.name)
         if not _has_grants(payload):
             return
@@ -402,17 +388,30 @@ class BundleApplier:
             ctx=self._ctx,
             created_by_user_id=self._user_id,
         )
+        await sync_agent_machine_grant(
+            self._uow,
+            pod_id=self._pod_id,
+            agent_id=agent.id,
+            machine=getattr(agent, "machine", None),
+            ctx=self._ctx,
+            created_by_user_id=self._user_id,
+        )
 
     # --- grants ----------------------------------------------------------
 
     async def _apply_grants(
         self, *, grantee_type: str, grantee_id: UUID, grants: list[_GrantInput]
     ) -> None:
-        """Replace the grantee's resource grants on the step's own short UoW
-        session (see infrastructure/grants.py), declaring first any connector
-        they name that the pod does not (see connector_grants.py)."""
+        """Replace the grantee's resource grants on the step's short UoW session,
+        declaring first any connector they name that the pod does not, and
+        dropping those on one the import left out (see connector_grants.py)."""
         grants = await resolve_connector_grants(
-            self._uow, self._ctx, pod_id=self._pod_id, grants=grants
+            self._uow,
+            self._ctx,
+            pod_id=self._pod_id,
+            grants=grants,
+            choices=self._connector_choices,
+            warnings=self._warnings,
         )
         await apply_grants(
             self._uow.session,
@@ -436,6 +435,8 @@ class BundleApplier:
             user_id=self._user_id,
             load=self._load,
             warnings=self._warnings,
+            created=self._created,
+            resumed=self._resumed,
         )
 
     # --- workflows (best-effort) -----------------------------------------
@@ -446,12 +447,12 @@ class BundleApplier:
             workflow_exists,
         )
 
-        payload = self._load("workflows", step.name)
         if await workflow_exists(
             self._uow, pod_id=self._pod_id, name=step.name, ctx=self._ctx
         ):
-            # Create-once by name, like schedules; the plan says SKIP for it.
+            self._created.claim(step, resumed=self._resumed)
             return
+        payload = self._load("workflows", step.name)
         await create_workflow(
             self._uow,
             pod_id=self._pod_id,
@@ -470,6 +471,7 @@ class BundleApplier:
             # imported workflow ran unbounded however its source was capped.
             max_concurrent_runs=payload.get("max_concurrent_runs"),
         )
+        self._created.add(StepKind.WORKFLOW, step.name)
 
 
 # --- module helpers ----------------------------------------------------------
@@ -479,33 +481,6 @@ def _is_system_column(column: dict[str, Any]) -> bool:
     from lemma_pod_bundle.diff import _is_system_table_column
 
     return _is_system_table_column(column)
-
-
-def _agent_runtime(payload: dict[str, Any]):
-    from app.core.domain.runtime import AgentRuntimeConfig
-
-    raw = payload.get("agent_runtime")
-    if isinstance(raw, dict) and raw.get("profile_id"):
-        return AgentRuntimeConfig.model_validate(raw)
-    return None
-
-
-def _agent_toolsets(payload: dict[str, Any]) -> list[Any]:
-    """Map the manifest's ``toolsets`` list to :class:`AgentToolset` values,
-    dropping any the runtime doesn't recognize (forward-compat) and the reserved
-    ``VIEW_IMAGE`` toolset, which is never persisted."""
-    from app.modules.agent.contracts import AgentToolset
-
-    toolsets: list[AgentToolset] = []
-    for raw in payload.get("toolsets") or []:
-        try:
-            toolset = AgentToolset(str(raw))
-        except ValueError:
-            continue
-        if toolset is AgentToolset.VIEW_IMAGE:
-            continue
-        toolsets.append(toolset)
-    return toolsets
 
 
 def _read_json_file(path: Path, *, label: str, warnings: list[str]) -> dict[str, Any]:

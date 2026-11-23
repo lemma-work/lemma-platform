@@ -32,6 +32,7 @@ pytestmark = pytest.mark.unit
 def _service(monkeypatch, agent):
     repository = AsyncMock()
     repository.update.return_value = agent
+    repository.get_by_pod_and_name.return_value = agent
     service = AgentService(
         uow=AsyncMock(),
         agent_repository=repository,
@@ -56,6 +57,7 @@ def _agent():
         kind=AgentKind.USER,
         instruction="Report on the week.",
         toolsets=[],
+        machine=None,
     )
 
 

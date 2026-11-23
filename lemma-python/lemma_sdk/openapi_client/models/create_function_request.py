@@ -28,6 +28,9 @@ class CreateFunctionRequest:
 
         Attributes:
             name (str):
+            assistant_invoke (bool | Unset): Offer this function to the Lemma's assistant. False keeps it for the flows that
+                call it -- apps, workflows, schedules and other functions: the assistant is not shown it and is refused if it
+                runs it by name. Default: True.
             code (None | str | Unset): Python source for the function. When provided, the platform analyzes the code and
                 populates input_schema, output_schema, and config_schema on the returned function.
             config (JsonObject | None | Unset):
@@ -42,6 +45,7 @@ class CreateFunctionRequest:
     """
 
     name: str
+    assistant_invoke: bool | Unset = True
     code: None | str | Unset = UNSET
     config: JsonObject | None | Unset = UNSET
     description: None | str | Unset = UNSET
@@ -57,6 +61,8 @@ class CreateFunctionRequest:
         from ..models.json_object import JsonObject
 
         name = self.name
+
+        assistant_invoke = self.assistant_invoke
 
         code: None | str | Unset
         if isinstance(self.code, Unset):
@@ -107,6 +113,8 @@ class CreateFunctionRequest:
                 "name": name,
             }
         )
+        if assistant_invoke is not UNSET:
+            field_dict["assistant_invoke"] = assistant_invoke
         if code is not UNSET:
             field_dict["code"] = code
         if config is not UNSET:
@@ -133,6 +141,8 @@ class CreateFunctionRequest:
 
         d = dict(src_dict)
         name = d.pop("name")
+
+        assistant_invoke = d.pop("assistant_invoke", UNSET)
 
         def _parse_code(data: object) -> None | str | Unset:
             if data is None:
@@ -213,6 +223,7 @@ class CreateFunctionRequest:
 
         create_function_request = cls(
             name=name,
+            assistant_invoke=assistant_invoke,
             code=code,
             config=config,
             description=description,

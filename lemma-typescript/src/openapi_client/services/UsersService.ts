@@ -10,6 +10,7 @@ import type { FirstWorkspaceRequest } from '../models/FirstWorkspaceRequest.js';
 import type { FirstWorkspaceResponse } from '../models/FirstWorkspaceResponse.js';
 import type { UserProfileRequest } from '../models/UserProfileRequest.js';
 import type { UserResponse } from '../models/UserResponse.js';
+import type { WorkAnswerRequest } from '../models/WorkAnswerRequest.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
@@ -79,7 +80,7 @@ export class UsersService {
     }
     /**
      * Ensure The Current User Has A Workspace
-     * Select an eligible organization and idempotently ensure the current user has a private pod and assistant.
+     * Put the current user in an organization, making one if they belong to none, and say which Lemma they land in. Pending invitations are accepted first, then an organization they already belong to is used, then their company's organization open to their verified work domain is joined; otherwise one is made, with a Lemma everyone in it shares. Safe to repeat: a second call makes nothing new.
      * @param requestBody
      * @returns FirstWorkspaceResponse Successful Response
      * @throws ApiError
@@ -122,6 +123,26 @@ export class UsersService {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/users/me/profile',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Say What The Current User Does
+     * Keep what the current user said they do, replacing any earlier answer, and return the user with it. Asked once, at their first start: an answer with no jobs and no `other` records that they skipped, so they are not asked again. Leaves every other preference as it was.
+     * @param requestBody
+     * @returns UserResponse Successful Response
+     * @throws ApiError
+     */
+    public static usersWorkSet(
+        requestBody: WorkAnswerRequest,
+    ): CancelablePromise<UserResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/users/me/work',
             body: requestBody,
             mediaType: 'application/json',
             errors: {

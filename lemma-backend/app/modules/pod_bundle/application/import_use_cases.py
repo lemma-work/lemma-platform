@@ -25,24 +25,20 @@ from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.config import pod_bundle_settings
+from app.modules.pod_bundle.application.approval import approve_plan
 from app.modules.pod_bundle.domain.errors import (
-    BundleConfirmationRequiredError,
     BundleInvalidError,
     BundleJobConflictError,
     BundleJobExpiredError,
     BundleJobNotFoundError,
     BundleTooLargeError,
 )
-from app.modules.pod_bundle.domain.connector_plan import (
-    ConnectorChoice,
-    resolve_connector_choices,
-)
+from app.modules.pod_bundle.domain.connector_plan import ConnectorChoice
 from app.modules.pod_bundle.domain.state import (
     BundleSource,
     BundleSourceKind,
     ImportState,
     ImportStatus,
-    StepStatus,
 )
 from app.modules.pod_bundle.events.work import (
     APPLY,
@@ -73,46 +69,6 @@ PLAN_JOB_NAME = PLAN
 GITHUB_JOB_NAME = IMPORT_GITHUB
 URL_JOB_NAME = IMPORT_URL
 APPLY_JOB_NAME = APPLY
-
-
-def _require_import_variables(
-    state: ImportState,
-    variables: dict[str, str] | None,
-) -> None:
-    if state.plan is None:
-        return
-    missing = [
-        item.name
-        for item in state.plan.variables
-        if item.required and not (variables or {}).get(item.name)
-    ]
-    if missing:
-        raise BundleConfirmationRequiredError(
-            "Required variables are missing.", details={"missing": missing}
-        )
-
-
-def _resolve_connector_choices(
-    state: ImportState, requested: dict[str, ConnectorChoice] | None
-) -> dict[str, ConnectorChoice]:
-    """The importer's connector choices made whole, or why the apply is held.
-
-    Checked here, before anything is queued, so a connector that cannot be
-    declared stops the import while the pod is still untouched -- rather than
-    failing at its step after nothing, or worse after half the pod, landed."""
-    if state.plan is None:
-        return {}
-    resolved, blocking = resolve_connector_choices(
-        state.plan.connectors, requested or {}
-    )
-    if blocking:
-        raise BundleConfirmationRequiredError(
-            "Some of this bundle's connectors cannot be declared yet: "
-            + "; ".join(f"'{b.slug}': {b.reason}" for b in blocking)
-            + ".",
-            details={"blocking": [b.model_dump() for b in blocking]},
-        )
-    return resolved
 
 
 logger = get_logger(__name__)
@@ -227,6 +183,7 @@ class ImportUseCases:
         owner: str | None = None,
         repo: str | None = None,
         ref: str | None = None,
+        path: str | None = None,
         template: str | None = None,
     ) -> ImportState:
         """Single URL-based import entry point.
@@ -234,7 +191,7 @@ class ImportUseCases:
         ``URL``: verify the lemma signed download token (410 on bad/expired) and
         queue ``pod_bundle.import_url`` with the resolved source object — the
         worker reads it straight from object storage (no server-side fetch, no
-        SSRF). ``GITHUB``: parse the repo reference and queue
+        SSRF). ``GITHUB``: parse the repo reference, keep ``path``, and queue
         ``pod_bundle.import_github``. ``TEMPLATE``: pack the named template that
         ships with the backend (404 for an unknown name), stage it, and queue
         the plan straight away. The request carries no bytes in any case.
@@ -303,6 +260,7 @@ class ImportUseCases:
                 source=BundleSource(
                     kind=BundleSourceKind.GITHUB,
                     repo_url=url or f"https://github.com/{owner}/{repo}",
+                    path=path,
                     ref=ref,
                 ),
             )
@@ -360,38 +318,15 @@ class ImportUseCases:
             raise BundleJobConflictError(
                 f"Import cannot be applied from status {state.status.value}."
             )
-        if state.plan.has_destructive_steps and not confirm_destructive:
-            raise BundleConfirmationRequiredError(
-                "This import would drop or alter table columns. Re-submit with "
-                "confirm_destructive=true to proceed.",
-                details={"warnings": state.plan.warnings},
-            )
-        _require_import_variables(state, variables)
-        state.connector_choices = _resolve_connector_choices(state, connectors)
-        # Grants the importer could not make themselves: refused here, with the
-        # pod untouched, rather than by the last step of the apply. Imported
-        # here: only an apply needs it, not every process serving the routes.
-        from app.modules.pod_bundle.infrastructure.grant_planning import (
-            refuse_unconferrable_grants,
-        )
-
-        refuse_unconferrable_grants(state.plan)
-        await self._check_accounts(state, user_id=user_id, variables=variables)
-
         retrying_failed_job = state.status is ImportStatus.FAILED
-        # Reset any FAILED step back to PENDING so a re-apply retries it; DONE
-        # steps stay DONE (idempotent resume).
-        for step in state.plan.steps:
-            if step.status == StepStatus.FAILED:
-                step.status = StepStatus.PENDING
-                step.error = None
-        state.variables_provided = dict(variables or {})
-        state.confirm_destructive = confirm_destructive
-        state.status = ImportStatus.APPLYING
-        state.error = None
-        state.error_type = None
-        state.error_code = None
-        state.completed_at = None
+        await approve_plan(
+            self._uow_factory,
+            state,
+            user_id=user_id,
+            variables=variables,
+            confirm_destructive=confirm_destructive,
+            connectors=connectors,
+        )
         if retrying_failed_job:
             state.attempt += 1
         async with self._uow_factory() as uow:
@@ -430,6 +365,8 @@ class ImportUseCases:
             )
         retrying_failed_job = state.status is ImportStatus.FAILED
         state.status = ImportStatus.QUEUED
+        # What the discarded plan made: the new one finishes it, not keeps it.
+        state.remember_finished_creates()
         state.plan = None
         state.error = None
         state.error_type = None
@@ -501,14 +438,7 @@ class ImportUseCases:
                 if state.status is ImportStatus.PARTIALLY_CANCELLED:
                     # As the job says when it stops itself mid-apply: the
                     # steps that landed were not undone.
-                    applied = len(state.committed_steps)
-                    total = len(state.plan.steps) if state.plan else 0
-                    state.error = (
-                        f"Cancelled after {applied} of {total} steps had been "
-                        "applied to this pod. Those changes were not undone; "
-                        "import the bundle again to finish, or remove what it "
-                        "created."
-                    )
+                    state.error = state.cancelled_part_way_message()
                 state.current_step = None
                 state.completed_at = datetime.now(timezone.utc)
                 await self._state_store.stage_import(uow, state)
@@ -527,51 +457,6 @@ class ImportUseCases:
         # and before commit. Force-aborting them could bypass that finalization
         # path and strand the job in CANCELLING.
         return accepted
-
-    async def _check_accounts(
-        self,
-        state: ImportState,
-        *,
-        user_id: UUID,
-        variables: dict[str, str] | None,
-    ) -> None:
-        """The accounts this apply would use, checked while the pod is still
-        untouched (``infrastructure/account_checks``): a narrow share is
-        refused, and a schedule naming an account the importer cannot use is
-        planned as skipped now that its import variable is known."""
-        from app.modules.pod_bundle.infrastructure.account_checks import (
-            ServiceAccountUsability,
-            refuse_narrow_shares,
-            skip_unusable_accounts,
-            steps_naming_an_account,
-        )
-
-        assert state.plan is not None, "checked by the caller"
-        shares = {
-            slug: choice.share_account_id
-            for slug, choice in state.connector_choices.items()
-            if choice.share_account_id is not None
-        }
-        if not shares and not steps_naming_an_account(state.plan.steps):
-            return
-        replacements = {
-            v.name: v.default for v in state.plan.variables if v.default is not None
-        }
-        replacements.update(variables or {})
-        async with uow_scope(self._uow_factory) as uow:
-            ctx = await AuthorizationDataService(uow.session).build_user_context(
-                user_id=user_id, pod_id=state.pod_id
-            )
-            async with context_scope(ctx):
-                await refuse_narrow_shares(uow, pod_id=state.pod_id, shares=shares)
-                await skip_unusable_accounts(
-                    state.plan.steps,
-                    state.warnings,
-                    replacements=replacements,
-                    check=ServiceAccountUsability(
-                        uow=uow, ctx=ctx, pod_id=state.pod_id
-                    ),
-                )
 
     async def _starters_import(
         self, *, pod_id: UUID, import_id: UUID, user_id: UUID

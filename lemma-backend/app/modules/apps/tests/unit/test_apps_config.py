@@ -27,6 +27,8 @@ def test_apps_settings_own_archive_limits(monkeypatch):
         # Moved from `app/core/config.py`: only this module reads it. Off
         # until the "Remix on Lemma" pill is rethought.
         "app_branding_enabled": False,
+        # Private apps over plain HTTP: a local stack's opt-in, refused elsewhere.
+        "private_apps_over_http": False,
     }
     assert set(AppsSettings.model_fields) == set(expected)
     for field, default in expected.items():

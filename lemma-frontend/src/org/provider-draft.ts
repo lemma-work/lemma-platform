@@ -7,7 +7,35 @@
 
 import type { Choice, Runtime } from "@/data/runtimes";
 
-export type ProviderProtocol = "openai" | "anthropic";
+export type ProviderProtocol = "openai" | "anthropic" | "google";
+
+/** How a Google provider signs in: the Gemini API with a key, or Vertex AI
+ *  as a service account. */
+export type GoogleSignIn = "GEMINI_API" | "VERTEX_AI";
+
+/** Whether this computer's model lookup can test the route. It reads an
+ *  OpenAI- or Anthropic-style `/models` list; Google's names every model the
+ *  project could reach, chat or not, so a Google provider is checked by the
+ *  backend when it is saved instead. */
+export function canTestRoute(protocol: ProviderProtocol): boolean {
+    return protocol !== "google";
+}
+
+/** What a Google provider needs before it can be saved. A key file is checked
+ *  for its shape here only so a wrong file is caught before the round trip;
+ *  the backend checks it again, and with Google. */
+export function googleSignInProblem(signIn: GoogleSignIn, apiKey: string, keyFile: string): string | null {
+    if (signIn === "GEMINI_API") return apiKey.trim() ? null : "Paste a Gemini API key.";
+    const text = keyFile.trim();
+    if (!text) return "Add the service account's key file.";
+    try {
+        const parsed: unknown = JSON.parse(text);
+        if (parsed && typeof parsed === "object" && "type" in parsed && parsed.type === "service_account") return null;
+    } catch {
+        /* Said below, the same as any other file that is not a key. */
+    }
+    return "That file isn't a Google Cloud service account key.";
+}
 
 /** The comma-separated Models field, as names. Blank entries and repeats go. */
 export function modelNames(text: string): string[] {
@@ -51,7 +79,7 @@ export function chosenVisionModels(
  *  the dialog. The key is sent as typed — even empty — because an omitted
  *  one tells the lookup to attach the key stored on this computer, which is
  *  the wrong key for a different route. */
-export function discoveryRequest(protocol: ProviderProtocol, baseUrl: string, apiKey: string): Record<string, unknown> {
+export function discoveryRequest(protocol: Exclude<ProviderProtocol, "google">, baseUrl: string, apiKey: string): Record<string, unknown> {
     return {
         ai: {
             protocol: protocol === "anthropic" ? "anthropic_compat" : "openai_compat",

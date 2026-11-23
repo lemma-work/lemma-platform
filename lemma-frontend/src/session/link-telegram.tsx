@@ -65,19 +65,20 @@ async function myTelegramBots(mine: MyTelegramSurfaces): Promise<BotChoice[]> {
 }
 
 function title(choice: BotChoice): string {
-    return choice.shared ? "Lemma’s bot" : choice.handle || "Telegram bot";
+    return choice.shared ? "Lemma on Telegram" : choice.handle || "Its own Telegram account";
 }
 
 function detail(choice: BotChoice): string {
     const spaces = spacesSaid(choice.spaces);
     if (choice.shared) return (choice.handle ? choice.handle + " · " : "") + spaces;
-    return choice.spaces.length > 1 ? "Its own bot in " + spaces : spaces + "’s own bot";
+    return choice.spaces.length > 1 ? "Its own, in " + spaces : spaces + "’s own";
 }
 
-/** The profile's row: the accounts already linked, each to unlink, and the
- *  button that links one. The button only for somebody one of whose spaces has
- *  a Telegram bot -- without one there is nothing to open the code with -- and
- *  the row only when there is something to show. */
+/** Account's Telegram rows: each account already linked, to unlink, and the
+ *  button that links one. The button only for somebody one of whose Lemmas
+ *  is on Telegram -- without one there is nothing to open the code with --
+ *  and the rows only when there is something to show. Drawn as rows in the
+ *  Account list: what it is, what it says, what you can do. */
 export function LinkTelegramEntry() {
     const [open, setOpen] = useState(false);
     const cache = useQueryClient();
@@ -94,50 +95,61 @@ export function LinkTelegramEntry() {
     if (accounts.isPending) return null;
     const unread = accounts.isError && !accounts.data;
     if (!through && !linked.length && !unread) return null;
+    const linkButton = through && (
+        <button type="button" className="b b--s b--secondary" onClick={() => setOpen(true)}>
+            {linked.length ? "Link another" : "Link Telegram"}
+        </button>
+    );
     return (
-        <div className="field profile-telegram">
-            <span>Telegram</span>
+        <>
             {unread ? (
-                <em className="profile-form__problem" role="alert">
-                    {problemOf(accounts.error, "Couldn’t read your linked accounts.")}{" "}
-                    <button type="button" className="linkish" onClick={() => void accounts.refetch()}>Try again</button>
-                </em>
-            ) : linked.length ? (
-                <ul className="profile-telegram__accounts">
-                    {linked.map((account) => {
-                        const name = account.name ?? "A Telegram account";
-                        const when = linkedWhen(account.provedAt);
-                        return (
-                            <li key={account.id}>
-                                <ChannelIcon platform="TELEGRAM" size={15} />
-                                <span className="profile-telegram__name">{name}</span>
-                                {when && <span className="profile-telegram__when">linked {when}</span>}
-                                <button
-                                    type="button"
-                                    className="linkish"
-                                    disabled={unlink.isPending}
-                                    aria-label={"Unlink " + name}
-                                    onClick={() => unlink.mutate(account.id)}
-                                >
-                                    Unlink
-                                </button>
-                            </li>
-                        );
-                    })}
-                </ul>
-            ) : (
-                <p className="profile-form__hint-line">
-                    Link your Telegram account so your spaces’ bots know it is you, in groups as well as in private chats.
-                </p>
-            )}
-            {unlink.isError && <em className="profile-form__problem" role="alert">{problemOf(unlink.error, "Couldn’t unlink it.")}</em>}
-            {through && (
-                <button type="button" className="btn" onClick={() => setOpen(true)}>
-                    <ChannelIcon platform="TELEGRAM" size={15} /> {linked.length ? "Link another account" : "Link Telegram"}
-                </button>
+                <div className="krow krow--kv">
+                    <span className="krow__k">Telegram</span>
+                    <span className="krow__v kset-wrap">
+                        <b>Not read</b>
+                        <span className="kset-said--bad" role="alert">{problemOf(accounts.error, "Couldn’t read your linked accounts.")}</span>
+                    </span>
+                    <span className="krow__end">
+                        <button type="button" className="b b--s b--secondary" onClick={() => void accounts.refetch()}>Try again</button>
+                    </span>
+                </div>
+            ) : linked.length ? linked.map((account, index) => {
+                const name = account.name ?? "A Telegram account";
+                const when = linkedWhen(account.provedAt);
+                const failed = unlink.isError && unlink.variables === account.id;
+                return (
+                    <div className="krow krow--kv" key={account.id}>
+                        <span className="krow__k">{index === 0 ? "Telegram" : ""}</span>
+                        <span className="krow__v kset-wrap">
+                            <b>{name}</b>
+                            {failed
+                                ? <span className="kset-said--bad" role="alert">{problemOf(unlink.error, "Couldn’t unlink it.")}</span>
+                                : when && <span>Linked {when}</span>}
+                        </span>
+                        <span className="krow__end">
+                            <button
+                                type="button"
+                                className="b b--s b--quiet"
+                                disabled={unlink.isPending}
+                                aria-label={"Unlink " + name}
+                                onClick={() => unlink.mutate(account.id)}
+                            >Unlink</button>
+                            {index === linked.length - 1 && linkButton}
+                        </span>
+                    </div>
+                );
+            }) : (
+                <div className="krow krow--kv">
+                    <span className="krow__k">Telegram</span>
+                    <span className="krow__v kset-wrap">
+                        <b>Not linked</b>
+                        <span>Link it so your Lemmas know it’s you there, in groups as well as in private chats.</span>
+                    </span>
+                    <span className="krow__end">{linkButton}</span>
+                </div>
             )}
             {open && through && <LinkTelegramFromProfile mine={through} onClose={() => { setOpen(false); void reread(); }} />}
-        </div>
+        </>
     );
 }
 
@@ -163,27 +175,27 @@ function LinkTelegramFromProfile({ mine, onClose }: { mine: MyTelegramSurfaces; 
             ) : (
                 <div className="gsheet">
                     {bots.isPending ? (
-                        <p className="gsheet__lead" role="status">Finding your spaces’ Telegram bots…</p>
+                        <p className="gsheet__lead" role="status">Finding your Lemmas on Telegram…</p>
                     ) : bots.isError ? (
                         <>
-                            <p className="gsheet__problem" role="alert">{problemOf(bots.error, "Couldn’t find your spaces’ Telegram bots.")}</p>
+                            <p className="gsheet__problem" role="alert">{problemOf(bots.error, "Couldn’t find your Lemmas on Telegram.")}</p>
                             <div className="gsheet__foot">
                                 <button type="button" className="ghost-pill" onClick={() => void bots.refetch()}>Try again</button>
                             </div>
                         </>
                     ) : !selected ? (
                         <>
-                            <p className="gsheet__lead">None of your spaces has a Telegram bot yet.</p>
-                            <p className="gsheet__fine">Once one does, link your account through it here.</p>
+                            <p className="gsheet__lead">None of your Lemmas is on Telegram yet.</p>
+                            <p className="gsheet__fine">Once one is, link your account through it here.</p>
                             <div className="gsheet__foot">
                                 <button type="button" className="ghost-pill" onClick={onClose}>Done</button>
                             </div>
                         </>
                     ) : (
                         <>
-                            <p className="gsheet__lead">Which bot should Telegram open?</p>
-                            <p className="gsheet__fine">Whichever you pick, every space you’re in knows the account as you.</p>
-                            <div className="gsheet__block" role="radiogroup" aria-label="Telegram bot">
+                            <p className="gsheet__lead">Which should Telegram open?</p>
+                            <p className="gsheet__fine">Whichever you pick, every Lemma you’re in knows the account as you.</p>
+                            <div className="gsheet__block" role="radiogroup" aria-label="Telegram account">
                                 {choices.map((choice) => (
                                     <label key={choice.surfaceId} className="gsheet__check">
                                         <input

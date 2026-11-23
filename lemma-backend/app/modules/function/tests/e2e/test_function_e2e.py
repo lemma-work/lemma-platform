@@ -20,6 +20,15 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import status
 
+from app.core.authorization.app_sessions import app_session_id
+from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
+from app.modules.function.contracts.agent_tools import list_pod_functions
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
+from app.modules.identity.infrastructure.supertokens_auth.helpers import get_user_token
+from app.modules.identity.infrastructure.supertokens_auth.token_factory import (
+    build_delegation_claims,
+)
 from app.modules.test_support.e2e.function_helpers import (
     bulk_facade_function_code,
     create_folder,
@@ -1098,6 +1107,138 @@ async def test_update_function_replaces_code_and_activates_new_revision(
         authenticated_client, pod_id, func_name, {"value": 10}
     )
     assert updated_result["output_data"]["result"] == 30
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
+async def test_a_function_greets_the_person_by_the_name_they_go_by(
+    authenticated_client, test_pod
+):
+    """``ctx.user_name`` is the name the person gave, read when the run starts,
+    so a rename reaches the next run."""
+    pod_id = test_pod["id"]
+    func_name = f"greet_{uuid4().hex[:8]}"
+    code = f"""#input_type_name: Input
+#output_type_name: Output
+#function_name: {func_name}
+
+from pydantic import BaseModel
+from lemma_sdk import FunctionContext
+
+class Input(BaseModel):
+    value: int
+
+class Output(BaseModel):
+    user_name: str | None = None
+
+async def {func_name}(ctx: FunctionContext, data: Input) -> Output:
+    return Output(user_name=ctx.user_name)"""
+    await create_function(
+        authenticated_client, pod_id, {"name": func_name, "code": code}
+    )
+
+    async def run_as(first_name: str, last_name: str | None) -> object:
+        renamed = await authenticated_client.post(
+            "/users/me/profile",
+            json={"first_name": first_name, "last_name": last_name},
+        )
+        assert renamed.status_code == status.HTTP_201_CREATED, renamed.text
+        run = await run_function(authenticated_client, pod_id, func_name, {"value": 1})
+        return run["output_data"]["user_name"]
+
+    assert await run_as("Ada", "Lovelace") == "Ada Lovelace"
+    assert await run_as("Grace", None) == "Grace"
+
+
+async def _assistant_headers(
+    *, user_id: str, pod_id: str, session_id: str, name: str | None
+) -> dict[str, str]:
+    """A token with the Lemma's assistant's standing, as its mint sites make
+    one: the assistant's own (a conversation's session) or an app framed in an
+    AI tool (``app_session_id``)."""
+    claims = build_delegation_claims(
+        workload_type="agent",
+        workload_id=UUID(pod_id),
+        workload_name=name,
+        pod_id=UUID(pod_id),
+        session_id=session_id,
+        invoked_by_user_id=UUID(user_id),
+    )
+    token = await get_user_token(UUID(user_id), delegation_claims=claims)
+    return {"Authorization": f"Bearer {token}"}
+
+
+async def _offered_to_the_assistant(pod_id: str) -> set[str]:
+    """The functions the assistant's brief lists, as it reads them."""
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        listed, _ = await list_pod_functions(uow, UUID(pod_id), limit=100)
+    return {function.name for function in listed}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
+async def test_a_function_kept_from_the_assistant_still_runs_in_its_flow(
+    authenticated_client, async_client, test_pod, fixed_test_user
+):
+    """The assistant ran a plugin's "claim" directly, past the daily limit the
+    plugin's app checked first. Kept from the assistant, it is refused to the
+    assistant by name and still runs for the person, the app and the export."""
+    pod_id = test_pod["id"]
+    name = f"claim_{uuid4().hex[:8]}"
+    created = await create_function(
+        authenticated_client,
+        pod_id,
+        {
+            "name": name,
+            "code": typed_function_code(name, expression="data.value + 1"),
+            "assistant_invoke": False,
+        },
+    )
+    assert created["assistant_invoke"] is False
+    assistant = await _assistant_headers(
+        user_id=fixed_test_user["id"],
+        pod_id=pod_id,
+        session_id=str(uuid4()),
+        name=DEFAULT_POD_AGENT_NAME,
+    )
+    framed_app = await _assistant_headers(
+        user_id=fixed_test_user["id"],
+        pod_id=pod_id,
+        session_id=app_session_id(uuid4()),
+        name=None,
+    )
+    runs = f"/pods/{pod_id}/functions/{name}/runs"
+
+    refused = await async_client.post(
+        runs, json={"input_data": {"value": 1}}, headers=assistant
+    )
+    assert refused.status_code == status.HTTP_403_FORBIDDEN, refused.text
+    assert refused.json()["code"] == "FUNCTION_NOT_FOR_ASSISTANT", refused.text
+
+    by_person = await run_function(authenticated_client, pod_id, name, {"value": 1})
+    assert by_person["output_data"]["result"] == 2
+    by_app = await async_client.post(
+        runs, json={"input_data": {"value": 2}}, headers=framed_app
+    )
+    assert by_app.status_code == status.HTTP_200_OK, by_app.text
+
+    # Not in the list of functions the assistant is told it can run...
+    assert name not in await _offered_to_the_assistant(pod_id)
+    # ...but it still sees it to build with, flagged.
+    seen = await async_client.get(f"/pods/{pod_id}/functions/{name}", headers=assistant)
+    assert seen.status_code == status.HTTP_200_OK, seen.text
+    assert seen.json()["assistant_invoke"] is False
+
+    reopened = await authenticated_client.patch(
+        f"/pods/{pod_id}/functions/{name}", json={"assistant_invoke": True}
+    )
+    assert reopened.status_code == status.HTTP_200_OK, reopened.text
+    assert reopened.json()["assistant_invoke"] is True
+    assert name in await _offered_to_the_assistant(pod_id)
+    allowed = await async_client.post(
+        runs, json={"input_data": {"value": 3}}, headers=assistant
+    )
+    assert allowed.status_code == status.HTTP_200_OK, allowed.text
 
 
 @pytest.mark.asyncio

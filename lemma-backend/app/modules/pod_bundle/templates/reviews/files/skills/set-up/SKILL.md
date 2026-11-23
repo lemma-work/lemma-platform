@@ -5,7 +5,7 @@ description: Set Reviews up from the repositories the team works in. Use once, i
 
 # Set Reviews up
 
-Reviews owns "Every pull request is reviewed the same day", counted from `pull_requests`. That table starts empty, so the first job is to fill it from the team's repositories, keep it filling, and show the person where they stand. Do the steps in order and say what you did after each one, in a line. `lemma-setup` holds the rules behind each step; this skill is what is particular to Reviews.
+Reviews keeps its work in `pull_requests`. That table starts empty, so the first job is to fill it from the team's repositories and keep it filling. Do the steps in order and say what you did after each one, in a line. `lemma-setup` holds the rules behind each step; this skill is what is particular to Reviews.
 
 1. **Connect GitHub.** GitHub is the one this template reads. Find the read with `lemma connectors run github "list pull requests" --dry-run`, then run one page of it for real: that proves the connection. If it is not connected yet, the answer carries a `connect_url`: give the person that link as it is, end your turn, and run the same call again when they say it is done.
 2. **Ask which repositories count.** One `ask_user` with two questions: which repositories count, offering up to four of the busiest, and which city's time the team works in, since "the same day" is the team's day. Then set each schedule in `lemma schedules list` to that timezone, keeping its cron: `lemma schedules update <name> -d '{"config":{"cron":"<its cron>","timezone":"<zone>"}}'`.
@@ -18,10 +18,8 @@ Reviews owns "Every pull request is reviewed the same day", counted from `pull_r
 6. **Keep it true from now on.** A row has to arrive when a pull request opens and change when it is reviewed. List GitHub's triggers with `lemma connectors triggers list github`, and create one automation for a pull request opened and one for a review submitted, each like this:
    `lemma schedules create --name new-pull-requests --agent POD_DEFAULT --webhook-source composio --connector github --connector-trigger <trigger> --filter "Only a pull request that waits on a person's review, or a review of one." --instruction "Add the pull request to pull_requests, or update its row when its link is already there, following the keep-pull-requests skill."`
    Then read the repositories once more for anything since the step 3 read started, skipping links already in the table. `link` is unique: a write refused for a duplicate link means the row is already there, so skip it.
-7. **Show where they stand.** Count each of the four weeks with `lemma query run` the way the measure does: each pull request in the week it opened, counting only those reviewed or opened before today. Show it as a small widget with `display_resource`: one bar per week, with the bar Reviews will hold drawn across it. A week with nothing due shows no bar, never a 0.
-8. **Ask for the bar.** Use `ask_user`: "Last four weeks, N% were reviewed the same day. What bar should Reviews hold every week?" Each option is a number: 90% (recommended), N plus 5 rounded to the nearest 5, and N. Drop an option that repeats another. Set the answer with `set_what_you_own`, keeping the sentence, kind, unit and measure it has.
-9. **Name the people.** Say who reviewed most, from `reviewer`, and that adding them to Reviews (⋯ › Add people) lets the nudges reach them. You cannot add people yourself.
+7. **Name the people.** Say who reviewed most, from `reviewer`, and that adding them to Reviews (⋯ › Add people) lets the nudges reach them. You cannot add people yourself.
 
-Then fill in `/plan.md` and finish as `lemma-setup` says (steps 8 and Finish).
+Then keep what you were taught in memory and finish as `lemma-setup` says (step 6 and Finish).
 
 Never comment on, approve or merge a pull request while setting up.

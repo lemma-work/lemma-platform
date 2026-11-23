@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { LemmaClient } from "../client.js";
-import { isTerminalFunctionStatus, normalizeRunStatus, sleep } from "../run-utils.js";
+import {
+  functionRunPollDelay,
+  isTerminalFunctionStatus,
+  normalizeRunStatus,
+  sleep,
+} from "../run-utils.js";
 import type { FunctionRun, FunctionRunSummary } from "../types.js";
 import { normalizeError, resolvePodClient, resolvePodId } from "./utils.js";
 
@@ -10,6 +15,8 @@ export interface UseFunctionSessionOptions {
   functionName?: string;
   runId?: string | null;
   autoPoll?: boolean;
+  /** Longest wait between looks at an unfinished run. The first look comes
+   *  sooner and the wait doubles up to this. */
   pollIntervalMs?: number;
   onRun?: (run: FunctionRun) => void;
   onError?: (error: unknown) => void;
@@ -66,6 +73,9 @@ export function useFunctionSession({
 
   const onRunRef = useRef(onRun);
   const onErrorRef = useRef(onError);
+  // The id of a run already held in its final state, which nothing needs to
+  // fetch again.
+  const finishedRunIdRef = useRef<string | null>(null);
 
   useEffect(() => { onRunRef.current = onRun; }, [onRun]);
   useEffect(() => { onErrorRef.current = onError; }, [onError]);
@@ -97,6 +107,9 @@ export function useFunctionSession({
 
       setRun(nextRun);
       const nextStatus = normalizeRunStatus(nextRun.status);
+      if (isTerminalFunctionStatus(nextStatus)) {
+        finishedRunIdRef.current = id;
+      }
       setStatus(nextStatus);
       onRunRef.current?.(nextRun);
 
@@ -147,13 +160,20 @@ export function useFunctionSession({
       revision: options.revision,
     });
 
+    const nextStatus = normalizeRunStatus(created.status);
+    // An API function answers with its finished run. Reading it back, here and
+    // again from each effect below, only added round trips before the caller
+    // saw a result it already had.
+    const finished = isTerminalFunctionStatus(nextStatus);
+    if (finished) {
+      finishedRunIdRef.current = created.id;
+    }
     setRun(created);
     setRunIdState(created.id);
-    const nextStatus = normalizeRunStatus(created.status);
     setStatus(nextStatus);
     onRunRef.current?.(created);
 
-    if (options.connect !== false) {
+    if (options.connect !== false && !finished) {
       await refresh(created.id);
     }
 
@@ -161,7 +181,9 @@ export function useFunctionSession({
   }, [client, functionName, podId, refresh]);
 
   useEffect(() => {
-    if (!runId) {
+    // With polling on, the poll's first look is this fetch; doing both read
+    // the same run twice at once.
+    if (!runId || autoPoll || finishedRunIdRef.current === runId) {
       return;
     }
 
@@ -180,10 +202,10 @@ export function useFunctionSession({
       cancelled = true;
       controller.abort();
     };
-  }, [refresh, runId]);
+  }, [autoPoll, refresh, runId]);
 
   useEffect(() => {
-    if (!autoPoll || !runId) {
+    if (!autoPoll || !runId || finishedRunIdRef.current === runId) {
       return;
     }
 
@@ -192,6 +214,7 @@ export function useFunctionSession({
 
     const loop = async () => {
       setIsPolling(true);
+      let attempt = 0;
 
       while (active) {
         const latest = await refresh(runId);
@@ -205,7 +228,8 @@ export function useFunctionSession({
         }
 
         try {
-          await sleep(pollIntervalMs, abortController.signal);
+          await sleep(functionRunPollDelay(attempt, pollIntervalMs), abortController.signal);
+          attempt += 1;
         } catch (sleepError) {
           if (sleepError instanceof Error && sleepError.name === "AbortError") {
             break;

@@ -1,0 +1,804 @@
+/* Adding an app to a Lemma (`outcomes/add-app.tsx`): a page of its own.
+   Describing your own comes first, in a box tinted as the thing to do; under
+   it every plugin, the built ones as cards with their real screens, the ones
+   still being made as a quieter list. An app's mark sits in a circle, so the
+   ring that says how far it has gone in wraps it -- on its card, beside
+   "Adding to", and in the rows a new Lemma is offered. The classes are flat
+   rather than nested under the page, because those rows sit elsewhere. */
+
+.ox-add {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 32px;
+    min-width: 0;
+    padding-bottom: 96px;
+}
+
+.ox-add__small {
+    color: var(--ink-2);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+/* ── which Lemma, and what it has ─────────────────────────────────────── */
+
+.ox-add__to {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+    min-width: 0;
+}
+
+.ox-add__tolabel {
+    color: var(--ink-2);
+    font-size: 13.5px;
+}
+
+.ox-add__pick {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    max-width: 100%;
+    height: 36px;
+    padding: 0 10px 0 6px;
+    border-radius: 10px;
+    background: var(--wash-b);
+    color: var(--ink);
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.ox-add__pick--one {
+    cursor: default;
+}
+
+.ox-add__pick select {
+    appearance: none;
+    min-width: 0;
+    max-width: 260px;
+    height: 36px;
+    padding: 0 18px 0 0;
+    border: 0;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    outline: none;
+    field-sizing: content;
+}
+
+.ox-add__pick .ox-icon {
+    position: absolute;
+    right: 9px;
+    pointer-events: none;
+}
+
+.ox-add__pick:focus-within {
+    box-shadow: 0 0 0 1.5px var(--ink-2);
+}
+
+.ox-add__in {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    margin-left: auto;
+}
+
+.ox-add__inlabel {
+    margin-right: 4px;
+}
+
+.ox-add__dot {
+    display: inline-grid;
+    place-items: center;
+    border-radius: 50%;
+}
+
+.ox-add__dotmore {
+    display: inline-grid;
+    place-items: center;
+    min-width: 30px;
+    height: 30px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--wash-a);
+    color: var(--ink-2);
+    font-size: 12px;
+}
+
+/* ── an app's mark, in its circle, with its ring ──────────────────────── */
+
+.ox-add__mark {
+    --mark: 40px;
+    position: relative;
+    flex: none;
+    display: inline-grid;
+    place-items: center;
+    width: var(--mark);
+    height: var(--mark);
+}
+
+.ox-add__glyph {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    background: var(--paper);
+    box-shadow: 0 0 0 1px var(--line-2);
+    color: var(--ink);
+}
+
+.ox-add__mark[data-state="stopped"] .ox-add__glyph {
+    box-shadow: 0 0 0 1.5px var(--warn);
+    color: var(--warn);
+}
+
+.ox-add__ring {
+    position: absolute;
+    inset: -5px;
+    width: calc(100% + 10px);
+    height: calc(100% + 10px);
+    overflow: visible;
+    rotate: -90deg;
+    opacity: 0;
+    transition: opacity 300ms;
+}
+
+.ox-add__mark[data-state="waiting"] .ox-add__ring,
+.ox-add__mark[data-state="adding"] .ox-add__ring {
+    opacity: 1;
+}
+
+/* Waiting its turn: a short arc going round, until there is a share to fill. */
+.ox-add__mark[data-state="waiting"] .ox-add__ring {
+    animation: ox-add-turn 1.4s linear infinite;
+}
+
+@keyframes ox-add-turn {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.ox-add__ring circle {
+    fill: none;
+    stroke-width: 2.5;
+    stroke-linecap: round;
+}
+
+.ox-add__track {
+    stroke: var(--line-2);
+}
+
+.ox-add__done {
+    stroke: var(--ink);
+    transition: stroke-dashoffset 600ms ease;
+}
+
+.ox-add__tick {
+    position: absolute;
+    right: -3px;
+    bottom: -3px;
+    display: grid;
+    place-items: center;
+    width: max(15px, calc(var(--mark) * 0.38));
+    height: max(15px, calc(var(--mark) * 0.38));
+    border-radius: 50%;
+    background: var(--ok);
+    box-shadow: 0 0 0 2px var(--paper);
+    color: var(--on-ok);
+    opacity: 0;
+    scale: 0.4;
+    transition: opacity 200ms, scale 360ms cubic-bezier(0.34, 1.7, 0.55, 1);
+}
+
+.ox-add__mark[data-state="in"] .ox-add__tick {
+    opacity: 1;
+    scale: 1;
+}
+
+/* ── describe your own ────────────────────────────────────────────────── */
+
+.ox-add__custom {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+    min-width: 0;
+    padding: 22px;
+    border: 1.5px solid var(--info);
+    border-radius: 20px;
+    background: linear-gradient(var(--select, var(--accent-soft)), var(--select, var(--accent-soft))), var(--paper);
+}
+
+.ox-add__tag {
+    display: inline-flex;
+    align-items: center;
+    justify-self: start;
+    gap: 6px;
+    height: 24px;
+    padding: 0 10px;
+    border-radius: 999px;
+    background: var(--info);
+    color: var(--paper);
+    font-size: 12px;
+}
+
+.ox-add__customt {
+    margin: 0;
+    font-size: 21px;
+    font-weight: 500;
+    line-height: 1.25;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+}
+
+/* The sentence the reader finishes: what they see is what the Lemma reads. */
+.ox-add__write {
+    display: grid;
+    gap: 2px;
+    padding: 12px 16px 6px;
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+    background: var(--paper);
+    cursor: text;
+}
+
+.ox-add__write:focus-within {
+    border-color: var(--ink-3);
+}
+
+.ox-add__lead {
+    color: var(--ink-2);
+    font-size: 16px;
+}
+
+.ox-add__write textarea {
+    width: 100%;
+    min-height: 72px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 16px;
+    line-height: 1.5;
+    resize: vertical;
+    outline: none;
+}
+
+.ox-add__write textarea::placeholder {
+    color: var(--ink-3);
+}
+
+.ox-add__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.ox-add__chip {
+    min-height: 34px;
+    padding: 7px 14px;
+    border: 1px solid var(--line-2);
+    border-radius: 18px;
+    background: var(--paper);
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 13.5px;
+    line-height: 1.35;
+    text-align: left;
+    cursor: pointer;
+}
+
+.ox-add__chip:hover {
+    color: var(--ink);
+    border-color: var(--ink-3);
+}
+
+.ox-add__chip[aria-pressed="true"] {
+    border-color: var(--info);
+    background: var(--select, var(--accent-soft));
+    color: var(--ink);
+}
+
+.ox-add__foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 16px;
+}
+
+.ox-add__foot .ox-add__small {
+    flex: 1;
+    min-width: 220px;
+}
+
+/* The frame's button, a touch taller here: these are what the page is for. */
+.ox-add__btn {
+    height: auto;
+    min-height: 36px;
+    padding: 0 14px;
+    border-radius: 9px;
+}
+
+.ox-add__btn--big {
+    min-height: 42px;
+    padding: 0 20px;
+    font-size: 14px;
+}
+
+/* ── every plugin ─────────────────────────────────────────────────────── */
+
+.ox-add__shelf {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+    min-width: 0;
+}
+
+.ox-add__shelfhead {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 12px 16px;
+}
+
+.ox-add__said {
+    display: grid;
+    flex: 1;
+    gap: 2px;
+    min-width: 220px;
+}
+
+.ox-add__said h2 {
+    margin: 0;
+    font-size: 21px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+}
+
+.ox-add__find {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 200px;
+    height: 36px;
+    padding: 0 12px;
+    border: 1px solid var(--line-2);
+    border-radius: 10px;
+    color: var(--ink-3);
+}
+
+.ox-add__find:focus-within {
+    border-color: var(--ink-3);
+}
+
+.ox-add__find input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    outline: none;
+}
+
+.ox-add__pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.ox-add__pills button {
+    height: 30px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--wash-a);
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.ox-add__pills button:hover {
+    color: var(--ink);
+}
+
+.ox-add__pills button[aria-pressed="true"] {
+    background: var(--accent);
+    color: var(--on-accent);
+}
+
+.ox-add__why {
+    margin: 0;
+    padding: 10px 0 10px 12px;
+    border-left: 2px solid var(--warn);
+    color: var(--ink-2);
+    font-size: 13.5px;
+}
+
+.ox-add__none {
+    display: grid;
+    justify-items: start;
+    gap: 10px;
+    padding: 24px 0;
+    color: var(--ink-2);
+}
+
+.ox-add__none p {
+    margin: 0;
+}
+
+.ox-add__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+    gap: 16px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+/* The card a ready-made app elsewhere pointed at: lit once on arrival. */
+.ox-add__card[data-pointed] {
+    animation: ox-add-pointed 1.8s ease-out;
+}
+
+@keyframes ox-add-pointed {
+    from {
+        box-shadow: 0 0 0 3px var(--info);
+    }
+
+    to {
+        box-shadow: 0 0 0 3px transparent;
+    }
+}
+
+.ox-add__card {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--line-2);
+    border-radius: 16px;
+    background: var(--paper);
+    transition: border-color 200ms, box-shadow 200ms;
+}
+
+.ox-add__card:hover {
+    box-shadow: var(--shadow-soft);
+}
+
+.ox-add__card[data-state="in"] {
+    border-color: color-mix(in srgb, var(--ok) 40%, var(--line-2));
+}
+
+.ox-add__card[data-state="stopped"] {
+    border-color: color-mix(in srgb, var(--warn) 45%, var(--line-2));
+}
+
+.ox-add__pic {
+    display: block;
+    overflow: hidden;
+    aspect-ratio: 16 / 10;
+    border-bottom: 1px solid var(--line);
+    background: var(--wash-a);
+}
+
+.ox-add__nopic {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+    color: var(--ink-3);
+}
+
+.ox-add__body {
+    display: grid;
+    align-content: start;
+    gap: 4px;
+    min-width: 0;
+    padding: 14px;
+}
+
+.ox-add__who {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    margin-bottom: 6px;
+}
+
+.ox-add__name {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 15px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-add__job {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 13.5px;
+    line-height: 1.4;
+}
+
+.ox-add__needs {
+    margin: 0;
+    color: var(--ink-3);
+    font-size: 12.5px;
+}
+
+.ox-add__said2 {
+    display: grid;
+    gap: 2px;
+    margin: 10px 0 0;
+}
+
+.ox-add__said2:empty {
+    display: none;
+}
+
+.ox-add__step {
+    color: var(--ink);
+    font-size: 13.5px;
+}
+
+.ox-add__stop {
+    color: var(--warn);
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.ox-add__intag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ok);
+    font-size: 13px;
+}
+
+.ox-add__acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+/* The ones still being made: lines, not cards, and no picture to show. */
+.ox-add__soonwrap {
+    display: grid;
+    gap: 6px;
+    margin-top: 12px;
+}
+
+.ox-add__soonhead {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 0;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--line);
+    font-size: 15px;
+    font-weight: 500;
+}
+
+.ox-add__soonhead .ox-num {
+    color: var(--ink-3);
+    font-size: 12.5px;
+}
+
+.ox-add__soon {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
+    gap: 0 28px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.ox-add__sooncard {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+}
+
+.ox-add__sooncard .ox-add__glyph {
+    color: var(--ink-3);
+}
+
+.ox-add__soonbody {
+    display: grid;
+    justify-items: start;
+    gap: 2px;
+    min-width: 0;
+}
+
+.ox-add__soonname {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+    font-size: 14px;
+}
+
+.ox-add__soontag {
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: var(--wash-a);
+    color: var(--ink-2);
+    font-size: 11.5px;
+    white-space: nowrap;
+}
+
+.ox-add__build {
+    margin-top: 4px;
+    font-size: 12.5px;
+}
+
+.ox-add__more {
+    justify-self: start;
+    margin-top: 8px;
+}
+
+/* ── apps that fit a Lemma just started ───────────────────────────────── */
+
+.ox-add__fit {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--line);
+    list-style: none;
+    text-align: left;
+}
+
+.ox-add__fitrow {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+    padding: 12px 2px;
+    border-bottom: 1px solid var(--line);
+}
+
+.ox-add__fittext {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+
+.ox-add__fittext .ox-add__job,
+.ox-add__fittext .ox-add__stop {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-add__fitpct {
+    min-width: 44px;
+    color: var(--ink-2);
+    font-size: 13px;
+    text-align: right;
+}
+
+/* ── the Apps page's way here ─────────────────────────────────────────── */
+
+.ox-add-appshead {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.ox-add-appshead__btn {
+    height: auto;
+    min-height: 36px;
+    padding: 0 14px;
+}
+
+.ox-empty .ox-add-appshead__btn {
+    margin-top: 14px;
+}
+
+/* ── narrow screens and fingers ───────────────────────────────────────── */
+
+@media (max-width: 760px) {
+    .ox-add {
+        gap: 26px;
+        padding-bottom: 72px;
+    }
+
+    .ox-add__custom {
+        padding: 16px;
+        border-radius: 16px;
+    }
+
+    .ox-add__customt,
+    .ox-add__said h2 {
+        font-size: 19px;
+    }
+
+    .ox-add__in {
+        margin-left: 0;
+    }
+
+    .ox-add__find {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .ox-add__find input {
+        font-size: 16px;
+    }
+
+    .ox-add__foot .ox-add__btn--big {
+        flex: 1;
+    }
+}
+
+/* Anything pressed with a finger is at least 44px tall. */
+@media (pointer: coarse), (max-width: 760px) {
+    .ox-add__btn,
+    .ox-add__btn--big,
+    .ox-add-appshead__btn,
+    .ox-add__chip,
+    .ox-add__pick,
+    .ox-add__pick select,
+    .ox-add__find,
+    .ox-add__pills button {
+        min-height: 44px;
+    }
+
+    .ox-add__pills button {
+        height: auto;
+    }
+
+    .ox-add__dot,
+    .ox-add__dotmore {
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    .ox-add__build,
+    .ox-add__more {
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ox-add__mark[data-state="waiting"] .ox-add__ring {
+        animation: none;
+    }
+
+    .ox-add__ring,
+    .ox-add__done,
+    .ox-add__tick,
+    .ox-add__card {
+        transition: none;
+    }
+
+    .ox-add__card[data-pointed] {
+        animation: none;
+    }
+}

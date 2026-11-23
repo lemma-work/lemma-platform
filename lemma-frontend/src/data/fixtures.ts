@@ -3,10 +3,11 @@ import { readOrigins, type Contact, type ContactReach, type ContactsCap, type We
 import type { Audience, OfferedColumn, TableOpening } from "./public-rows";
 import { NEW_CONVERSATION } from "./types";
 import type { AgentSurfaceResponse, AvailableSurfaceChannelsResponse, SurfaceSetupResponse } from "lemma-sdk";
-import type { Conversation, FileContent, Invitation, LibraryItem, LinkShare, Member, Message, NewOrg, Org, Profile, Pod, PodSource, SharedLink, SlackAppWorkspace, SlackManagedWorkspace, SlackPersonLink, Surface, Tab } from "./types";
+import type { Conversation, FileContent, Invitation, LibraryItem, LinkShare, Member, Message, NewOrg, Org, FirstWorkspace, Profile, Pod, PodSource, SharedLink, SlackAppWorkspace, SlackManagedWorkspace, SlackPersonLink, Surface, Tab } from "./types";
 import { displayAgentName, isPodDefaultAgent } from "./agent-names";
 import { originOf } from "@/thread/conversation-origin";
 import { sampleListing } from "@/thread/memory-notes";
+import { slug } from "@/outcomes/named-address";
 import { agentChanges, agentRows, answeringAs, grantsBody, readAgentDetail, type AgentDraft, type AgentGrant } from "./agents";
 import {
     createRequest,
@@ -45,7 +46,7 @@ import { madeIn } from "./made";
 /** A stand-in for when there is no session — enough to judge the layout, and
  *  loudly labelled so it is never mistaken for your pods. */
 
-const ORGS: Org[] = [{ id: "acme", name: "Acme" }];
+const ORGS: Org[] = [{ id: "acme", name: "Acme", handle: "acme" }];
 
 /** A first morning, on demand.
  *
@@ -345,7 +346,7 @@ const CONVERSATION: Conversation = {
             sequence: 4.1,
             created_at: new Date().toISOString(),
             tool_name: "exec_command",
-            tool_args: { cmd: "wc -w drafts/monday-launch-v3.md", workdir: "/workspace/launch" },
+            tool_args: { cmd: "wc -w drafts/monday-launch-v3.md", workdir: "/home/user/lemma/launch" },
             tool_call_id: "call_wc",
         },
         {
@@ -377,7 +378,7 @@ const CONVERSATION: Conversation = {
             tool_name: "exec_command",
             tool_args: {
                 cmd: "grep -rn \"a more human way to work\" drafts/",
-                workdir: "/workspace/launch",
+                workdir: "/home/user/lemma/launch",
                 comment: "Checking the old headline is gone everywhere, not just from v3.",
             },
             tool_call_id: "call_grep",
@@ -792,7 +793,7 @@ const CONVERSATION: Conversation = {
             tool_args: {
                 /* Relative, which is the ordinary spelling and the whole
                    difficulty: it resolves against the conversation's own
-                   directory, not against `/workspace`. */
+                   directory, not against `~/lemma`. */
                 workspace_file_path: "images/plans-table.png",
                 instructions: "Read the three column headers and the price under each one.",
             },
@@ -2426,6 +2427,12 @@ export const fixtureSource: PodSource = {
         stopPretending();
     },
 
+    async declineInvitation(invitationId: string) {
+        await wait(160);
+        const at = INVITATIONS.findIndex((one) => one.id === invitationId);
+        if (at >= 0) INVITATIONS.splice(at, 1);
+    },
+
     async suggestedOrgs() {
         await wait(60);
         return belongsToNothing() ? SUGGESTED : [];
@@ -2451,6 +2458,14 @@ export const fixtureSource: PodSource = {
         return made;
     },
     async getPod(podId: string) { return PODS.find(pod => pod.id === podId) ?? null; },
+    async findPodByName(orgHandle: string, word: string) {
+        await wait(60);
+        /* The sample's one organization holds every Lemma it shows, so any
+           name it has is one the reader is in. */
+        const org = ORGS.find((one) => one.handle === orgHandle);
+        const called = org ? PODS.filter((pod) => pod.orgId === org.id && slug(pod.name) === word) : [];
+        return called.length === 1 ? called[0].id : null;
+    },
     async askablePods(podId: string) {
         await wait(60);
         /* Every sample pod has the same person in it, so each can ask all the
@@ -2654,6 +2669,13 @@ export const fixtureSource: PodSource = {
         const clean = description.trim();
         if (clean) pod.description = clean;
         else delete pod.description;
+    },
+    async setHomeApp(podId: string, app: string | null) {
+        await wait(160);
+        const pod = PODS.find((candidate) => candidate.id === podId);
+        if (!pod) return;
+        if (app) pod.homeApp = app;
+        else delete pod.homeApp;
     },
     /* Real, in memory, for the reason renaming is: what deleting is judged by
        is the rail losing a face and the team page closing over the gap, and a
@@ -2915,7 +2937,7 @@ export const fixtureSource: PodSource = {
             default_model_name: key.models[0] ?? null,
             model_catalog: key.models.map((name) => ({
                 name,
-                capabilities: key.protocol === "anthropic" || key.visionModels?.includes(name)
+                capabilities: key.protocol !== "openai" || key.visionModels?.includes(name)
                     ? ["TEXT", "TOOLS", "VISION"]
                     : ["TEXT", "TOOLS"],
             })),
@@ -3060,6 +3082,21 @@ export const fixtureSource: PodSource = {
         KNOCKING.splice(at, 1);
         return admitted;
     },
+    async declineJoinRequest(_podId: string, requestId: string) {
+        await wait(300);
+        const at = KNOCKING.findIndex((one) => one.id === requestId);
+        if (at < 0) throw new Error("That ask is no longer waiting.");
+        const declined: JoinRequest = { ...KNOCKING[at], standing: "refused" };
+        KNOCKING.splice(at, 1);
+        return declined;
+    },
+    async withdrawJoinRequest(podId: string) {
+        await wait(200);
+        const mine = ASKED[podId];
+        if (!mine || mine.standing !== "pending") throw new Error("There is no pending request of yours to take back.");
+        delete ASKED[podId];
+        return { ...mine, standing: "withdrawn" as const };
+    },
     async listConnectors() {
         await wait(120);
         return CONNECTORS.map(readConnector).filter((entry): entry is Connector => entry !== null)
@@ -3136,9 +3173,19 @@ export const fixtureSource: PodSource = {
         await wait(200);
         return true;
     },
-    async ensureFirstWorkspace() {
+    async ensureFirstWorkspace(): Promise<FirstWorkspace> {
         await wait(400);
-        return { orgId: ORGS[0].id };
+        const shared = PODS.find((pod) => pod.orgId === ORGS[0].id) ?? null;
+        return {
+            orgId: ORGS[0].id,
+            orgName: ORGS[0].name,
+            entry: "existing",
+            orgCreated: false,
+            podId: shared?.id ?? null,
+            podName: shared?.name ?? null,
+            orgPodId: shared?.id ?? null,
+            openToDomain: null,
+        };
     },
     async startSlackInstall() {
         await wait(400);

@@ -621,3 +621,109 @@ async def test_whatsapp_signup_joins_the_pod_they_were_invited_to(
             select(AgentSurface.pod_id).where(AgentSurface.pod_id == owned.pod_id)
         )
         assert list(surfaces)
+
+
+@pytest.mark.parametrize("arrival", ["own", "colleague"])
+async def test_whatsapp_signup_lands_in_the_organizations_lemma(
+    async_client, db_session, fake_whatsapp, message_store, monkeypatch, arrival
+):
+    """A chat sign-up lands where a web one does, with WhatsApp's default set
+    to that Lemma's assistant and nothing private made beside it.
+
+    "own" is somebody with a personal address, who gets a workspace of their
+    own and its one Lemma, "Personal", theirs alone; "colleague" arrives from
+    the domain of a company already here and lands in the Lemma it shares.
+    """
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.agent_surfaces.infrastructure.models import AgentSurface
+    from app.modules.identity.services.first_workspace import ensure_first_workspace
+    from app.modules.identity.tests.e2e.test_first_workspace_e2e import (
+        _organization_service,
+    )
+    from app.modules.pod.infrastructure.models.pod_models import Pod
+
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.platforms.whatsapp.client._WHATSAPP_API_BASE",
+        f"{fake_whatsapp.api_base}/v21.0",
+    )
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "1234567890")
+    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "waba-onboarding")
+    sessions = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    company = None
+    if arrival == "colleague":
+        domain = f"chat-acme-{uuid4().hex[:8]}.com"
+        email = f"grace@{domain}"
+        async with sessions() as session:
+            founder = User(email=f"ada@{domain}", is_verified=True, is_active=True)
+            session.add(founder)
+            await session.flush()
+            uow = SqlAlchemyUnitOfWork(session)
+            company = await ensure_first_workspace(
+                uow,
+                organization_service=_organization_service(uow),
+                user_id=founder.id,
+                email=founder.email,
+                full_name="Ada Lovelace",
+            )
+            await uow.commit()
+    else:
+        email = f"chat-{uuid4().hex}@gmail.com"
+
+    codes: list[str] = []
+
+    async def capture(*, email: str, code: str) -> bool:
+        codes.append(code)
+        return True
+
+    coordinator = ChatOnboardingCoordinator(
+        SessionUnitOfWorkFactory(sessions),
+        challenges=EmailChallengeService(
+            sessions, send_email=capture, enforce_send_limits=allow_test_delivery
+        ),
+    )
+    sender = "15552" + str(int(uuid4().hex[:7], 16)).zfill(9)
+
+    async def say(text: str):
+        payload = _whatsapp_payload(
+            text=text,
+            message_id=uuid4().hex,
+            phone_number_id="1234567890",
+            waba_id="waba-onboarding",
+            sender_phone=sender,
+        )
+        return await coordinator.handle(
+            SurfacePlatformWebhookIngress(source="whatsapp", payload=payload)
+        )
+
+    assert (await say("hello")).handled
+    assert (await say(email)).handled
+    assert (await say(codes[0])).handled
+
+    async with sessions() as session:
+        user = await session.scalar(select(User).where(User.email == email))
+        assert user is not None
+        surface_id = (
+            (user.preferences or {}).get("default_surfaces", {}).get("WHATSAPP")
+        )
+        assert surface_id, user.preferences
+        surface = await session.get(AgentSurface, surface_id)
+        assert surface is not None
+        lemma = await session.get(Pod, surface.pod_id)
+        assert lemma is not None
+        if company is not None:
+            assert lemma.id == company.organization_pod_id
+            assert lemma.config["join_policy"] == "ORG_MEMBERS"
+            assert lemma.config["auto_join_new_members"] is True
+        else:
+            assert lemma.name == "Personal"
+            assert lemma.user_id == user.id
+            # Theirs alone: nobody invited into the workspace later is put
+            # in another person's own Lemma.
+            assert lemma.config.get("join_policy", "INVITE_ONLY") == "INVITE_ONLY"
+            assert lemma.config.get("auto_join_new_members", False) is False
+        # Nothing private made beside it.
+        own_pods = await session.scalar(
+            select(func.count(Pod.id)).where(Pod.user_id == user.id, Pod.id != lemma.id)
+        )
+        assert own_pods == 0

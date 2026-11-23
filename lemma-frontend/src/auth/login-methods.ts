@@ -13,14 +13,6 @@ export type ProviderId = "google" | "active-directory" | "apple";
 
 const KNOWN: readonly ProviderId[] = ["google", "active-directory", "apple"];
 
-/** What a person calls each provider. Microsoft's id is SuperTokens' name for
- *  its recipe, which nobody signing in would recognise. */
-export const PROVIDER_NAMES: Record<ProviderId, string> = {
-    "google": "Google",
-    "active-directory": "Microsoft",
-    "apple": "Apple",
-};
-
 export function isProviderId(value: unknown): value is ProviderId {
     return typeof value === "string" && (KNOWN as readonly string[]).includes(value);
 }

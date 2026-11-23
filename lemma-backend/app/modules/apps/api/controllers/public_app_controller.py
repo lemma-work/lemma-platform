@@ -5,10 +5,11 @@ this router at /public/apps only through ``AppHostRoutingMiddleware``, which
 derives the app's label from the request Host and hands it over as the
 ``X-App-Public-Slug`` header -- after dropping any copy the client sent.
 
-A private app is served on its hosted HTTPS address only to someone holding its
-access cookie and still allowed to read it; anyone else -- and anyone asking for
-a slug that does not exist -- gets the same sign-in page. See
-``app_access_controller`` for how the cookie is obtained.
+A private app is served on its hosted HTTPS address -- or its ``*.localhost``
+address on a local HTTP stack that set ``PRIVATE_APPS_OVER_HTTP`` -- only to
+someone holding its access cookie and still allowed to read it; anyone else --
+and anyone asking for a slug that does not exist -- gets the same sign-in page.
+See ``app_access_controller`` for how the cookie is obtained.
 """
 
 from pathlib import PurePosixPath
@@ -21,7 +22,6 @@ from supertokens_python.exceptions import SuperTokensError
 
 from app.core.config import settings
 from app.modules.apps.api.app_access import (
-    ACCESS_COOKIE,
     PRIVATE_NO_STORE,
     AppHost,
     private_app_host,
@@ -147,7 +147,7 @@ async def _viewer_app_id(
     """
     claims = (
         verify_app_access_token(
-            request.cookies.get(ACCESS_COOKIE),
+            request.cookies.get(host.cookie),
             purpose=AppAccessPurpose.COOKIE,
             origin=host.origin,
         )
@@ -250,8 +250,9 @@ async def _serve_host_asset(
             _expire_stale_session_marker(request, response)
         return response
     if host is None:
-        # Not a hosted HTTPS app address (the desktop, or the API host with a
-        # slug header): only published apps exist here, as they always have.
+        # Not an address private apps open at (plain HTTP that did not opt in,
+        # such as the desktop, or the API host with a slug header): only
+        # published apps exist here, as they always have.
         raise AppNotFoundError(f"App with public slug '{slug}' not found")
     if isinstance(viewer, AppAccessUnavailableError):
         return private_error(viewer)

@@ -41,6 +41,14 @@ from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.pod_ask_record import AskMode, PodAsk
 from app.modules.agent.domain.value_objects import AgentToolset
 
+#: On a member's run started by something a stranger wrote -- a row a contact
+#: put in a table a schedule watches -- and on that run's first message. The
+#: run is the owner's, not the contact's, so none of the above applies; what
+#: does is the authorizer's ask-before-acting for a run reading words from
+#: outside the pod (``services/outside_text``), for as long as that message
+#: is in front of it.
+OUTSIDE_ROW_KEY = "outside_row"
+
 
 #: The toolsets a stranger's run keeps, when its agent has them. A first cut:
 #: inside them, only the tools offered to it (``ToolPolicy.offered_to``)

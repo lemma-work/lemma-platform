@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, HttpUrl
 from app.modules.agent.agent_host.api import AgentHostHarnessResponse
 from app.modules.agent.agent_host.api import AgentHostStatus
 from app.modules.agent.domain.runtime_profiles import (
+    GoogleGenAIBackend,
     RuntimeModelCatalogEntry,
     RuntimeProfileAvailability,
     RuntimeProfileKind,
@@ -127,10 +128,35 @@ class CreateAnthropicCompatibleRuntimeProfileRequest(BaseModel):
     model_settings: JsonObject = Field(default_factory=dict)
 
 
+class CreateGoogleGenAIRuntimeProfileRequest(BaseModel):
+    """A Google provider: the Gemini API with an API key, or Vertex AI with a
+    service account key file. Never the server's own Google identity."""
+
+    source: Literal["GOOGLE_GENAI"] = "GOOGLE_GENAI"
+    name: str = Field(min_length=1, max_length=255)
+    backend: GoogleGenAIBackend = GoogleGenAIBackend.GEMINI_API
+    #: Gemini API only.
+    api_key: str | None = Field(default=None, min_length=1)
+    #: Vertex AI only: the key file's JSON, as downloaded. Write-only.
+    service_account_json: str | None = Field(default=None, min_length=1)
+    #: Vertex AI only. Empty is the key file's own project.
+    vertex_project: str | None = None
+    vertex_location: str | None = None
+    description: str | None = None
+    default_model_name: str | None = Field(default=None, min_length=1)
+    #: Chat models. Empty offers the current Gemini models.
+    model_names: list[str] = Field(default_factory=list)
+    #: Models that draw for the generate_image tool. Null offers Google's
+    #: current one; an empty list offers none.
+    image_model_names: list[str] | None = None
+    model_settings: JsonObject = Field(default_factory=dict)
+
+
 CreateAgentRuntimeProfileRequest = Annotated[
     CreateAgentHostRuntimeProfileRequest
     | CreateOpenAICompatibleRuntimeProfileRequest
-    | CreateAnthropicCompatibleRuntimeProfileRequest,
+    | CreateAnthropicCompatibleRuntimeProfileRequest
+    | CreateGoogleGenAIRuntimeProfileRequest,
     Field(discriminator="source"),
 ]
 
@@ -184,10 +210,28 @@ class UpdateAnthropicCompatibleRuntimeProfileRequest(BaseModel):
     refresh_models: bool = False
 
 
+class UpdateGoogleGenAIRuntimeProfileRequest(BaseModel):
+    """Omitted keeps a field. The host (``backend``) is not editable: moving
+    between the Gemini API and Vertex AI is a new provider."""
+
+    source: Literal["GOOGLE_GENAI"] = "GOOGLE_GENAI"
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    api_key: str | None = Field(default=None, min_length=1)
+    service_account_json: str | None = Field(default=None, min_length=1)
+    vertex_project: str | None = Field(default=None, min_length=1)
+    vertex_location: str | None = Field(default=None, min_length=1)
+    default_model_name: str | None = Field(default=None, min_length=1)
+    model_names: list[str] | None = None
+    image_model_names: list[str] | None = None
+    model_settings: JsonObject | None = None
+
+
 UpdateAgentRuntimeProfileRequest = Annotated[
     UpdateAgentHostRuntimeProfileRequest
     | UpdateOpenAICompatibleRuntimeProfileRequest
-    | UpdateAnthropicCompatibleRuntimeProfileRequest,
+    | UpdateAnthropicCompatibleRuntimeProfileRequest
+    | UpdateGoogleGenAIRuntimeProfileRequest,
     Field(discriminator="source"),
 ]
 

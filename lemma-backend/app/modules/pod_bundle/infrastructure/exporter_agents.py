@@ -69,7 +69,9 @@ async def export_agents(
         )
         dir_ = root / "agents" / agent_name
         dir_.mkdir(parents=True, exist_ok=True)
-        payload = _normalize_agent_payload(_agent_response_dict(agent))
+        payload = _normalize_agent_payload(
+            _agent_response_dict(agent), pod_id=str(pod_id)
+        )
         grantee_id = getattr(agent, "id", None)
         if grantee_id is not None:
             grants = await grants_payload(

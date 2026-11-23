@@ -80,6 +80,8 @@ class Agent(Entity):
     output_schema: JsonObject | None = None
     metadata: JsonObject | None = None
     allowed_actions: list[str] = Field(default_factory=list)
+    #: A machine ref (`pod:<name>`, ...); None runs on the default machine.
+    machine: str | None = None
 
 
 class Message(CreatedEntity):
@@ -186,6 +188,11 @@ class Conversation(Entity):
     contact_id: UUID | None = None
     #: The channel it works in, when it lives on one.
     channel_id: UUID | None = None
+    #: The platform of the places in that channel it answers -- WhatsApp,
+    #: email, Slack, a web widget -- or None for one kept in Lemma itself. A
+    #: person has one conversation per agent on each, never one shared across
+    #: them (``uq_agent_conversations_channel_person``).
+    platform: str | None = None
     organization_id: UUID | None = None
     agent_id: UUID | None = None
     title: str | None = None
@@ -231,6 +238,7 @@ class Conversation(Entity):
     last_activity_at: datetime | None = None
     # Diagnostics from the most recent agent run, so a single `conversations get`
     # can explain a failure without separately fetching runs.
+    last_run_id: UUID | None = None
     last_run_status: AgentRunStatus | None = None
     last_run_error: str | None = None
     last_run_error_code: str | None = None

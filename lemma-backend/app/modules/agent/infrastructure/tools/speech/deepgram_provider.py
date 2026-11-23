@@ -22,6 +22,11 @@ from app.modules.agent.infrastructure.tools.speech.provider import (
 
 _LISTEN_URL = "https://api.deepgram.com/v1/listen"
 _SPEAK_URL = "https://api.deepgram.com/v1/speak"
+#: Flux voices (``flux-{voice}-{lang}``) are served here only.
+_SPEAK_FLUX_URL = "https://api.deepgram.com/v2/speak"
+#: The most text one speak request takes. Longer is refused with a 400 that
+#: reads like a bad voice, so it is refused here, in words the agent can act on.
+MAX_SPEAK_CHARS = 2000
 _DEFAULT_STT_MODEL = "nova-3"
 _DEFAULT_TTS_MODEL = "aura-2-thalia-en"
 _STT_TIMEOUT = 120.0
@@ -110,12 +115,7 @@ class DeepgramSpeechProvider(SpeechProvider):
     ) -> bytes:
         if not self._api_key:
             raise SpeechProviderError("Deepgram API key is not configured.")
-        model = (
-            voice
-            or await voice_for_language(language)
-            or agent_settings.speech_tts_voice
-            or _DEFAULT_TTS_MODEL
-        )
+        model = await _speaking_model(text, voice=voice, language=language)
         params: dict[str, str] = {}
         format_params = _TTS_FORMAT_PARAMS.get(
             output_format.lower(), {"encoding": "mp3"}
@@ -133,7 +133,13 @@ class DeepgramSpeechProvider(SpeechProvider):
                 # far less than losing the reply, so fall back to the default
                 # voice rather than failing the call.
                 fallback = agent_settings.speech_tts_voice or _DEFAULT_TTS_MODEL
-                if exc.response.status_code != 400 or model == fallback:
+                # Not from a Flux voice: those speak what Aura cannot (Hindi),
+                # and that text in the English default is not a reply.
+                if (
+                    exc.response.status_code != 400
+                    or model == fallback
+                    or model.startswith("flux-")
+                ):
                     raise
                 return await self._speak(client, text, params, fallback)
 
@@ -145,13 +151,36 @@ class DeepgramSpeechProvider(SpeechProvider):
         model: str,
     ) -> bytes:
         response = await client.post(
-            _SPEAK_URL,
+            _SPEAK_FLUX_URL if model.startswith("flux-") else _SPEAK_URL,
             params={**params, "model": model},
             headers=self._headers(content_type="application/json"),
             json={"text": text},
         )
         response.raise_for_status()
         return response.content
+
+
+async def _speaking_model(text: str, *, voice: str | None, language: str | None) -> str:
+    """The voice to speak ``text`` in, or why it cannot be spoken: too long for
+    one request, or in a language no voice speaks -- an English voice reading
+    another script is noise, not a reply."""
+    if len(text) > MAX_SPEAK_CHARS:
+        raise SpeechProviderError(
+            f"The text is {len(text)} characters; one spoken message takes "
+            f"at most {MAX_SPEAK_CHARS}. Say the gist and send the rest as text."
+        )
+    if voice:
+        return voice
+    language_voice = await voice_for_language(language)
+    if language and not _is_english(language) and not language_voice:
+        raise SpeechProviderError(
+            f"No voice speaks '{language}' yet; reply in text instead."
+        )
+    return language_voice or agent_settings.speech_tts_voice or _DEFAULT_TTS_MODEL
+
+
+def _is_english(language: str) -> bool:
+    return language.strip().lower().split("-", 1)[0] == "en"
 
 
 def _language_params(language: str | None) -> dict[str, str]:

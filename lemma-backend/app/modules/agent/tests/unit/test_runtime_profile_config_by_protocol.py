@@ -22,6 +22,7 @@ from app.modules.agent.domain.errors import (
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     AnthropicCompatibleRuntimeConfig,
+    GoogleGenAIRuntimeConfig,
     HarnessRuntimeConfig,
     OpenAICompatibleRuntimeConfig,
     RuntimeModelCapability,
@@ -51,6 +52,13 @@ _STORED: dict[RuntimeProfileProtocol, dict[str, object]] = {
         "headers": {},
         "model_settings": {},
     },
+    RuntimeProfileProtocol.GOOGLE_GENAI: {
+        "backend": "VERTEX_AI",
+        "vertex_project": "a-project",
+        "vertex_location": "global",
+        "base_url": None,
+        "model_settings": {},
+    },
     RuntimeProfileProtocol.AGENT_HOST: {
         "harness_snapshot_revision": "rev-7",
         "config_selections": {"mode": "plan"},
@@ -61,6 +69,7 @@ _STORED: dict[RuntimeProfileProtocol, dict[str, object]] = {
 _TYPE: dict[RuntimeProfileProtocol, type[BaseModel]] = {
     RuntimeProfileProtocol.OPENAI_COMPATIBLE: OpenAICompatibleRuntimeConfig,
     RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE: AnthropicCompatibleRuntimeConfig,
+    RuntimeProfileProtocol.GOOGLE_GENAI: GoogleGenAIRuntimeConfig,
     RuntimeProfileProtocol.AGENT_HOST: HarnessRuntimeConfig,
 }
 

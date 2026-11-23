@@ -126,6 +126,7 @@ async def create_function(
         config=data.config,
         type=data.type,
         visibility=data.visibility.value,
+        assistant_invoke=data.assistant_invoke,
     )
     function = await use_cases.create_function(
         pod_id=pod_id, entity=entity, user_id=user.id, code=data.code, request=request

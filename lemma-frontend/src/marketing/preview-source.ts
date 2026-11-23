@@ -8,6 +8,7 @@ import { SAMPLE_WORKFLOWS } from "./preview-fixtures";
 import { readSchedules } from "@/schedule/schedules";
 import { byEffort } from "@/data/connectable";
 import type { Conversation, Member, PodSource, Tab } from "@/data/types";
+import { slug } from "@/outcomes/named-address";
 
 const added = new Map<string, Member[]>();
 export const previewCandidates = [
@@ -168,8 +169,12 @@ function kitConversation() {
 /** Isolated fictional work; production and general QA fixtures stay separate. */
 export const previewSource: PodSource = {
     ...fixtureSource,
-    async listOrgs() { return [{ id: "acme", name: "Acme" }]; },
+    async listOrgs() { return [{ id: "acme", name: "Acme", handle: "acme" }]; },
     async getPod(podId) { return (await previewSource.listPods("acme")).find(pod => pod.id === podId) ?? null; },
+    async findPodByName(orgHandle, word) {
+        const called = orgHandle === "acme" ? (await previewSource.listPods("acme")).filter(pod => slug(pod.name) === word) : [];
+        return called.length === 1 ? called[0].id : null;
+    },
     async listPods(orgId) {
         return orgId === "acme" ? teammates.map(person => ({ id: person.id, orgId, name: person.name, iconUrl: faceOf(person), description: person.role, teammate: persona(person.id), subtitle: person.role, members: members(person.id), waiting: person.waiting })) : [];
     },
@@ -184,6 +189,9 @@ export const previewSource: PodSource = {
     async renamePod(id, name) { const person = teammates.find(item => item.id === id); if (person) person.name = name; },
     async describePod(id, description) { const person = teammates.find(item => item.id === id); if (person) person.role = description.trim() || person.role; },
     async deletePod(id) { const at = teammates.findIndex(item => item.id === id); if (at >= 0) teammates.splice(at, 1); },
+    /* The landing's sample Lemmas open where they are drawn to: a visitor's
+       choice is not kept. */
+    async setHomeApp() {},
     async listSurfaces(id) { const person = teammateFor(id); return [{ id: id + "-email", platform: "RESEND", name: "email", mine: true, agentName: person.name, handle: person.id + "@acme.example.invalid", email: person.id + "@acme.example.invalid", active: true }]; },
     /* The general sample has spent the org's shared WhatsApp number, to
        exercise that sentence. A visitor to the landing has not. */

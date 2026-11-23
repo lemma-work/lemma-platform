@@ -112,6 +112,7 @@ FUNCTION_JSON = _fill_enums("""{
   "type": "API",         // API = sync request/response; JOB = async background run
   "visibility": "POD",   // __VISIBILITY__
   // "config": { },      // runtime settings for this function (timeouts, memory)
+  // "assistant_invoke": false,  // an internal step: apps, workflows and people run it, the assistant doesn't
   "code": { "$file": "code.py" },
   // Zero access by default. This EMPTY list means "holds nothing" — on import it
   // REPLACES the function's grants, so delete the whole "permissions" key if you
@@ -159,6 +160,8 @@ AGENT_JSON = _fill_enums("""{
   // which is what lets a workflow read named fields off its result.
   // "input_schema": { "type": "object", "properties": { } },
   // "output_schema": { "type": "object", "properties": { } },
+  // "machine": "pod:builder",  // where its commands run: one of the pod's machines
+  //                            // (machines/<name>/<name>.json); omitted = the default machine of whoever it acts for
   // "metadata": { },     // free-form; yours to read, the platform ignores it
   // Zero access by default. This EMPTY list means "holds nothing" — on import it
   // REPLACES the agent's grants, so delete the whole "permissions" key if you are
@@ -682,6 +685,13 @@ PERMISSION_PRESETS: dict[str, dict[str, list[str]]] = {
         "publish": ["app.publish"],
         "delete": ["app.delete"],
     },
+    # The pod itself, named `/`: what a workload may do for the person it runs
+    # as -- tell them something, or start the pod's own assistant.
+    "pod": {
+        "notify-self": ["channel.notify_self"],
+        "notify_self": ["channel.notify_self"],
+        "assistant": ["agent.execute"],
+    },
 }
 _GRANT_TYPE_ALIASES = {
     "table": "datastore_table",
@@ -696,6 +706,7 @@ _GRANT_TYPE_ALIASES = {
     "agent": "agent",
     "workflow": "workflow",
     "schedule": "schedule",
+    "pod": "pod",
 }
 GRANT_TYPE_TOKENS = tuple(sorted(_GRANT_TYPE_ALIASES))
 _ACCOUNT_TOKENS = frozenset({"account", "connector_account"})
@@ -765,6 +776,11 @@ def parse_grant_spec(spec: str) -> dict:
     name = name.strip()
     if not name:
         raise ScaffoldError(f"Bad grant {spec!r}: no resource name.")
+    if rtype == "pod" and name != "/":
+        raise ScaffoldError(
+            f"Bad grant {spec!r}: a pod grant names the pod as `/` "
+            "(e.g. pod:/:notify-self)."
+        )
     presets = PERMISSION_PRESETS[rtype]
     perm_ids: list[str] = []
     for token in perms.split(","):
@@ -932,6 +948,9 @@ def _decision_misroute_issues(nodes: list, edges: list) -> list[str]:
     issues: list[str] = []
     outgoing: dict[str, list] = {}
     for edge in edges:
+        # A failure edge is where a node goes when it fails, never its default.
+        if str(edge.get("kind") or "").upper() == "FAILURE":
+            continue
         src = str(edge.get("source") or "")
         outgoing.setdefault(src, []).append(edge)
     for node in nodes:

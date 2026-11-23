@@ -9,16 +9,25 @@ import { useCapChange, useContactsCap } from "@/space/contact-queries";
  *
  *  Contacts are never billed, so this is the ceiling on what they can cost.
  *  Past it, the organization's bots stop answering contacts until the month
- *  turns, and tell them a person will reply. Owners and editors set it. */
+ *  turns, and tell them a person will reply. Owners and editors set it, in
+ *  one row of the organization's Usage: the cap as it stands, and the
+ *  field that changes it. */
 export function ContactsCapBlock({ orgId }: { orgId: string }) {
     const cap = useContactsCap(orgId);
     const change = useCapChange(orgId);
     const [typed, setTyped] = useState<string | null>(null);
     const [problem, setProblem] = useState<string | null>(null);
 
-    if (cap.isPending) return <p className="usage-quiet" role="status">Reading the cap…</p>;
+    if (cap.isPending) return <p className="kset-note" role="status">Reading the cap on answering contacts…</p>;
     if (!cap.data) {
-        return <p className="usage-quiet">{isForbidden(cap.error) ? "Only owners and editors see the contacts cap." : "Couldn’t read the contacts cap."}</p>;
+        return isForbidden(cap.error)
+            ? <p className="kset-note">Only owners and editors see the cap on answering contacts.</p>
+            : (
+                <p className="kset-said kset-said--bad" role="alert">
+                    Couldn’t read the cap on answering contacts.
+                    <button type="button" className="b b--s b--secondary" onClick={() => void cap.refetch()}>Try again</button>
+                </p>
+            );
     }
     const value = typed ?? (cap.data.limit == null ? "" : String(cap.data.limit));
     const save = (limit: number | null) => {
@@ -30,30 +39,41 @@ export function ContactsCapBlock({ orgId }: { orgId: string }) {
     };
 
     return (
-        <section className="usage-block">
-            <h4>Answering contacts</h4>
-            <p className="usage-quiet">{sayCap(cap.data)}. Contacts are never billed; this is the most they may cost a month.</p>
-            <form
-                className="csheet__row"
-                onSubmit={(event) => {
-                    event.preventDefault();
-                    const amount = value.trim() === "" ? null : Number(value);
-                    if (amount !== null && (!Number.isFinite(amount) || amount < 0)) {
-                        setProblem("Enter an amount in dollars, or leave it empty for no cap.");
-                        return;
-                    }
-                    save(amount);
-                }}
-            >
-                <label className="record-form__field">
-                    <span className="smanage__label">Monthly cap (USD)</span>
-                    <input inputMode="decimal" value={value} placeholder="No cap" onChange={(event) => setTyped(event.target.value)} />
-                </label>
-                <button type="submit" className="ghost-pill" disabled={change.isPending || typed === null}>
-                    {change.isPending ? "Saving…" : "Save"}
-                </button>
-            </form>
-            {problem && <p role="alert">{problem}</p>}
-        </section>
+        <>
+            <p className="ksub">Answering contacts <span>Contacts are never billed; this is the most they may cost a month</span></p>
+            <div className="klist">
+                <form
+                    className="krow krow--kv"
+                    onSubmit={(event) => {
+                        event.preventDefault();
+                        const amount = value.trim() === "" ? null : Number(value);
+                        if (amount !== null && (!Number.isFinite(amount) || amount < 0)) {
+                            setProblem("Enter an amount in dollars, or leave it empty for no cap.");
+                            return;
+                        }
+                        save(amount);
+                    }}
+                >
+                    <label className="krow__k" htmlFor={"contacts-cap-" + orgId}>Monthly cap</label>
+                    <span className="krow__v kset-wrap">
+                        <b>{sayCap(cap.data)}</b>
+                        <input
+                            id={"contacts-cap-" + orgId}
+                            className="kinput kset-input"
+                            inputMode="decimal"
+                            value={value}
+                            placeholder="No cap, in dollars"
+                            onChange={(event) => setTyped(event.target.value)}
+                        />
+                        {problem && <span className="kset-said--bad" role="alert">{problem}</span>}
+                    </span>
+                    <span className="krow__end">
+                        <button type="submit" className="b b--s b--secondary" disabled={change.isPending || typed === null}>
+                            {change.isPending ? "Saving…" : "Save"}
+                        </button>
+                    </span>
+                </form>
+            </div>
+        </>
     );
 }

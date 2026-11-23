@@ -13,13 +13,15 @@ import { TableView } from "@/library/library";
 import { RecordView } from "@/library/record-view";
 import { DocSpace, isDoc } from "@/docs/doc-space";
 import { AgentPage } from "@/space/agent-page";
-import { AboutPage } from "@/space/about-page";
+import { AboutPage, aboutHead } from "@/space/about-page";
+import { LemmaPageHead } from "./lemma-page";
 import { isAboutSection } from "@/space/about-sections";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Org } from "@/data";
 import { displayAgentName } from "@/data/agent-names";
 import { readableName } from "@/library/reading";
 import { registerFrame } from "@/thread/compose-bridge";
+import { acknowledgeOpen, appUrlAt, readLocation, readOpen, tellLocation } from "@/thread/location-bridge";
 import { docTitle } from "@/library/doc-title";
 import { ViewActions } from "@/shell/view-actions";
 import { CommentsButton } from "@/docpages/comments/button";
@@ -32,8 +34,12 @@ import type { ShareSubject } from "@/space/share-sheet";
 import { useResourceConversation } from "@/thread/use-resource-conversation";
 import { chatView, outcomeView, type Go, type View } from "./model";
 import type { FrameActions } from "./actions";
-import { LemmaActions, SectionSwitch } from "./lemma-bar";
-import { Empty, to } from "./parts";
+import { Icon, to } from "./parts";
+import { AppMark } from "./app-mark";
+import { Calm } from "./calm";
+import { TryAgain, codeOf } from "./read-again";
+import { SHOW_AFTER_MS, useLasted } from "@/ui/skeleton";
+import { openPodApp } from "@/desktop/pod-apps";
 
 const NOTHING = () => undefined;
 
@@ -45,7 +51,7 @@ export type Back = (fallback: View) => void;
  *  an app, a file or page, a table and its rows, an agent. The bar says
  *  which Lemma it is in and is the way back; the workspace's own view of it
  *  fills the rest. */
-export function Stage({ pod, title, here, go, fill, ownBar = false, actions, children }: {
+export function Stage({ pod, title, here, head, go, fill, ownBar = false, actions, children }: {
     pod: Pod;
     /** Where in the Lemma this is. Left out, the Lemma itself is: its
      *  summary, where the crumb ends at its name. */
@@ -53,6 +59,9 @@ export function Stage({ pod, title, here, go, fill, ownBar = false, actions, chi
     /** In place of `title`, a step that does more than name the place: a
      *  section's page names itself with a menu of the other sections. */
     here?: ReactNode;
+    /** In place of the bar, the Lemma's own header: who it is, its tabs.
+     *  A Lemma's own pages wear it; what it holds wears the bar. */
+    head?: ReactNode;
     go: Go;
     fill?: boolean;
     /** The page draws the one bar itself, with `StageCrumbs` at its start:
@@ -63,7 +72,8 @@ export function Stage({ pod, title, here, go, fill, ownBar = false, actions, chi
 }) {
     return (
         <div className={"ox-stagepage" + (fill ? " ox-stagepage--fill" : "")}>
-            {!ownBar && (
+            {head}
+            {!head && !ownBar && (
                 <div className="ox-stagebar">
                     <StageCrumbs pod={pod} title={title} here={here} go={go} />
                     {actions && <div className="ox-stagebar__acts">{actions}</div>}
@@ -177,15 +187,21 @@ export function WorkflowView({ pod, workflow, go }: { pod: Pod; workflow: string
 
 /** An app, framed here the way the workspace frames it, and registered so
  *  a button in it that asks Lemma something reaches a chat in this frame. */
-export function AppView({ pod, app, go, actions, shown }: {
+export function AppView({ pod, app, at, go, actions, shown, onMove }: {
     pod: Pod;
     app: string;
+    /** Where the address says the app is inside itself: `/` for its one
+     *  screen, or the page for one of its records. Read while it is in front. */
+    at: string;
     go: Go;
     actions: FrameActions;
     /** Whether it is the app in front. A kept app behind something else
      *  stays mounted but is not trusted to ask for a chat: only the app on
      *  screen may put words in a box. */
     shown: boolean;
+    /** The app in front moved inside itself, or asked for another app of
+     *  this Lemma: the app named, and where in it. The address follows. */
+    onMove: (podId: string, app: string, path: string) => void;
 }) {
     const tabs = useQuery({ queryKey: ["outcome-apps", pod.id], queryFn: () => source.listTabs(pod.id), staleTime: 5 * 60_000 });
     const found = (tabs.data ?? []).flatMap((tab) => (tab.kind === "app" && tab.id === "app:" + app ? [tab] : []))[0] ?? null;
@@ -194,8 +210,48 @@ export function AppView({ pod, app, go, actions, shown }: {
     const [loaded, setLoaded] = useState<Window | null>(null);
     useEffect(() => (shown ? registerFrame(loaded) : undefined), [shown, loaded]);
     const frame = useRef<HTMLIFrameElement | null>(null);
+    /* The frame starts on the path the address named when it was first
+       drawn. After that the address is told to it, never loaded into it: a
+       frame given a new `src` starts the app over. */
+    const [start] = useState(at);
+    const address = found?.url ?? null;
+    const url = useMemo(() => (address ? appUrlAt(address, start) : null), [address, start]);
+    /* Where the frame is, as far as this side knows: where it started, what
+       it last said, or what it was last told. A move it made is not told
+       back to it, and one it was told is not heard as its own. */
+    const frameAt = useRef(start);
+    const podId = pod.id;
+    useEffect(() => {
+        if (!shown || !loaded) return;
+        const listen = (event: MessageEvent) => {
+            const moved = readLocation(event, loaded);
+            if (moved !== null) {
+                frameAt.current = moved;
+                onMove(podId, app, moved);
+                return;
+            }
+            const asked = readOpen(event, loaded);
+            if (!asked) return;
+            onMove(podId, asked.app, asked.path);
+            acknowledgeOpen(event, asked);
+        };
+        window.addEventListener("message", listen);
+        return () => window.removeEventListener("message", listen);
+    }, [shown, loaded, podId, app, onMove]);
+    useEffect(() => {
+        if (!shown || !loaded || frameAt.current === at) return;
+        const src = frame.current?.getAttribute("src");
+        if (!src) return;
+        frameAt.current = at;
+        tellLocation(loaded, new URL(src, window.location.href).origin, at);
+    }, [shown, loaded, at]);
     const chat = useFloatingChat();
     const label = found?.label ?? readableName(app);
+    /* Each Reload or Try again loads the frame afresh -- on the src it was
+       given, which on macOS is the app's alias rather than its URL -- and
+       shows it opening again. */
+    const [attempt, setAttempt] = useState(0);
+    const again = () => setAttempt((n) => n + 1);
     return (
         <Stage
             pod={pod}
@@ -208,23 +264,127 @@ export function AppView({ pod, app, go, actions, shown }: {
                     tab={found}
                     subject={{ kind: "app", label: found.label }}
                     actions={actions}
-                    /* The src it was given, which on macOS is the app's alias
-                       rather than its URL. */
-                    onReload={() => { if (frame.current) frame.current.src = frame.current.getAttribute("src") ?? found.url; }}
+                    onReload={again}
                 />
             )}
         >
             {tabs.isPending
-                ? <p className="ox-loading">Opening the app…</p>
-                : !found
-                    ? <div className="ox-stage__none"><Empty title="This app isn’t here."><p>It may have been removed or renamed.</p></Empty></div>
-                    : <AppFrameView
-                        url={found.url}
-                        frameRef={(element) => { frame.current = element; }}
-                        onFrameLoad={setLoaded}
-                    />}
+                ? <div className="app-veil"><AppOpening name={app} label={label} lemma={pod.name} /></div>
+                : tabs.isError && !found
+                    ? (
+                        <div className="ox-stage__none">
+                            <Calm
+                                tone="warn"
+                                title={`Couldn’t read ${pod.name}’s apps`}
+                                note={codeOf(tabs.error)}
+                                actions={<TryAgain busy={tabs.isFetching} onClick={() => void tabs.refetch()} />}
+                            >
+                                Nothing in them changed. The list of them didn’t come through just now.
+                            </Calm>
+                        </div>
+                    )
+                    : !found || !url
+                        ? (
+                            <div className="ox-stage__none">
+                                <Calm
+                                    icon="search"
+                                    title="This app isn’t here"
+                                    actions={<a className="b b--m b--primary" {...to(outcomeView(pod.id), go)}>Go to {pod.name}</a>}
+                                >
+                                    It may have been removed or renamed.
+                                </Calm>
+                            </div>
+                        )
+                        : <AppFrameView
+                            url={url}
+                            attempt={attempt}
+                            frameRef={(element) => { frame.current = element; }}
+                            /* A load is the app starting over, on the path its
+                               frame was given. */
+                            onFrameLoad={(view) => { frameAt.current = start; setLoaded(view); }}
+                            mark={<AppMark name={app} label={label} size={64} className="app-open__app" />}
+                            cover={(
+                                <AppOpening
+                                    key={attempt}
+                                    name={app}
+                                    label={label}
+                                    lemma={pod.name}
+                                    url={url}
+                                    onAsk={() => actions.ask(pod.id, appTrouble(label))}
+                                    onRetry={again}
+                                />
+                            )}
+                        />}
             {found && <ResourceChat pod={pod} resource={{ kind: "app", name: app, label }} state={chat} go={go} />}
         </Stage>
+    );
+}
+
+/** How long an app may take to answer before it is said to be slow, and
+ *  before it is said not to have opened. */
+const APP_SLOW_MS = 6_000;
+const APP_GONE_MS = 30_000;
+
+/** What the reader asks a Lemma when its app didn't open. */
+export function appTrouble(label: string): string {
+    return `${label} didn’t open: nothing came back from it in 30 seconds. Can you look at what’s wrong with it?`;
+}
+
+/** An app opening in the frame, over it until the frame answers (design.md,
+ *  "States"): nothing for the first moment, then its mark and a thin bar;
+ *  slow after a few seconds, with its own tab offered; and after 30 seconds
+ *  with nothing back, said plainly, with Try again and the Lemma asked to
+ *  look. Without `url` -- the app still being found -- it only says it is
+ *  opening. */
+export function AppOpening({ name, label, lemma, url, onAsk, onRetry }: {
+    name: string;
+    label: string;
+    /** The Lemma it is in, by name. */
+    lemma: string;
+    url?: string | null;
+    onAsk?: () => void;
+    onRetry?: () => void;
+}) {
+    const shown = useLasted(true, SHOW_AFTER_MS);
+    const waits = Boolean(url);
+    const slow = useLasted(waits, APP_SLOW_MS);
+    const gone = useLasted(waits, APP_GONE_MS);
+    if (gone) {
+        return (
+            <div className="app-open" role="alert">
+                <span className="kcalm__i" data-tone="warn"><Icon name="warn" size={22} /></span>
+                <h2 className="app-open__t">{label} didn’t open</h2>
+                <p className="app-open__line">Nothing came back from it in 30 seconds. It may be restarting, or something in it broke.</p>
+                <div className="app-open__acts">
+                    {onAsk && <button type="button" className="b b--m b--secondary" onClick={onAsk}>Ask {lemma} to look</button>}
+                    {onRetry && <TryAgain onClick={onRetry} />}
+                </div>
+            </div>
+        );
+    }
+    if (!shown) return null;
+    const mark = <AppMark name={name} label={label} size={64} className="app-open__app" />;
+    if (slow && url) {
+        return (
+            <div className="app-open" role="status">
+                {mark}
+                <span className="app-open__bar" aria-hidden="true"><i /></span>
+                <h2 className="app-open__t">Still opening {label}</h2>
+                <p className="app-open__line">It’s slower to answer than usual. It keeps trying here, or it can open on its own.</p>
+                <div className="app-open__acts">
+                    <button type="button" className="b b--m b--secondary" onClick={() => openPodApp(url)}>
+                        <Icon name="out" size={15} />Open in a new tab
+                    </button>
+                </div>
+            </div>
+        );
+    }
+    return (
+        <div className="app-open app-open--quiet" role="status">
+            {mark}
+            <span className="app-open__bar" aria-hidden="true"><i /></span>
+            <p className="app-open__line">Opening {label}</p>
+        </div>
     );
 }
 
@@ -370,16 +530,20 @@ export function AgentView({ pod, agent, go, actions, back }: { pod: Pod; agent: 
  *  height, with the way back to the Lemma. */
 export function SettingsView({ pod, org, section, go, actions }: { pod: Pod; org: Org; section: string | null; go: Go; actions: FrameActions }) {
     const cache = useQueryClient();
+    const part = isAboutSection(section) ? section : null;
+    /* The page's header is every Lemma page's: the way back to it, the
+       part's title and its one line. The overview is its Settings. */
+    const head = part ? aboutHead(part, pod.name) : { title: "Settings", note: `${pod.name}’s name and job, and everything about how it works.` };
     return (
-        <Stage pod={pod} here={<SectionSwitch pod={pod} here="settings" go={go} />} go={go} actions={<LemmaActions pod={pod} go={go} actions={actions} />}>
+        <Stage pod={pod} go={go} head={<LemmaPageHead pod={pod} tab="settings" title={head.title} says={head.note} go={go} actions={actions} />}>
             <div className="ox-page ox-section" data-section="settings">
-                <h1 className="ox-section__t">Settings</h1>
                 <AboutPage
                     framed
+                    bare
                     pod={pod}
                     orgId={org.id}
                     orgName={org.name}
-                    section={isAboutSection(section) ? section : null}
+                    section={part}
                     onSection={(next) => go(outcomeView(pod.id, "settings", next))}
                     onOpenSettings={(next) => actions.openSettings(next)}
                     onAsk={() => go(outcomeView(pod.id))}

@@ -20,7 +20,7 @@ never a member's personal allowance.
 | Visitor | What the pod made Public | Rows of tables opened to anyone |
 
 A contact's or visitor's run is anonymous to the pod: Public reads only, a short tool
-allowlist, no sandbox, no member's grants. In a **group**, people outside the pod are
+allowlist, no machine, no member's grants. In a **group**, people outside the pod are
 answered as outsiders the same way (`surfaces.md`): they can read what is Public, and
 nothing they say in the group is written anywhere by the bot -- a request to save or
 change something is passed to the member who looks after the group, who acts on it.
@@ -73,7 +73,12 @@ chat lasts only as long as the site keeps handing over fresh tokens:
 `Lemma.identify(() => fetch("/lemma-token").then(r => r.text()))`. Reissuing the
 secret ends every signed-in chat. The public key goes in pages; the signing secret
 never does. A new widget answers nobody until `answer` is set, and none answers
-anybody unless the deployment has `PUBLIC_WEB_ENABLED` on.
+anybody unless the deployment has `PUBLIC_WEB_ENABLED` on. A Lemma's own Public
+app is told the key by its host (`window.__LEMMA_CONFIG__.webWidgets`, see
+`apps.md`). To test the email-code step where no inbox can receive it, a test
+server sets `PUBLIC_WEB_TEST_VISITOR_CODE` and every code is those six digits,
+mailed to nobody (refused in production); a local stack writes the mail to its
+`EMAIL_OUTPUT_DIR` instead.
 
 **Forms** — not an object. A **table opened to people outside**
 (`PUT /pods/{pod}/datastore/tables/{t}/public-rows`, SDK

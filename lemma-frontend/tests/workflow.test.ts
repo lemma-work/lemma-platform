@@ -449,7 +449,7 @@ test("a branch puts both arms under the decision and the join under both", () =>
     assert.equal(shape.ordered[3].says, "Runs pay-invoice");
     assert.equal(shape.ordered[3].detail[0], "With: amount");
     // The times live on a pod schedule, not on the workflow (domain/start.py:47).
-    assert.match(shape.start.detail[0], /Over and over\. The timetable lives on a pod schedule/);
+    assert.match(shape.start.detail[0], /Over and over\. The timetable lives on a schedule/);
 });
 
 test("a loop prints its body before what comes after it, and does not hang", () => {
@@ -998,4 +998,21 @@ test("a run assigned to the viewer is theirs even when their wait list missed it
     assert.equal(legal.cards[0].yours, true);
     assert.equal(legal.cards[0].mine, null, "no wait detail without the list");
     assert.equal(board.mine, 1);
+});
+
+test("a step's failure edge is not its next step", () => {
+    // Listed first on purpose: the outline used to take a step's first edge
+    // as the line, so the failure branch read as what runs on success.
+    const shape = readShape({
+        name: "claim-rows",
+        nodes: [node("save", "FUNCTION"), node("mark-failed", "FUNCTION"), node("done", "END")],
+        edges: [
+            { ...edge("save", "mark-failed"), kind: "FAILURE" },
+            edge("save", "done"),
+        ],
+        start: { type: "MANUAL", config: null },
+    });
+    assert.ok(shape);
+    assert.equal(ids(shape.ordered)[0], "save", "the failure target is reached, so it is not the first step");
+    assert.deepEqual(outlineOf(shape.flow).slice(0, 2), ["save", "done"]);
 });

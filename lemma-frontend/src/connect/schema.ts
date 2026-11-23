@@ -31,6 +31,10 @@ export interface Field {
     options?: string[];
     /** What the schema says to start with. */
     initial?: unknown;
+    /** Plumbing: optional, and either already set to something sensible or
+     *  a technical knob (an API address, a webhook's check token, a port).
+     *  Drawn under "More settings", closed. */
+    more: boolean;
 }
 
 interface RawSchema {
@@ -66,12 +70,47 @@ export function isSecretName(name: string): boolean {
     return SECRET_WORDS.test(lower);
 }
 
-/** Words to a label, when the schema gave no title. */
-function labelFor(name: string, property: RawProperty): string {
-    if (property.title) return property.title;
-    const words = name.replace(/[_-]+/g, " ").trim();
-    return words.charAt(0).toUpperCase() + words.slice(1);
+/** Titles that read better said another way. A product's own term stays as
+ *  the product spells it; plumbing is said as what it is. */
+const SAID_AS: Record<string, string> = {
+    "api base url": "API address",
+    "base url": "API address",
+    "webhook verify token": "Webhook check token",
+    "whatsapp business account id": "WhatsApp Business Account ID",
+};
+
+/** Short words that are letters, said the way they are written. */
+const LETTERS: Record<string, string> = {
+    id: "ID", ids: "IDs", api: "API", tls: "TLS", ssl: "SSL", smtp: "SMTP", http: "HTTP", https: "HTTPS",
+    mcp: "MCP", sql: "SQL", oauth: "OAuth", jwt: "JWT", ip: "IP", sso: "SSO", dns: "DNS", aws: "AWS", mx: "MX",
+};
+
+/** A schema's title, or its key, as a label in plain words: sentence case,
+ *  "ID" and "API" as they are written, a URL called an address — never
+ *  Title Case and never a snake_case key. "Phone Number ID" becomes
+ *  "Phone number ID"; a word with capitals of its own (WhatsApp, GitHub)
+ *  keeps them. */
+export function labelWords(text: string): string {
+    const plain = text.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+    const known = SAID_AS[plain.toLowerCase()];
+    if (known) return known;
+    const said = plain.split(" ").map((word, at) => {
+        const lower = word.toLowerCase();
+        if (lower === "url" || lower === "uri") return "address";
+        if (LETTERS[lower]) return LETTERS[lower];
+        if (/[A-Z]/.test(word.slice(1))) return word;
+        return at === 0 ? word : lower;
+    }).join(" ").replace(/\bbase address\b/i, "address");
+    return said.charAt(0).toUpperCase() + said.slice(1);
 }
+
+function labelFor(name: string, property: RawProperty): string {
+    return labelWords(property.title || name);
+}
+
+/** Keys that name plumbing: where the API lives, how a webhook proves
+ *  itself, which region or version — things a person almost never sets. */
+const PLUMBING = /(^|_)(api_)?base_url$|(^|_)server_url$|verify_token$|webhook|(^|_)region$|(^|_)api_version$|^version$|_endpoint$|(^|_)headers$|^session_setup$|^port$/;
 
 function kindFor(name: string, property: RawProperty): FieldKind {
     if (Array.isArray(property.enum) && property.enum.length > 0) return "choice";
@@ -96,15 +135,18 @@ export function fields(schema: unknown): Field[] {
     return Object.entries(properties).map(([name, property]) => {
         const one = (property ?? {}) as RawProperty;
         const example = Array.isArray(one.examples) ? one.examples[0] : undefined;
+        const kind = kindFor(name, one);
+        const needed = required.has(name);
         return {
             name,
             label: labelFor(name, one),
-            kind: kindFor(name, one),
-            required: required.has(name),
+            kind,
+            required: needed,
             description: one.description,
             placeholder: example === undefined || example === null ? undefined : String(example),
             options: Array.isArray(one.enum) ? one.enum.map(String) : undefined,
             initial: one.default,
+            more: !needed && (one.default !== undefined || kind === "headers" || PLUMBING.test(name.toLowerCase())),
         };
     });
 }

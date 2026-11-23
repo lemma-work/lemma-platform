@@ -166,7 +166,11 @@ class AgentRuntimeProfileService:
         runtime: AgentRuntimeConfig | None,
         organization_id: UUID | None,
         user_id: UUID,
+        allow_drawing: bool = False,
     ) -> ResolvedAgentRuntime:
+        """``allow_drawing`` is for the image generator alone: everything else
+        runs a turn or a background call, which a model that only draws
+        cannot."""
         if runtime is None:
             runtime = self.system_default_runtime_config()
         profile_id = runtime.profile_id
@@ -196,7 +200,7 @@ class AgentRuntimeProfileService:
                 # happened instead of surfacing an opaque 500.
                 raise DomainError(
                     f"{archived.name} was retired. Pick another model for this "
-                    "teammate, or bring it back in Settings \u2192 Models.",
+                    "Lemma, or bring it back in Settings \u2192 Models.",
                     code="runtime_profile_archived",
                     status_code=409,
                 )
@@ -212,7 +216,12 @@ class AgentRuntimeProfileService:
         if model is None and profile.kind is not RuntimeProfileKind.HARNESS:
             raise RuntimeUnavailableError(
                 f"{profile.name} has no model to run. Add one in Settings "
-                "\u2192 Models, or pick another model for this teammate."
+                "\u2192 Models, or pick another model for this Lemma."
+            )
+        if model is not None and model.draws_only and not allow_drawing:
+            raise RuntimeUnavailableError(
+                f"{model.display_name or model.name} makes images and can't "
+                "run a Lemma. Pick a chat model for this Lemma."
             )
         harness_sees = await self._harness_reads_images(profile)
         model = with_harness_vision(model, harness_sees=harness_sees)
@@ -447,9 +456,9 @@ def runtime_profile_unavailable_error() -> RuntimeUnavailableError:
     but the owner.
     """
     return RuntimeUnavailableError(
-        "The model this teammate is set to use isn't available to you: it was "
+        "The model this Lemma is set to use isn't available to you: it was "
         "removed, or it is someone's personal model. Pick another model for "
-        "the teammate.",
+        "the Lemma.",
         code="runtime_profile_unavailable",
     )
 
@@ -458,10 +467,10 @@ def personal_runtime_not_shareable_error(
     *, profile_name: str, owner_name: str | None
 ) -> RuntimeUnavailableError:
     """Another member's own runtime, reached by someone who is not them."""
-    whose = f"{owner_name}'s" if owner_name else "a teammate's"
+    whose = f"{owner_name}'s" if owner_name else "a member's"
     ask = f"Ask {owner_name}" if owner_name else "Ask its owner"
     return RuntimeUnavailableError(
-        f"This teammate runs on {whose} own {profile_name}, which only they can "
+        f"This Lemma runs on {whose} own {profile_name}, which only they can "
         f"use. {ask} to run it, or pick a model the organization shares.",
         code="runtime_profile_not_shareable",
     )

@@ -1,4 +1,5 @@
 import type { UserProfileRequest, UserResponse } from "lemma-sdk";
+import { currentZoneName } from "@/data/time-zone";
 
 /** Editing the person behind the work, here rather than somewhere else.
  *
@@ -31,7 +32,9 @@ export function draftOf(user: UserResponse | null | undefined): ProfileDraft {
     return {
         first_name: text(user?.first_name),
         last_name: text(user?.last_name),
-        timezone: text(user?.timezone),
+        /* By its current name, so one saved under a name the tz database has
+           since replaced is shown, and saved again, as the zone it is. */
+        timezone: currentZoneName(text(user?.timezone)),
         country: text(user?.country),
         mobile_number: text(user?.mobile_number),
         date_of_birth: text(user?.date_of_birth).slice(0, 10),
@@ -98,10 +101,12 @@ export function isTimezone(value: string): boolean {
 }
 
 /** The zone this browser is in — the sensible default for somebody who has
- *  never set one, which is everybody until they open this form. */
+ *  never set one, which is everybody until they open this form. By its
+ *  current name: Chrome calls India `Asia/Calcutta`, a name a database on
+ *  current zone data refuses, and what this returns is what gets saved. */
 export function localTimezone(): string {
     try {
-        return Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+        return currentZoneName(Intl.DateTimeFormat().resolvedOptions().timeZone || "");
     } catch {
         return "";
     }
@@ -131,7 +136,9 @@ export function timezones(): string[] {
     const withHere = (all: string[]) => (here && !all.includes(here) ? [here, ...all] : all);
     try {
         const supported = (Intl as unknown as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf;
-        if (typeof supported === "function") return withHere(supported("timeZone"));
+        /* Each by its current name, once: a runtime may list a zone under
+           the name the tz database has since replaced. */
+        if (typeof supported === "function") return withHere([...new Set(supported("timeZone").map(currentZoneName))]);
     } catch {
         /* fall through to the short list */
     }

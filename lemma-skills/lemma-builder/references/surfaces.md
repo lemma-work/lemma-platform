@@ -131,15 +131,17 @@ the rest, reporting how each part landed. Two consequences worth designing aroun
 automation — `schedules-and-triggers.md`. A surface's inbound webhook is transport you
 never wire.)
 
-## Thread shape — one conversation per person and agent
+## Thread shape — one conversation per person, agent and platform
 
 Every thread sits in a **channel**: a member's private chats on every platform are
 their `DIRECT` channel, a contact's are their `CONTACT` channel, and a group, a shared
 Slack channel or an email thread with others on it is a `GROUP` channel of its own. A
-person has **one conversation per agent in a channel**, however many threads, numbers,
-platforms or quiet days they write across — a new Slack DM thread, a WhatsApp chat on
-another pool number and a Telegram message a week later all continue it. Only a
-different agent, or a different person, opens another. There is no inactivity reset;
+person has **one conversation per agent on each platform** of a channel, however many
+threads or quiet days they write across there — a new Slack DM thread, or a WhatsApp
+chat on another pool number, continues it. Another platform opens another:
+the same member's WhatsApp chat, their email with the pod's inbox and their chat in
+Lemma are three conversations, so what is asked on one is never answered on another.
+A different agent, or a different person, opens another too. There is no inactivity reset;
 the agent's own history cap and compaction decide how much of a long conversation a run
 carries. A surface config that still sends `dm_conversation_reset_after_hours` is
 accepted and ignored. The SDK lists channels and reads their timelines (`pod.channels` in Python, `client.channels` in TypeScript).

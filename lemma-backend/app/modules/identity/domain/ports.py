@@ -14,7 +14,7 @@ from app.modules.identity.domain.organization_entities import (
     OrganizationRole,
 )
 from app.modules.identity.domain.user_entities import UserEntity
-from app.modules.identity.domain.user_preferences import UserPreferences
+from app.modules.identity.domain.user_preferences import UserPreferences, WorkAnswer
 
 
 class UserRepositoryPort(Protocol):
@@ -42,6 +42,10 @@ class UserRepositoryPort(Protocol):
     async def set_preferences(
         self, user_id: UUID, preferences: UserPreferences
     ) -> UserEntity: ...
+
+    async def set_work(self, user_id: UUID, answer: WorkAnswer) -> UserEntity:
+        """Keep what the person said they do, leaving every other preference."""
+        ...
 
     async def get_id_by_mobile_digits(self, digits: str) -> Optional[UUID]: ...
 
@@ -210,10 +214,32 @@ class IdentityEmailPort(Protocol):
         self,
         *,
         to_email: str,
+        pod_id: UUID,
         pod_name: str,
         organization_name: str,
         requester_name: str,
         requester_email: str,
+    ) -> bool: ...
+
+    async def send_pod_join_decided_email(
+        self,
+        *,
+        to_email: str,
+        pod_id: UUID,
+        pod_name: str,
+        organization_name: str,
+        approved: bool,
+        decided_by_name: str,
+    ) -> bool: ...
+
+    async def send_pod_member_added_email(
+        self,
+        *,
+        to_email: str,
+        pod_id: UUID,
+        pod_name: str,
+        organization_name: str,
+        added_by_name: str,
     ) -> bool: ...
 
 

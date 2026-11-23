@@ -24,9 +24,7 @@ class PodOutcome:
 
             ``week`` is a bar held every week, which never finishes ("Every customer
             hears back within a day"). ``date`` is a finish line, reached once by its
-            ``due`` date ("The launch ships by the date it is due"). The values are the plan
-            file's own (``kind: week`` in ``/plan.md``), so a plan a person or the
-            pod's agent wrote reads straight across.
+            ``due`` date ("The launch ships by the date it is due").
         sentence (str): What it owns, as one sentence a person can check.
         due (datetime.date | None | Unset): The finish line's date. Required for kind=date, refused for week.
         measure (None | str | Unset): One read-only SQL query over the pod's tables that answers a single number: one

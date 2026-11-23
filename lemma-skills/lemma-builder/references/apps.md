@@ -26,7 +26,8 @@ what the pod model allows them to see — nothing special, nothing extra.
   operation through one of the pod's connectors, as the account it resolves to
   for the signed-in person — the app never holds credentials.
 - **Runtime context.** The host injects `window.__LEMMA_CONFIG__` (`podId`,
-  `apiUrl`, `authUrl`) at serve time, so the same app runs unchanged against
+  `apiUrl`, `authUrl`, and `webWidgets` when the Lemma has a web widget for the
+  app's address) at serve time, so the same app runs unchanged against
   local / staging / cloud. Auth is one bearer (`localStorage["lemma_token"]`) or a
   cookie session — the tooling below seeds it for you.
 
@@ -135,6 +136,10 @@ lemma apps open support-app          # open the DEPLOYED app in the agent browse
   only a fallback for `vite dev` (where the host isn't in the loop). Do **not** pass
   `podId: import.meta.env.VITE_LEMMA_POD_ID` into the client — that re-bakes a pod
   and breaks portability.
+- **No `.env.local` needed to deploy.** `lemma apps deploy` (and `lemma pods import`
+  of an app's `source/`) fills any `VITE_LEMMA_*` the project leaves empty from the
+  Lemma it deploys to; values the project sets win. `--dist-dir` deploys a prebuilt
+  `dist/` as it is and asks for no build env at all.
 - `init` materializes a bundled **Vite + React + `lemma-sdk`** template offline
   (pass `--template <git|path>` to override). It writes `.env.local` (dev fallback),
   a working `tsconfig`, `lemma.app.json`, `AGENTS.md`, and a `.lemma.<server>.env`
@@ -142,7 +147,11 @@ lemma apps open support-app          # open the DEPLOYED app in the agent browse
   `--nav sidebar|topbar|single-page`,
   `--style soft|neobrutal|editorial|terminal`, `--chat-mode page|popup|right-sidebar`,
   `--members/--no-members`, `--sdk-path <local-lemma-typescript>` (offline SDK),
-  `--proxy` (same-origin `/api` dev proxy — use this in the sandbox/agent browser),
+  `--proxy` (same-origin `/api` dev proxy — use this on a Lemma machine / in the agent browser,
+  and whenever `vite dev` talks to a hosted Lemma server: a hosted API refuses
+  `localhost`/`127.0.0.1` origins on purpose, since it answers them with credentials;
+  a server you run yourself in local mode allows both on ports 3000, 3711, 4173 and
+  5173, and `CORS_ORIGINS` there adds others),
   `--no-install`.
 - **Latest SDK, automatically.** `init` resolves the **latest published `lemma-sdk` from
   npm** and pins it (`^x.y.z`) in `package.json` (or a local `file:` when a sibling
@@ -153,7 +162,7 @@ lemma apps open support-app          # open the DEPLOYED app in the agent browse
   current token via `lemma auth print-token` and seeds `localStorage["lemma_token"]`
   before the app boots, so opening the dev URL in **any** browser (or the agent
   browser) is authenticated — no login UI, never written to a file, never shipped
-  in `vite build`. Inside the workspace sandbox use `--proxy` and
+  in `vite build`. On a Lemma machine use `--proxy` and
   `agent-browser open http://localhost:<port>`; for a deployed app use
   `lemma apps open <slug>` (registers the agent bearer scoped to the API origin).
 
@@ -200,7 +209,9 @@ pass `appName` only to override that identity in local development. Prefer **hoo
 - **Workflows**: `useWorkflowStart`, `useWorkflowRuns`, `useWorkflowRun`,
   `useWorkflowForm`/`<WorkflowForm>`, `useWorkflowResume`,
   `useWorkflowRunWaitAssignments`, `useFlowRunHistory`
-- **Functions**: `useFunctionRun`, `useFunctionRuns`, `useFunctionSession`
+- **Functions**: `useFunctionRun`, `useFunctionRuns`, `useFunctionSession` —
+  an `API` function's `start` resolves with the finished run; a `JOB` is polled
+  from 250 ms, backing off to `pollIntervalMs` (2 s). Don't add your own poll.
 - **Members/search**: `useMembers`, `useGlobalSearch`
 
 Plus **generated CRUD hooks** (`use<Resource>List/Get/Create/Update/Delete` for
@@ -209,6 +220,46 @@ where a write **auto-refreshes the matching list** (need a `QueryClientProvider`
 which the scaffold mounts). The scaffold depends on `lemma-sdk`, so its type
 declarations are in the app project's **`node_modules/lemma-sdk/dist/`** — read
 them for exact signatures (`cat node_modules/lemma-sdk/dist/react/useRecords.d.ts`).
+
+**Running code from an app: `client.machines`.** An app that runs a command,
+reads a file or opens a preview does it on a machine of **its own pod**, named
+by a ref: `"pod:<name>"` (or `"pod:<pod-id>:<name>"`).
+
+```ts
+const run = await client.machines.exec("pod:report", { command: "python report.py", cwd: "~/lemma/report" });
+for await (const event of run) { /* output events, then the exit */ }
+```
+
+The app acts as its viewer, as it does for every pod resource: a viewer whose
+pod role lets them use the machine (editors and admins) gets processes, files
+and previews; anyone else is told the machine does not exist. An app never
+reaches its viewer's own machine (`"me"`) -- that is not the pod's to offer --
+and the browser, its logins, a `home` reset, and creating, changing or granting
+machines stay the person's own.
+
+## Addresses — a record's page, and other apps
+
+Inside a Lemma an app is framed: it has no address bar or history of its own.
+Keep the record that is open in Lemma's address, so a copied link lands on it and
+Back steps out of it. All of these come from `lemma-sdk` (and `window.LemmaClient`
+in the HTML bundle):
+
+- `currentAppPath()`: where the app was opened (`/`, or `/1042` for a record).
+  Read it at start-up to pick the first screen.
+- `moveAppTo("/1042")` when the person opens a record, `moveAppTo("/")` when they
+  go back to the list. Lemma writes `…/apps/<name>/1042` and makes it a step of
+  Back.
+- `watchAppPath(path => …)` for Back, Forward, or an address followed in Lemma.
+  It is never called for the app's own `moveAppTo`, so route from it without a
+  guard.
+- `client.apps.open("people", "/1042")` to open another app of the same Lemma at
+  a record. Inside Lemma, Lemma switches; on its own in a tab, the page goes to
+  that app's address; inside an AI tool's conversation it resolves `false` and
+  does nothing.
+
+On its own in a tab the same calls use the page's own address and history, so one
+routing path serves both. Don't `history.pushState` inside a frame: Back would
+undo a step the address above never showed.
 
 ## Calling the API well — fetch once, subscribe, don't re-render the world
 
@@ -285,6 +336,14 @@ adopt any one design system.
   borders (subtle/strong), text (primary/secondary/muted), one accent + hover, one
   color per status, a 4/8/12/16/24/32 spacing scale. A dominant base + one sharp
   accent beats a timid even palette.
+- **Follow the Lemma's light and dark.** Inside the Lemma web app an app is
+  framed and told the person's theme (`lemma-app-theme`, tokens named
+  `--lemma-app-bg`, `--lemma-app-text`, `--lemma-app-accent`, …) when it loads
+  and whenever it changes. Point your root variables at those tokens with your
+  own values as the fallback — `--surface: var(--lemma-app-surface, #fff)` — so
+  the app matches the Lemma around it and still stands alone in a tab. The HTML
+  bundle applies the message itself; a Vite app adds the short listener in the
+  SDK README ("Drawing in the Lemma's theme").
 - **Legibility & density.** Three font sizes max in dense UIs; tabular/mono figures
   for ids, timestamps, metadata so columns align; panel layouts with intentional
   widths; selected row = accent left-border, not a heavy fill.
@@ -297,13 +356,13 @@ adopt any one design system.
 ## Test it (and view it)
 
 - `npm run build` passes.
-- In `npm run dev` (auto-authed; in the sandbox open with
+- In `npm run dev` (auto-authed; on a Lemma machine open with
   `agent-browser open http://localhost:<port>` and scaffold with `--proxy`): walk
   one full DESIGN.md scenario — auth load, queue, select, a write, start/advance a
   workflow, submit an assigned form, file preview. Confirm `200`/`201`, not `401`.
 - **View it with your own eyes.** Use the browser snapshot loop (`browser` skill) +
   the **view-image** capability on a screenshot to actually *see* the rendered app;
-  and view-image works directly on pod/workspace files too (a `…/pages/page_0001.jpg`
+  and view-image works directly on pod or machine files too (a `…/pages/page_0001.jpg`
   child, an uploaded image) — see `file-viewer.md`.
 - **Ship a cover.** Before the final deploy, make the app's 1200×630 cover — the
   picture its links unfurl with and its card shows — and put it in the build at
@@ -345,6 +404,15 @@ adopt any one design system.
   `apps/<name>/<name>.json` (or `lemma apps update <app> -d '{"visibility":
   "PUBLIC"}'`, or the share dialog). An app's data calls are authorized on their
   own either way.
+- **A Public app's chat and forms for strangers go through the Lemma's web
+  widget** (`people-outside.md`). The host names the widgets the app may embed in
+  `__LEMMA_CONFIG__.webWidgets` — `{name, publicKey, scriptUrl}` for each one
+  switched on whose `allowed_origins` include the app's address (or are empty) —
+  and `client.webWidget(name?)` returns one. Load it with
+  `<script src={scriptUrl} data-lemma-key={publicKey}>`; never put the key in the
+  app's links. The page reloads to see a widget made after it loaded. Loading the
+  SDK on the same page is fine: it leaves `/public/` calls alone, so the widget's
+  calls carry no session headers.
 
 ## See also
 

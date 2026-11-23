@@ -9,10 +9,11 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pytest
 
+from app.core.helpers.time_zones import RENAMED_ZONES
 from app.modules.agent.contracts.conversation_summaries import (
     DayActivity,
     PendingInteraction,
@@ -294,6 +295,26 @@ def test_a_zone_is_an_iana_name_this_host_knows():
     for bad in ("europe/berlin", "Mars/Olympus", "../etc/passwd"):
         with pytest.raises(ValueError):
             known_zone(bad)
+
+
+def test_a_renamed_zone_is_read_as_its_current_name():
+    """A browser reports India as ``Asia/Calcutta``; a database that ships only
+    current names fails on it, so the name handed on is the current one."""
+    assert str(known_zone("Asia/Calcutta")) == "Asia/Kolkata"
+    assert str(known_zone("Europe/Kiev")) == "Europe/Kyiv"
+    for old, current in RENAMED_ZONES.items():
+        assert str(known_zone(old)) == current
+    # Where the host still knows an old name, it is the same zone as the new
+    # one. A host on current zone data alone (CI's) knows none of them, which
+    # is the case the mapping is for, and the comparison has nothing to read.
+    for old, current in RENAMED_ZONES.items():
+        try:
+            before = ZoneInfo(old)
+        except ZoneInfoNotFoundError:
+            continue
+        assert before.utcoffset(datetime(2026, 1, 15)) == ZoneInfo(current).utcoffset(
+            datetime(2026, 1, 15)
+        )
 
 
 def test_the_days_are_the_readers_calendar_days():

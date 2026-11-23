@@ -74,15 +74,12 @@ def _ws_closed() -> type[Exception]:
     return websockets.exceptions.ConnectionClosed
 
 
-router = APIRouter(tags=["Workspace"])
+router = APIRouter(tags=["Machine Browser"])
 
 #: Where a grant's URL points. Under `/public/`, because the browser it is handed
 #: to has no Lemma session and never will: the signed grant in the path is the
 #: whole credential, and the handlers verify it.
-PORT_PROXY_PREFIX = "/public/workspace-ports"
-#: The old path, for grants minted before the move; see `LEGACY_ALIASES` in
-#: `app.core.auth_exemptions`. Every route is registered on both until it goes.
-_LEGACY_PORT_PROXY_PREFIX = "/workspace-ports"
+PORT_PROXY_PREFIX = "/public/machine-ports"
 _PROXIED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 
 
@@ -243,10 +240,6 @@ async def _resolve_target(token: str) -> SandboxEndpoint | None:
         return None
 
 
-@router.websocket(PORT_PROXY_PREFIX + "/{token}")
-@router.websocket(PORT_PROXY_PREFIX + "/{token}/{path:path}")
-@router.websocket(_LEGACY_PORT_PROXY_PREFIX + "/{token}")
-@router.websocket(_LEGACY_PORT_PROXY_PREFIX + "/{token}/{path:path}")
 async def proxy_sandbox_websocket(
     websocket: WebSocket, token: str, path: str = ""
 ) -> None:
@@ -297,26 +290,6 @@ async def proxy_sandbox_websocket(
 # Two paths, one handler. The grant's own URL ends at the token with a trailing
 # slash and no path at all — `/{token}/{path:path}` does not match that, so the
 # very URL this proxy hands out 404'd while every deeper path worked.
-@router.api_route(
-    PORT_PROXY_PREFIX + "/{token}",
-    methods=_PROXIED_METHODS,
-    include_in_schema=False,
-)
-@router.api_route(
-    PORT_PROXY_PREFIX + "/{token}/{path:path}",
-    methods=_PROXIED_METHODS,
-    include_in_schema=False,
-)
-@router.api_route(
-    _LEGACY_PORT_PROXY_PREFIX + "/{token}",
-    methods=_PROXIED_METHODS,
-    include_in_schema=False,
-)
-@router.api_route(
-    _LEGACY_PORT_PROXY_PREFIX + "/{token}/{path:path}",
-    methods=_PROXIED_METHODS,
-    include_in_schema=False,
-)
 async def proxy_sandbox_port(token: str, request: Request, path: str = "") -> Response:
     key = workspace_settings.runtime_credential_key
     if not key:
@@ -399,6 +372,7 @@ async def _forward(client: httpx.AsyncClient, outbound: httpx.Request) -> Respon
             name: value
             for name, value in proxied.headers.items()
             if name.lower() not in _STRIPPED_RESPONSE_HEADERS
+            and name.lower() != "set-cookie"
         }
         headers["content-security-policy"] = f"frame-ancestors {_frame_ancestors()}"
         # Raw bytes, so a gzip body stays gzip under its own content-encoding
@@ -409,11 +383,31 @@ async def _forward(client: httpx.AsyncClient, outbound: httpx.Request) -> Respon
             headers=headers,
             background=BackgroundTask(proxied.aclose),
         )
+        for cookie in _set_cookies(proxied.headers):
+            forwarded.headers.append("set-cookie", cookie)
         handed_over = True
         return forwarded
     finally:
         if not handed_over:
             await proxied.aclose()
+
+
+def _set_cookies(upstream: httpx.Headers) -> list[str]:
+    """The upstream's cookies, one header each, without ``Domain`` and without
+    any named like Lemma's own.
+
+    One header each: folding them into one (as a plain dict of the headers
+    did) breaks every cookie after the first. Without ``Domain``: a server in
+    a sandbox must not set cookies for the parent of the host serving it --
+    the API's own, or every other preview.
+    """
+    from app.modules.workspace.services.machine_previews import upstream_set_cookie
+
+    kept = []
+    for name, value in upstream.multi_items():
+        if name.lower() == "set-cookie" and (cookie := upstream_set_cookie(value)):
+            kept.append(cookie)
+    return kept
 
 
 async def _relay(proxied: httpx.Response) -> AsyncIterator[bytes]:
@@ -424,3 +418,26 @@ async def _relay(proxied: httpx.Response) -> AsyncIterator[bytes]:
         # Also closed by the background task; this covers a generator that is
         # abandoned mid-stream. `aclose` is idempotent.
         await proxied.aclose()
+
+
+#: Where grants pointed before machines, served by the same handlers until
+#: the `/workspace-ports` date in `app.core.auth_exemptions.LEGACY_ALIASES`:
+#: a grant already handed out keeps working for the hour it lives. Both go
+#: together on that day.
+LEGACY_PORT_PROXY_PREFIXES = ("/public/workspace-ports", "/workspace-ports")
+
+# Two paths per prefix, one handler: the grant's own URL ends at the token with
+# a trailing slash and no path at all, which `/{token}/{path:path}` does not
+# match.
+for _path in (
+    f"{_prefix}{_tail}"
+    for _prefix in (PORT_PROXY_PREFIX, *LEGACY_PORT_PROXY_PREFIXES)
+    for _tail in ("/{token}", "/{token}/{path:path}")
+):
+    router.add_api_websocket_route(_path, proxy_sandbox_websocket)
+    router.add_api_route(
+        _path,
+        proxy_sandbox_port,
+        methods=_PROXIED_METHODS,
+        include_in_schema=False,
+    )

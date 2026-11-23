@@ -30,9 +30,17 @@ class DatastoreTableSchedulePolicy:
     def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
         self._uow = uow
 
-    async def require_table_update(
-        self, *, pod_id: UUID, table_name: str, ctx: Context
+    async def require_table_watch(
+        self, *, pod_id: UUID, table_name: str, owner_readable_rows: bool, ctx: Context
     ) -> None:
+        """May the caller point a trigger at this table.
+
+        A trigger that sees every change takes ``datastore.table.update``: on
+        a table where each person has their own rows it reaches rows its
+        author cannot read. One that sees only the rows its owner can read
+        (``rows: OWNER_READABLE``) takes ``datastore.record.read`` -- reading
+        those rows is all it does, and it runs as nobody but its owner.
+        """
         target = await schedule_table_target(
             self._uow, pod_id=pod_id, table_name=table_name, ctx=ctx
         )
@@ -40,7 +48,12 @@ class DatastoreTableSchedulePolicy:
             raise ScheduleValidationError(
                 f"Datastore table '{table_name}' was not found in this pod."
             )
-        await ctx.require(Permissions.DATASTORE_TABLE_UPDATE, target.ref)
+        permission = (
+            Permissions.DATASTORE_RECORD_READ
+            if owner_readable_rows
+            else Permissions.DATASTORE_TABLE_UPDATE
+        )
+        await ctx.require(permission, target.ref)
 
     async def can_view_all_runs(
         self, *, pod_id: UUID, table_name: str, ctx: Context

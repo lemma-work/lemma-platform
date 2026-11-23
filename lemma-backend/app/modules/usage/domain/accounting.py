@@ -48,6 +48,17 @@ CONTACT_RUN = "contact_run"
 OUTSIDER_RUN = "outsider_run"
 OUTSIDE_AUDIENCE_SOURCES: tuple[str, ...] = (CONTACT_RUN, OUTSIDER_RUN)
 
+#: A person's own machine's compute: their windows, and their organization's
+#: when it has one.
+MACHINE_COMPUTE = "machine"
+#: A pod machine's compute. The organization's alone -- the machine outlives
+#: whoever created it, and its runs are the pod's work, so it never fills a
+#: member's personal allowance.
+POD_MACHINE_COMPUTE = "pod_machine"
+#: Recorded with a user id because the ledger needs one, and never counted in
+#: that user's windows.
+ORG_ONLY_SOURCES: tuple[str, ...] = (*OUTSIDE_AUDIENCE_SOURCES, POD_MACHINE_COMPUTE)
+
 
 class TokenCounts(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -59,6 +70,13 @@ class TokenCounts(BaseModel):
     input_audio_tokens: int = Field(default=0, ge=0)
     output_audio_tokens: int = Field(default=0, ge=0)
     cache_audio_read_tokens: int = Field(default=0, ge=0)
+    #: Image tokens a model drew. Included in `output_tokens`, and billed at
+    #: an image rate an order of magnitude above text where a card has one.
+    #: ``None`` when the provider reported no image split at all, which is not
+    #: the same as reporting none drawn.
+    output_image_tokens: int | None = Field(default=None, ge=0)
+    #: Images a model returned: what an image request is counted in.
+    output_images: int = Field(default=0, ge=0)
     unpriced_requests: int = Field(default=0, ge=0)
     unconfirmed_requests: int = Field(default=0, ge=0)
     request_count: int = Field(default=0, ge=0)

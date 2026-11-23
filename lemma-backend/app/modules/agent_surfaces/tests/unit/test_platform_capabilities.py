@@ -81,9 +81,9 @@ def test_no_platform_names_a_reply_tool_any_more():
         assert not hasattr(get_platform_capabilities(platform), "reply_tool")
 
 
-def test_only_telegram_renders_a_native_voice_note():
+def test_telegram_and_whatsapp_render_a_native_voice_note():
     voice = {p for p, c in PLATFORM_CAPABILITIES.items() if c.supports_native_voice}
-    assert voice == {"TELEGRAM"}
+    assert voice == {"TELEGRAM", "WHATSAPP"}
 
 
 def test_the_shared_system_bot_platforms():
@@ -151,3 +151,54 @@ def test_platform_facts_are_frozen():
 
     with pytest.raises(dataclasses.FrozenInstanceError):
         platform_facts("SLACK").soft_char_limit = 1  # type: ignore[misc]
+
+
+async def test_a_whatsapp_voice_note_is_sent_with_the_voice_flag() -> None:
+    from app.modules.agent_surfaces.platforms.whatsapp import media
+
+    class Client:
+        def __init__(self) -> None:
+            self.sent: list[dict[str, object]] = []
+
+        async def upload_media(self, **kwargs: object) -> str:
+            self.uploaded_type = kwargs["mime_type"]
+            return "m1"
+
+        async def send_media(self, **kwargs: object) -> str:
+            self.sent.append(kwargs)
+            return "wamid.1"
+
+    client = Client()
+    sent = await media.send_file(
+        client,  # type: ignore[arg-type]
+        phone_number_id="p",
+        recipient_wa_id="91",
+        file_name="reply.ogg",
+        file_bytes=b"OggS",
+        mime_type="audio/ogg",
+        voice=True,
+    )
+    assert sent is True
+    assert [(s["send_type"], s["voice"]) for s in client.sent] == [("audio", True)]
+
+
+async def test_a_whatsapp_voice_note_payload_carries_voice_true() -> None:
+    from app.modules.agent_surfaces.platforms.whatsapp.client import WhatsAppClient
+
+    client = WhatsAppClient.__new__(WhatsAppClient)
+    payloads: list[dict[str, object]] = []
+
+    async def capture(*, phone_number_id: str, payload: dict[str, object]) -> str:
+        payloads.append(payload)
+        return "wamid.1"
+
+    client.send_message_payload = capture  # type: ignore[method-assign]
+    await client.send_media(
+        phone_number_id="p",
+        to="91",
+        media_id="m1",
+        send_type="audio",
+        file_name="reply.ogg",
+        voice=True,
+    )
+    assert payloads[0]["audio"] == {"id": "m1", "voice": True}

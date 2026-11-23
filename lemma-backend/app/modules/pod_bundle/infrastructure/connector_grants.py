@@ -18,7 +18,7 @@ own account) and grants on the slug it answers with
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Protocol
 from uuid import UUID
@@ -27,6 +27,10 @@ from lemma_pod_bundle import load_resource_payload
 
 from app.core.authorization.context import Context
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.pod_bundle.domain.connector_plan import (
+    ConnectorChoice,
+    skipped_connectors,
+)
 from app.modules.pod_bundle.domain.errors import BundleInvalidError
 from app.modules.pod_bundle.infrastructure.grants import (
     GrantInput,
@@ -46,15 +50,23 @@ class ConnectorDirectory(Protocol):
     async def installation_for(self, name: str) -> UUID | None: ...
 
 
-def connector_grant_names(bundle_root: Path) -> dict[str, list[str]]:
+def connector_grant_names(
+    bundle_root: Path, writing: Collection[tuple[str, str]] | None = None
+) -> dict[str, list[str]]:
     """Every connector a bundled agent or function is granted, by the name the
-    bundle uses, with who holds a grant on it ("agent 'triage'")."""
+    bundle uses, with who holds a grant on it ("agent 'triage'").
+
+    ``writing`` narrows it to the holders whose grants the import writes, as
+    ``(directory, name)``: one the pod already has keeps its own access, so
+    what its bundled copy was granted names nothing the import must declare."""
     found: dict[str, list[str]] = {}
     for directory, label in _HOLDERS:
         type_dir = bundle_root / directory
         if not type_dir.is_dir():
             continue
         for resource_dir in sorted(p for p in type_dir.iterdir() if p.is_dir()):
+            if writing is not None and (directory, resource_dir.name) not in writing:
+                continue
             payload = load_resource_payload(
                 resource_dir, resource_dir.name, resource_type=directory
             )
@@ -72,6 +84,7 @@ async def plan_connector_grants(
     directory: ConnectorDirectory,
     *,
     bundled: Collection[str] = (),
+    writing: Collection[tuple[str, str]] | None = None,
 ) -> list[str]:
     """Refuse a bundle granting a connector nobody can declare; warn of the rest.
 
@@ -80,10 +93,13 @@ async def plan_connector_grants(
     declared by the pod nor installed in the organization, naming each. A
     connector the bundle declares itself (``bundled``, its ``connectors/``) is
     ``connector_planning``'s, which declares it before any grant names it.
+    Only the grants the import writes count (``writing``, as in
+    :func:`connector_grant_names`).
     """
     warnings: list[str] = []
     unknown: list[str] = []
-    for name, holders in sorted(connector_grant_names(bundle_root).items()):
+    granted = connector_grant_names(bundle_root, writing)
+    for name, holders in sorted(granted.items()):
         if name in bundled or await directory.declares(name):
             continue
         who = ", ".join(holders)
@@ -139,16 +155,26 @@ async def resolve_connector_grants(
     *,
     pod_id: UUID,
     grants: list[GrantInput],
+    choices: Mapping[str, ConnectorChoice] | None = None,
+    warnings: list[str] | None = None,
 ) -> list[GrantInput]:
     """``grants`` with each undeclared connector declared and named by its slug.
 
     A name with no installation is left as it is, and the grant write that
     follows refuses it by name; planning has already refused such a bundle, so
     reaching that means the installation went away between plan and apply.
+
+    A grant on a bundled connector the importer's ``choices`` leave out
+    (optional, nothing to map it to) is dropped and said in ``warnings``: the holder is
+    imported without it rather than the whole grant write refusing a name the
+    importer was told would be missing. Unless the pod declares that slug after
+    all -- by hand, since the plan -- when the grant stands.
     """
     if not any(g.resource_type.value == _CONNECTOR for g in grants):
         return grants
     from app.modules.connectors.contracts import pod_connectors
+
+    left_out = skipped_connectors(choices or {})
 
     directory = ServiceConnectorDirectory(
         uow=uow, pod_id=pod_id, organization_id=ctx.organization_id
@@ -159,6 +185,11 @@ async def resolve_connector_grants(
         name = grant.resource_name
         if grant.resource_type.value != _CONNECTOR or await directory.declares(name):
             resolved.append(grant)
+            continue
+        if name in left_out:
+            note = f"A grant on connector '{name}' was dropped: it was left out."
+            if warnings is not None and note not in warnings:
+                warnings.append(note)
             continue
         if name not in slugs:
             installation = await directory.installation_for(name)

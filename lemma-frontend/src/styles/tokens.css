@@ -141,7 +141,7 @@
 
     /* Sign in with Apple's button. Apple's colours, not the palette's: it
        allows black or white and nothing warmer, so these are the one pure
-       black and white here, and they swap in dark (`.auth__apple`). */
+       black and white here, and they swap in dark (`.auth-apple`). */
     --apple: #000000;
     --apple-ink: #ffffff;
 

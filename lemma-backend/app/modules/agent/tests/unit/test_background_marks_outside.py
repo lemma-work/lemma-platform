@@ -117,3 +117,15 @@ def test_a_turn_knows_when_its_prompt_holds_a_strangers_words(
     message: Message, reads_outside: bool
 ):
     assert carries_outside_text([message]) is reads_outside
+
+
+def test_a_run_a_strangers_row_started_reads_outside_text():
+    """A schedule fired by a row a contact wrote runs as its owner, on their
+    machine: its first message says so, for as long as it is in the prompt."""
+    from app.modules.agent.domain.outsiders import OUTSIDE_ROW_KEY
+
+    started = _message(metadata={"source": "SCHEDULE", OUTSIDE_ROW_KEY: True})
+    ordinary = _message(metadata={"source": "SCHEDULE"})
+
+    assert carries_outside_text([ordinary, started])
+    assert not carries_outside_text([ordinary])

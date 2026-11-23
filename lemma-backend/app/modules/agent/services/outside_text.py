@@ -10,7 +10,9 @@ authorizer's answer true to what the run actually has in front of it:
 * as a turn starts, from its whole prompt -- the backgrounds its messages
   carry, and what the channel reads still in its history returned;
 * when a message steered into the run brings a background of its own;
-* when the run reads a channel itself and a line in it is from outside.
+* when the run reads a channel itself and a line in it is from outside;
+* when a schedule started it for a row somebody outside the pod wrote
+  (``OUTSIDE_ROW_KEY``) -- it runs as the schedule's owner, on their machine.
 
 Kept per conversation, which is one person's in a group: another member's run
 there is decided on its own prompt.
@@ -26,6 +28,7 @@ from app.core.authorization.outside_text import (
     note_outside_text,
 )
 from app.modules.agent.domain.entities import Message
+from app.modules.agent.domain.outsiders import OUTSIDE_ROW_KEY
 from app.modules.agent.infrastructure.tools.messaging.models import CHANNEL_READ_TOOLS
 
 
@@ -50,6 +53,9 @@ def _background_reads_outside(message: Message) -> bool:
 
 def _reads_outside(message: Message) -> bool:
     if _background_reads_outside(message):
+        return True
+    if (message.metadata or {}).get(OUTSIDE_ROW_KEY) is True:
+        # What a schedule woke the run with: a row somebody outside wrote.
         return True
     result = message.tool_result
     return (

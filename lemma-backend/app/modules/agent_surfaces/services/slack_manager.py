@@ -267,7 +267,7 @@ async def _offer_channel(
     if ctx.user_id is None:
         text = (
             "Connect your Lemma account first, then invite me again and I'll "
-            "bring a teammate in here: "
+            "bring a Lemma in here: "
             f"<{sign_in_url(ctx.team_id, parsed.user_id)}|connect>."
         )
         blocks = None
@@ -299,8 +299,8 @@ _HANDOFF_REASONS = {
     "is_archived": "the channel is archived.",
     "app_cannot_join_channel": "this workspace doesn't let apps into that channel.",
     "restricted_action": "this workspace doesn't let apps into that channel.",
-    "cant_invite": "Slack won't let me invite that teammate there.",
-    "no_permission": "Slack won't let me invite that teammate there.",
+    "cant_invite": "Slack won't let me invite that Lemma there.",
+    "no_permission": "Slack won't let me invite that Lemma there.",
 }
 
 
@@ -361,7 +361,7 @@ async def _bring_in(
         None,
     )
     if not channel or chosen is None or chosen.surface is None:
-        return "that teammate isn't yours to set up here."
+        return "that Lemma isn't yours to set up here."
     if not chosen.can_manage:
         return f"only an editor of {views.escape(chosen.name)} can give it a channel."
     surface = chosen.surface

@@ -7,6 +7,7 @@ SHELL := /bin/bash
 #   make dev           start infra + backend + frontend (hot-reload)
 #   make dev-public    same, with an ephemeral public Cloudflare API URL
 #   make dev RELOAD=1  same, with uvicorn --reload on the backend
+#   make dev DEV_ONE_SITE=1  same, on lemma.localhost so framed apps are signed in
 #   make dev OTEL=1 LLM_OTEL=1  same, with local HyperDX + Phoenix dashboards
 #   make stop          stop backend/frontend processes
 #   make stop-all      also stop infra containers
@@ -16,7 +17,7 @@ SHELL := /bin/bash
 #   make coverage      full coverage report (unit + e2e per component)
 # ──────────────────────────────────────────────────────────────────────────────
 
-.PHONY: help init dev dev-public stop stop-all logs otel-up otel-down otel-tail otel-smoke \
+.PHONY: help init streamer-test dev dev-public stop stop-all logs otel-up otel-down otel-tail otel-smoke \
         observability-up observability-down observability-open \
         _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-sandbox-images _wait-backend \
         _ensure-native-connectors _desktop-verify-dist-app _desktop-ensure-sidecars \
@@ -128,8 +129,31 @@ DEV_POSTGRES_PORT     ?= 5432
 DEV_REDIS_PORT        ?= 6379
 DEV_SUPERTOKENS_PORT  ?= 3567
 
+# `make dev DEV_ONE_SITE=1` serves the web app, the API and every app as one
+# site, so an app framed in the web app is signed in.
+#
+# By default the web app and the API are on `localhost` and apps on
+# `<slug>.apps.lemma.localhost`. Browsers count those as different sites, so the
+# session cookie (SameSite=Lax, on `localhost`) never reaches an app: a framed
+# app shows its sign-in card, and a private one cannot get past its access
+# page. One site is `lemma.localhost` for the web app, `api.lemma.localhost`
+# for the API and the session cookie on `.lemma.localhost` -- the shape hosted
+# Lemma has under its own domain. `*.localhost` needs no DNS or hosts file.
+#
+# Not the default: a developer's open tabs and bookmarks, and any OAuth
+# redirect URI registered with a provider for local development, name
+# `localhost`.
+DEV_ONE_SITE          ?=
+ifeq ($(strip $(DEV_ONE_SITE)),1)
+DEV_SITE_DOMAIN       := lemma.localhost
+DEV_BACKEND_URL       := http://api.$(DEV_SITE_DOMAIN):$(DEV_BACKEND_PORT)
+DEV_FRONTEND_URL      := http://$(DEV_SITE_DOMAIN):$(DEV_FRONTEND_PORT)
+DEV_SESSION_COOKIE_DOMAIN := .$(DEV_SITE_DOMAIN)
+else
 DEV_BACKEND_URL       := http://localhost:$(DEV_BACKEND_PORT)
 DEV_FRONTEND_URL      := http://localhost:$(DEV_FRONTEND_PORT)
+DEV_SESSION_COOKIE_DOMAIN :=
+endif
 DEV_AUTH_FRONTEND_URL := $(DEV_FRONTEND_URL)
 DEV_APP_BASE_DOMAIN   := apps.lemma.localhost:$(DEV_BACKEND_PORT)
 # A sandbox browser needs an origin, not a path: the dashboard is a Next.js
@@ -137,6 +161,10 @@ DEV_APP_BASE_DOMAIN   := apps.lemma.localhost:$(DEV_BACKEND_PORT)
 # or hosts-file setup in every current browser.
 DEV_BROWSER_BASE_DOMAIN := browser.lemma.localhost:$(DEV_BACKEND_PORT)
 DEV_APPS_DOMAIN_SUFFIX := apps.lemma.localhost
+# Machine previews, each on its own `p-<id>.` origin under this domain. Unset,
+# previews are off -- which is right for a deployment without a wildcard
+# certificate, and wrong for a laptop, where `*.localhost` needs nothing.
+DEV_MACHINE_PREVIEW_DOMAIN := machines.localhost:$(DEV_BACKEND_PORT)
 DEV_DATABASE_URL      := postgresql+asyncpg://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/lemma
 DEV_DATASTORE_DATABASE_URL := postgresql+asyncpg://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/lemma_datastore
 DEV_REDIS_URL         := redis://localhost:$(DEV_REDIS_PORT)/0
@@ -240,10 +268,14 @@ BACKEND_WORKSPACE_CALLBACK_AUTH_URL ?= $(DEV_SANDBOX_FRONTEND_URL)
 BACKEND_WORKSPACE_CALLBACK_FRONTEND_URL ?= $(DEV_SANDBOX_FRONTEND_URL)
 BACKEND_APP_BASE_DOMAIN         ?= $(DEV_APP_BASE_DOMAIN)
 BACKEND_BROWSER_BASE_DOMAIN     ?= $(DEV_BROWSER_BASE_DOMAIN)
-BACKEND_SESSION_COOKIE_DOMAIN   ?=
+BACKEND_SESSION_COOKIE_DOMAIN   ?= $(DEV_SESSION_COOKIE_DOMAIN)
 BACKEND_SESSION_COOKIE_SECURE   ?= false
 BACKEND_SESSION_COOKIE_SAME_SITE?= lax
-BACKEND_CORS_ORIGINS            ?= ["http://localhost:$(DEV_FRONTEND_PORT)","http://127.0.0.1:$(DEV_FRONTEND_PORT)"]
+# Private apps open at their http://<slug>.apps.lemma.localhost address for the
+# people allowed to read them, as they do over HTTPS. Signed in there only on
+# one site (DEV_ONE_SITE above); otherwise their access page asks you to sign in.
+BACKEND_PRIVATE_APPS_OVER_HTTP  ?= true
+BACKEND_CORS_ORIGINS            ?= ["$(DEV_FRONTEND_URL)","http://127.0.0.1:$(DEV_FRONTEND_PORT)"]
 BACKEND_CORS_ORIGIN_REGEX       ?= $(DEV_CORS_ORIGIN_REGEX)
 BACKEND_TELEGRAM_POLLING        ?= true
 BACKEND_SLACK_SOCKET_MODE       ?= true
@@ -326,6 +358,7 @@ BACKEND_DEV_ENV := \
 	ENABLE_TELEGRAM_POLLING_MODE=$(BACKEND_TELEGRAM_POLLING) \
 	ENABLE_SLACK_SOCKET_MODE=$(BACKEND_SLACK_SOCKET_MODE) \
 	APP_BASE_DOMAIN=$(BACKEND_APP_BASE_DOMAIN) \
+	PRIVATE_APPS_OVER_HTTP=$(BACKEND_PRIVATE_APPS_OVER_HTTP) \
 	WORKSPACE_BROWSER_BASE_DOMAIN=$(BACKEND_BROWSER_BASE_DOMAIN) \
 	SESSION_COOKIE_DOMAIN=$(BACKEND_SESSION_COOKIE_DOMAIN) \
 	SESSION_COOKIE_SECURE=$(BACKEND_SESSION_COOKIE_SECURE) \
@@ -336,7 +369,7 @@ BACKEND_DEV_ENV := \
 FRONTEND_API_URL              ?= $(DEV_BACKEND_URL)
 FRONTEND_SITE_URL             ?= $(DEV_FRONTEND_URL)
 FRONTEND_AUTH_URL             ?= $(DEV_AUTH_FRONTEND_URL)/auth
-FRONTEND_SESSION_TOKEN_DOMAIN ?=
+FRONTEND_SESSION_TOKEN_DOMAIN ?= $(DEV_SESSION_COOKIE_DOMAIN)
 FRONTEND_APPS_DOMAIN_SUFFIX   ?= $(DEV_APPS_DOMAIN_SUFFIX)
 
 FRONTEND_DEV_ENV := \
@@ -365,7 +398,9 @@ WORKSPACE_DEV_ENV := \
 	FUNCTION_IMAGE=$(DEV_FUNCTION_IMAGE) \
 	WORKSPACE_DOCKER_ALLOW_MUTABLE_IMAGES=true \
 	WORKSPACE_ADD_HOST_GATEWAY=true \
-	WORKSPACE_HOST_ALIAS=host.lemma.internal
+	WORKSPACE_HOST_ALIAS=host.lemma.internal \
+	MACHINE_PREVIEW_DOMAIN=$(DEV_MACHINE_PREVIEW_DOMAIN) \
+	MACHINE_PREVIEW_SCHEME=http
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 
@@ -381,6 +416,7 @@ help:
 	@echo "    make dev-frontend       start only the frontend (backend running elsewhere)"
 	@echo "    make dev-public         start with an ephemeral public API tunnel"
 	@echo "    make dev RELOAD=1       same, with uvicorn --reload on the backend"
+	@echo "    make dev DEV_ONE_SITE=1 same, on http://lemma.localhost:3000 so apps open signed in"
 	@echo "    make stop               stop app and tunnel processes"
 	@echo "    make stop-all           also bring down infra containers"
 	@echo "    make logs               tail infrastructure container logs"
@@ -516,9 +552,12 @@ init:
 # ~2s and browser tools timing out against their 90s budget. So the workspace
 # image is checked for the architecture it will actually run on. The function
 # image is deliberately amd64 everywhere (see SANDBOX_FUNCTION_PLATFORM), so it
-# is only checked for presence.
+# is only checked for presence. The machine's architecture is asked the way
+# SANDBOX_PLATFORM asks it, podman's `.Host.Arch` second: were the two to
+# disagree, every `make dev` would see a mismatch and rebuild.
 _ensure-sandbox-images:
-	@host_arch="$$(docker version --format '{{.Server.Arch}}' 2>/dev/null || echo amd64)"; \
+	@host_arch="$$(docker version --format '{{.Server.Arch}}' 2>/dev/null \
+		|| docker info --format '{{.Host.Arch}}' 2>/dev/null || echo amd64)"; \
 	workspace_arch="$$(docker image inspect --format '{{.Architecture}}' "$(DEV_WORKSPACE_IMAGE)" 2>/dev/null || true)"; \
 	if [ "$$workspace_arch" = "$$host_arch" ] \
 		&& docker image inspect "$(DEV_FUNCTION_IMAGE)" >/dev/null 2>&1; then \
@@ -841,9 +880,9 @@ _run-backend:
 	@cd $(BACKEND_DIR) && rm -f $(notdir $(BACKEND_PID_FILE)) && \
 		$(COMMON_DEV_ENV) $(BACKEND_DEV_ENV) $(WORKSPACE_DEV_ENV) $(OTEL_DEV_ENV) $(LLM_OTEL_DEV_ENV) \
 		bash -c "if [ '$(RELOAD)' = '1' ]; then \
-			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --ws-max-size 1048576 --reload & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
+			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --ws-max-size 1048576 --ws-per-message-deflate false --reload & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
 		else \
-			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --ws-max-size 1048576 & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
+			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --ws-max-size 1048576 --ws-per-message-deflate false & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
 		fi; wait"
 
 _run-frontend:
@@ -2110,6 +2149,7 @@ QUALITY_GATES := \
 	qg-swallowed-errors \
 	qg-memory-hazards \
 	qg-public-prose \
+	qg-stale-machine-terms \
 	qg-migration-order \
 	qg-in-subject-test-doubles \
 	qg-import-budget \
@@ -2132,6 +2172,12 @@ QUALITY_GATES := \
 .PHONY: quality $(QUALITY_GATES)
 
 QUALITY_JOBS ?=
+
+# The browser streamer's Go tests, in the builder image the workspace image uses:
+# go vet, go test (encoders included, with cgo), then the binaries into out/.
+streamer-test:
+	@docker build -f lemma-backend/sandbox-images/streamer/Dockerfile --target out \
+		-o type=local,dest=out/streamer lemma-backend/sandbox-images/streamer
 
 quality:
 	@python3 scripts/run_quality_gates.py $(if $(QUALITY_JOBS),--jobs $(QUALITY_JOBS)) $(QUALITY_GATES)
@@ -2194,6 +2240,14 @@ qg-memory-hazards:
 qg-public-prose:
 	@echo "→ Public prose…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-public-prose
+
+# The per-user workspace sandbox became a machine. Old paths, deprecated
+# routes and SDK names, and "the sandbox" in agent-facing text all survive a
+# rename unless something reads for them, and an agent acts on what it reads.
+# The rules and the allowlist are in scripts/check_stale_machine_terms.py.
+qg-stale-machine-terms:
+	@echo "→ Stale machine terms…"
+	@python3 scripts/check_stale_machine_terms.py
 
 qg-migration-order:
 	@echo "→ Migration order…"

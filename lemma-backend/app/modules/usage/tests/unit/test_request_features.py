@@ -176,8 +176,12 @@ def test_cache_markers_cannot_sneak_one_hour_pricing_into_text_accounting() -> N
     assert not priceable(messages, ModelRequestParameters(), {})
 
 
-def test_image_output_is_not_a_text_request() -> None:
-    assert not priceable([], ModelRequestParameters(allow_image_output=True), {})
+def test_image_output_is_priceable_only_on_a_card_with_an_image_rate() -> None:
+    asks_for_images = ModelRequestParameters(allow_image_output=True)
+    assert not priceable([], asks_for_images, {})
+    assert priceable_request(
+        [], asks_for_images, {}, prices_images_as_text=True, prices_image_output=True
+    )
 
 
 def test_a_tool_returning_a_model_is_text_because_that_is_what_is_sent() -> None:

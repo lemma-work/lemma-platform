@@ -7,7 +7,10 @@ import {
     REASONING_EFFORTS, agentProblems, draftOfAgent, hasAgentChanges, runtimeLine,
     type AgentDetail, type AgentDraft,
 } from "@/data/agents";
-import { CloseIcon, WarningIcon } from "@/ui/icons";
+import { machineChoices } from "@/machines/machine-choices";
+import { usePodMachines } from "@/machines/pod-machines";
+import { WarningIcon } from "@/ui/icons";
+import { ConfirmDialog } from "@/shell/confirm-dialog";
 
 /** An agent's page, the parts worth sharing: what it runs on, the two fields
  *  worth editing by hand, and removing it. Talking to an agent is still the
@@ -72,6 +75,8 @@ export function Editor({ podId, orgId, detail, onDone }: {
 
     const found = agentProblems(draft);
     const dirty = hasAgentChanges(before, draft);
+    const machines = usePodMachines(podId);
+    const machineOptions = machineChoices(machines.data, draft.machine);
 
     const save = useMutation({
         mutationFn: () => source.updateAgent(podId, detail.name, before, draft),
@@ -189,6 +194,25 @@ export function Editor({ podId, orgId, detail, onDone }: {
                 </div>
             )}
 
+            <div className="record-form__field">
+                <label htmlFor="agent-machine">Machine</label>
+                <small>
+                    Where its commands, files and browser run. The default is the machine of whoever it is
+                    working for, so each person’s runs stay on their own.
+                </small>
+                <select
+                    id="agent-machine"
+                    value={draft.machine}
+                    disabled={save.isPending}
+                    onChange={(event) => setDraft({ ...draft, machine: event.target.value })}
+                >
+                    {machineOptions.map((one) => (
+                        <option key={one.value} value={one.value}>{one.label}</option>
+                    ))}
+                </select>
+                {machines.isError && <em role="alert">The pod’s machines could not be listed.</em>}
+            </div>
+
             {/* Toolsets, visibility, the runtime and the schemas are all on
                 `UpdateAgentRequest` and none of them are here. Each is a
                 decision with a consequence outside this page — a toolset
@@ -219,7 +243,9 @@ export function Editor({ podId, orgId, detail, onDone }: {
     );
 }
 
-/** Named, and it says what breaks rather than asking "are you sure?". */
+/** Named, and it says what breaks rather than asking "are you sure?" — in
+ *  the shared yes-or-no dialog, which holds while the delete runs and says a
+ *  refusal where it was asked. */
 export function ConfirmRemove({ detail, lost, busy, problem, onCancel, onConfirm }: {
     detail: AgentDetail;
     lost: { platform: string; handle: string }[];
@@ -229,28 +255,27 @@ export function ConfirmRemove({ detail, lost, busy, problem, onCancel, onConfirm
     onConfirm: () => void;
 }) {
     return (
-        <div className="agents-confirm" role="alertdialog" aria-label={"Delete " + detail.label}>
-            <p>
-                Delete <strong>{detail.label}</strong>? Its instruction goes with it, anything holding
-                a token for it stops working immediately, and {detail.label} can no longer be handed work.
-            </p>
-            {lost.length > 0 && (
-                <p className="agents-confirm__breaks">
-                    <WarningIcon size={14} />
-                    {lost.length === 1 ? " This address stops answering: " : " These addresses stop answering: "}
-                    {lost.map((one) => one.handle + " (" + one.platform.toLowerCase() + ")").join(", ")}.
-                </p>
-            )}
-            {problem && <p className="record-form__problem" role="alert">{problem}</p>}
-            <div className="record-form__actions">
-                <button className="btn btn--danger" disabled={busy} onClick={onConfirm}>
-                    {busy ? "Deleting…" : "Delete " + detail.label}
-                </button>
-                <button className="btn" disabled={busy} onClick={onCancel}>Keep it</button>
-            </div>
-            <button className="agents-confirm__close" aria-label="Cancel" onClick={onCancel} disabled={busy}>
-                <CloseIcon size={14} />
-            </button>
-        </div>
+        <ConfirmDialog
+            title={"Delete " + detail.label + "?"}
+            line={<>
+                Its instruction goes with it, anything holding a token for it stops working at once, and it can no
+                longer be handed work.
+                {lost.length > 0 && (
+                    <span className="kd-warn">
+                        <WarningIcon size={14} aria-hidden="true" />
+                        {lost.length === 1 ? "This address stops answering: " : "These addresses stop answering: "}
+                        {lost.map((one) => one.handle + " (" + one.platform.toLowerCase() + ")").join(", ")}.
+                    </span>
+                )}
+            </>}
+            confirm={"Delete " + detail.label}
+            cancel="Keep it"
+            working="Deleting…"
+            danger
+            busy={busy}
+            problem={problem || null}
+            onConfirm={onConfirm}
+            onClose={onCancel}
+        />
     );
 }

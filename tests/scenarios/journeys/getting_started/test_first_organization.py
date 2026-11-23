@@ -125,13 +125,99 @@ async def test_first_chat_workspace_is_ready_and_reused(world):
     assert sum(result["pod_created"] for result in (first, second)) == 1
 
 
-@scenario("An importer can prepare only the organization and add chat later")
+@scenario("Asking for no private pod still lands a person in their first Lemma")
 @proves("PS-ONB-050")
 @covers("users.ensure_first_workspace")
-async def test_importer_can_defer_personal_pod_creation(world):
+async def test_no_private_pod_is_made_beside_the_organizations_lemma(world):
+    """What the web asks for: the organization's Lemma, and nothing private.
+
+    A later request that does ask for a private pod finds the Lemma already
+    there and makes nothing beside it.
+    """
     person = await world.new_person("import_then_chat")
     imported = await person.prepares_first_workspace(with_pod=False)
-    assert imported["pod_id"] is None and imported["assistant_id"] is None
+    # A workspace of one (the suite's addresses are unverified): its first
+    # Lemma is the person's own, and not one the organization shares.
+    assert imported["organization_pod_id"] is None, imported
+    assert imported["pod_id"] and imported["assistant_id"]
     ready = await person.prepares_first_workspace()
     assert ready["organization_id"] == imported["organization_id"]
-    assert ready["pod_id"] and ready["assistant_id"]
+    assert ready["pod_id"] == imported["pod_id"]
+    assert not ready["pod_created"]
+
+
+@scenario(
+    "A workspace of one opens in its person's own Lemma, which nobody invited later is put in"
+)
+@proves("PS-ONB-015")
+@covers(
+    "users.ensure_first_workspace",
+    "pod.get",
+    "pod.list",
+    "org.invitation.invite",
+    "org.invitation.accept",
+    "org.permissions.me",
+)
+async def test_a_workspace_of_one_opens_in_its_persons_own_lemma(world):
+    founder = await world.new_person("founder")
+
+    made = await founder.prepares_first_workspace(with_pod=False)
+
+    assert made["organization_created"], made
+    # The suite's addresses are unverified, so this is a workspace of one,
+    # named after the person; its one Lemma, "Personal", is theirs alone. A
+    # company's organization, whose Lemma everyone shares, needs a verified
+    # work address: the backend's e2e suite proves that half.
+    assert made["organization_name"] == "Founder's workspace", made
+    assert made["organization_open_to_domain"] is None, made
+    assert made["pod_name"] == "Personal", made
+    assert made["organization_pod_id"] is None, "a workspace of one shares no Lemma"
+    lemma = await founder.opens_pod({"id": made["pod_id"], "name": made["pod_name"]})
+    assert lemma["config"].get("join_policy", "INVITE_ONLY") == "INVITE_ONLY", lemma[
+        "config"
+    ]
+    assert not lemma["config"].get("auto_join_new_members"), lemma["config"]
+    organization = {"id": made["organization_id"], "name": made["organization_name"]}
+    assert "org.member.manage" in await founder.org_permissions_in(organization), (
+        "the person a first workspace makes an organization for owns it in "
+        "every check, not only on the membership list"
+    )
+
+    colleague = await world.new_person("colleague")
+    invitation = await founder.invites(colleague, to=organization)
+    await colleague.accepts(invitation)
+    arrived = await colleague.prepares_first_workspace(with_pod=False)
+
+    assert arrived["organization_id"] == made["organization_id"], arrived
+    # Invited into somebody's workspace, not into their own Lemma.
+    assert arrived["pod_id"] is None, arrived
+    assert not arrived["organization_created"] and not arrived["pod_created"]
+    await colleague.does_not_see_pod(lemma)
+
+    again = await founder.prepares_first_workspace(with_pod=False)
+    assert (again["organization_id"], again["pod_id"]) == (
+        made["organization_id"],
+        made["pod_id"],
+    )
+    assert [pod["id"] for pod in await founder.pods_in(organization)] == [
+        made["pod_id"]
+    ], "asking again made a second Lemma"
+
+
+@scenario("What a person does is asked once and stays with them")
+@proves("PS-ONB-008")
+@covers("users.work.set", "user.current.get")
+async def test_what_a_person_does_stays_with_them(world):
+    person = await world.new_person("asked")
+    assert (await person.profile())["work"] is None, "nobody has asked them yet"
+
+    answered = await person.says_what_they_do(["PRODUCT", "FOUNDER"], other=" Design ")
+
+    assert answered["work"]["jobs"] == ["PRODUCT", "FOUNDER"], answered["work"]
+    assert answered["work"]["other"] == "Design", answered["work"]
+    assert (await person.profile())["work"] == answered["work"]
+
+    skipper = await world.new_person("skipper")
+    skipped = await skipper.says_what_they_do([])
+    assert skipped["work"]["jobs"] == [] and skipped["work"]["other"] is None
+    assert skipped["work"]["answered_at"], "a skip still records they were asked"

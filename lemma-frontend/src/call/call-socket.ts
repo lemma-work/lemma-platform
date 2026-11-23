@@ -18,6 +18,14 @@ export type CallFrame =
     | { type: "transcript"; speaker: "caller" | "voice"; text: string; final: boolean }
     | { type: "clear" }
     | { type: "work"; running: boolean }
+    /** A run started on the call's own conversation: the chat beside the
+     *  call reads it again and follows it. Sent for every run, also while
+     *  the call is already working. */
+    | { type: "run"; agent_run_id: string }
+    /** The call wrote into its conversation outside any run -- part of the
+     *  transcript, a note about something that went wrong -- which no run's
+     *  stream carries: the chat beside the call reads it again. */
+    | { type: "chat" }
     /** Something the person should know that the voice is also saying: a
      *  request the team cannot take, and why. The call stays up. */
     | { type: "notice"; text: string }
@@ -56,7 +64,7 @@ const END_TIMEOUT_MS = 4000;
 /** Close codes the server ends a call with, as the person should read them. */
 const CLOSE_REASONS: Record<number, string> = {
     4401: "Your session expired. Sign in again to call.",
-    4403: "You can no longer reach this pod.",
+    4403: "You can no longer reach this Lemma.",
     4404: "This call no longer exists.",
     4429: "You already have the most calls open at once.",
     4503: "The voice is not available right now.",

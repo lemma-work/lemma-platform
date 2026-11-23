@@ -165,3 +165,127 @@ async def test_no_metadata_server_is_an_unavailable_voice_not_a_crash() -> None:
     headers = service_account_headers(transport=httpx.MockTransport(refuse))
     with pytest.raises(EngineUnavailable):
         await headers()
+
+
+def test_the_multilingual_listener_takes_language_hints_and_others_do_not() -> None:
+    from app.modules.calls.infrastructure.engines.deepgram import FluxListener
+
+    multi = FluxListener(
+        api_key="k",
+        model="flux-general-multi",
+        eager_eot_threshold=0.5,
+        language_hints=("hi", "en"),
+    )
+    english = FluxListener(
+        api_key="k",
+        model="flux-general-en",
+        eager_eot_threshold=None,
+        language_hints=("hi",),
+    )
+    assert "language_hint=hi&language_hint=en" in multi._url
+    assert "language_hint" not in english._url
+
+
+class _SpeakSocket:
+    """The provider end of a speak socket: records what is sent, plays back
+    the frames it is given, then stays open."""
+
+    class state:  # noqa: N801 - websockets' ``State`` attribute shape
+        name = "OPEN"
+
+    def __init__(self, frames: list[str | bytes] | None = None) -> None:
+        self.sent: list[dict[str, object]] = []
+        self._frames = frames or []
+
+    async def send(self, raw: str) -> None:
+        import json
+
+        self.sent.append(json.loads(raw))
+
+    async def close(self) -> None: ...
+
+    def __aiter__(self):
+        return self._play()
+
+    async def _play(self):
+        for frame in self._frames:
+            yield frame
+        await asyncio.Event().wait()
+
+
+async def test_a_flux_voice_speaks_on_v2_and_is_interrupted_not_cleared() -> None:
+    from app.modules.calls.infrastructure.engines.deepgram import DeepgramSpeaker
+
+    speaker = DeepgramSpeaker(api_key="k", voice="aura-2-thalia-en")
+    assert "/v1/speak" in speaker._url
+    await speaker.use_voice("flux-anjali-hi")
+    assert "/v2/speak" in speaker._url and "model=flux-anjali-hi" in speaker._url
+    socket = _SpeakSocket()
+    speaker._socket = socket  # type: ignore[assignment]
+    await speaker.clear()
+    assert socket.sent == [{"type": "Interrupt"}]
+
+
+async def test_a_flux_reply_is_done_on_speech_metadata_not_flushed() -> None:
+    """On Flux audio can follow `Flushed`; `SpeechMetadata` closes the turn.
+    The provider pauses after the trailing audio, so a speaker that counted
+    `Flushed` would already show the reply done."""
+    import json
+
+    from app.modules.calls.infrastructure.engines.deepgram import DeepgramSpeaker
+    from app.modules.test_support.e2e.waiters import eventually
+
+    release = asyncio.Event()
+
+    class Paused(_SpeakSocket):
+        async def _play(self):
+            yield json.dumps({"type": "Flushed"})
+            yield b"tail"
+            await release.wait()
+            yield json.dumps({"type": "SpeechMetadata"})
+            await asyncio.Event().wait()
+
+    speaker = DeepgramSpeaker(api_key="k", voice="flux-anjali-hi")
+    speaker._socket = Paused()  # type: ignore[assignment]
+    speaker._opened.set()
+    heard: list[bytes] = []
+
+    async def play() -> None:
+        async for pcm in speaker.audio():
+            heard.append(pcm)
+
+    playing = asyncio.create_task(play())
+
+    async def read() -> list[bytes]:
+        return heard
+
+    await eventually(
+        label="trailing audio read",
+        probe=read,
+        done=bool,
+        timeout_seconds=2,
+        interval_seconds=0.01,
+    )
+    assert heard == [b"tail"]
+    assert speaker.flush_count == 0
+    release.set()
+
+    async def count() -> int:
+        return speaker.flush_count
+
+    await eventually(
+        label="turn closed",
+        probe=count,
+        done=lambda n: n == 1,
+        timeout_seconds=2,
+        interval_seconds=0.01,
+    )
+    playing.cancel()
+
+
+def test_flux_turn_info_carries_the_languages_heard() -> None:
+    from app.modules.calls.infrastructure.engines.deepgram import _languages
+
+    assert _languages(["hi", "en"]) == ("hi", "en")
+    assert _languages([{"language": "hi"}]) == ("hi",)
+    assert _languages(None) == ()

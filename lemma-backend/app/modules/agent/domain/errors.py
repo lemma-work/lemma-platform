@@ -136,6 +136,13 @@ class ConversationNotFoundError(AgentModuleError):
         super().__init__(message, code="CONVERSATION_NOT_FOUND", status_code=404)
 
 
+class AgentRunNotFoundError(AgentModuleError):
+    """No run by that id in the conversation the caller may read."""
+
+    def __init__(self, message: str = "Run not found"):
+        super().__init__(message, code="AGENT_RUN_NOT_FOUND", status_code=404)
+
+
 class ConversationValidationError(AgentModuleError):
     """Conversation payload failed module-level validation."""
 

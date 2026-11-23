@@ -2,7 +2,11 @@ import { useMemo, useState } from "react";
 import { Modal } from "@/shell/modal";
 import { LoadingIndicator } from "@/ui/loading";
 import { CheckCircleIcon, WarningIcon } from "@/ui/icons";
-import { Fields, NOT_A_LOGIN } from "./fields";
+import { Problem } from "@/outcomes/calm";
+import { NOT_A_LOGIN } from "@/ui/form";
+import { SchemaFields } from "./fields";
+import { LOOKS } from "./add-connector";
+import { ServiceMark } from "./service-mark";
 import { useConnector, useConnectorRefresh, useInstall, useUpdateInstall } from "./queries";
 import { blank, fields, payload, problems, type Values } from "./schema";
 import { connectorProblem, discoveryNote, installSchema, kindNamed, type CatalogEntry, type Install } from "./install";
@@ -42,6 +46,8 @@ export function EditInstall({ orgId, install, connector, takenNames, onClose, on
     const ready = values ?? blank(list, current.data?.config ?? install.config ?? null);
     const [shown, setShown] = useState<Record<string, string>>({});
     const [failure, setFailure] = useState<string | null>(null);
+    /* Said under the name, where the fix is, rather than over the buttons. */
+    const [nameProblem, setNameProblem] = useState<string | null>(null);
     const [done, setDone] = useState<{ note: string; bad: boolean; reauth: number } | null>(null);
 
     const loading = detail.isLoading || current.isLoading;
@@ -49,13 +55,14 @@ export function EditInstall({ orgId, install, connector, takenNames, onClose, on
 
     const submit = async () => {
         setFailure(null);
+        setNameProblem(null);
         const found = problems(list, ready);
         setShown(found);
         if (Object.keys(found).length > 0) return;
         const wanted = name.trim();
-        if (!wanted) { setFailure("Give it a name you will recognise later."); return; }
+        if (!wanted) { setNameProblem("Give it a name you will recognise later."); return; }
         const renamed = wanted !== (install.name || "");
-        if (renamed && takenNames.includes(wanted)) { setFailure("Another connection here is already called that."); return; }
+        if (renamed && takenNames.includes(wanted)) { setNameProblem("Another connection here is already called that."); return; }
         try {
             const answer = await update.mutateAsync({
                 install,
@@ -79,9 +86,14 @@ export function EditInstall({ orgId, install, connector, takenNames, onClose, on
         }
     };
 
+    /* A server, database or API the organization added wears its kind's
+       glyph, as it does in the list; a catalogue service its logo. */
+    const mark = <ServiceMark entry={connector} kind={LOOKS[install.kind] ? install.kind : null} />;
+
     if (done) {
         return (
-            <Modal title={name.trim() || connector.title} subtitle="Saved" narrow onClose={onDone}>
+            <Modal title={name.trim() || connector.title} subtitle="Saved" mark={mark} onClose={onDone}
+                footer={<button type="button" className="b b--l b--primary" onClick={onDone}>Done</button>}>
                 <div className="connect-form">
                     <p className={"connect-result" + (done.bad ? " connect-result--warn" : "")} role="status">
                         {done.bad ? <WarningIcon size={18} /> : <CheckCircleIcon size={18} />} {done.note}
@@ -92,16 +104,21 @@ export function EditInstall({ orgId, install, connector, takenNames, onClose, on
                             and {done.reauth === 1 ? "has" : "have"} to sign in again. {done.reauth === 1 ? "It is" : "They are"} kept, and marked in the list.
                         </p>
                     )}
-                    <div className="record-form__actions">
-                        <button className="btn btn--primary" onClick={onDone}>Done</button>
-                    </div>
                 </div>
             </Modal>
         );
     }
 
     return (
-        <Modal title={"Edit " + (install.name || connector.title)} subtitle={connector.title} narrow onClose={onClose}>
+        <Modal title={"Edit " + (install.name || connector.title)} subtitle={connector.title} mark={mark} onClose={onClose}
+            footer={loading ? (
+                <button type="button" className="b b--l b--secondary" onClick={onClose}>Cancel</button>
+            ) : <>
+                <button type="button" className="b b--l b--secondary" disabled={update.isPending} onClick={onClose}>Cancel</button>
+                <button type="button" className="b b--l b--primary" disabled={update.isPending} onClick={() => void submit()}>
+                    {update.isPending ? "Saving…" : "Save changes"}
+                </button>
+            </>}>
             <div className="connect-form">
                 {loading ? <p className="connect-lead"><LoadingIndicator inline label="Reading this connection" /></p> : (
                     <>
@@ -110,23 +127,19 @@ export function EditInstall({ orgId, install, connector, takenNames, onClose, on
                                 ? "Changing the app’s client asks everyone signed in through it to sign in again."
                                 : "Accounts stay connected. Pointing it somewhere else asks the people using it to sign in again."}
                         </p>
-                        <div className="record-form">
-                            <div className="record-form__field">
-                                <label htmlFor="edit-install-name">Name<i aria-hidden="true"> *</i></label>
-                                <small>How your team and its teammates refer to this connection.</small>
-                                <input id="edit-install-name" value={name} disabled={update.isPending} autoComplete="off" {...NOT_A_LOGIN}
+                        <div className="kform">
+                            <div className="kfield">
+                                <label htmlFor="edit-install-name">Name</label>
+                                <input id="edit-install-name" className="kinput" value={name} disabled={update.isPending} autoComplete="off" {...NOT_A_LOGIN}
+                                    aria-describedby="edit-install-name-help" aria-invalid={Boolean(nameProblem) || undefined}
                                     onChange={(event) => setName(event.target.value)} />
+                                {nameProblem && <Problem>{nameProblem}</Problem>}
+                                <small id="edit-install-name-help">How your team and its Lemmas refer to this connection.</small>
                             </div>
+                            <SchemaFields list={list} values={ready} problems={shown} disabled={update.isPending}
+                                onChange={(field, value) => setValues({ ...ready, [field]: value })} />
                         </div>
-                        <Fields list={list} values={ready} problems={shown} disabled={update.isPending}
-                            onChange={(field, value) => setValues({ ...ready, [field]: value })} />
-                        {failure && <p className="library-problem" role="alert">{failure}</p>}
-                        <div className="record-form__actions">
-                            <button className="btn btn--primary" disabled={update.isPending} onClick={() => void submit()}>
-                                {update.isPending ? <LoadingIndicator inline label="Saving" /> : "Save changes"}
-                            </button>
-                            <button className="btn" disabled={update.isPending} onClick={onClose}>Cancel</button>
-                        </div>
+                        {failure && <Problem>{failure}</Problem>}
                     </>
                 )}
             </div>

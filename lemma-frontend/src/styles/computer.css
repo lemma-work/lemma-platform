@@ -126,12 +126,6 @@
 .logins__what{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
 .logins__what strong{font-weight:500;font-size:13px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .logins__what small{font-size:11.5px;color:var(--ink-3)}
-/* The row becomes the question rather than growing a popover beside it: what
-   is going is named in the sentence, and the two answers sit under it. */
-.logins__row--asking{flex-direction:column;align-items:flex-start;gap:10px;padding:14px 2px}
-.logins__row--asking p{margin:0;font-size:13px;line-height:1.6;color:var(--ink-2)}
-.logins__row--asking strong{font-weight:500;color:var(--ink)}
-.logins__actions{display:flex;gap:10px;flex-wrap:wrap}
 
 /* ── signing in to a site ───────────────────────────────
    A teammate's browser with a person typing a password into it. Everything
@@ -185,64 +179,22 @@
 }
 
 /* ── connecting ─────────────────────────────────────────────────────
-   The form is whatever the connector described, so none of this styles a
-   field by name — it styles the shapes `schema.ts` can produce. It leans on
-   `.record-form`, which is already this app's answer to "a server owns this
-   field list": the record editor and the notification form are the same act
-   wearing different schemas. */
-
-/* `stretch`, not `center`. The two controls are different heights — the search
-   box pads 9px and a button pads 8px, and their text metrics differ besides —
-   so centring them left the tops and bottoms 5px out of step with each other.
-   Stretching makes the button exactly as tall as the box beside it.
-
-   And the search box carries a `margin-top` from when it was the first thing
-   in this section. In a flex row that margin is inside the centring, so it
-   pushed the box down past the button as well as making it taller: measured at
-   42/84 against 37/75. */
-.connectors__top{display:flex;align-items:stretch;gap:10px;margin:14px 0 12px}
-.connectors__top .connectors__find{flex:1;margin:0}
-.connectors__top .btn{flex-shrink:0;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
-
-/* Your own server, database, API or OAuth app: one quiet row of tiles above
-   the catalogue, so each is named where somebody looks for it rather than
-   folded behind a single "Add your own". */
-.byo{margin:14px 0 4px}
-.byo__head{margin:0 0 8px;font-size:12px;font-weight:500;color:var(--ink-3)}
-.byo__tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
-.byo__tile{display:flex;align-items:flex-start;gap:10px;min-width:0;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--paper);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
-.byo__tile:hover{border-color:var(--accent-line);background:var(--accent-soft)}
-.byo__tile:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.byo__glyph{display:grid;place-items:center;width:30px;height:30px;flex-shrink:0;margin-top:1px;border-radius:8px;border:1px solid var(--line);color:var(--ink-3)}
-.byo__said{display:flex;flex-direction:column;min-width:0}
-.byo__name{font-size:13px;font-weight:500;color:var(--ink)}
-.byo__said small{font-size:11.5px;line-height:1.4;color:var(--ink-3)}
+   The form is whatever the connector described, drawn by `SchemaFields`
+   from the kit's form pieces (kit.css, "forms"); none of this styles a field
+   by name. What is left here is the dialog's own column and the header map. */
 
 .connect-lead{margin:0 0 16px;font-size:13px;line-height:1.6;color:var(--ink-3)}
 
-/* A connect dialog, laid out as one. The record form it borrows was built to
-   sit inside a page, so in a dialog its actions landed 4px under the last
-   input, left-aligned, with nothing to say where the form ended — the buttons
-   read as another field. Spacing comes from the column's gap; the actions are
-   a footer, primary last in reading order and first on the right. */
+/* A connect dialog's body, laid out as one column; its buttons are the
+   dialog's footer. */
 .connect-form{display:flex;flex-direction:column;gap:18px}
-.connect-form > .connect-lead,.connect-form > .connect-result,.connect-form > .library-problem{margin:0}
-.connect-form .record-form{gap:18px}
-.connect-form .record-form__field{gap:7px}
-.connect-form .record-form__field label{font-size:13px;color:var(--ink)}
-.connect-form .record-form__field small{line-height:1.55}
-.connect-form .record-form__actions{flex-direction:row-reverse;justify-content:flex-start;margin:6px 0 0;padding-top:16px;border-top:1px solid var(--line)}
+.connect-form > .connect-lead,.connect-form > .connect-result{margin:0}
 
 /* A map whose keys the tenant chooses, so it is pairs rather than inputs. */
-.connect-pairs{display:flex;flex-direction:column;gap:6px}
-.connect-pair{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 30px;gap:6px}
+.connect-pairs{display:flex;flex-direction:column;gap:8px}
+.connect-pair{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 32px;align-items:center;gap:8px}
 .connect-pair input{min-width:0}
-.connect-pair button{display:grid;place-items:center;border:1px solid var(--line-2);border-radius:var(--r-sm);background:var(--paper);color:var(--ink-3);cursor:pointer}
-.connect-pair button:hover{border-color:var(--bad);color:var(--bad)}
-.connect-add{align-self:flex-start;display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:12px;color:var(--accent);background:none;border:0;padding:4px 0;cursor:pointer}
-.connect-add:hover{text-decoration:underline}
-.connect-check{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-2)}
-.connect-check input{width:auto}
+.connect-add{align-self:flex-start}
 
 /* What you are connecting, before which one. Every MCP server is one
    catalogue row, so "pick a connector" is the wrong first question. */
@@ -259,13 +211,47 @@
 
 .acct__acts{display:inline-flex;align-items:center;gap:12px;margin-left:auto;flex-shrink:0}
 .acct__acts .linkish{margin-left:0}
-/* What discovery said, which is information rather than a warning. */
-.acct__trouble--quiet{color:var(--ink-3)}
 
 @media(max-width:600px){
-  .connectors__top{flex-wrap:wrap}
-  .byo__tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .byo__glyph{display:none}
-  .connect-pair{grid-template-columns:minmax(0,1fr) 30px}
+  .connect-pair{grid-template-columns:minmax(0,1fr) 32px}
   .connect-pair input:nth-child(2){grid-column:1 / -1}
 }
+
+/* ── the live screen over WebRTC, and what both transports share ─────
+   The picture is scaled to the pane here, locally, whatever shape the pane
+   is: the machine's display only changes when somebody picks a preset. */
+.screen-view{position:absolute;inset:0}
+.screen-video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;transform-origin:center;touch-action:none}
+.screen-live--rtc{touch-action:none;user-select:none;-webkit-user-select:none}
+/* The last picture of the page, dimmed so nobody takes it for the live one. */
+.screen-last{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:.45;filter:saturate(.6);pointer-events:none}
+.screen-pointer{position:absolute;z-index:1;pointer-events:none;image-rendering:pixelated}
+/* The keyboard's target: present, focusable, and invisible. Off-screen would
+   stop a phone raising its keyboard, so it sits on the picture at no size. */
+.screen-keys{position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;border:0;padding:0;resize:none;caret-color:transparent;font-size:16px}
+
+/* The bar above the screen: a browser window's own controls, on the screen's
+   dark surface rather than the page's. Wraps on a narrow pane; the address
+   takes whatever is left. */
+.screen-bar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 8px;background:#1d1b26;border-bottom:1px solid rgb(255 255 255 / 0.08);color:rgb(255 255 255 / 0.85);font-size:12.5px}
+.computer-view .screen-bar__btn{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:7px;color:rgb(255 255 255 / 0.8);background:transparent;cursor:pointer}
+.computer-view .screen-bar__btn:hover:not(:disabled){background:rgb(255 255 255 / 0.1)}
+.computer-view .screen-bar__btn:disabled{opacity:.35;cursor:default}
+.screen-bar__address{flex:1 1 180px;min-width:0;display:flex}
+.screen-bar__address input{flex:1;min-width:0;height:28px;padding:0 10px;border-radius:999px;border:1px solid rgb(255 255 255 / 0.12);background:rgb(0 0 0 / 0.35);color:rgb(255 255 255 / 0.9);font:inherit;font-size:16px}
+@media (min-width:700px){.screen-bar__address input{font-size:12.5px}}
+.screen-bar__address input:focus{outline:2px solid rgb(255 255 255 / 0.45);outline-offset:1px}
+.screen-bar__size{height:28px;border-radius:7px;border:1px solid rgb(255 255 255 / 0.12);background:rgb(0 0 0 / 0.35);color:rgb(255 255 255 / 0.85);font:inherit;font-size:12px;padding:0 6px}
+.screen-bar__tabs{position:relative}
+.screen-bar__tabs summary{list-style:none;display:inline-flex;align-items:center;gap:4px;height:28px;padding:0 8px;border-radius:7px;cursor:pointer}
+.screen-bar__tabs summary::-webkit-details-marker{display:none}
+.screen-bar__tabs ul{position:absolute;z-index:5;top:32px;left:0;min-width:240px;max-width:min(420px,80vw);margin:0;padding:4px;list-style:none;border-radius:10px;background:#1d1b26;border:1px solid rgb(255 255 255 / 0.12);box-shadow:var(--shadow-soft)}
+.screen-bar__tabs li{display:flex;align-items:center;gap:4px}
+.computer-view .screen-bar__tabs li button{padding:6px 8px;border-radius:6px;color:rgb(255 255 255 / 0.85);background:transparent;cursor:pointer;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.computer-view .screen-bar__tabs li button:first-child{flex:1;min-width:0}
+.computer-view .screen-bar__tabs li button:hover:not(:disabled){background:rgb(255 255 255 / 0.1)}
+.screen-bar__agent,.screen-bar__watching{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;background:rgb(255 255 255 / 0.1);white-space:nowrap}
+.screen-bar__agent{background:rgb(255 200 80 / 0.18);color:rgb(255 225 160 / 0.95)}
+.computer-view .screen-bar__control{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border-radius:999px;cursor:pointer;color:rgb(255 255 255 / 0.85);background:rgb(255 255 255 / 0.1)}
+.computer-view .screen-bar__control--take{color:#14131a;background:rgb(255 255 255 / 0.9)}
+.screen-bar__note{flex-basis:100%;margin:0;font-size:12px;color:rgb(255 255 255 / 0.65)}
