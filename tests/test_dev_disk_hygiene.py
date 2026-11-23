@@ -91,7 +91,7 @@ def checkout(tmp_path: Path) -> Path:
     git(main, "checkout", "-q", "-b", "main")
     commit(main, "README", "hello\n", days_ago=60)
     # As in the real repository: build output is ignored, not untracked.
-    commit(main, ".gitignore", "target/\nnode_modules/\n.venv/\n", days_ago=60)
+    commit(main, ".gitignore", "target/\nnode_modules/\n.venv/\n.next/\n", days_ago=60)
     git(main, "push", "-q", "-u", "origin", "main")
     return main
 
@@ -321,3 +321,23 @@ def test_the_sweep_keeps_each_crates_newest_build_and_anything_recent(
 
     assert stale == [superseded]
     assert newest not in stale and only_copy not in stale and recent not in stale
+
+
+def test_an_agents_build_output_goes_sooner_than_a_persons(checkout: Path) -> None:
+    agents = checkout / ".claude" / "worktrees"
+    agents.mkdir(parents=True)
+    agent = agents / "agent-1"
+    git(checkout, "worktree", "add", "-q", "-b", "agent-1", str(agent), "main")
+    person = add_worktree(checkout, "person")
+    for worktree in (agent, person):
+        commit(worktree, "wip.txt", "unmerged, so the worktree itself stays\n")
+        (worktree / "lemma-frontend" / "node_modules" / "pkg").mkdir(parents=True)
+        (worktree / "lemma-frontend" / ".next" / "cache").mkdir(parents=True)
+
+    hygiene(checkout, "--apply", "--no-fetch", days_later=3)
+
+    assert not (agent / "lemma-frontend" / "node_modules").exists()
+    assert not (agent / "lemma-frontend" / ".next").exists()
+    assert (person / "lemma-frontend" / "node_modules" / "pkg").exists()
+    assert (person / "lemma-frontend" / ".next" / "cache").exists()
+    assert agent.exists() and person.exists()

@@ -87,10 +87,19 @@ the lines you changed, and an inline comment on each high or critical one.
 `make codeql` still reproduces a finding locally when you want it.
 
 **Disk.** Each worktree carries its own build output: a Rust dev
-`desktop/target` of several gigabytes, and roughly a gigabyte each for
-`node_modules` and `lemma-backend/.venv`. With many worktrees that fills a
-disk, and `make dev` warns when less than 30 GB is free. `make dev-clean` lists
-what can go and why — build output in idle worktrees, stale Rust artifacts,
+`desktop/target` of several gigabytes, roughly a gigabyte of
+`node_modules`, and half that in `lemma-frontend/.next`. With many worktrees that fills a
+disk, and `make dev` warns when less than 30 GB is free. A new worktree should
+get its dependencies from `make worktree-deps` (`ONLY=backend,frontend` to
+pick): it clones `node_modules` copy-on-write from any worktree whose install
+matches the lockfile, so it costs tens of megabytes rather than most of a
+gigabyte, and runs `npm ci` only when nothing matches. Virtualenvs are cheap
+already — `uv` clones them from its cache, so `du` overstates them about
+tenfold. `make dev-clean` lists
+what can go and why — `node_modules`, `.venv` and `.next` in idle worktrees
+(after 14 days, or 2 for an agent's worktree under `.claude/worktrees`), an
+idle worktree's `desktop/target` (after 3 days, in any worktree), stale Rust
+artifacts,
 worktrees and branches whose work has landed, old sandbox images — and
 `make dev-clean-apply` removes it. Nothing it removes is unrecoverable: it
 keeps anything with uncommitted changes or commits no remote has. Each worktree

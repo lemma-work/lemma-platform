@@ -43,7 +43,7 @@ SHELL := /bin/bash
         lint lint-clients lint-lockfiles measure-clients client-structure-record client-typecheck-record \
         quality quality-frontend check architecture pre-push codeql codeql-python codeql-javascript codeql-all migrate \
         fix format lint-python lint-frontend lint-rust lint-shell lint-ci lint-docker lint-docs lint-config \
-        lint-repo hooks dev-clean dev-clean-apply _disk-hint
+        lint-repo hooks dev-clean dev-clean-apply worktree-deps _disk-hint
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -507,6 +507,7 @@ help:
 	@echo "  Disk"
 	@echo "    make dev-clean          dry run: what stale build output, worktrees and branches would go"
 	@echo "    make dev-clean-apply    remove them (GIT=1 also runs git gc)"
+	@echo "    make worktree-deps      install deps, cloning node_modules from a matching worktree (ONLY=backend,frontend)"
 	@echo ""
 	@echo "  Other"
 	@echo "    make migrate            apply backend database migrations"
@@ -2440,6 +2441,14 @@ dev-clean:
 
 dev-clean-apply:
 	@$(DEV_CLEAN) --apply $(if $(filter 1,$(GIT)),--git)
+
+# A new worktree's dependencies, without a fresh copy of each. node_modules is
+# cloned copy-on-write from any worktree whose install matches this lockfile,
+# and installed with `npm ci` only when none does; Python goes to `uv sync`,
+# which already clones from the uv cache. ONLY= picks components (backend, cli,
+# python, typescript, frontend) so a backend-only task installs no frontend.
+worktree-deps:
+	@uv run --quiet --no-project python scripts/worktree_deps.py $(if $(ONLY),--only $(ONLY))
 
 # A one-line nudge from the commands that are about to need disk. Below this,
 # a single Rust build plus an image pull can fail a dev session halfway in.
