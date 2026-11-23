@@ -22,6 +22,7 @@ from app.modules.identity.infrastructure.supertokens_auth.override_email_passwor
 from app.modules.identity.infrastructure.supertokens_auth.override_email_password_apis import (
     override_emailpassword_apis,
 )
+from app.modules.identity.infrastructure.supertokens_auth.apple import apple_provider
 from app.modules.identity.infrastructure.supertokens_auth.override_thirdparty import (
     override_thirdparty_functions,
 )
@@ -129,6 +130,10 @@ def build_thirdparty_providers() -> list[ProviderInput]:
                 )
             )
         )
+
+    apple = apple_provider(identity_settings)
+    if apple is not None:
+        providers.append(apple)
 
     return providers
 

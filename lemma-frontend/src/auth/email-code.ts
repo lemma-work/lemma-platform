@@ -1,9 +1,10 @@
 import { onApi } from "./config";
 import { retryAfterSeconds, sayDelay } from "./errors";
 import { proofHeader } from "./altcha";
+import { isProviderId, type ProviderId } from "./login-methods";
 
 export interface EmailChallenge { challenge_id: string; expires_at: string }
-export type EmailMethod = { method: "password" } | { method: "thirdparty"; provider: "google" | "active-directory" } | ({ method: "code" } & EmailChallenge);
+export type EmailMethod = { method: "password" } | { method: "thirdparty"; provider: ProviderId } | ({ method: "code" } & EmailChallenge);
 type CodeAction = "browser" | "continue" | "start" | "resend" | "verify";
 
 export class EmailCodeError extends Error {
@@ -74,7 +75,7 @@ export async function continueEmail(email: string, nonce: string, abandon: strin
     }
     if (record(result)) {
         if (result.method === "password") return { method: "password" };
-        if (result.method === "thirdparty" && (result.provider === "google" || result.provider === "active-directory")) {
+        if (result.method === "thirdparty" && isProviderId(result.provider)) {
             return { method: "thirdparty", provider: result.provider };
         }
         if (result.method === "code") return { method: "code", ...challenge(result) };

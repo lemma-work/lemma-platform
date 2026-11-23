@@ -67,3 +67,19 @@ def test_collapses_whitespace_and_bounds_length():
     long_first, _ = names_from_provider({"given_name": "A" * 500}, None)
     assert long_first is not None
     assert len(long_first) == MAX_NAME_LENGTH
+
+
+def test_reads_the_name_apple_posts_beside_its_id_token():
+    # SuperTokens files Apple's form-posted `user` under the id-token payload.
+    payload = {
+        "sub": "001234.abcd",
+        "email": "ada@privaterelay.appleid.com",
+        "user": {"name": {"firstName": "Ada", "lastName": "Lovelace"}},
+    }
+    assert names_from_provider(payload, None) == ("Ada", "Lovelace")
+
+
+def test_apple_sends_no_name_after_the_first_sign_in():
+    assert names_from_provider({"sub": "001234.abcd"}, None) == (None, None)
+    assert names_from_provider({"user": {"email": "a@b.c"}}, None) == (None, None)
+    assert names_from_provider({"user": "not an object"}, None) == (None, None)

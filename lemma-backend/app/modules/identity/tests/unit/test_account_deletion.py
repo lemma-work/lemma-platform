@@ -480,6 +480,57 @@ def test_every_module_holding_something_of_the_persons_lets_go_with_the_account(
     }
 
 
+async def test_a_deletion_that_died_writes_one_more_that_does_not_wait_on_apple():
+    """The person was told the account is gone, so a dead item -- Apple down
+    past the day an item may wait -- must not keep their sign-in, and the
+    address with it. The hook has no network: it writes the second try."""
+    from types import SimpleNamespace
+
+    from app.core.infrastructure.work import WorkRegistry
+    from app.modules.identity.contracts.account_facts import AccountDeleted
+    from app.modules.identity.events.identity_work import (
+        IDENTITY_ACCOUNT_DELETED,
+        IDENTITY_ACCOUNT_DELETED_WITHOUT_APPLE,
+        on_account_deleted_dead,
+        register_identity_work,
+    )
+
+    registry = WorkRegistry()
+    register_identity_work(registry)
+    assert registry.get(IDENTITY_ACCOUNT_DELETED).on_dead is on_account_deleted_dead
+    # The second try has no hook of its own: one more round, not a chain.
+    assert registry.get(IDENTITY_ACCOUNT_DELETED_WITHOUT_APPLE).on_dead is None
+
+    user_id = uuid4()
+    written: list[tuple[str, str, object, str | None]] = []
+
+    class _Work:
+        async def add(
+            self, kind: str, ns: str, payload: object, *, dedup_key: str | None = None
+        ) -> UUID:
+            written.append((kind, ns, payload, dedup_key))
+            return uuid4()
+
+    dead = SimpleNamespace(
+        item=SimpleNamespace(ns="system", payload={"user_id": str(user_id)}),
+        reason="unavailable_exhausted",
+        work=_Work(),
+    )
+    await on_account_deleted_dead(dead)  # type: ignore[arg-type]
+
+    assert written == [
+        (
+            IDENTITY_ACCOUNT_DELETED_WITHOUT_APPLE,
+            "system",
+            AccountDeleted(user_id=user_id),
+            f"identity-account-deleted-without-apple:{user_id}",
+        )
+    ]
+    # What the second try does -- ask Apple once, then delete the user anyway
+    # -- is `test_the_second_try_frees_the_address_while_apple_is_still_down`
+    # (e2e), against a real SuperTokens.
+
+
 def test_only_the_person_themselves_can_delete_their_account():
     """Not an agent acting for them, and not a pod app's page they have open."""
     from app.core.api.actor_policy import app_may_call, workload_may_call
