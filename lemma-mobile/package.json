@@ -63,6 +63,7 @@
   "overrides": {
     "query-string": {
       "decode-uri-component": "0.5.1"
-    }
+    },
+    "node-forge": "^1.4.4"
   }
 }
