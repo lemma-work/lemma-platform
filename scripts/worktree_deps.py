@@ -58,6 +58,14 @@ COMPONENTS: dict[str, list[str]] = {
     "frontend": ["lemma-typescript", "lemma-frontend"],
 }
 LOCK_FIELDS = ("version", "resolved", "integrity")
+# The SDK build cleans `dist` and then runs tsc, the browser bundle and the UI
+# bundle in turn; the frontend imports all three. A failed stage leaves some of
+# them missing, so their presence, not the folder's, says the build finished.
+SDK_BUILD_OUTPUTS = (
+    "dist/index.js",
+    "dist/browser/lemma-client.js",
+    "dist/browser/lemma-ui.js",
+)
 
 
 # ── Matching an install to a lockfile ─────────────────────────────────────────
@@ -91,10 +99,15 @@ def install_matches(lockfile: Path, node_modules: Path) -> bool:
             return False
         if any(entry.get(name) != wanted[key].get(name) for name in LOCK_FIELDS):
             return False
-    # Optional packages for another platform are in the lockfile, not installed.
+        # npm itself trusts its hidden lockfile only while each folder exists.
+        # It records other platforms' optional binaries (esbuild, sharp) too,
+        # without ever unpacking them, so those are allowed to be absent.
+        if not entry.get("optional") and not (node_modules.parent / key).is_dir():
+            return False
+    # Optional packages for another platform are in the lockfile, not
+    # installed. Peers are not excused: a default `npm ci` installs them.
     return all(
-        key in installed or entry.get("optional") or entry.get("peer")
-        for key, entry in wanted.items()
+        key in installed or entry.get("optional") for key, entry in wanted.items()
     )
 
 
@@ -155,19 +168,39 @@ def npm_project(
         ok = True
     else:
         donor = None if force else find_donor(root, project, worktrees)
+        ok = False
         if donor is not None:
             print(f"  cloning the matching install in {donor.parent.parent}")
-            ok = True
-            if node_modules.exists():
-                ok = run(["rm", "-rf", "node_modules"], directory, dry_run)
-            ok = ok and run(clone_command(donor, node_modules), directory, dry_run)
+            ok = remove(node_modules, directory, dry_run) and run(
+                clone_command(donor, node_modules), directory, dry_run
+            )
+            # The donor can change or vanish between the check and the copy
+            # (another worktree's `npm ci`, a `make dev-clean`), so the copy
+            # is checked too, and a partial one is never left behind.
+            if ok and not dry_run and not install_matches(lockfile, node_modules):
+                ok = False
+            if not ok:
+                print("  the clone did not give a matching install; installing")
         else:
             print("  no worktree has a matching install; installing")
-            ok = run(["npm", "ci", "--no-audit", "--no-fund"], directory, dry_run)
+        if not ok:
+            ok = remove(node_modules, directory, dry_run) and run(
+                ["npm", "ci", "--no-audit", "--no-fund"], directory, dry_run
+            )
     # The frontend imports the SDK's build output, not its source.
-    if ok and project == "lemma-typescript" and not (directory / "dist").is_dir():
+    if ok and project == "lemma-typescript" and not sdk_is_built(directory):
         ok = run(["npm", "run", "build", "--silent"], directory, dry_run)
     return ok
+
+
+def remove(node_modules: Path, cwd: Path, dry_run: bool) -> bool:
+    if not node_modules.exists():
+        return True
+    return run(["rm", "-rf", node_modules.name], cwd, dry_run)
+
+
+def sdk_is_built(directory: Path) -> bool:
+    return all((directory / output).is_file() for output in SDK_BUILD_OUTPUTS)
 
 
 def uv_project(root: Path, name: str, dry_run: bool) -> bool:

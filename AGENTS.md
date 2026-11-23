@@ -135,8 +135,15 @@ Install dependencies with `make worktree-deps ONLY=backend` (or `frontend`,
 `cli`, `python`, `typescript`, comma-separated), not `npm ci` or `make init`,
 and only for the components the task touches. It clones `node_modules` from
 another worktree whose install matches the lockfile — tens of megabytes on
-disk instead of most of a gigabyte -- and falls back to `npm ci` only when none
-does. Many agents run at once here, and each full install is a gigabyte.
+disk instead of most of a gigabyte — and falls back to `npm ci` only when none
+does. With `frontend` or `typescript` it also builds the SDK's `dist`, which
+the frontend and `make dev` need. Many agents run at once here, and each full
+install is a gigabyte.
+
+`make dev` also needs `lemma-backend/.env` and `lemma-frontend/.env.local`.
+`make worktree-deps` does not write them; `make _init-backend-env
+_init-frontend-env` does, and only where they are missing, without installing
+anything.
 
 ## Tools to run
 

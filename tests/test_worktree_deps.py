@@ -16,7 +16,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from worktree_deps import find_donor, install_matches, main
+import worktree_deps
+from worktree_deps import find_donor, install_matches, main, npm_project, sdk_is_built
 
 GIT_ENV = {
     "GIT_AUTHOR_NAME": "Test",
@@ -53,6 +54,9 @@ def installed(project: Path, packages: dict) -> Path:
     (node_modules / ".package-lock.json").write_text(
         json.dumps({"lockfileVersion": 3, "packages": packages})
     )
+    for key in packages:
+        if key.startswith("node_modules/"):
+            (project / key).mkdir(parents=True, exist_ok=True)
     return node_modules
 
 
@@ -122,14 +126,11 @@ def test_cloning_copies_a_matching_install_into_a_new_worktree(tmp_path: Path) -
     git(main_checkout, "add", ".")
     git(main_checkout, "commit", "-q", "-m", "init")
     donor = installed(main_checkout / "lemma-frontend", wanted)
-    (donor / "left-pad").mkdir()
     (donor / "left-pad" / "index.js").write_text("module.exports = 1\n")
     worktree = tmp_path / "wt"
     git(main_checkout, "worktree", "add", "-q", "-b", "wt", str(worktree))
 
     # Only the frontend's own project: the SDK is not in this fake checkout.
-    import worktree_deps
-
     original = worktree_deps.COMPONENTS
     worktree_deps.COMPONENTS = {"frontend": ["lemma-frontend"]}
     try:
@@ -148,4 +149,76 @@ def test_a_linked_local_package_is_not_compared(tmp_path: Path) -> None:
     install = installed(
         tmp_path, {**link, "../lemma-typescript": {"version": "0.10.1"}}
     )
+    assert install_matches(lock, install)
+
+
+PEER = {
+    "version": "3.0.0",
+    "resolved": "https://r/peer.tgz",
+    "integrity": "sha512-p",
+    "peer": True,
+}
+
+
+def test_a_package_folder_deleted_under_the_hidden_lockfile_does_not_match(
+    tmp_path: Path,
+) -> None:
+    lock = lockfile(tmp_path, {"node_modules/left-pad": LEFT_PAD})
+    install = installed(tmp_path, {"node_modules/left-pad": LEFT_PAD})
+    (install / "left-pad").rmdir()
+    assert not install_matches(lock, install)
+
+
+def test_a_missing_peer_package_does_not_match(tmp_path: Path) -> None:
+    lock = lockfile(
+        tmp_path, {"node_modules/left-pad": LEFT_PAD, "node_modules/peer": PEER}
+    )
+    assert not install_matches(
+        lock, installed(tmp_path, {"node_modules/left-pad": LEFT_PAD})
+    )
+
+
+def test_a_clone_that_does_not_match_falls_back_to_npm_ci(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The donor changed after it was chosen: the copy is checked, then replaced."""
+    here, donor_root = tmp_path / "here", tmp_path / "donor"
+    lockfile(here / "app", {"node_modules/left-pad": LEFT_PAD})
+    stale = installed(
+        donor_root / "app", {"node_modules/left-pad": {**LEFT_PAD, "version": "0.1.0"}}
+    )
+    monkeypatch.setattr(worktree_deps, "find_donor", lambda *_: stale)
+    commands: list[list[str]] = []
+
+    def run(command: list[str], cwd: Path, dry_run: bool) -> bool:
+        commands.append(command)
+        if command[0] == "npm":
+            return True  # stands in for a real install
+        return subprocess.run(command, cwd=cwd, check=False).returncode == 0
+
+    monkeypatch.setattr(worktree_deps, "run", run)
+
+    assert npm_project(here, "app", [], dry_run=False, force=False)
+    assert commands[-1][:2] == ["npm", "ci"]
+    assert not (here / "app" / "node_modules").exists()  # the bad copy went first
+
+
+def test_the_sdk_counts_as_built_only_when_every_stage_wrote_its_output(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "dist" / "browser").mkdir(parents=True)
+    (tmp_path / "dist" / "index.js").write_text("")
+    (tmp_path / "dist" / "browser" / "lemma-client.js").write_text("")
+    assert not sdk_is_built(tmp_path)  # the UI bundle stage never ran
+    (tmp_path / "dist" / "browser" / "lemma-ui.js").write_text("")
+    assert sdk_is_built(tmp_path)
+
+
+def test_another_platforms_optional_binary_may_be_recorded_without_a_folder(
+    tmp_path: Path,
+) -> None:
+    packages = {"node_modules/left-pad": LEFT_PAD, "node_modules/fsevents": FSEVENTS}
+    lock = lockfile(tmp_path, packages)
+    install = installed(tmp_path, packages)
+    (install / "fsevents").rmdir()
     assert install_matches(lock, install)

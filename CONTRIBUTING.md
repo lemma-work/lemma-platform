@@ -96,8 +96,10 @@ matches the lockfile, so it costs tens of megabytes rather than most of a
 gigabyte, and runs `npm ci` only when nothing matches. Virtualenvs are cheap
 already — `uv` clones them from its cache, so `du` overstates them about
 tenfold. `make dev-clean` lists
-what can go and why — build output in idle worktrees (after 14 days, or 2 for
-an agent's worktree under `.claude/worktrees`), stale Rust artifacts,
+what can go and why — `node_modules`, `.venv` and `.next` in idle worktrees
+(after 14 days, or 2 for an agent's worktree under `.claude/worktrees`), an
+idle worktree's `desktop/target` (after 3 days, in any worktree), stale Rust
+artifacts,
 worktrees and branches whose work has landed, old sandbox images — and
 `make dev-clean-apply` removes it. Nothing it removes is unrecoverable: it
 keeps anything with uncommitted changes or commits no remote has. Each worktree
