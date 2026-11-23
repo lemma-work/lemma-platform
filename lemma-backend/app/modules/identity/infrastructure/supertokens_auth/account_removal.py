@@ -13,10 +13,15 @@ rolled-back deletion must not have signed anybody out.
 - The ``identity.account_deleted`` work item, written with the deletion, does
   the rest (:func:`end_deleted_account_sign_in`): it revokes every session,
   has Apple revoke the person's Sign in with Apple, and deletes the
-  SuperTokens user, and is retried until it lands. All three are safe to repeat: revoking
-  sessions a user no longer has returns nothing, the kept Apple token is
-  dropped once Apple has answered, and removing a user SuperTokens no longer
-  holds is not an error.
+  SuperTokens user, and is retried until it lands. All three are safe to
+  repeat: revoking sessions a user no longer has returns nothing, the kept
+  Apple token is dropped once Apple has answered, and removing a user
+  SuperTokens no longer holds is not an error.
+- If that item dies -- Apple down for longer than the work runtime's day of
+  waiting, say -- its ``on_dead`` hook writes one more,
+  ``identity.account_deleted_without_apple``, which does the same work but no
+  longer waits on Apple. The person was told the account is gone; the address
+  must not stay taken because a third party was down.
 
 Deleting the SuperTokens user is what frees the address: until it goes, the
 same email signing up again would sign in to the deleted account instead, and
@@ -33,6 +38,7 @@ from redis.exceptions import RedisError
 from supertokens_python.asyncio import delete_user as delete_supertokens_user
 from supertokens_python.recipe.session.asyncio import revoke_all_sessions_for_user
 
+from app.core.infrastructure.work.types import Unavailable
 from app.core.log.log import get_logger
 from app.modules.identity.infrastructure.supertokens_auth.apple import (
     revoke_apple_sign_in,
@@ -68,8 +74,18 @@ async def drop_cached_standing(
 
 
 async def end_deleted_account_sign_in(
-    user_id: UUID, *, apple_http: httpx.AsyncClient | None = None
+    user_id: UUID,
+    *,
+    apple_http: httpx.AsyncClient | None = None,
+    wait_for_apple: bool = True,
 ) -> None:
+    """End the deleted account's sign-in: cached standing, sessions, Apple, user.
+
+    ``wait_for_apple=False`` is the second try, written when the first item
+    died (`on_account_deleted_dead`): Apple is asked once more, and if it is
+    still down the deletion finishes without it, because the person has been
+    told the account is gone and the address must not stay taken.
+    """
     # The cached standing first: until it is dropped, an access token that has
     # not expired still reads the account as live.
     await get_user_cache().invalidate(user_id)
@@ -82,7 +98,18 @@ async def end_deleted_account_sign_in(
     # SuperTokens user's metadata. Apple being down raises `Unavailable`, so
     # the item waits for it with the user, and the token, still there; an
     # answer Apple gives is final, and the deletion carries on whatever it is.
-    await revoke_apple_sign_in(str(user_id), http=apple_http)
+    try:
+        await revoke_apple_sign_in(str(user_id), http=apple_http)
+    except Unavailable as down:
+        if wait_for_apple:
+            raise
+        # A day of waiting is spent. The authorization stays with Apple, where
+        # the person can still remove it under their Apple ID's settings.
+        logger.warning(
+            "identity.apple_sign_in.revoke_abandoned",
+            user_id=str(user_id),
+            reason=str(down),
+        )
     await delete_supertokens_user(str(user_id), remove_all_linked_accounts=True)
 
 

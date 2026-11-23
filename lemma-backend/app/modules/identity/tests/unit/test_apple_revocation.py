@@ -19,7 +19,6 @@ from pydantic import SecretStr
 
 from app.core.infrastructure.work.types import Unavailable, UnavailableEvidence
 from app.modules.identity.config import IdentitySettings
-from app.modules.identity.infrastructure.supertokens_auth import apple
 from app.modules.identity.infrastructure.supertokens_auth.apple import (
     APPLE_REVOKE_ENDPOINT,
     Revocation,
@@ -158,36 +157,30 @@ async def test_without_the_key_nothing_is_asked_of_apple():
 
 
 async def test_a_sign_in_that_brought_no_refresh_token_keeps_nothing(
-    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ):
     # A native sign-in that sent only the id token, or a token answer without
     # an audience: there is nothing a later revocation could use. The sign-in
     # still goes ahead, so the account is named in the log to be found later.
-    said: list[tuple[str, dict[str, object]]] = []
-
-    class _Log:
-        def warning(self, event: str, **fields: object) -> None:
-            said.append((event, fields))
-
-    monkeypatch.setattr(apple, "logger", _Log())
-
     assert not await remember_apple_refresh_token(
         "user-1", {"id_token": "x"}, {"aud": "com.example.signin"}
     )
     assert not await remember_apple_refresh_token(
         "user-2", {"refresh_token": "r.refresh-token"}, {}
     )
-    assert said == [
-        (
-            "identity.apple_sign_in.token_not_kept",
-            {"user_id": "user-1", "reason": "Apple sent no refresh token"},
-        ),
-        (
-            "identity.apple_sign_in.token_not_kept",
-            {"user_id": "user-2", "reason": "the id token named no audience"},
-        ),
+
+    # structlog hands the whole event to the stdlib record as a dict.
+    said = [
+        (event["user_id"], event["reason"])
+        for event in (record.msg for record in caplog.records)
+        if isinstance(event, dict)
+        and event.get("event") == "identity.apple_sign_in.token_not_kept"
     ]
-    assert "r.refresh-token" not in repr(said)
+    assert said == [
+        ("user-1", "Apple sent no refresh token"),
+        ("user-2", "the id token named no audience"),
+    ]
+    assert "r.refresh-token" not in caplog.text
 
 
 def test_apple_is_available_only_while_its_key_loads():

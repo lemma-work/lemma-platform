@@ -179,6 +179,28 @@ async def test_apple_being_down_keeps_the_account_and_its_token_for_the_retry(
     assert await get_user(user_id) is None
 
 
+async def test_the_second_try_frees_the_address_while_apple_is_still_down(
+    test_app: FastAPI, apple_configured: None
+) -> None:
+    """The item written when the first died (`on_account_deleted_dead`) asks
+    Apple once more and, still down, deletes the user anyway."""
+    del test_app
+    created = await _apple_user()
+    user_id = created.user.id
+    assert await remember_apple_refresh_token(
+        user_id, {"refresh_token": "r.refresh-token"}, {"aud": "com.example.signin"}
+    )
+
+    apple, asked = _apple_answering(httpx.Response(503))
+    async with apple:
+        await end_deleted_account_sign_in(
+            UUID(user_id), apple_http=apple, wait_for_apple=False
+        )
+
+    assert len(asked) == 1
+    assert await get_user(user_id) is None
+
+
 @pytest.mark.parametrize(
     "answer",
     [
