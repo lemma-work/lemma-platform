@@ -16,16 +16,16 @@ export interface ComputerSource {
     /** Whether a real machine stands behind this source. Sample data has
      *  none, so its screen says so rather than open a socket to nothing. */
     machine: boolean;
-    /** `GET /workspace/status`: ready, downloading, starting, asleep. */
+    /** `GET /machines/me` startup: ready, downloading, starting, asleep. */
     status(): Promise<WorkspaceStatus>;
-    /** `GET /workspace/files`, one page. `path` null is the server's own
+    /** `GET /machines/me/files`, one page. `path` null is the server's own
      *  default; `after` is the server's cursor. */
     files(path: string | null, wake: boolean, after?: string): Promise<Listing>;
-    /** `GET /workspace/browser/status`. Never starts anything. */
+    /** `GET /machines/me/browser`. Never starts anything. */
     browser(): Promise<BrowserState>;
     /** The folder a chat works in (the conversation's `workspace_cwd`). */
     chatFolder(podId: string, conversationId: string): Promise<string | null>;
-    /** `GET /workspace/files:stat`: the file's real size. */
+    /** `GET /machines/me/files:stat`: the file's real size. */
     stat(path: string): Promise<{ size_bytes: number }>;
     /** Up to `limit` bytes of a file, read as text. `bytes` is how much came
      *  back, so a caller that asked for one past its ceiling can tell. */
@@ -33,7 +33,7 @@ export interface ComputerSource {
     /** A file (up to `limit` bytes) downloaded into the phone's cache, for
      *  an image to draw or a file to save. */
     download(path: string, limit: number): Promise<{ uri: string; bytes: number }>;
-    /** `POST /workspace/apps/browser/access`: a signed, expiring address for
+    /** `POST /machines/me/browser:access`: a signed, expiring address for
      *  the browser, to open in the phone's own browser. Starts the machine. */
     browserAccess(): Promise<{ url: string; expires_at: string }>;
     /** `GET /web-logins`. */
@@ -44,10 +44,10 @@ export interface ComputerSource {
     signIn(conversationId: string, toolCallId: string): Promise<PendingSignIn>;
     /** `POST /web-logins/sign-ins/{conversation}/{call}/answer`. */
     answerSignIn(conversationId: string, toolCallId: string, signedIn: boolean): Promise<SignInOutcome>;
-    /** `GET /workspace/browser/current-page-url?origin=`: where a sign-in's
+    /** `GET /machines/me/browser/current-page-url?origin=`: where a sign-in's
      *  browser really is. */
     currentPage(origin: string): Promise<string | null>;
-    /** `POST /workspace/browser/display-size`, CSS pixels. */
+    /** `POST /machines/me/browser:display`, CSS pixels. */
     fitDisplay(size: { width: number; height: number }): Promise<{ size: string | null }>;
 }
 
