@@ -88,6 +88,7 @@ def _contact(row: ContactModel, identities: Sequence[ContactIdentityModel]) -> C
         merged_into_user_id=row.merged_into_user_id,
         answered_at=row.answered_at,
         blocked_at=row.blocked_at,
+        blocked_by_user_id=row.blocked_by_user_id,
     )
 
 
@@ -497,7 +498,10 @@ class ContactRepository:
             await self.session.execute(
                 update(ContactModel)
                 .where(ContactModel.id == survivor.id)
-                .values(blocked_at=merged.blocked_at)
+                .values(
+                    blocked_at=merged.blocked_at,
+                    blocked_by_user_id=merged.blocked_by_user_id,
+                )
             )
 
     async def set_blocked(
@@ -507,26 +511,19 @@ class ContactRepository:
         or, ``by`` None, let them answer again. Blocking one already blocked
         keeps when and by whom it was first done. Whether it was written: not
         on a contact merged into another meanwhile, which holds nothing."""
-        values = (
-            {
-                "blocked_at": func.coalesce(
-                    ContactModel.blocked_at, datetime.now(timezone.utc)
-                ),
-                "blocked_by_user_id": func.coalesce(
-                    ContactModel.blocked_by_user_id, by
-                ),
-            }
-            if by is not None
-            else {"blocked_at": None, "blocked_by_user_id": None}
-        )
+        c = ContactModel
+        blocking = by is not None
         result = await self.session.execute(
-            update(ContactModel)
-            .where(
-                ContactModel.id == contact_id,
-                ContactModel.pod_id == pod_id,
-                ContactModel.merged_into_id.is_(None),
+            update(c)
+            .where(c.id == contact_id, c.pod_id == pod_id, c.merged_into_id.is_(None))
+            .values(
+                blocked_at=func.coalesce(c.blocked_at, func.now())
+                if blocking
+                else None,
+                blocked_by_user_id=(
+                    func.coalesce(c.blocked_by_user_id, by) if blocking else None
+                ),
             )
-            .values(**values)
         )
         return bool(result.rowcount)
 
