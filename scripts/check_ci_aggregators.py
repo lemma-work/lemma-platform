@@ -78,6 +78,10 @@ UNWATCHED = {
     # runs outside a pull request, so there is nothing it could ever post. A
     # failure here costs cache space, not correctness.
     "cache-cleanup.yml",
+    # Runs only on a pull request and its comments, so likewise there is
+    # nothing the notifier could post; and an unsigned agreement is its
+    # answer to that pull request, not a failure anyone else should hear of.
+    "cla.yml",
 }
 
 # Every workflow is checked for timeouts, not just the two with aggregators.
