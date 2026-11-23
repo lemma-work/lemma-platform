@@ -14,6 +14,7 @@ import { readTableGrant } from "@web/channels/table-grants-model";
 import { readSearchPage } from "@web/channels/search-model";
 import { readSourceSettings } from "@web/channels/sources";
 import { readInbox } from "@web/channels/waiting";
+import { blockPath, reportBody, reportPath } from "@web/reports/model";
 import { grantableNames, mineRequest, must, ownColumns, postRequest, readAgents, readSurfaces, roleOf, updateRequest } from "./wire";
 
 /** Chats, groups, people and contacts, from the server: the calls the web
@@ -63,6 +64,18 @@ export function chatsLive(context: LiveContext): ChatsSource {
         },
         async share(podId, channelId, lineId) {
             return must(readLine(await pod(podId).channels.share(podId, channelId, lineId)), "message");
+        },
+        async report(podId, target, reason, note) {
+            await pod(podId).request("POST", reportPath(podId, target), { body: reportBody(reason, note) });
+        },
+        async block(podId, who) {
+            await pod(podId).request("PUT", blockPath(podId, who));
+        },
+        async unblock(podId, who) {
+            await pod(podId).request("DELETE", blockPath(podId, who));
+        },
+        async setContactBlocked(podId, contactId, blocked) {
+            await pod(podId).request("PATCH", `/pods/${podId}/contacts/${contactId}`, { body: { blocked } });
         },
         async markRead(podId, channelId, seq, threadRootId) {
             await pod(podId).channels.markRead(podId, channelId, seq, threadRootId);

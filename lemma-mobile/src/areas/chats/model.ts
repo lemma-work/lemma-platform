@@ -20,6 +20,7 @@ import {
 } from "@web/channels/model";
 import { platformName, type Starter } from "@web/channels/sources";
 import type { Inbox, MentionItem, WaitingQuestion } from "@web/channels/waiting";
+import { blockable, cannotBlock, type Blockable } from "@web/reports/model";
 
 /** What the phone's chat screens work out that is not drawing, in the app's
  *  own words. The web's sentences are used where they already say what a
@@ -261,15 +262,22 @@ export function subtitleOf(channel: ChannelDetail, lemmaName: string, me: string
 /* ── one message ───────────────────────────────────────────────────── */
 
 /** What holding a message offers: reply in its thread, copy, change, delete
- *  or remove, share an answer kept to the reader (the web's line tools).
- *  Said or sent outside already, a message is not changed here: the copy
- *  there would not change with it. */
+ *  or remove, share an answer kept to the reader (the web's line tools),
+ *  report it, and block who wrote it. Said or sent outside already, a
+ *  message is not changed here: the copy there would not change with it. */
 export interface LineOffers {
     reply: boolean;
     copy: boolean;
     edit: boolean;
     remove: boolean;
     share: boolean;
+    /** Anybody's line but one's own, to the Lemma team. */
+    report: boolean;
+    /** Who wrote it, when they could be blocked: a person, never a Lemma,
+     *  never the reader. */
+    block: Blockable | null;
+    /** Why Block is not offered on a person's line, when it is not. */
+    blockRefused: string | null;
     /** Asked before a delete, as one sentence. */
     removeAsk: string;
     /** The same as a question and what follows from it, for a dialog. */
@@ -300,6 +308,9 @@ export function lineOffers(line: Line, channel: ChannelDetail, me: string | null
         edit: mine && line.text !== null && !outside,
         remove: removable,
         share: line.canShare,
+        report: !line.deleted && !line.withheld && !line.blocked && !isMine(line, me),
+        block: line.deleted || line.blocked ? null : blockable(line.sender, me),
+        blockRefused: line.deleted ? null : cannotBlock(line.sender),
         removeAsk: (mine ? "Delete this message?" : "Remove " + name + "’s message for everyone?") + (outside ? " It goes from here only; the copy in " + outside + " stays." : ""),
         removeTitle: mine ? "Delete this message?" : "Remove " + name + "’s message?",
         removeNote: outside ? "It goes from here only; the copy in " + outside + " stays." : "It goes for everyone in this chat.",

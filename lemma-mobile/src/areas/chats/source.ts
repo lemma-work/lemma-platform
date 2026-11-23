@@ -23,6 +23,7 @@ import type { SourceChange, SourceSettings } from "@web/channels/sources";
 import type { Surface } from "@web/data/types";
 import type { ListFilter } from "@web/channels/views";
 import type { Inbox, PersonRef } from "@web/channels/waiting";
+import type { Blockable, ReportReason, ReportTarget } from "@web/reports/model";
 
 /** Chats across Lemmas, groups, people and contacts (PARITY.md, E).
  *
@@ -184,6 +185,16 @@ export interface ChatsSource {
     /** A workflow run, for the form a question waits on. */
     workflowRun(podId: string, runId: string): Promise<WaitingRun>;
     submitForm(podId: string, runId: string, nodeId: string, inputs: Record<string, unknown>): Promise<void>;
+
+    /* ── reporting and blocking ───────────────────────────────────── */
+    /** Report a Lemma's reply, or anybody's line, to the Lemma team. */
+    report(podId: string, target: ReportTarget, reason: ReportReason, note: string): Promise<void>;
+    /** Hide a person's lines from the reader, in this Lemma's chats. */
+    block(podId: string, who: Pick<Blockable, "kind" | "id">): Promise<void>;
+    unblock(podId: string, who: Pick<Blockable, "kind" | "id">): Promise<void>;
+    /** Stop the Lemma answering a contact, or let it again: for whoever may
+     *  change the Lemma. */
+    setContactBlocked(podId: string, contactId: string, blocked: boolean): Promise<void>;
 
     /* ── contacts ─────────────────────────────────────────────────── */
     contacts(podId: string): Promise<Contact[]>;

@@ -34,6 +34,7 @@ import {
 import { extraLinks, isInlineImage, pieces, sizeShown } from "@web/channels/parts-model";
 import { problemOf } from "@web/channels/problem";
 import { platformName } from "@web/channels/sources";
+import { blockable, blockedNote } from "@web/reports/model";
 
 type FilePart = Extract<Part, { type: "file" }>;
 
@@ -76,7 +77,7 @@ export const LineView = memo(function LineView({ line, context, continued = fals
     const platform = saidOn(line.sourceId, channel.places);
     const places = channel.places.filter((one) => !one.pending).length;
     const time = clockTime(line.createdAt);
-    const label = who + (platform ? ", on " + platformName(platform) : "") + ", " + time + ". " + (line.deleted ? removedNote(line, me) : withheld ?? line.text ?? "");
+    const label = who + (platform ? ", on " + platformName(platform) : "") + ", " + time + ". " + (line.deleted ? removedNote(line, me) : line.blocked ? blockedNote(who) : withheld ?? line.text ?? "");
     /* A Lemma's message carries its colour as a thin bar at its edge. */
     const faceId = faceIdOf(line.sender, context.lemma, context.frontId);
     const identity = useIdentity(faceId ?? "");
@@ -122,6 +123,8 @@ export const LineView = memo(function LineView({ line, context, continued = fals
 
                 {line.deleted ? (
                     <Text size={14.5} tone={color.ink3}>{removedNote(line, me)}</Text>
+                ) : line.blocked ? (
+                    <Blocked podId={podId} line={line} who={who} me={me} />
                 ) : withheld ? (
                     <Text size={14.5} tone={color.ink3}>{withheld}</Text>
                 ) : line.text ? (
@@ -156,6 +159,36 @@ function Tag({ text }: { text: string }) {
     return (
         <View style={{ backgroundColor: color.wash, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1 }}>
             <Text size={11.5} tone={color.ink2}>{text}</Text>
+        </View>
+    );
+}
+
+/** In place of what somebody the reader blocked said: that it is there, and
+ *  the way to read them again. */
+function Blocked({ podId, line, who, me }: { podId: string; line: Line; who: string; me: string | null }) {
+    const source = useChatsSource();
+    const key = useCacheKey();
+    const cache = useQueryClient();
+    const person = blockable(line.sender, me);
+    const lift = useMutation({
+        mutationFn: () => {
+            if (!person) throw new Error("There is no one to unblock.");
+            return source.unblock(podId, person);
+        },
+        onSuccess: () => { void cache.invalidateQueries({ queryKey: [key, "chats", podId] }); },
+    });
+    return (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12, backgroundColor: color.chrome }}>
+            <Glyph name="block" size={16} tone={color.ink3} />
+            <View style={{ flex: 1, gap: 2 }}>
+                <Text size={14} tone={color.ink2} style={{ lineHeight: 19 }}>{blockedNote(who)}</Text>
+                <Trouble>{lift.isError ? problemOf(lift.error, "Couldn’t unblock them.") : null}</Trouble>
+            </View>
+            {person ? (
+                <Press label={"Unblock " + person.name} onPress={() => lift.mutate()} disabled={lift.isPending} hitSlop={10} style={{ minHeight: 36, justifyContent: "center" }}>
+                    <Text size={14} tone={color.violetInk}>{lift.isPending ? "Unblocking…" : "Unblock"}</Text>
+                </Press>
+            ) : null}
         </View>
     );
 }

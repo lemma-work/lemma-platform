@@ -152,6 +152,44 @@ describe("a chat's words", () => {
         expect(removedNote(line({ deleted: true }), "me")).toBe("This message was deleted.");
     });
 
+    it("offers Report on anybody's message but one's own, and Block on a person", () => {
+        const group = channel({ me: { can_manage: false } });
+        expect(lineOffers(line({}), group, "me", true, false)).toMatchObject({ report: false, block: null });
+        const sam = line({ sender: { kind: "CONTACT", id: "sam", name: "Sam" } });
+        expect(lineOffers(sam, group, "me", true, false)).toMatchObject({ report: true, block: { kind: "CONTACT", id: "sam", name: "Sam" } });
+        const lemma = line({ sender: { kind: "AGENT", id: "lem", name: "Lem" } });
+        expect(lineOffers(lemma, group, "me", true, false)).toMatchObject({ report: true, block: null, blockRefused: null });
+        // Somebody their platform did not vouch for: reported, and told why not blocked.
+        const unknown = line({ sender: { kind: "CONTACT", id: null, name: "Sam" } });
+        expect(lineOffers(unknown, group, "me", true, false)).toMatchObject({ report: true, block: null });
+        expect(lineOffers(unknown, group, "me", true, false).blockRefused).toMatch(/didn’t confirm who they are/);
+        // Blocked already: nothing to report or block until unblocked.
+        const hidden = line({ sender: { kind: "CONTACT", id: "sam", name: "Sam" }, blocked: true, text: "rude" });
+        expect(hidden.text).toBeNull();
+        expect(lineOffers(hidden, group, "me", true, false)).toMatchObject({ report: false, block: null, copy: false });
+    });
+
+    it("the sample hides a blocked person's messages, and shows them again", async () => {
+        const sample = chatsSample();
+        const [pod] = SAMPLE_LEMMAS;
+        const { items } = await sample.list(pod.id, {} as never);
+        for (const one of items) {
+            const page = await sample.lines(pod.id, one.id);
+            const theirs = page.items.find((each) => each.sender.kind === "CONTACT" && each.sender.id && !each.deleted);
+            if (!theirs?.sender.id) continue;
+            const who = { kind: "CONTACT" as const, id: theirs.sender.id };
+            await sample.block(pod.id, who);
+            const hidden = (await sample.lines(pod.id, one.id)).items.find((each) => each.id === theirs.id);
+            expect(hidden).toMatchObject({ blocked: true, text: null });
+            await sample.unblock(pod.id, who);
+            const back = (await sample.lines(pod.id, one.id)).items.find((each) => each.id === theirs.id);
+            expect(back?.blocked).toBeFalsy();
+            expect(back?.text).toBe(theirs.text);
+            return;
+        }
+        throw new Error("The sample has no contact's message to block");
+    });
+
     it("says when a group last heard from its place without \"Yesterday ago\"", () => {
         expect(agoSaid(ago(5 * MIN), NOW)).toBe("5 min ago");
         expect(agoSaid(ago(26 * 60 * MIN), NOW)).toBe("yesterday");

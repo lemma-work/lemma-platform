@@ -9,12 +9,15 @@ import { Sheet } from "../../ui/sheet";
 import { Text } from "../../ui/text";
 import { color, font, TOUCH } from "../../ui/tokens";
 import { Trouble } from "./bits";
-import { lineKeys, useAgents, useChatsSource } from "./hooks";
+import { lineKeys, useAbilities, useAgents, useChatsSource } from "./hooks";
 import { useMentionMenu } from "./mention-menu";
 import { lineOffers } from "./model";
+import { BlockSheet } from "./block-sheet";
+import { ReportSheet } from "./report-sheet";
 import { mentionsIn, type Mentionable } from "@web/channels/mentions";
-import type { ChannelDetail, Line, Part } from "@web/channels/model";
+import { personName, type ChannelDetail, type Line, type Part } from "@web/channels/model";
 import { problemOf } from "@web/channels/problem";
+import type { Blockable } from "@web/reports/model";
 
 /** How long a sheet takes to leave: iOS will not show an alert, or another
  *  sheet, over one still going. */
@@ -22,8 +25,9 @@ const AFTER_SHEET_MS = Platform.OS === "ios" ? 350 : 0;
 
 /** What holding a message offers (the web's hover tools, as a sheet): reply
  *  in its thread, copy, change, delete -- or, for whoever may change the
- *  chat, remove anybody's -- and share an answer kept to the reader. A copy
- *  already carried outside stays as sent, and a delete says so first. */
+ *  chat, remove anybody's -- share an answer kept to the reader, report it
+ *  to the Lemma team, and block the person who wrote it. A copy already
+ *  carried outside stays as sent, and a delete says so first. */
 export function LineActions({ podId, channel, line, me, mayWrite, inThread, people, onClose, onThread }: {
     podId: string;
     channel: ChannelDetail;
@@ -51,6 +55,10 @@ export function LineActions({ podId, channel, line, me, mayWrite, inThread, peop
         onError: (error) => Alert.alert("Not shared", problemOf(error, "Couldn’t share it.")),
     });
     const offers = line ? lineOffers(line, channel, me, mayWrite, inThread) : null;
+    const lemma = useLemma(podId);
+    const abilities = useAbilities(podId);
+    const [reporting, setReporting] = useState<{ line: Line; person: Blockable | null } | null>(null);
+    const [blocking, setBlocking] = useState<Blockable | null>(null);
     const rows: { glyph: GlyphName; label: string; tone?: string; run: () => void }[] = [];
     if (line && offers) {
         if (offers.reply) rows.push({ glyph: "tree", label: line.replyCount > 0 ? "Open the thread" : "Reply in a thread", run: () => onThread(line) });
@@ -62,6 +70,13 @@ export function LineActions({ podId, channel, line, me, mayWrite, inThread, peop
                 { text: "Share", onPress: () => share.mutate(line) },
             ]),
         });
+        if (offers.report) rows.push({ glyph: "flag", label: "Report", run: () => setReporting({ line, person: offers.block }) });
+        const person = offers.block;
+        if (person) rows.push({ glyph: "block", label: "Block " + person.name, run: () => setBlocking(person) });
+        else if (offers.blockRefused) {
+            const why = offers.blockRefused;
+            rows.push({ glyph: "block", label: "Block", tone: color.ink3, run: () => Alert.alert("Can’t block them", why) });
+        }
         if (offers.remove) rows.push({
             glyph: "trash", label: offers.removeLabel, tone: color.amber, run: () => Alert.alert(offers.removeTitle, offers.removeNote, [
                 { text: "Keep", style: "cancel" },
@@ -84,6 +99,21 @@ export function LineActions({ podId, channel, line, me, mayWrite, inThread, peop
                 </View>
             </Sheet>
             {editing ? <EditSheet podId={podId} channel={channel} line={editing} people={people} onClose={() => setEditing(null)} /> : null}
+            <ReportSheet
+                podId={podId}
+                target={reporting ? { kind: "line", channelId: channel.id, lineId: reporting.line.id } : null}
+                author={reporting && reporting.line.sender.kind !== "AGENT" ? personName(reporting.line.sender, me) : null}
+                person={reporting?.person ?? null}
+                onBlock={(whom) => { setReporting(null); setTimeout(() => setBlocking(whom), AFTER_SHEET_MS); }}
+                onClose={() => setReporting(null)}
+            />
+            <BlockSheet
+                podId={podId}
+                person={blocking}
+                lemma={lemma?.name ?? "this Lemma"}
+                mayStopAnswering={Boolean(abilities.held?.includes("pod.update"))}
+                onClose={() => setBlocking(null)}
+            />
         </>
     );
 }

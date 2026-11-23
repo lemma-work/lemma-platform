@@ -9,7 +9,8 @@ import { color } from "../ui/tokens";
 export type GlyphName =
     | "copy" | "globe" | "terminal" | "code" | "image" | "camera" | "stop" | "lock" | "memory"
     | "arrow-down" | "agent" | "plug" | "shield" | "question" | "deny" | "pointer" | "text"
-    | "tree" | "folder" | "branch" | "edit" | "trash" | "move" | "download" | "external" | "eye" | "wait";
+    | "tree" | "folder" | "branch" | "edit" | "trash" | "move" | "download" | "external" | "eye" | "wait"
+    | "flag" | "block";
 
 export function Glyph({ name, size = 16, tone = color.ink, width = 1.8 }: { name: GlyphName; size?: number; tone?: string; width?: number }) {
     const s = { stroke: tone, strokeWidth: width, fill: "none", strokeLinecap: "round", strokeLinejoin: "round" } as const;
@@ -139,6 +140,15 @@ function draw(name: GlyphName, s: { stroke: string; strokeWidth: number; fill: "
                 <>
                     <Circle {...s} cx={12} cy={12} r={8} />
                     <Path {...s} d="M12 7.5V12l3 2" />
+                </>
+            );
+        case "flag":
+            return <Path {...s} d="M5.5 20.5V4.5M5.5 4.5h11l-2 4 2 4h-11" />;
+        case "block":
+            return (
+                <>
+                    <Circle {...s} cx={12} cy={12} r={8} />
+                    <Path {...s} d="m6.5 6.5 11 11" />
                 </>
             );
     }

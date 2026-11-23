@@ -1,5 +1,7 @@
 import { createContext, memo, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
-import { View } from "react-native";
+import { Platform, View } from "react-native";
+import { ReportSheet } from "../areas/chats/report-sheet";
+import { isServerId, type ReportTarget } from "@web/reports/model";
 import { useRouter } from "expo-router";
 import { filesRoutes } from "../areas/files/routes";
 import { routes } from "../data/routes";
@@ -39,14 +41,31 @@ interface MenuAction {
     run: () => void;
 }
 
-const MenuContext = createContext<(title: string, actions: MenuAction[]) => void>(() => undefined);
+/** What Report sends: the Lemma, the message, and who wrote it. */
+interface Reported {
+    podId: string;
+    target: ReportTarget;
+    author: string | null;
+}
 
-/** The one sheet a long press opens, for every message in the thread. */
+const MenuContext = createContext<{ show: (title: string, actions: MenuAction[]) => void; report: (what: Reported) => void }>({
+    show: () => undefined,
+    report: () => undefined,
+});
+
+/** iOS will not show a sheet over one still leaving. */
+const AFTER_SHEET_MS = Platform.OS === "ios" ? 350 : 0;
+
+/** The one sheet a long press opens, for every message in the thread, and
+ *  the report sheet its Report opens. */
 export function MessageMenu({ children }: { children: ReactNode }) {
     const [open, setOpen] = useState<{ title: string; actions: MenuAction[] } | null>(null);
+    const [reporting, setReporting] = useState<Reported | null>(null);
     const show = useCallback((title: string, actions: MenuAction[]) => setOpen({ title, actions }), []);
+    const report = useCallback((what: Reported) => { setTimeout(() => setReporting(what), AFTER_SHEET_MS); }, []);
+    const menu = useMemo(() => ({ show, report }), [show, report]);
     return (
-        <MenuContext.Provider value={show}>
+        <MenuContext.Provider value={menu}>
             {children}
             <Sheet open={open !== null} onClose={() => setOpen(null)} title={open?.title}>
                 {(open?.actions ?? []).map((action) => (
@@ -64,16 +83,27 @@ export function MessageMenu({ children }: { children: ReactNode }) {
                     </Press>
                 ))}
             </Sheet>
+            <ReportSheet podId={reporting?.podId ?? ""} target={reporting?.target ?? null} author={reporting?.author ?? null} onClose={() => setReporting(null)} />
         </MenuContext.Provider>
     );
 }
 
 function useMenu() {
-    return useContext(MenuContext);
+    return useContext(MenuContext).show;
 }
 
 function copyAction(text: string): MenuAction {
     return { label: "Copy", glyph: "copy", run: () => copyText(text) };
+}
+
+/** Report, for a message the server has: one drawn before it did has
+ *  nothing to report yet. */
+function useReportAction(what: Reported | null): MenuAction | null {
+    const { report } = useContext(MenuContext);
+    if (!what) return null;
+    const id = what.target.kind === "reply" ? what.target.messageId : what.target.lineId;
+    if (!isServerId(id)) return null;
+    return { label: "Report", glyph: "flag", run: () => report(what) };
 }
 
 /** Where the menu says it came from: the start of the message. */
@@ -143,10 +173,11 @@ function Chip({ text, glyph, onPress }: { text: string; glyph?: GlyphName; onPre
  *  another Lemma, on the near side under its name. One still going says so
  *  where its time would be, and one the server refused stays where it was
  *  written with Retry and Edit under it. */
-function Human({ message, name, podId, outsiders, onRetry, onEdit }: {
+function Human({ message, name, podId, conversationId, outsiders, onRetry, onEdit }: {
     message: HumanMessage;
     name: string;
     podId: string;
+    conversationId: string | null;
     outsiders?: string;
     onRetry?: (id: string) => void;
     onEdit?: (id: string) => void;
@@ -162,7 +193,14 @@ function Human({ message, name, podId, outsiders, onRetry, onEdit }: {
     const at = message.pending === "sending" ? "Sending…" : message.pending === "failed" ? "Not sent" : message.at;
     const who = relayed ? relayed.name : guest ? message.from : null;
     const failed = message.pending === "failed";
-    const actions: MenuAction[] = [copyAction(message.text)];
+    /* What somebody outside wrote, through a platform, is theirs to report;
+       not the reader's own words, nor another Lemma's relayed answer. */
+    const reportOutsider = useReportAction(
+        outsiders && message.from && !relayed && !message.pending && conversationId
+            ? { podId, target: { kind: "reply", conversationId, messageId: message.id }, author: message.from }
+            : null,
+    );
+    const actions: MenuAction[] = [copyAction(message.text), ...(reportOutsider ? [reportOutsider] : [])];
     if (failed && onRetry) actions.push({ label: "Retry", glyph: "move", run: () => onRetry(message.id) });
     if (failed && onEdit) actions.push({ label: "Edit", glyph: "edit", run: () => onEdit(message.id) });
     const place = relayed?.place ?? null;
@@ -228,14 +266,16 @@ function Human({ message, name, podId, outsiders, onRetry, onEdit }: {
 /* ── the Lemma's turn ───────────────────────────────────────────────────── */
 
 /** What the Lemma said, on its own surface: four things said while it
- *  worked are four things said. */
-function Speech({ text, streaming = false }: { text: string; streaming?: boolean }) {
+ *  worked are four things said. Holding it offers Copy, and Report once
+ *  the server has it. */
+function Speech({ text, streaming = false, report = null }: { text: string; streaming?: boolean; report?: Reported | null }) {
     const menu = useMenu();
+    const reportAction = useReportAction(streaming ? null : report);
     return (
         <Press
             label={text}
             accessibilityHint="Hold for more"
-            onLongPress={() => menu(headOf(text), [copyAction(text)])}
+            onLongPress={() => menu(headOf(text), [copyAction(text), ...(reportAction ? [reportAction] : [])])}
             delayLongPress={350}
             style={{ alignSelf: "stretch", borderWidth: 1, borderColor: color.line, borderRadius: 16, paddingVertical: 10, paddingHorizontal: 14, backgroundColor: color.paper }}
         >
@@ -318,7 +358,7 @@ export const TurnRow = memo(function TurnRow({ turn, streaming, lemma, conversat
         <View style={{ gap: 14 }}>
             {turn.day ? <DayChip day={turn.day} /> : null}
             {turn.notice ? <Notice text={turn.notice} /> : null}
-            {turn.human ? <Human message={turn.human} name={lemma.name} podId={podId} outsiders={outsiders} onRetry={onRetrySend} onEdit={onEditSend} /> : null}
+            {turn.human ? <Human message={turn.human} name={lemma.name} podId={podId} conversationId={conversationId} outsiders={outsiders} onRetry={onRetrySend} onEdit={onEditSend} /> : null}
             {notes.length > 0 || turn.items.length > 0 || merging || Boolean(turn.runtimeNotes?.length) ? (
                 <Reply lemma={lemma} at={spoke?.kind === "text" ? spoke.at : undefined}>
                     {drawn.map((item) => {
@@ -326,7 +366,13 @@ export const TurnRow = memo(function TurnRow({ turn, streaming, lemma, conversat
                             case "photos":
                                 return <PhotoRun key={item.id} podId={podId} paths={item.paths} />;
                             case "text":
-                                return <Speech key={item.id} text={item.text} />;
+                                return (
+                                    <Speech
+                                        key={item.id}
+                                        text={item.text}
+                                        report={conversationId ? { podId, target: { kind: "reply", conversationId, messageId: item.id }, author: lemma.name } : null}
+                                    />
+                                );
                             case "resource":
                                 return <ResourceCard key={item.id} resource={item.resource} podId={podId} conversationId={conversationId} toolCallId={item.toolCallId} onCompose={onCompose} />;
                             case "plan":

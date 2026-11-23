@@ -449,6 +449,11 @@ export function chatsSample(): ChatsSource {
        seconds after it is made, so the confirm step can be seen. */
     const links = new Map<string, { opensAt: number; contactId: string | null; ended: "OTHER_ACCOUNT" | "GONE" | null }>();
     let autoAck: string | null = "Thanks — someone from Support will reply.";
+    /* Who the reader blocked, as `KIND:id`: their lines read back blocked. */
+    const blocked = new Set<string>();
+    const shown = (line: Line): Line => (line.sender.id && blocked.has(line.sender.kind + ":" + line.sender.id)
+        ? { ...line, blocked: true, text: null, parts: [] }
+        : { ...line });
     let made = 0;
     const answered = new Set<string>();
 
@@ -565,10 +570,10 @@ export function chatsSample(): ChatsSource {
             const older = beforeSeq === undefined ? one.lines : one.lines.filter((line) => line.seq < beforeSeq);
             const page = older.slice(-6);
             const rest = older.length - page.length;
-            return { items: page.map((line) => ({ ...line })), nextBefore: rest > 0 ? page[0].seq : null };
+            return { items: page.map(shown), nextBefore: rest > 0 ? page[0].seq : null };
         },
         async thread(podId, channelId, rootId) {
-            return { items: [...(find(podId, channelId).replies.get(rootId) ?? [])], nextAfter: null };
+            return { items: (find(podId, channelId).replies.get(rootId) ?? []).map(shown), nextAfter: null };
         },
         async post(podId, channelId, body) {
             return post(podId, channelId, body);
@@ -588,6 +593,18 @@ export function chatsSample(): ChatsSource {
             if (!was) return;
             replace(one, { ...was, deleted: true, text: null, parts: [], removedBy: was.sender.id === ME.id ? null : ME, canShare: false, delivered: null });
             settle(one);
+        },
+        async report() {
+            /* The sample has no team to tell: it is taken, and goes nowhere. */
+        },
+        async block(_podId, who) {
+            blocked.add(who.kind + ":" + who.id);
+        },
+        async unblock(_podId, who) {
+            blocked.delete(who.kind + ":" + who.id);
+        },
+        async setContactBlocked() {
+            /* The sample's Lemma answers nobody for real. */
         },
         async share(podId, channelId, lineId) {
             const one = find(podId, channelId);
