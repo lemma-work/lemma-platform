@@ -95,14 +95,23 @@ def apple_private_key(config: IdentitySettings) -> str | None:
     return pem
 
 
+def is_apple_sign_in_available(config: IdentitySettings) -> bool:
+    """Whether Apple is registered: the four values set, and the key loads.
+
+    The test `apple_provider` registers on, and so the one that decides the
+    button. Anything that sends a person to Apple asks this rather than
+    `is_apple_oauth_configured`, which counts a key as set even when it does
+    not load -- and a person sent to a button that is not there has no way in.
+    """
+    return config.is_apple_oauth_configured() and apple_private_key(config) is not None
+
+
 def apple_provider(config: IdentitySettings) -> ProviderInput | None:
     """Sign in with Apple, or None until all four values are set and usable."""
-    if not config.is_apple_oauth_configured():
+    if not is_apple_sign_in_available(config):
         return None
     private_key = apple_private_key(config)
-    if private_key is None:
-        return None
-    assert config.apple_client_id is not None
+    assert private_key is not None and config.apple_client_id is not None
     return ProviderInput(
         config=ProviderConfig(
             # SuperTokens picks its Apple implementation by this id: OIDC
@@ -167,13 +176,17 @@ async def remember_apple_refresh_token(
     The client id comes from the verified id token's ``aud`` rather than from
     settings: a refresh token can only be revoked by the client it was issued
     to, and a phone's native sign-in is issued to the app's bundle id.
+
+    A sign-in that brought nothing to keep still goes ahead -- a phone that
+    sends only the id token never has a refresh token -- but it is logged with
+    the user, so the accounts a deletion cannot revoke can be found.
     """
     refresh_token = oauth_tokens.get("refresh_token")
     client_id = (id_token_payload or {}).get("aud")
     if not (isinstance(refresh_token, str) and refresh_token):
-        return False
+        return _not_kept(user_id, "Apple sent no refresh token")
     if not (isinstance(client_id, str) and client_id):
-        return False
+        return _not_kept(user_id, "the id token named no audience")
     sealed = await get_secret_cipher().encrypt_json_async(
         {"refresh_token": refresh_token}
     )
@@ -288,6 +301,13 @@ async def revoke_apple_sign_in(
     return outcome
 
 
+def _not_kept(user_id: str, reason: str) -> bool:
+    logger.warning(
+        "identity.apple_sign_in.token_not_kept", user_id=user_id, reason=reason
+    )
+    return False
+
+
 async def _open(record: Mapping[str, object]) -> _Kept | None:
     """``client_id`` and ``refresh_token`` from a kept record, if it still opens."""
     client_id = record.get("client_id")
@@ -327,6 +347,7 @@ __all__ = [
     "apple_client_secret",
     "apple_private_key",
     "apple_provider",
+    "is_apple_sign_in_available",
     "remember_apple_refresh_token",
     "revoke_apple_sign_in",
     "revoke_refresh_token",

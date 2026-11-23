@@ -181,8 +181,11 @@ def override_thirdparty_functions(
                 if third_party_id == "apple":
                     # What a deletion of this account will revoke with Apple.
                     # Kept on every sign-in, since each exchange issues a new
-                    # refresh token, and not swallowed: a sign-in Lemma could
-                    # not later revoke is one to fail and retry, not to keep.
+                    # refresh token. A sign-in that brought none (a phone that
+                    # sent only the id token) goes ahead with nothing to
+                    # revoke, and is logged so those accounts can be found.
+                    # Failing to keep one that did come is not swallowed: that
+                    # sign-in fails, and the person tries again.
                     await remember_apple_refresh_token(
                         result.user.id,
                         oauth_tokens,

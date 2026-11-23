@@ -27,6 +27,9 @@ from app.modules.identity.domain.email import (
 )
 from app.modules.identity.domain.email_challenge import PENDING_TTL_SECONDS
 from app.modules.identity.infrastructure.models.user_models import User
+from app.modules.identity.infrastructure.supertokens_auth.apple import (
+    is_apple_sign_in_available,
+)
 from app.modules.identity.infrastructure.supertokens_auth.auth_method_conflicts import (
     get_conflicting_thirdparty_id,
     has_emailpassword_login_method,
@@ -312,10 +315,10 @@ async def _method_for(
         # A code would bounce from the first, and from the second it would
         # make a code account that Apple could never sign in to again. It is
         # the answer an Apple account at the address gets, so it tells nobody
-        # whether one exists.
-        if (
-            is_apple_private_relay(email)
-            and identity_settings.is_apple_oauth_configured()
+        # whether one exists. Only while the Apple button is there to press:
+        # a key that does not load hides it, and then the address gets a code.
+        if is_apple_private_relay(email) and is_apple_sign_in_available(
+            identity_settings
         ):
             return ThirdPartyMethod(provider="apple")
 

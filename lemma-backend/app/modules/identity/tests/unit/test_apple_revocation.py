@@ -19,10 +19,12 @@ from pydantic import SecretStr
 
 from app.core.infrastructure.work.types import Unavailable, UnavailableEvidence
 from app.modules.identity.config import IdentitySettings
+from app.modules.identity.infrastructure.supertokens_auth import apple
 from app.modules.identity.infrastructure.supertokens_auth.apple import (
     APPLE_REVOKE_ENDPOINT,
     Revocation,
     apple_client_secret,
+    is_apple_sign_in_available,
     remember_apple_refresh_token,
     revoke_refresh_token,
 )
@@ -155,12 +157,46 @@ async def test_without_the_key_nothing_is_asked_of_apple():
     assert asked == []
 
 
-async def test_a_sign_in_that_brought_no_refresh_token_keeps_nothing():
+async def test_a_sign_in_that_brought_no_refresh_token_keeps_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+):
     # A native sign-in that sent only the id token, or a token answer without
-    # an audience: there is nothing a later revocation could use.
+    # an audience: there is nothing a later revocation could use. The sign-in
+    # still goes ahead, so the account is named in the log to be found later.
+    said: list[tuple[str, dict[str, object]]] = []
+
+    class _Log:
+        def warning(self, event: str, **fields: object) -> None:
+            said.append((event, fields))
+
+    monkeypatch.setattr(apple, "logger", _Log())
+
     assert not await remember_apple_refresh_token(
-        "user-id", {"id_token": "x"}, {"aud": "com.example.signin"}
+        "user-1", {"id_token": "x"}, {"aud": "com.example.signin"}
     )
     assert not await remember_apple_refresh_token(
-        "user-id", {"refresh_token": "r.refresh-token"}, {}
+        "user-2", {"refresh_token": "r.refresh-token"}, {}
     )
+    assert said == [
+        (
+            "identity.apple_sign_in.token_not_kept",
+            {"user_id": "user-1", "reason": "Apple sent no refresh token"},
+        ),
+        (
+            "identity.apple_sign_in.token_not_kept",
+            {"user_id": "user-2", "reason": "the id token named no audience"},
+        ),
+    ]
+    assert "r.refresh-token" not in repr(said)
+
+
+def test_apple_is_available_only_while_its_key_loads():
+    # The email box sends relay addresses to Apple on this, and the button is
+    # registered on it: a key that does not load must hide both, not one.
+    unloadable = CONFIGURED.model_copy(
+        update={"apple_private_key": SecretStr("/secrets/AuthKey.p8")}
+    )
+
+    assert is_apple_sign_in_available(CONFIGURED)
+    assert not is_apple_sign_in_available(unloadable)
+    assert not is_apple_sign_in_available(IdentitySettings.model_construct())

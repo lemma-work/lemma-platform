@@ -1009,6 +1009,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'identity.apple_sign_in.revoke_skipped': EventSpec('warning', frozenset({'reason'})),
     'identity.apple_sign_in.revoked': EventSpec('info', frozenset({'client_id'})),
     'identity.apple_sign_in.token_already_spent': EventSpec('info', frozenset({'client_id'})),
+    'identity.apple_sign_in.token_not_kept': EventSpec('warning', frozenset({'reason', 'user_id'})),
     'identity.auth_abuse.counter_clear_failed': EventSpec('warning', frozenset()),
     'identity.auth_abuse.rate_limit_unavailable': EventSpec('error', frozenset()),
     'identity.email.not_sent': EventSpec('warning', frozenset({'kind', 'reason'})),
