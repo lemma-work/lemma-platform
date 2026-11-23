@@ -129,6 +129,15 @@ reason in `lemma-backend/app/core/tests/unit/test_boot_hooks.py`, and
 `test_boot_budget_e2e.py` holds module boot to a budget against a thousand pod
 schemas.
 
+## Setting up a worktree
+
+Install dependencies with `make worktree-deps ONLY=backend` (or `frontend`,
+`cli`, `python`, `typescript`, comma-separated), not `npm ci` or `make init`,
+and only for the components the task touches. It clones `node_modules` from
+another worktree whose install matches the lockfile — tens of megabytes on
+disk instead of most of a gigabyte -- and falls back to `npm ci` only when none
+does. Many agents run at once here, and each full install is a gigabyte.
+
 ## Tools to run
 
 Through `make`, rather than calling ruff, eslint or cargo yourself: the targets
