@@ -40,6 +40,7 @@ from app.modules.channels.domain.entities import (
     Delivery,
     Member,
     NotifyLevel,
+    Principal,
     SenderKind,
 )
 from app.modules.channels.domain.projection import withheld_from
@@ -258,14 +259,19 @@ async def _not_blocking(
     writer = message.sender.principal
     if writer is None or not told:
         return told
+    people = {writer}
     if writer.contact_id is not None:
         contact = await contact_by_id(
             uow, pod_id=channel.pod_id, contact_id=writer.contact_id
         )
         if contact is not None and contact.blocked:
             return {}
+        # Merged into another since the line was written, the blocks may sit
+        # under either id until the merge's work carries them over.
+        if contact is not None:
+            people.add(Principal.contact(contact.id))
     blockers = await BlockRepository(uow.session).blockers_among(
-        pod_id=channel.pod_id, person=writer, user_ids=told.keys()
+        pod_id=channel.pod_id, people=people, user_ids=told.keys()
     )
     return {
         user_id: calls for user_id, calls in told.items() if user_id not in blockers

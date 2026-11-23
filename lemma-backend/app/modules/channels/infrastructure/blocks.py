@@ -74,18 +74,22 @@ class BlockRepository:
         return [(_blocked(row), row.created_at) for row in rows]
 
     async def blockers_among(
-        self, *, pod_id: UUID, person: Principal, user_ids: Collection[UUID]
+        self, *, pod_id: UUID, people: Collection[Principal], user_ids: Collection[UUID]
     ) -> set[UUID]:
-        """Which of these members blocked this person here -- every one of
-        them asked, a batch at a time, however many there are."""
+        """Which of these members blocked any of ``people`` here -- one person
+        under every id they have had -- every member asked, a batch at a
+        time, however many there are."""
+        if not people:
+            return set()
         b = PersonBlockModel
         readers = sorted(set(user_ids))
+        anyone = or_(*(_is(person) for person in people))
         found: set[UUID] = set()
         for start in range(0, len(readers), _BATCH):
             rows = await self._session.scalars(
                 select(b.user_id).where(
                     b.pod_id == pod_id,
-                    _is(person),
+                    anyone,
                     b.user_id.in_(readers[start : start + _BATCH]),
                 )
             )

@@ -293,13 +293,13 @@ async def test_a_block_follows_a_contact_into_the_one_they_turned_out_to_be(
 
     survivor = await blocks.blockers_among(
         pod_id=UUID(pod.id),
-        person=Principal.contact(older.id),
+        people=[Principal.contact(older.id)],
         user_ids=[owner, editor],
     )
     assert survivor == {owner, editor}
     assert not await blocks.blockers_among(
         pod_id=UUID(pod.id),
-        person=Principal.contact(newer.id),
+        people=[Principal.contact(newer.id)],
         user_ids=[owner, editor],
     )
 
@@ -341,6 +341,7 @@ async def test_a_line_from_somebody_blocked_is_neither_reported_nor_copied(
     assert theirs.status_code == 201, theirs.text
 
 
+@pytest.mark.drives_work
 async def test_a_contact_the_pod_stopped_answering_is_pushed_to_nobody(
     pod: Pod, db_session
 ):
