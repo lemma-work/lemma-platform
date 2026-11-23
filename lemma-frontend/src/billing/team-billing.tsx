@@ -70,7 +70,14 @@ export function TeamBillingSection({ orgId, orgName }: { orgId: string; orgName?
     const myRole = people.find((member) => member.user_id === me.data?.id)?.role ?? null;
     const mayBuy = canManage(myRole);
     const mayStop = myRole === "ORG_OWNER";
-    const buyers = people.filter((member) => canManage(member.role)).length;
+    /* Whether this person may buy is only known once both reads answer;
+       until then nothing is offered, rather than a button the server may
+       refuse. */
+    const roleKnown = members.isSuccess && me.isSuccess;
+    /* Who can buy, counted only from a roster read to its end: the first
+       page of a larger organization would undercount them. */
+    const wholeRoster = members.isSuccess && !(members.data as { next_page_token?: string | null }).next_page_token;
+    const buyers = wholeRoster ? people.filter((member) => canManage(member.role)).length : 0;
 
     const plan = useOrgPlan(orgId, waiting);
     const plans = usePlans();
@@ -112,9 +119,34 @@ export function TeamBillingSection({ orgId, orgName }: { orgId: string; orgName?
     const subscription = plan.data ?? null;
     const note = standing(subscription);
     const bought = seats.data?.current_seats ?? 0;
-    /* Everyone in the organization, which is what a checkout charges for. The
-       seat read counts it; the roster is the fallback while that loads. */
-    const present = seats.data?.member_count ?? (members.isSuccess ? people.length : null);
+    /* Everyone in the organization, which is what a checkout charges for.
+       Only the seat read counts all of them, so until it answers the head
+       count is unknown, and nothing that depends on it is shown or sold. */
+    const present = seats.data?.member_count ?? null;
+    const where = orgName ?? "this organization";
+    const blocked = !roleKnown
+        ? (members.isError || me.isError
+            ? {
+                short: "Couldn’t read who can buy",
+                long: <>Couldn’t read who can choose the plan for {where}.
+                    <button type="button" className="b b--s b--secondary" onClick={() => { void members.refetch(); void me.refetch(); }}><RefreshIcon /> Try again</button></>,
+            }
+            : { short: "Checking who can buy…" })
+        : !mayBuy
+            ? {
+                short: "An owner or editor can choose it",
+                long: "Owners and editors choose the plan for " + where
+                    + (buyers > 0 ? ". " + (buyers === 1 ? "One person" : buyers + " people") + " here can." : "."),
+            }
+            : present === null
+                ? (seats.isError
+                    ? {
+                        short: "Couldn’t read how many people are here",
+                        long: <>Couldn’t read how many people are in {where}, so the plans can’t be priced for it.
+                            <button type="button" className="b b--s b--secondary" onClick={() => void seats.refetch()}><RefreshIcon /> Try again</button></>,
+                    }
+                    : { short: "Counting the people here…" })
+                : undefined;
     const allowance = allowanceOf(limits.data);
     const crowded = allowance.kind === "blocked" || (allowance.kind === "within" && allowance.warn);
     const unpaid = present !== null && paying(subscription) && present > bought ? present - bought : 0;
@@ -164,11 +196,7 @@ export function TeamBillingSection({ orgId, orgName }: { orgId: string; orgName?
                 people={present}
                 orgName={orgName}
                 crowded={crowded}
-                blocked={members.isSuccess && !mayBuy ? {
-                    short: "An owner or editor can choose it",
-                    long: "Owners and editors choose the plan for " + (orgName ?? "this organization")
-                        + (buyers > 0 ? ". " + (buyers === 1 ? "One person" : buyers + " people") + " here can." : "."),
-                } : undefined}
+                blocked={blocked}
                 start={(planId) => start.mutateAsync(planId)}
                 change={(planId) => change.mutateAsync(planId)}
                 onWaiting={setWaiting}

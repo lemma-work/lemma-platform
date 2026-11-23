@@ -245,6 +245,7 @@
 /* Why this person can look but not buy, once, above the cards. */
 .kbill-who {
     display: flex;
+    flex-wrap: wrap;
     align-items: baseline;
     gap: 10px;
     margin: 0;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type CSSProperties } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import { CheckIcon, ExternalIcon } from "@/ui/icons";
 import { captureEvent } from "@/site/analytics/client";
 import { PlanDialog } from "./plan-dialog";
@@ -45,9 +45,10 @@ export function PlanCards({
     orgName?: string;
     /** Usage is near or at its limit, which earns the next plan up a word. */
     crowded: boolean;
-    /** Why this person may look but not buy, short (in a card) and long
-     *  (once, above them). Absent for somebody who can buy. */
-    blocked?: { short: string; long: string };
+    /** Why this person may not buy here, or not yet: short, in each card, and
+     *  where it needs saying, long, once above them. Absent for somebody who
+     *  can buy. */
+    blocked?: { short: string; long?: ReactNode };
     start: (planId: string) => Promise<StartedCheckout>;
     change: (planId: string) => Promise<ChangeAcknowledged>;
     onWaiting: (waiting: boolean) => void;
@@ -87,7 +88,7 @@ export function PlanCards({
                 {base && rows.some((row) => row.label === "Usage") && <span>Usage is measured against {shortName(base)}</span>}
             </p>
 
-            {blocked && <p className="kbill-who"><span className="kstatus kstatus--off" aria-hidden="true" />{blocked.long}</p>}
+            {blocked?.long && <p className="kbill-who"><span className="kstatus kstatus--off" aria-hidden="true" />{blocked.long}</p>}
 
             {selfServe.length > 0 && (
                 <div className="kbill-plans" style={{ "--n": selfServe.length } as CSSProperties}>
@@ -129,6 +130,10 @@ export function PlanCards({
                                         </span>
                                     ) : blocked ? (
                                         <span className="kbill-plan__said">{blocked.short}</span>
+                                    ) : isPerSeat(plan) && people === null ? (
+                                        /* A per-seat plan can't be quoted
+                                           before the head count is known. */
+                                        <span className="kbill-plan__said">Counting the people here…</span>
                                     ) : (
                                         <button
                                             type="button"
