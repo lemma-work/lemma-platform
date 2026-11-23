@@ -179,6 +179,22 @@ class PublicRowsResponse(BaseModel):
 class RowRequest(BaseModel):
     table: str = Field(max_length=255)
     values: dict[str, object] = Field(default_factory=dict)
+    altcha: str | None = Field(
+        default=None,
+        max_length=4096,
+        description="The solved challenge, when starting an anonymous session.",
+    )
+
+
+class RowResponse(Accepted):
+    secret: str | None = Field(
+        default=None,
+        description="Only when new: keep it to come back. Null means keep the one you have.",
+    )
+    session: SessionResponse | None = Field(
+        default=None,
+        description="Only when new: credentials to continue chatting.",
+    )
 
 
 def _visitors(
@@ -473,39 +489,57 @@ async def web_read_rows(
     "/{public_key}/rows",
     operation_id="public.web.row.add",
     status_code=201,
-    response_model=Accepted,
+    response_model=RowResponse,
+    response_model_exclude_none=True,
 )
 async def web_add_row(
     body: RowRequest,
+    request: Request,
+    response: Response,
     widget: PublicWidgetDep,
     visitor: OptionalVisitorDep,
     address: VisitorAddressDep,
     chat: WebChat = Depends(web_chat),
-) -> Accepted:
+) -> RowResponse:
     """Add one row to a table the pod opened to visitors. Nothing is read back."""
-    await chat.add_visitor_row(
-        widget, visitor, table=body.table, answers=body.values, address=address
+    started = await chat.add_visitor_row(
+        widget,
+        visitor,
+        table=body.table,
+        answers=body.values,
+        address=address,
+        altcha=body.altcha,
     )
-    return Accepted()
+    if started is not None:
+        if kept_chats.keeps_chats(request) and started.secret:
+            kept_chats.keep(response, widget, started.secret)
+        return RowResponse(
+            ok=True,
+            secret=started.secret,
+            session=_session_response(started, title=await chat.widget_title(widget)),
+        )
+    return RowResponse(ok=True)
 
 
 @router.post(
     "/{public_key}/rows/with-files",
     operation_id="public.web.row.add_with_files",
     status_code=201,
-    response_model=Accepted,
+    response_model=RowResponse,
+    response_model_exclude_none=True,
     # The widget script's own wire, like the page and the script itself: a page
     # attaches a file through ``Lemma.addRow``, never by calling this.
     include_in_schema=False,
 )
 async def web_add_row_with_files(
     request: Request,
+    response: Response,
     widget: PublicWidgetDep,
     visitor: OptionalVisitorDep,
     address: VisitorAddressDep,
     table: str = Query(max_length=255),
     chat: WebChat = Depends(web_chat),
-) -> Accepted:
+) -> RowResponse:
     """Add one row with files attached. Nothing is read back.
 
     ``multipart/form-data``: the typed answers as a JSON object in ``values``,
@@ -530,7 +564,7 @@ async def web_add_row_with_files(
                     },
                     # A file input left empty may arrive as a bare field of its
                     # column's name: taken, and never read as a value.
-                    text_fields={"values", *attachable},
+                    text_fields={"values", "altcha", *attachable},
                     combined_max_bytes=surface_settings.surface_web_attachments_max_bytes,
                     coordinator=_visitor_uploads,
                 )
@@ -555,14 +589,24 @@ async def web_add_row_with_files(
             # An empty file input still sends a part: no name, no bytes.
             if (staged := form.file(name)) is not None and staged.size > 0
         }
-        await chat.save_visitor_row(
+        started = await chat.save_visitor_row(
             widget,
             visitor,
             table=table,
             answers=_typed_answers(form.text("values")),
             attachments=attachments,
+            address=address,
+            altcha=form.text("altcha"),
         )
-    return Accepted()
+    if started is not None:
+        if kept_chats.keeps_chats(request) and started.secret:
+            kept_chats.keep(response, widget, started.secret)
+        return RowResponse(
+            ok=True,
+            secret=started.secret,
+            session=_session_response(started, title=await chat.widget_title(widget)),
+        )
+    return RowResponse(ok=True)
 
 
 def _typed_answers(raw: str | None) -> dict[str, object]:

@@ -45,6 +45,8 @@ class _Chat:
     def __init__(self, *, admit_error=None) -> None:
         self.admit_error = admit_error
         self.saved: list[dict[str, object]] = []
+        self.last_address: str | None = None
+        self.last_altcha: str | None = None
 
     async def admit_row(self, widget, visitor, *, table, address):
         if self.admit_error is not None:
@@ -52,7 +54,19 @@ class _Chat:
         assert table == "applications"
         return APPLICATIONS
 
-    async def save_visitor_row(self, widget, visitor, *, table, answers, attachments):
+    async def save_visitor_row(
+        self,
+        widget,
+        visitor,
+        *,
+        table,
+        answers,
+        attachments,
+        address: str | None = None,
+        altcha: str | None = None,
+    ):
+        self.last_address = address
+        self.last_altcha = altcha
         # The staged files are gone once the request ends: read them now.
         self.saved.append(
             {
@@ -189,3 +203,15 @@ def test_answers_too_long_are_said_as_answers_not_files():
     assert response.status_code == 413
     assert response.json()["message"] == "Your answers are too long"
     assert chat.saved == []
+
+
+def test_multipart_row_forwards_address_and_altcha():
+    chat = _Chat()
+    response = _client(chat).post(
+        URL,
+        data={**_values(full_name="Ana"), "altcha": "solved_proof"},
+        files={"cv": ("cv.pdf", b"%PDF-1.7", "application/pdf")},
+    )
+    assert response.status_code == 201, response.text
+    assert chat.last_address == "1.2.3.4"
+    assert chat.last_altcha == "solved_proof"

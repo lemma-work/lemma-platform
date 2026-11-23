@@ -55,6 +55,10 @@ from app.modules.agent_surfaces.services.outsider_limits import (
     WebWidgetLimiter,
 )
 from app.modules.agent_surfaces.services.visitor_access import Visitor
+from app.modules.agent_surfaces.services.web_visitors import (
+    StartedSession,
+    WebVisitors,
+)
 from app.modules.agent_surfaces.services.widget_directory import widget_by_key
 from app.modules.channels.contracts import ContactsHome, Source, source_for
 from app.modules.contacts.contracts import contact_by_id, open_anonymous_contact
@@ -77,6 +81,7 @@ from app.modules.datastore.contracts.public_rows import (
     PublicRowRefused,
     PublicRowsClosed,
     add_visitor_row,
+    public_values,
     visitor_table,
 )
 from app.modules.pod.contracts.members import (
@@ -98,12 +103,14 @@ class WebChat:
         *,
         limiter: WebWidgetLimiter | None = None,
         turns: ContactTurnLimiter | None = None,
+        visitors: WebVisitors | None = None,
     ) -> None:
         self.uow_factory = uow_factory
         self.limiter = limiter or WebWidgetLimiter()
         #: How often a visitor may put the bot to work: the one limiter every
         #: door for people outside the pod counts turns with.
         self.turns = turns or ContactTurnLimiter()
+        self.visitors = visitors or WebVisitors(uow_factory, limiter=self.limiter)
 
     async def widget_for_key(self, public_key: str) -> WebWidget:
         widget = await widget_by_key(public_key, uow_factory=self.uow_factory)
@@ -442,9 +449,17 @@ class WebChat:
         table: str,
         answers: dict[str, object],
         address: str,
-    ) -> None:
+        altcha: str | None = None,
+    ) -> StartedSession | None:
         await self.admit_row(widget, visitor, table=table, address=address)
-        await self.save_visitor_row(widget, visitor, table=table, answers=answers)
+        return await self.save_visitor_row(
+            widget,
+            visitor,
+            table=table,
+            answers=answers,
+            address=address,
+            altcha=altcha,
+        )
 
     async def admit_row(
         self,
@@ -476,11 +491,33 @@ class WebChat:
         *,
         table: str,
         answers: dict[str, object],
+        address: str | None = None,
+        altcha: str | None = None,
         attachments: dict[str, Attachment] | None = None,
-    ) -> None:
+    ) -> StartedSession | None:
         """Add the row :meth:`admit_row` let through, with any files attached."""
         vouched = visitor is not None and visitor.session.is_vouched
-        contact_id = await self._writer(visitor) if visitor is not None else None
+        opened, _ = await self.visitor_table(widget, table=table)
+        try:
+            public_values(
+                opened.columns,
+                answers,
+                attached=set(attachments or {}),
+            )
+        except PublicRowRefused as exc:
+            raise refused(exc.message, 422, "bad_answer") from exc
+        started_session: StartedSession | None = None
+        if visitor is not None:
+            contact_id = await self._writer(visitor)
+        else:
+            if address is None:
+                raise refused("Could not identify client address", 400, "bad_address")
+            (
+                started_session,
+                contact_id,
+            ) = await self.visitors.open_anonymous_row_session(
+                widget, altcha=altcha, address=address
+            )
         try:
             await add_visitor_row(
                 self.uow_factory,
@@ -498,6 +535,7 @@ class WebChat:
             raise refused(
                 "This isn't taking answers right now", 403, "table_closed"
             ) from exc
+        return started_session
 
     async def _writer(self, visitor: Visitor) -> UUID:
         """The contact a visitor writing a row is, opened if this is their first write."""

@@ -63,6 +63,7 @@ from app.modules.contacts.contracts import (
     ProofTooWeak,
     contact_by_id,
     find_contact,
+    open_anonymous_contact,
     prove_handle,
 )
 from app.modules.contacts.contracts.outreach import host_handle
@@ -244,6 +245,39 @@ class WebVisitors:
                     "This chat has ended. Start a new one.", 401, "no_session"
                 )
         return await self._open_session(widget, claims, altcha=altcha, address=address)
+
+    async def open_anonymous_row_session(
+        self,
+        widget: WebWidget,
+        *,
+        altcha: str | None,
+        address: str,
+    ) -> tuple[StartedSession, UUID]:
+        """Open an anonymous session and its contact on the visitor's first row write.
+
+        Used when a public row arrives without a visitor session.
+        """
+        await self._prove_human(altcha, purpose=SESSION_PROOF)
+        if not await self.limiter.allow_session(widget_id=widget.id, address=address):
+            raise refused("Too many chats. Try again later.", 429, "rate_limited")
+        async with self.uow_factory() as uow:
+            session, secret = await open_visitor_session(
+                uow,
+                pod_id=widget.pod_id,
+                widget_id=widget.id,
+                contact_id=None,
+                strength=VisitorStrength.ANONYMOUS,
+                ip_hash=address_hash(address),
+            )
+            contact = await open_anonymous_contact(
+                uow, pod_id=widget.pod_id, session_id=session.id
+            )
+            session_with_contact = session.model_copy(update={"contact_id": contact.id})
+            started = await self._issue_access(
+                uow, widget, session_with_contact, secret=secret
+            )
+            await uow.commit()
+        return started, contact.id
 
     async def _host_claims(self, widget: WebWidget, host_token: str) -> HostClaims:
         async with self.uow_factory() as uow:

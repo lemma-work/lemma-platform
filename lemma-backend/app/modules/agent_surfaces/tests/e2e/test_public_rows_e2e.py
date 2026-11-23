@@ -27,10 +27,12 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
 from app.modules.agent_surfaces.tests.e2e.test_web_widgets_e2e import (
     SHOP,
     _as,
+    _handles_of,
     _latest_code,
     _page,
     _say,
     _session,
+    _solved,
     _widget,
 )
 from app.modules.datastore.contracts.contact_rows import rows_for_contact
@@ -383,3 +385,258 @@ async def test_the_chat_fills_the_open_columns_and_writes_nothing(
         "values": {"full_name": "Jonas Weber", "seats": "3", "track": "Code"},
     }
     assert await _rows(authenticated_client, pod_id, table) == []
+
+
+async def test_anonymous_row_submission_without_session_creates_contact_and_session(
+    authenticated_client: AsyncClient, test_pod, db_session: AsyncSession
+):
+    pod_id = test_pod["id"]
+    table = await _signups(
+        authenticated_client,
+        pod_id,
+        "anonymous_signups",
+        contact_owned=True,
+        contact_columns=["full_name", "track"],
+    )
+    opened = await _open(authenticated_client, pod_id, table, audience="anyone")
+    assert opened.status_code == 200, opened.text
+
+    widget = await _widget(authenticated_client, pod_id, name="Public Door")
+    key = widget["public_key"]
+
+    contacts_before = (
+        await authenticated_client.get(f"/pods/{pod_id}/contacts")
+    ).json()["items"]
+    assert len(contacts_before) == 0
+
+    # 1. Successful row submission without an Authorization header
+    added = await authenticated_client.post(
+        f"/public/web/{key}/rows",
+        json={
+            "table": table,
+            "values": {"full_name": "Ghost Visitor", "track": "Design"},
+        },
+        headers=_page(),
+    )
+    assert added.status_code == 201, added.text
+    data = added.json()
+    assert data["ok"] is True
+    assert data["secret"] is not None
+    assert data["session"] is not None
+    assert data["session"]["is_contact"] is False
+    access_token = data["session"]["access_token"]
+
+    # 2. Exactly one anonymous visitor contact created
+    contacts = (await authenticated_client.get(f"/pods/{pod_id}/contacts")).json()[
+        "items"
+    ]
+    assert len(contacts) == 1
+    contact_id = contacts[0]["id"]
+
+    # 3. The saved row's contact_id matching the created anonymous contact
+    rows = await _rows(authenticated_client, pod_id, table)
+    assert len(rows) == 1
+    assert rows[0]["contact_id"] == contact_id
+    assert rows[0]["full_name"] == "Ghost Visitor"
+
+    # 4. The contact having the expected anonymous WEB/SESSION handle
+    handles = await _handles_of(db_session, UUID(contact_id))
+    assert handles == {("WEB", "SESSION")}
+
+    # 5. Existing-session submissions reusing the same contact without duplication
+    followup = await authenticated_client.post(
+        f"/public/web/{key}/rows",
+        json={
+            "table": table,
+            "values": {"full_name": "Ghost Visitor Again", "track": "Code"},
+        },
+        headers={**_page(), "Authorization": f"Bearer {access_token}"},
+    )
+    assert followup.status_code == 201, followup.text
+    assert followup.json() == {"ok": True}
+
+    contacts_after = (
+        await authenticated_client.get(f"/pods/{pod_id}/contacts")
+    ).json()["items"]
+    assert len(contacts_after) == 1
+
+    rows_after = await _rows(authenticated_client, pod_id, table)
+    assert len(rows_after) == 2
+    assert [r["contact_id"] for r in rows_after] == [contact_id, contact_id]
+
+
+async def test_anonymous_row_submission_with_invalid_token_is_rejected(
+    authenticated_client: AsyncClient, test_pod
+):
+    pod_id = test_pod["id"]
+    table = await _signups(authenticated_client, pod_id, "invalid_token_test")
+    await _open(authenticated_client, pod_id, table, audience="anyone")
+    widget = await _widget(authenticated_client, pod_id, name="Token Door")
+    key = widget["public_key"]
+
+    refused = await authenticated_client.post(
+        f"/public/web/{key}/rows",
+        json={"table": table, "values": {"full_name": "Hacker"}},
+        headers={**_page(), "Authorization": "Bearer not_a_valid_token"},
+    )
+    assert refused.status_code == 401
+    assert refused.json()["code"] == "bad_token"
+
+    contacts = (await authenticated_client.get(f"/pods/{pod_id}/contacts")).json()[
+        "items"
+    ]
+    assert len(contacts) == 0
+
+
+async def test_anonymous_row_submission_contacts_only_table_still_rejects_stranger(
+    authenticated_client: AsyncClient, test_pod
+):
+    pod_id = test_pod["id"]
+    table = await _signups(
+        authenticated_client,
+        pod_id,
+        "contacts_only_guard",
+        contact_owned=True,
+        contact_columns=["full_name"],
+    )
+    await _open(authenticated_client, pod_id, table, audience="contacts")
+    widget = await _widget(authenticated_client, pod_id, name="Guard Door")
+    key = widget["public_key"]
+
+    refused = await authenticated_client.post(
+        f"/public/web/{key}/rows",
+        json={"table": table, "values": {"full_name": "Stranger"}},
+        headers=_page(),
+    )
+    assert refused.status_code == 403
+    assert refused.json()["code"] == "needs_contact"
+
+    contacts = (await authenticated_client.get(f"/pods/{pod_id}/contacts")).json()[
+        "items"
+    ]
+    assert len(contacts) == 0
+
+
+async def test_anonymous_row_submission_with_files_creates_contact_and_session(
+    authenticated_client: AsyncClient, test_pod, db_session: AsyncSession
+):
+    pod_id = test_pod["id"]
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/tables",
+        json={
+            "name": "resumes",
+            "primary_key_column": "id",
+            "enable_rls": False,
+            "contact_owned": True,
+            "contact_columns": ["full_name"],
+            "columns": [
+                {"name": "id", "type": "UUID", "default": "gen_random_uuid()"},
+                {"name": "full_name", "type": "TEXT", "required": True},
+                {"name": "cv", "type": "FILE_PATH", "required": True},
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
+    table = "resumes"
+    await _open(authenticated_client, pod_id, table, columns=["full_name", "cv"])
+
+    widget = await _widget(authenticated_client, pod_id, name="Files Door")
+    key = widget["public_key"]
+
+    added = await authenticated_client.post(
+        f"/public/web/{key}/rows/with-files?table={table}",
+        data={"values": '{"full_name": "File Candidate"}'},
+        files={"cv": ("cv.pdf", b"%PDF-1.7 resume bytes", "application/pdf")},
+        headers=_page(),
+    )
+    assert added.status_code == 201, added.text
+    data = added.json()
+    assert data["ok"] is True
+    assert data["secret"] is not None
+    assert data["session"] is not None
+
+    contacts = (await authenticated_client.get(f"/pods/{pod_id}/contacts")).json()[
+        "items"
+    ]
+    assert len(contacts) == 1
+    contact_id = contacts[0]["id"]
+
+    rows = await _rows(authenticated_client, pod_id, table)
+    assert len(rows) == 1
+    assert rows[0]["contact_id"] == contact_id
+    assert rows[0]["full_name"] == "File Candidate"
+
+    handles = await _handles_of(db_session, UUID(contact_id))
+    assert handles == {("WEB", "SESSION")}
+
+
+async def test_anonymous_row_submission_with_bot_protection_requires_altcha(
+    authenticated_client: AsyncClient, test_pod, monkeypatch
+):
+    from app.core.config import settings
+    from app.core.public_web import public_web_settings
+    from app.modules.identity.config import identity_settings
+
+    monkeypatch.setattr(public_web_settings, "public_web_altcha_enabled", True)
+    monkeypatch.setattr(settings, "auth_altcha_enabled", False)
+    monkeypatch.setattr(identity_settings, "auth_altcha_hmac_key", None)
+    monkeypatch.setattr(identity_settings, "auth_altcha_max_number", 10_000)
+
+    pod_id = test_pod["id"]
+    table = await _signups(authenticated_client, pod_id, "guarded_rows")
+    await _open(authenticated_client, pod_id, table)
+
+    widget = await _widget(authenticated_client, pod_id, name="Guarded Form")
+    key = widget["public_key"]
+
+    # Submission without session and without ALTCHA proof is refused
+    bare = await authenticated_client.post(
+        f"/public/web/{key}/rows",
+        json={"table": table, "values": {"full_name": "Bot"}},
+        headers=_page(),
+    )
+    assert bare.status_code == 400
+    assert bare.json()["code"] == "altcha_failed"
+
+    # Solve challenge
+    challenge = (
+        await authenticated_client.get(f"/public/web/{key}/challenge", headers=_page())
+    ).json()
+    assert challenge["enabled"] is True
+    proof = _solved(challenge)
+
+    # Submission with valid proof succeeds
+    added = await authenticated_client.post(
+        f"/public/web/{key}/rows",
+        json={"table": table, "values": {"full_name": "Human"}, "altcha": proof},
+        headers=_page(),
+    )
+    assert added.status_code == 201, added.text
+    data = added.json()
+    assert data["ok"] is True
+    assert data["secret"] is not None
+
+
+async def test_anonymous_row_submission_validation_failure_creates_no_contact(
+    authenticated_client: AsyncClient, test_pod
+):
+    pod_id = test_pod["id"]
+    table = await _signups(authenticated_client, pod_id, "validation_fail")
+    await _open(authenticated_client, pod_id, table)
+
+    widget = await _widget(authenticated_client, pod_id, name="Val Door")
+    key = widget["public_key"]
+
+    # Missing required field full_name
+    refused = await authenticated_client.post(
+        f"/public/web/{key}/rows",
+        json={"table": table, "values": {"work_email": "fail@client.example"}},
+        headers=_page(),
+    )
+    assert refused.status_code == 422
+    assert "Full name is required" in refused.json()["message"]
+
+    contacts = (await authenticated_client.get(f"/pods/{pod_id}/contacts")).json()[
+        "items"
+    ]
+    assert len(contacts) == 0
