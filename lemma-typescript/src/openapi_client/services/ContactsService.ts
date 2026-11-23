@@ -95,6 +95,7 @@ export class ContactsService {
     }
     /**
      * Update Contact
+     * Rename a contact, or stop the pod's agents answering them (`blocked`).
      * @param podId
      * @param contactId
      * @param requestBody

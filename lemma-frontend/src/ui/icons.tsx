@@ -43,6 +43,8 @@ export {
     // A GitHub repository a new chat works in.
     GitBranch as BranchIcon,
     Broadcast as ReachIcon, GraduationCap as TaughtIcon, Handshake as AskIcon, Cpu as ModelIcon, Plug as PlugIcon,
+    // Reporting what was said, and blocking the person who said it.
+    Flag as ReportIcon, Prohibit as BlockIcon,
 } from "@phosphor-icons/react";
 
 export function LemmaLogo({ compact = false }: { compact?: boolean }) {

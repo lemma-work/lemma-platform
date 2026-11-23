@@ -87,6 +87,7 @@ def _contact(row: ContactModel, identities: Sequence[ContactIdentityModel]) -> C
         merged_into_id=row.merged_into_id,
         merged_into_user_id=row.merged_into_user_id,
         answered_at=row.answered_at,
+        blocked_at=row.blocked_at,
     )
 
 
@@ -485,6 +486,30 @@ class ContactRepository:
                 .where(ContactModel.id == survivor.id)
                 .values(answered_at=merged.answered_at)
             )
+        if merged.blocked_at is not None and survivor.blocked_at is None:
+            # The same person, still blocked: merging must not lift it.
+            await self.session.execute(
+                update(ContactModel)
+                .where(ContactModel.id == survivor.id)
+                .values(blocked_at=merged.blocked_at)
+            )
+
+    async def set_blocked(
+        self, *, pod_id: UUID, contact_id: UUID, by: UUID | None
+    ) -> bool:
+        """Stop the pod's agents answering them (``by`` the member who did),
+        or, ``by`` None, let them answer again. Whether the contact is here."""
+        values = (
+            {"blocked_at": datetime.now(timezone.utc), "blocked_by_user_id": by}
+            if by is not None
+            else {"blocked_at": None, "blocked_by_user_id": None}
+        )
+        result = await self.session.execute(
+            update(ContactModel)
+            .where(ContactModel.id == contact_id, ContactModel.pod_id == pod_id)
+            .values(**values)
+        )
+        return bool(result.rowcount)
 
     async def note_answered(self, *, pod_id: UUID, contact_id: UUID) -> bool:
         """Record the first time an agent answered them; whether this was it."""

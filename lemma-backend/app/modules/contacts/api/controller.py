@@ -2,7 +2,8 @@
 
 Reading a pod's contacts takes what reading its conversations takes: a contact
 is a person the pod talks to, and their handles are as private as what was
-said. Renaming a contact takes what editing the pod takes. Exporting or
+said. Renaming a contact, or stopping the pod's agents answering one, takes
+what editing the pod takes. Exporting or
 deleting one -- a request to see or to forget a person -- takes a pod admin.
 """
 
@@ -91,6 +92,14 @@ class ContactResponse(BaseModel):
             "absent until they first write."
         ),
     )
+    blocked_at: datetime | None = Field(
+        default=None,
+        description=(
+            "When the pod's agents were stopped from answering them: what they "
+            "write still reaches the pod's chats, and no agent answers it or "
+            "writes to them. Members still can."
+        ),
+    )
 
 
 class ContactListResponse(BaseModel):
@@ -119,6 +128,13 @@ class ContactExportResponse(BaseModel):
 
 class ContactUpdateRequest(BaseModel):
     display_name: str | None = Field(default=None, max_length=255)
+    blocked: bool | None = Field(
+        default=None,
+        description=(
+            "True stops the pod's agents answering them, or writing to them; "
+            "false lets them again. Absent leaves it as it is."
+        ),
+    )
 
 
 async def _response(uow: SqlAlchemyUnitOfWork, contact: Contact) -> ContactResponse:
@@ -167,6 +183,7 @@ def _shown(
         is_anonymous=contact.is_anonymous,
         answered_at=contact.answered_at,
         channel_id=channel_id,
+        blocked_at=contact.blocked_at,
     )
 
 
@@ -254,16 +271,33 @@ async def get_contact(pod_id: UUID, contact_id: UUID, uow: UoWDep) -> ContactRes
     dependencies=[require_action(Permissions.POD_UPDATE)],
 )
 async def update_contact(
-    pod_id: UUID, contact_id: UUID, request: ContactUpdateRequest, uow: UoWDep
+    pod_id: UUID,
+    contact_id: UUID,
+    request: ContactUpdateRequest,
+    user: CurrentUser,
+    uow: UoWDep,
 ) -> ContactResponse:
-    # The person a merged contact's id now leads to is the one renamed: the
+    """Rename a contact, or stop the pod's agents answering them (`blocked`)."""
+    # The person a merged contact's id now leads to is the one changed: the
     # absorbed row is never shown again.
     contact = await _found(uow, pod_id=pod_id, contact_id=contact_id)
     repository = ContactRepository(uow.session)
-    if not await repository.rename(
-        pod_id=pod_id, contact_id=contact.id, display_name=request.display_name
+    given = request.model_fields_set
+    # A request without `blocked` is a rename, as it always was: even `{}`
+    # clears the name.
+    if "display_name" in given or "blocked" not in given:
+        if not await repository.rename(
+            pod_id=pod_id, contact_id=contact.id, display_name=request.display_name
+        ):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Contact not found")
+    if request.blocked is not None and request.blocked != (
+        contact.blocked_at is not None
     ):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Contact not found")
+        await repository.set_blocked(
+            pod_id=pod_id,
+            contact_id=contact.id,
+            by=user.id if request.blocked else None,
+        )
     await uow.commit()
     return await _response(uow, await _found(uow, pod_id=pod_id, contact_id=contact.id))
 

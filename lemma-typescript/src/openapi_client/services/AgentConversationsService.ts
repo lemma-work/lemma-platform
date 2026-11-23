@@ -13,6 +13,8 @@ import type { ConversationType } from '../models/ConversationType.js';
 import type { CreateConversationRequest } from '../models/CreateConversationRequest.js';
 import type { MessageListResponse } from '../models/MessageListResponse.js';
 import type { PendingInteractionListResponse } from '../models/PendingInteractionListResponse.js';
+import type { ReportRequest } from '../models/ReportRequest.js';
+import type { ReportResponse } from '../models/ReportResponse.js';
 import type { ResolveUserApprovalRequest } from '../models/ResolveUserApprovalRequest.js';
 import type { SendMessageRequest } from '../models/SendMessageRequest.js';
 import type { UpdateConversationRequest } from '../models/UpdateConversationRequest.js';
@@ -375,6 +377,38 @@ export class AgentConversationsService {
                 404: `Conversation was not found or is not visible`,
                 409: `The message is no longer queued`,
                 422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Report Conversation Message
+     * Report a reply of the Lemma's, or a message from somebody outside, to the team that runs Lemma: why, and anything to add. Reporting it again replaces the report.
+     * @param podId
+     * @param conversationId
+     * @param messageId
+     * @param requestBody
+     * @returns ReportResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentConversationMessageReport(
+        podId: string,
+        conversationId: string,
+        messageId: string,
+        requestBody: ReportRequest,
+    ): CancelablePromise<ReportResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/conversations/{conversation_id}/messages/{message_id}/report',
+            path: {
+                'pod_id': podId,
+                'conversation_id': conversationId,
+                'message_id': messageId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                404: `Conversation or message not found, or not visible`,
+                422: `Not something that can be reported`,
             },
         });
     }

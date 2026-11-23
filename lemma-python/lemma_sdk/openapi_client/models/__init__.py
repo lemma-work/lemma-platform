@@ -118,6 +118,8 @@ _NAME_TO_MODULE = {
     'AvailableSurfaceChannelResponse': 'available_surface_channel_response',
     'AvailableSurfaceChannelsResponse': 'available_surface_channels_response',
     'AvailableSurfacesResponse': 'available_surfaces_response',
+    'BlockResponse': 'block_response',
+    'BlocksResponse': 'blocks_response',
     'BrowserAccessRequest': 'browser_access_request',
     'BrowserAccessResponse': 'browser_access_response',
     'BrowserCommandRequest': 'browser_command_request',
@@ -613,6 +615,9 @@ _NAME_TO_MODULE = {
     'RecordUpdateResponseRecordUpdate': 'record_update_response_record_update',
     'ReportFeedbackRequest': 'report_feedback_request',
     'ReportFeedbackResponse': 'report_feedback_response',
+    'ReportReason': 'report_reason',
+    'ReportRequest': 'report_request',
+    'ReportResponse': 'report_response',
     'ResetRequest': 'reset_request',
     'ResetRequestScopesItem': 'reset_request_scopes_item',
     'ResetResponse': 'reset_response',
@@ -988,6 +993,8 @@ if TYPE_CHECKING:
     from .available_surface_channel_response import AvailableSurfaceChannelResponse
     from .available_surface_channels_response import AvailableSurfaceChannelsResponse
     from .available_surfaces_response import AvailableSurfacesResponse
+    from .block_response import BlockResponse
+    from .blocks_response import BlocksResponse
     from .browser_access_request import BrowserAccessRequest
     from .browser_access_response import BrowserAccessResponse
     from .browser_command_request import BrowserCommandRequest
@@ -1483,6 +1490,9 @@ if TYPE_CHECKING:
     from .record_update_response_record_update import RecordUpdateResponseRecordUpdate
     from .report_feedback_request import ReportFeedbackRequest
     from .report_feedback_response import ReportFeedbackResponse
+    from .report_reason import ReportReason
+    from .report_request import ReportRequest
+    from .report_response import ReportResponse
     from .reset_request import ResetRequest
     from .reset_request_scopes_item import ResetRequestScopesItem
     from .reset_response import ResetResponse
@@ -1871,6 +1881,8 @@ __all__ = [
     'AvailableSurfaceChannelResponse',
     'AvailableSurfaceChannelsResponse',
     'AvailableSurfacesResponse',
+    'BlockResponse',
+    'BlocksResponse',
     'BrowserAccessRequest',
     'BrowserAccessResponse',
     'BrowserCommandRequest',
@@ -2366,6 +2378,9 @@ __all__ = [
     'RecordUpdateResponseRecordUpdate',
     'ReportFeedbackRequest',
     'ReportFeedbackResponse',
+    'ReportReason',
+    'ReportRequest',
+    'ReportResponse',
     'ResetRequest',
     'ResetRequestScopesItem',
     'ResetResponse',

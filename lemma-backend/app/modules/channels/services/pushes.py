@@ -12,7 +12,7 @@ question waiting on them; a line in their own channel they did not write; a
 contact's line in a channel assigned to them (seated or not); and, set to ``ALL``, any line
 written in Lemma in a group they are in. Never an agent's line at a platform
 (seen there) or answering in a thread (seen in the app), nor a line withheld
-from them (they could not read it). ``MENTIONS`` -- a group seat's default --
+from them (they could not read it), nor a line from somebody they blocked. ``MENTIONS`` -- a group seat's default --
 keeps only the first two, and so does a note for members only; ``NONE`` and a
 mute stop them all. Somebody named or asked who is not in the channel is told
 too, when they may see it. The first two *call* them: due at once, never held
@@ -42,6 +42,7 @@ from app.modules.channels.domain.entities import (
     SenderKind,
 )
 from app.modules.channels.domain.projection import withheld_from
+from app.modules.channels.infrastructure.blocks import BlockRepository
 from app.modules.channels.infrastructure.lines import LineRepository
 from app.modules.channels.infrastructure.members import MAX_MEMBERS, MemberRepository
 from app.modules.channels.infrastructure.models import ChannelMentionModel
@@ -90,7 +91,7 @@ async def fan_out(
         told[user_id] = True
     for user_id in await _assignee_not_seated(uow, channel, line):
         told.setdefault(user_id, False)
-    await _fold(uow, channel, line, told)
+    await _fold(uow, channel, line, await _not_blocking(uow, channel, line, told))
 
 
 async def push_named(
@@ -116,7 +117,7 @@ async def push_named(
             continue
         if seat is not None or await member_sees(uow, channel, user_id):
             told[user_id] = True
-    await _fold(uow, channel, message, told)
+    await _fold(uow, channel, message, await _not_blocking(uow, channel, message, told))
 
 
 async def fold_back(
@@ -240,6 +241,25 @@ async def _assignee_not_seated(
 
 def _muted(member: Member, at: datetime) -> bool:
     return member.muted_until is not None and member.muted_until > at
+
+
+async def _not_blocking(
+    uow: SqlAlchemyUnitOfWork,
+    channel: Channel,
+    message: ChannelMessage,
+    told: dict[UUID, bool],
+) -> dict[UUID, bool]:
+    """Who is told, less whoever blocked the person who wrote it: they hear
+    nothing of that person's lines, whatever the lines say."""
+    writer = message.sender.principal
+    if writer is None or not told:
+        return told
+    blockers = await BlockRepository(uow.session).blockers_of(
+        pod_id=channel.pod_id, person=writer
+    )
+    return {
+        user_id: calls for user_id, calls in told.items() if user_id not in blockers
+    }
 
 
 def _withheld(channel: Channel, message: ChannelMessage, user_id: UUID) -> bool:
