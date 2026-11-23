@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
-from contextlib import AsyncExitStack
 from datetime import timedelta
 from enum import StrEnum
 from typing import NamedTuple
@@ -270,11 +269,15 @@ async def revoke_apple_sign_in(
             "identity.apple_sign_in.revocation_unreadable",
             reason="the kept Apple token could not be decrypted",
         )
+    elif http is not None:
+        outcome = await revoke_refresh_token(
+            config,
+            client_id=kept.client_id,
+            refresh_token=kept.refresh_token,
+            http=http,
+        )
     else:
-        async with AsyncExitStack() as owned:
-            client = http or await owned.enter_async_context(
-                httpx.AsyncClient(timeout=10)
-            )
+        async with httpx.AsyncClient(timeout=10) as client:
             outcome = await revoke_refresh_token(
                 config,
                 client_id=kept.client_id,
