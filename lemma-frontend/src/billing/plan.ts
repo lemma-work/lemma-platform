@@ -221,6 +221,210 @@ export function offered(plans: Plan[] | undefined, audience: PlanAudience): Plan
         .sort((a, b) => rank(a) - rank(b));
 }
 
+/* ── comparing plans ──────────────────────────────────────────────────── */
+
+/** The plan's name where the page already says who it is for.
+ *
+ *  The catalogue names every plan in full ("Lemma Team Plus"), as an invoice
+ *  should. On a card inside the organization's own billing the page already
+ *  says "Lemma" and "Team", so the card keeps only what tells the plans
+ *  apart. A `short_name` in the catalogue wins; until there is one, the brand
+ *  and the audience word come off the front, and a plan whose whole name is
+ *  the audience ("Lemma Team") keeps it. */
+export function shortName(plan: Plan): string {
+    const own = feature(plan, "short_name");
+    if (typeof own === "string" && own.trim()) return own.trim();
+    const words = plan.name.trim().split(/\s+/);
+    if (words.length > 1 && words[0] === "Lemma") words.shift();
+    if (words.length > 1 && (words[0] === "Team" || words[0] === "Personal")) words.shift();
+    return words.join(" ") || plan.name;
+}
+
+/** Who the plan is for, in one line under its name.
+ *
+ *  The catalogue's `tagline` where it has one. Until then, the description
+ *  without the parts the page already says — "For teams.", "billed per
+ *  seat", and the usage, which the card's own row shows as a multiple —
+ *  so "For teams. Higher LLM and compute sandbox usage, for longer and
+ *  heavier agent runs. Billed per seat." reads "For longer and heavier agent
+ *  runs." A description that does not have that shape is kept whole. */
+export function tagline(plan: Plan): string {
+    const own = feature(plan, "tagline");
+    if (typeof own === "string" && own.trim()) return own.trim();
+    let text = (plan.description ?? "").trim()
+        .replace(/^For (?:teams|individuals)\.\s*/i, "")
+        .replace(/,?\s*billed per seat\.?$/i, "")
+        .replace(/\.$/, "")
+        .trim();
+    const purpose = /\busage,?\s+(for\s.+)$/i.exec(text);
+    if (purpose) text = purpose[1];
+    return text ? text.charAt(0).toUpperCase() + text.slice(1) + "." : "";
+}
+
+function limits(plan: Plan): Record<string, unknown> | null {
+    const value = feature(plan, "limits");
+    return value && typeof value === "object" ? value as Record<string, unknown> : null;
+}
+
+function includedCents(plan: Plan): number | null {
+    const cents = feature(plan, "included_llm_credits_cents");
+    return typeof cents === "number" && cents > 0 ? cents : null;
+}
+
+/** The plan the others' usage is measured against: the one including least.
+ *
+ *  Usage is shown as a multiple rather than in dollars — the allowance is
+ *  retuned as model prices move, so a published figure would be a promise
+ *  the next price change breaks. A ratio between plans survives that. */
+export function usageBase(plans: Plan[]): Plan | null {
+    let base: Plan | null = null;
+    for (const plan of plans) {
+        const cents = includedCents(plan);
+        if (cents === null) continue;
+        if (!base || cents < (includedCents(base) ?? Infinity)) base = plan;
+    }
+    return base;
+}
+
+/** How much usage a plan includes, as a multiple of `usageBase`. Whole
+ *  numbers from ten up, one decimal below, so 3× and 30× read as what they
+ *  are and 2.5× is not rounded into 3×. */
+export function usageTimes(plan: Plan, against: Plan[]): number | null {
+    const mine = includedCents(plan);
+    const base = usageBase(against);
+    const baseCents = base ? includedCents(base) : null;
+    if (mine === null || !baseCents) return null;
+    const times = mine / baseCents;
+    return times >= 10 ? Math.round(times) : Math.round(times * 10) / 10;
+}
+
+/** The workspace each person gets: cores and memory, read from the limits
+ *  the sandbox is actually started with rather than from a line of copy. */
+export function workspaceOf(plan: Plan): { cores: number; gb: number } | null {
+    const workspace = limits(plan)?.workspace;
+    if (!workspace || typeof workspace !== "object") return null;
+    const { cpu_count: cores, memory_mb: memory } = workspace as Record<string, unknown>;
+    if (typeof cores !== "number" || typeof memory !== "number") return null;
+    return { cores, gb: Math.round((memory / 1024) * 10) / 10 };
+}
+
+/** How many Lemmas the plan allows: a number, `null` for no cap, `undefined`
+ *  where the catalogue does not say (which is not the same as no cap). */
+export function lemmaCap(plan: Plan): number | null | undefined {
+    const table = limits(plan);
+    if (!table || !("max_pods" in table)) return undefined;
+    const cap = table.max_pods;
+    return typeof cap === "number" ? cap : cap === null ? null : undefined;
+}
+
+/** Whether the workspace can run Docker, or `undefined` where unsaid. */
+export function runsDocker(plan: Plan): boolean | undefined {
+    const machines = limits(plan)?.machines;
+    if (!machines || typeof machines !== "object") return undefined;
+    const templates = (machines as Record<string, unknown>).templates;
+    return Array.isArray(templates) ? templates.includes("workspace-docker") : undefined;
+}
+
+export interface ComparedRow {
+    label: string;
+    /** One cell per plan, in the order the plans were given. */
+    cells: string[];
+}
+
+/** The plans side by side, built from their limits.
+ *
+ *  A row appears only where every plan answers it, and only where the answers
+ *  differ, so the cards show what sets the plans apart. A row every plan
+ *  answers the same way is said once instead, in `shared`, under the cards. */
+export function compare(plans: Plan[], audience: PlanAudience): { rows: ComparedRow[]; shared: string[] } {
+    const rows: ComparedRow[] = [];
+    const shared: string[] = [];
+    if (plans.length === 0) return { rows, shared };
+    const everyone = audience === "TEAM" ? " for each person" : "";
+
+    function consider(label: string, cells: (string | undefined)[], sharedAs: (cell: string) => string | null) {
+        if (cells.some((cell) => cell === undefined)) return;
+        const said = cells as string[];
+        if (plans.length > 1 && said.every((cell) => cell === said[0])) {
+            const line = sharedAs(said[0]);
+            if (line) shared.push(line);
+            return;
+        }
+        rows.push({ label, cells: said });
+    }
+
+    consider("Usage", plans.map((plan) => {
+        const times = usageTimes(plan, plans);
+        return times === null ? undefined : times + "×";
+    }), () => null);
+
+    consider("Workspace", plans.map((plan) => {
+        const size = workspaceOf(plan);
+        return size ? size.cores + (size.cores === 1 ? " core · " : " cores · ") + size.gb + " GB" : undefined;
+    }), () => {
+        const size = workspaceOf(plans[0])!;
+        return "A " + size.cores + "-core, " + size.gb + " GB workspace" + everyone;
+    });
+
+    consider("Lemmas", plans.map((plan) => {
+        const cap = lemmaCap(plan);
+        return cap === undefined ? undefined : cap === null ? "No limit" : "Up to " + cap;
+    }), (cell) => (cell === "No limit" ? "As many Lemmas as you need" : cell + " Lemmas"));
+
+    consider("Docker", plans.map((plan) => {
+        const docker = runsDocker(plan);
+        return docker === undefined ? undefined : docker ? "Included" : "—";
+    }), (cell) => (cell === "Included" ? "Docker in the workspace" : null));
+
+    if (plans.every((plan) => feature(plan, "remove_lemma_branding") === true)) {
+        shared.push("Your branding instead of Lemma’s");
+    }
+    shared.push("Usage shown live, as a share of your limit");
+    return { rows, shared };
+}
+
+/** What the plan costs this customer a month: per person for a per-seat plan,
+ *  which is how a checkout charges it (one seat for each member, counted when
+ *  the checkout or the change is made). */
+export function monthlyCents(plan: Plan, people: number): number {
+    return isPerSeat(plan) ? plan.price_cents * Math.max(1, people) : plan.price_cents;
+}
+
+/** The unit under a card's figure. */
+export function priceUnit(plan: Plan): string {
+    return isPerSeat(plan) ? "per person, a month" : "a month";
+}
+
+/** Whether moving to `target` is a step up, by what it costs. */
+export function isUpgrade(from: Plan | null | undefined, target: Plan): boolean {
+    return !from || target.price_cents > from.price_cents;
+}
+
+/** The plan a card should point at, and why, if any.
+ *
+ *  Someone not paying is shown the catalogue's own pick (`recommended: true`)
+ *  or, until it has one, the middle of three — the tier built for regular
+ *  work, between the one for trying and the one for running all day. Someone
+ *  already paying is pointed nowhere, unless their usage is near its limit:
+ *  then the next plan up, for more usage. A plan is never recommended to the
+ *  person already on it. */
+export function recommended(
+    selfServe: Plan[],
+    current: Subscription | null | undefined,
+    crowded: boolean,
+): { plan: Plan; why: "pick" | "more" } | null {
+    if (paying(current)) {
+        if (!crowded) return null;
+        const price = current!.plan!.price_cents;
+        const above = selfServe.find((plan) => plan.price_cents > price);
+        return above ? { plan: above, why: "more" } : null;
+    }
+    const flagged = selfServe.find((plan) => feature(plan, "recommended") === true);
+    const pick = flagged ?? (selfServe.length >= 3 ? selfServe[1] : null);
+    if (!pick || current?.plan_id === pick.id) return null;
+    return { plan: pick, why: "pick" };
+}
+
 /* ── saying where a subscription stands ───────────────────────────────── */
 
 /** A date, said the way a person would write it. Empty for anything unreadable

@@ -1,12 +1,23 @@
 import type { Plan, Subscription } from "./plan";
 
-const monthly = (slug: string, credits: number, seat: boolean, lines: string[]) => ({
+/** The limits the cards compare, shaped as `plans.json` ships them: the
+ *  workspace each person gets, how many Lemmas, and whether Docker runs. */
+const sized = (cores: number, gb: number, lemmas: number | null, docker: boolean) => ({
+    max_pods: lemmas,
+    workspace: { cpu_count: cores, memory_mb: gb * 1024 },
+    machines: { templates: docker ? ["workspace", "workspace-docker"] : ["workspace"] },
+});
+
+const monthly = (
+    slug: string, credits: number, seat: boolean, lines: string[], limits: ReturnType<typeof sized>,
+) => ({
     slug,
     audience: seat ? "team" : "personal",
     billing_mode: "fixed_subscription",
     billing_interval: "MONTHLY",
     included_llm_credits_cents: credits,
     highlights: lines,
+    limits,
     ...(seat ? { price_unit: "seat", remove_lemma_branding: true } : { seats: 1 }),
 });
 
@@ -48,24 +59,24 @@ export const samplePlans: Plan[] = [
         0, "PERSONAL", { billing_mode: "fixed_subscription" }),
     plan("00000000-0000-4000-8000-000000000001", "Lemma Personal",
         "For individuals. Fair LLM and compute sandbox usage for everyday agent work.",
-        1000, "PERSONAL", monthly("personal", 1000, false, PERSONAL)),
+        1000, "PERSONAL", monthly("personal", 1000, false, PERSONAL, sized(2, 4, 10, false))),
     plan("00000000-0000-4000-8000-000000000002", "Lemma Personal Plus",
         "For individuals. Higher LLM and compute sandbox usage, for longer and heavier agent runs.",
         2500, "PERSONAL", monthly("personal_plus", 3000, false,
-            ["Higher limits — around three times Starter", ...PERSONAL.slice(1)])),
+            ["Higher limits — around three times Starter", ...PERSONAL.slice(1)], sized(4, 8, 25, true))),
     plan("00000000-0000-4000-8000-000000000003", "Lemma Personal Max",
         "For individuals. Our highest LLM and compute sandbox usage, for continuous heavy work.",
         20000, "PERSONAL", monthly("personal_max", 30000, false,
-            ["Our highest limits — around ten times Plus", ...PERSONAL.slice(1)])),
+            ["Our highest limits — around ten times Plus", ...PERSONAL.slice(1)], sized(8, 16, null, true))),
     plan("00000000-0000-4000-8000-000000000004", "Lemma Team",
         "For teams. Fair LLM and compute sandbox usage for everyday agent work, billed per seat.",
-        1000, "TEAM", monthly("team", 1000, true, ["Fair usage for everyday agent work", ...TEAM])),
+        1000, "TEAM", monthly("team", 1000, true, ["Fair usage for everyday agent work", ...TEAM], sized(2, 4, null, false))),
     plan("00000000-0000-4000-8000-000000000005", "Lemma Team Plus",
         "For teams. Higher LLM and compute sandbox usage, for longer and heavier agent runs. Billed per seat.",
-        2500, "TEAM", monthly("team_plus", 3000, true, ["Higher limits — around three times Starter", ...TEAM])),
+        2500, "TEAM", monthly("team_plus", 3000, true, ["Higher limits — around three times Starter", ...TEAM], sized(4, 8, null, true))),
     plan("00000000-0000-4000-8000-000000000006", "Lemma Team Max",
         "For teams. Our highest LLM and compute sandbox usage, for continuous heavy work. Billed per seat.",
-        20000, "TEAM", monthly("team_max", 30000, true, ["Our highest limits — around ten times Plus", ...TEAM])),
+        20000, "TEAM", monthly("team_max", 30000, true, ["Our highest limits — around ten times Plus", ...TEAM], sized(8, 16, null, true))),
     plan("00000000-0000-4000-8000-000000000007", "Lemma Enterprise",
         "For large organizations. Custom usage, security and support — talk to us.",
         0, "TEAM", {

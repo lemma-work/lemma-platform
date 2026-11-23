@@ -92,6 +92,9 @@ export const CLIENT_CATALOG = {
     /** A connector's sign-in opened at its provider. What comes back is the
      *  backend's `connector.connected`; this is the top of that funnel. */
     "connector.authorization_opened": { properties: [] },
+    /** A plan's button pressed, opening what it would cost. The top of the
+     *  purchase: the page was read and one plan was worth a look. */
+    "billing.plan_chosen": { properties: ["plan"] },
     /** The payment page opened, for which plan id. A payment that never happens
      *  writes nothing at either end, so this is the only record it was tried. */
     "billing.checkout_opened": { properties: ["plan"] },
