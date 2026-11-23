@@ -964,6 +964,7 @@ class ConnectorService:
                             self.account_repository, account, oauth_credentials
                         )
                         if renewed is not None:
+                            await self.uow.commit()  # lets go of the row
                             return self._to_oauth_credentials(renewed)
                         await self._persist_account_status(
                             account, AccountStatus.REAUTH_REQUIRED
@@ -979,12 +980,14 @@ class ConnectorService:
                     if is_expired or isinstance(exc, DomainError):
                         raise_refresh_failure(account, exc)
                 else:
-                    account.credentials = new_credentials
                     # A successful refresh restores a previously-degraded account.
-                    account.status = AccountStatus.CONNECTED
-                    account = await self.account_repository.update(account)
+                    await self.account_repository.store_refreshed(
+                        account.id, new_credentials
+                    )
                     await self.uow.commit()
-                    credentials = account.credentials
+                    account.credentials = new_credentials
+                    account.status = AccountStatus.CONNECTED
+                    credentials = new_credentials
             elif is_expired:
                 await self._persist_account_status(
                     account, AccountStatus.REAUTH_REQUIRED

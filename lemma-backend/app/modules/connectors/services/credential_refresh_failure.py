@@ -63,6 +63,12 @@ async def renewed_elsewhere(
     else's refresh went through, the grant is alive, and theirs is the
     credential to use -- not an account to mark for a reconnect it does not
     need.
+
+    The read locks the row, so the answer holds until the caller has acted on
+    it: marked the account, or committed and let go. Without that the other
+    refresh could store its token between this read and the mark, and leave a
+    working account marked -- for good, on an install that names its target,
+    which `reauth_recovery` never retries.
     """
     if not used.refresh_token:
         return None

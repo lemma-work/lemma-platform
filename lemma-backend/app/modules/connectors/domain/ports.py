@@ -95,8 +95,13 @@ class AccountRepositoryPort(Protocol):
         """Write the routing key and nothing else (never the credentials)."""
         ...
 
+    async def store_refreshed(self, account_id: UUID, credentials: object) -> None:
+        """Write a refreshed credential and mark the account connected."""
+        ...
+
     async def stored_credentials(self, account_id: UUID) -> dict[str, object] | None:
-        """The credentials the row holds now, whatever this session read."""
+        """The credentials the row holds now, whatever this session read; the
+        row stays locked until the transaction ends."""
         ...
 
     async def list_by_user(

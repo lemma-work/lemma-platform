@@ -828,10 +828,17 @@ async def _stored_credentials(db_session: AsyncSession, account_id: str) -> dict
 
 
 async def _stale_account_on_org_a(
-    scenario, db_session, github, github_sees, installation_id: str
+    scenario,
+    db_session,
+    github,
+    github_sees,
+    installation_id: str,
+    *,
+    refreshable: bool = True,
 ):
     """Org A holds the installation, and a member of it has a GitHub account
-    whose access token ran out an hour ago: connected, never bound."""
+    whose access token ran out an hour ago: connected, never bound. Its
+    refresh token is one GitHub still honours, unless ``refreshable`` is off."""
     from datetime import datetime, timedelta, timezone
 
     from app.modules.test_support.e2e_authz import invite_org_member
@@ -850,7 +857,8 @@ async def _stale_account_on_org_a(
             AuthConfig.connector_id == "github",
         )
     )
-    github.refreshable("ghr_first", code="mallory")
+    if refreshable:
+        github.refreshable("ghr_first", code="mallory")
     account_id = await _account_in(
         db_session,
         org_id=scenario.org_id,
@@ -917,3 +925,31 @@ async def test_binding_by_hand_keeps_the_token_it_refreshed_on_the_way(
     assert stored["refresh_token"] == "ghr_first+"
     account = await db_session.get(Account, UUID(account_id))
     assert account.external_ref == installation_id
+
+
+async def test_a_refresh_token_github_no_longer_honours_asks_for_a_reconnect(
+    scenario, db_session, github, github_sees
+):
+    """GitHub answers a spent, expired or revoked refresh token with
+    `bad_refresh_token`. That is the grant gone, not GitHub unwell: the answer
+    is a 409 naming the account to reconnect, the account is marked, and what
+    it holds is left exactly as it was. It used to be a 502 on every call."""
+    installation_id = _installation_id()
+    member, account_id = await _stale_account_on_org_a(
+        scenario, db_session, github, github_sees, installation_id, refreshable=False
+    )
+    before = await _stored_credentials(db_session, account_id)
+
+    seen = await scenario.async_client.get(
+        f"/organizations/{scenario.org_id}/connectors/accounts/{account_id}"
+        "/github/installations",
+        headers=auth_headers(member),
+        params={"refresh": True},
+    )
+
+    assert seen.status_code == 409, seen.text
+    assert seen.json()["code"] == "CONNECTOR_REAUTH_REQUIRED", seen.json()
+    assert await _stored_credentials(db_session, account_id) == before
+    account = await db_session.get(Account, UUID(account_id))
+    assert account.status == "REAUTH_REQUIRED"
+    assert account.external_ref is None

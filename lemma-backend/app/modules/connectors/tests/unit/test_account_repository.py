@@ -215,7 +215,27 @@ class TestWritesThatLeaveTheCredentialsAlone:
         assert await repo.stored_credentials(uuid4()) == {"access_token": "new"}
 
         (statement,) = session.statements
-        assert str(statement).startswith("SELECT accounts.credentials")
+        sql = str(statement)
+        assert sql.startswith("SELECT accounts.credentials")
+        # Locked, so a decision made from the answer cannot be overtaken by a
+        # refresh that commits a moment later.
+        assert sql.rstrip().endswith("FOR UPDATE")
+
+    async def test_a_refreshed_credential_always_says_the_account_is_connected(self):
+        """The status is in the statement whether or not this session saw it
+        change: a refresh that lost a race may have marked the account since,
+        and the ORM would have left that mark where it was."""
+        session = _FakeSession()
+        repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
+
+        await repo.store_refreshed(uuid4(), {"access_token": "new"})
+
+        (statement,) = session.statements
+        params = statement.compile().params
+        assert params["status"] == "CONNECTED"
+        assert params["credentials"] == {"access_token": "new"}
+        # And nothing an older copy of the account could get wrong.
+        assert {"external_ref", "email", "display_name"}.isdisjoint(params)
 
     async def test_an_account_that_is_gone_has_no_stored_credentials(self):
         session = _FakeSession(existing=None)

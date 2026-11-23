@@ -337,12 +337,19 @@ async def test_a_rate_limit_stays_a_rate_limit_when_the_connector_refused():
     assert exc.value.code == "GITHUB_RATE_LIMITED"
 
 
-async def test_a_public_repo_imports_anonymously_when_the_account_cannot_refresh():
+async def test_a_public_repo_imports_anonymously_when_the_account_cannot_refresh(
+    monkeypatch,
+):
     """The person's GitHub sign-in has gone stale and the token endpoint
     would not renew it. A public repository never needed that account, so the
     import goes ahead without it; this used to fail the install with "Unable
     to refresh connector credentials." before anything was fetched."""
     from app.modules.connectors.domain.errors import OAuthWorkflowError
+    from app.modules.pod_bundle.infrastructure import github_fetcher as gf
+
+    # The deployment's own token would put a header on the anonymous request;
+    # what is asserted below is that the account's does not ride along.
+    monkeypatch.setattr(gf.pod_bundle_settings, "pod_bundle_github_token", None)
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert "authorization" not in request.headers

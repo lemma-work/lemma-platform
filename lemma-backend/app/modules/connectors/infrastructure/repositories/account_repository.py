@@ -316,7 +316,7 @@ class AccountRepository(
         )
         return int(result.rowcount or 0)
 
-    # Three narrow statements, because `update` writes the whole row from the
+    # Narrow statements, because `update` writes the whole row from the
     # entity it is handed -- credentials included -- and an entity is a copy
     # made when it was read. A token refreshed since (by this request or by
     # another) is not on it, so marking an account or binding it with `update`
@@ -341,8 +341,33 @@ class AccountRepository(
             .values(external_ref=external_ref)
         )
 
+    async def store_refreshed(self, account_id: UUID, credentials: object) -> None:
+        """Write a refreshed credential, and that the account is connected.
+
+        The status is written every time, not only when this session thinks it
+        changed. A refresh that lost a race may have marked the account for a
+        reconnect a moment ago; the ORM would leave that mark standing, because
+        from here the status never moved, and an install that names its target
+        does not retry a marked account (``reauth_recovery``).
+        """
+        await self.session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(
+                credentials=await self.encryption.encrypt_json_async(
+                    self._serialize_credentials(credentials)
+                ),
+                status=AccountStatus.CONNECTED.value,
+            )
+        )
+
     async def stored_credentials(self, account_id: UUID) -> dict[str, object] | None:
         """The credentials the row holds now, read past this session's copy.
+
+        The row is locked until the transaction ends, so what is decided from
+        the answer cannot be overtaken: a refresh storing a new credential
+        either committed before this read and is in it, or writes after
+        whatever the caller does next.
 
         A column select, not an entity one: the session keeps the first
         instance it loaded and does not overwrite it with a later read, so
@@ -350,7 +375,9 @@ class AccountRepository(
         which is exactly what a caller asking this wants to look behind.
         """
         result = await self.session.execute(
-            select(Account.credentials).where(Account.id == account_id)
+            select(Account.credentials)
+            .where(Account.id == account_id)
+            .with_for_update()
         )
         encrypted = result.scalar_one_or_none()
         if encrypted is None:

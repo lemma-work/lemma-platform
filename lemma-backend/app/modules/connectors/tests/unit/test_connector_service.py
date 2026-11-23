@@ -749,6 +749,8 @@ async def test_losing_a_refresh_race_uses_the_token_the_winner_stored():
     assert account.status == AccountStatus.CONNECTED
     service.account_repository.set_status.assert_not_awaited()
     service.account_repository.update.assert_not_awaited()
+    # The read locked the row; nothing is left holding it.
+    service.uow.commit.assert_awaited_once()
 
 
 async def test_an_expired_token_with_nothing_to_refresh_with_asks_for_a_reconnect():
@@ -1016,7 +1018,12 @@ async def test_get_account_credentials_refreshes_expired_token():
     credentials = await service.get_account_credentials(account.id, user_id)
 
     assert credentials.access_token == "new"
-    account_repo.update.assert_awaited_once()
+    # The credential and the status, not the whole row: the account in hand
+    # was read before the refresh went out.
+    account_repo.store_refreshed.assert_awaited_once_with(
+        account.id, refreshed_credentials
+    )
+    account_repo.update.assert_not_awaited()
     uow.commit.assert_awaited_once()
 
 
@@ -1080,7 +1087,12 @@ async def test_get_account_credentials_force_refreshes_valid_token():
     )
 
     assert credentials.access_token == "new"
-    account_repo.update.assert_awaited_once()
+    # The credential and the status, not the whole row: the account in hand
+    # was read before the refresh went out.
+    account_repo.store_refreshed.assert_awaited_once_with(
+        account.id, refreshed_credentials
+    )
+    account_repo.update.assert_not_awaited()
     uow.commit.assert_awaited_once()
 
 
