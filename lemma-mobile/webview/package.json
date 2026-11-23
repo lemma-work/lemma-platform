@@ -1,0 +1,35 @@
+{
+  "name": "lemma-mobile-webview",
+  "private": true,
+  "type": "module",
+  "description": "Pages the phone app runs inside WebViews: the web's page editor and a PDF reader. Built into src/areas/files/web/*.generated.ts.",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@novnc/novnc": "1.7.0",
+    "@phosphor-icons/react": "2.1.10",
+    "@tanstack/react-query": "5.102.8",
+    "@tiptap/core": "3.31.3",
+    "@tiptap/extension-bubble-menu": "3.31.3",
+    "@tiptap/extension-drag-handle": "3.31.3",
+    "@tiptap/extension-drag-handle-react": "3.31.3",
+    "@tiptap/extension-floating-menu": "3.31.3",
+    "@tiptap/extension-image": "3.31.3",
+    "@tiptap/extension-placeholder": "3.31.3",
+    "@tiptap/extension-table": "3.31.3",
+    "@tiptap/extension-task-item": "3.31.3",
+    "@tiptap/extension-task-list": "3.31.3",
+    "@tiptap/pm": "3.31.3",
+    "@tiptap/react": "3.31.3",
+    "@tiptap/starter-kit": "3.31.3",
+    "@tiptap/suggestion": "3.31.3",
+    "pdfjs-dist": "5.7.284",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "tiptap-markdown": "0.9.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}
