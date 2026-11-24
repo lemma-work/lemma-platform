@@ -7,8 +7,12 @@ import { dehydrate, hydrate, type DehydratedState, type QueryClient } from "@tan
  * person saw last rather than on "Reading your Lemmas", and the network
  * catches up behind it: the lists Home and a Lemma's page are drawn from --
  * the organizations, the Lemmas, what moved in each and their chats, what
- * waits on the person, the apps, a Lemma's places. Never what is inside a
- * chat, a table or a file, and never a change still on its way to the API.
+ * waits on the person, the apps, a Lemma's places. Names and titles only:
+ * a chat's title but not its last line, a need's one-line title (a
+ * question's first line, what an approval is for, who is waiting) but not
+ * the question in full, what a contact wrote or the answers offered
+ * (`withoutWords`). Never what is inside a table or a file, and never a
+ * change still on its way to the API.
  *
  * The web's `session/device-cache.ts`, on a phone: one record, in a file in
  * the app's caches folder (not backed up, and the system may clear it, which
@@ -93,6 +97,7 @@ export function keptState(client: QueryClient, server: string): DehydratedState 
             ...query,
             state: {
                 ...query.state,
+                data: withoutWords(query.queryKey, query.state.data),
                 status: "success" as const,
                 fetchStatus: "idle" as const,
                 error: null,
@@ -102,6 +107,42 @@ export function keptState(client: QueryClient, server: string): DehydratedState 
             },
         })),
     };
+}
+
+type Row = Record<string, unknown>;
+const rows = (data: unknown): Row[] | null =>
+    Array.isArray(data) ? data.filter((one): one is Row => Boolean(one) && typeof one === "object") : null;
+
+/** A kept answer as it goes to disk: its names and titles, without the words
+ *  people and Lemmas said. Of the kept lists only two carry such words:
+ *
+ *  - what waits on the person (`pulse/needs`): a need's `detail` is the
+ *    question as asked, up to 4,000 characters, or what a contact wrote, and
+ *    its `choices` are the answers a question offered in its chat;
+ *  - what moved in each Lemma (`pulse`): a chat's `lastLine` says what was
+ *    last said in it, and its `attention.reason` why a contact is waiting.
+ *
+ *  Those are left out; the rest of each item stays, so the lists draw the
+ *  same, and the read that follows on arrival brings the words back. The
+ *  organizations, the Lemmas, the apps, you and a Lemma's places carry names
+ *  only. */
+export function withoutWords(queryKey: readonly unknown[], data: unknown): unknown {
+    if (queryKey[1] !== "pulse") return data;
+    const list = rows(data);
+    if (!list) return data;
+    if (queryKey[2] === "needs") return list.map((need) => ({ ...need, detail: null, choices: [] }));
+    return list.map((entry) => {
+        const channels = rows(entry.channels);
+        if (!channels) return entry;
+        return {
+            ...entry,
+            channels: channels.map((channel) => {
+                const lastLine = channel.lastLine && typeof channel.lastLine === "object" ? { ...(channel.lastLine as Row), text: "" } : null;
+                const attention = channel.attention && typeof channel.attention === "object" ? { ...(channel.attention as Row), reason: null } : null;
+                return { ...channel, lastLine, attention };
+            }),
+        };
+    });
 }
 
 /** Whether a kept record may be read back now, for this person here. */

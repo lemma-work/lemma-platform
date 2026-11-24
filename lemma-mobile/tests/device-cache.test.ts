@@ -134,7 +134,8 @@ describe("between launches", () => {
         await restoreFromDevice(next, ME);
 
         expect(next.getQueryData(LEMMAS)).toEqual([{ id: "pod-1", name: "Support" }]);
-        expect(next.getQueryData(NEEDS)).toEqual([{ key: "n-1", title: "Approve the refund?" }]);
+        /* A need comes back with its title, and without the words behind it. */
+        expect(next.getQueryData(NEEDS)).toEqual([{ key: "n-1", title: "Approve the refund?", detail: null, choices: [] }]);
         expect(next.getQueryData(PLACES)).toEqual([{ name: "WhatsApp" }]);
         expect(next.getQueryData(LINES)).toBeUndefined();
         expect(next.getQueryData(ROWS)).toBeUndefined();
@@ -206,6 +207,57 @@ describe("between launches", () => {
         stop();
         await vi.advanceTimersByTimeAsync(1000);
         expect(files.has(FILE)).toBe(false);
+    });
+
+    it("keeps names and titles, and none of the words said in a chat", async () => {
+        const client = new QueryClient();
+        const stop = keepOnDevice(client, ME, () => true);
+        client.setQueryData(NEEDS, [
+            {
+                key: "message:m-1",
+                kind: "MESSAGE",
+                title: "Refund the March invoice?",
+                detail: "Refund the March invoice?\nThe customer says the second charge was a mistake, on the card ending 4242.",
+                choices: ["Refund it", "Ask them first"],
+            },
+            { key: "contact:ch-1", kind: "CONTACT", title: "Maria Chen", detail: "My order never arrived and I want my money back", choices: [] },
+        ]);
+        client.setQueryData(PULSE, [
+            {
+                lemma: { id: "pod-1", name: "Support" },
+                conversations: [{ id: "c-1", title: "Refunds" }],
+                channels: [
+                    {
+                        id: "ch-1",
+                        kind: "CONTACT",
+                        title: "Maria Chen",
+                        topic: null,
+                        lastLine: { sender: { kind: "CONTACT", id: "p-1", name: "Maria Chen" }, text: "Where is my parcel? It was due on Monday.", createdAt: "2026-11-24T10:00:00Z" },
+                        attention: { since: "2026-11-24T10:00:00Z", reason: "Asked to speak to a person about a refund" },
+                    },
+                ],
+            },
+        ]);
+        client.setQueryData([SERVER, "apps", "org-1", "pod-1"], [{ id: "a-1", name: "tickets", description: "Every ticket, by status" }]);
+        await vi.advanceTimersByTimeAsync(1000);
+        stop();
+
+        const onDisk = files.get(FILE) ?? "";
+        for (const said of ["second charge", "card ending 4242", "Refund it", "Ask them first", "never arrived", "Where is my parcel", "speak to a person"]) {
+            expect(onDisk, said).not.toContain(said);
+        }
+        for (const named of ["Refund the March invoice?", "Maria Chen", "Refunds", "Support", "Every ticket, by status"]) {
+            expect(onDisk, named).toContain(named);
+        }
+
+        /* Read back, the lists draw the same, with the words left out. */
+        const next = new QueryClient();
+        await restoreFromDevice(next, ME);
+        const [question] = next.getQueryData<{ title: string; detail: unknown; choices: unknown }[]>(NEEDS) ?? [];
+        expect(question).toMatchObject({ title: "Refund the March invoice?", detail: null, choices: [] });
+        const [{ channels: [chat] }] = next.getQueryData<{ channels: { lastLine: { text: string; createdAt: string }; attention: { reason: unknown; since: string } }[] }[]>(PULSE) ?? [];
+        expect(chat.lastLine).toMatchObject({ text: "", createdAt: "2026-11-24T10:00:00Z" });
+        expect(chat.attention).toEqual({ since: "2026-11-24T10:00:00Z", reason: null });
     });
 
     it("never keeps a message on its way to the server", async () => {
