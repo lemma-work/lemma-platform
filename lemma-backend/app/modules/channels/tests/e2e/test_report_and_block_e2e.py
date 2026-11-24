@@ -446,3 +446,67 @@ async def test_a_block_holds_through_successive_merges_and_their_carries(
     await holds("B merged into C, its carry pending", (a, b, c), (stranger,))
     await carry(b, c)
     await holds("B's block carried to C", (a, b, c), (stranger,))
+
+
+@pytest.mark.parametrize(
+    "dana_survives",
+    [True, False],
+    ids=["block-names-the-merged-one", "line-names-the-merged-one"],
+)
+async def test_a_block_hides_lines_before_a_merge_is_carried(
+    pod: Pod, db_session, dana_survives: bool
+):
+    """The owner blocked Sam; Sam and Dana turn out to be one person, and the
+    work that carries the block and renames the lines has not run. Dana's
+    line already reads as blocked to the owner -- whichever of the two ids
+    the block and the line name -- and to nobody else, and the owner
+    unblocks her from the line."""
+    uow = SqlAlchemyUnitOfWork(db_session)
+    pod_id = UUID(pod.id)
+    owner = UUID(pod.owner["id"])
+    source, dana = await contact_place(db_session, pod)
+
+    async def contact(value: str, name: str) -> UUID:
+        made = await open_contact(
+            uow,
+            pod_id=pod_id,
+            kind=IdentityKind.EMAIL,
+            value=value,
+            strength=IdentityStrength.CHANNEL,
+            display_name=name,
+        )
+        return made.id
+
+    sam = await contact("sam@harbor.example", "Sam")
+    stranger = await contact("kim@pier.example", "Kim")
+    await db_session.commit()
+    blocked = await pod.client().put(f"/pods/{pod.id}/blocks/CONTACT:{sam}")
+    assert blocked.status_code == 200, blocked.text
+    (before,) = await _lines(pod, source.channel_id)
+    assert not before["blocked"]
+
+    merged, survivor = (sam, dana) if dana_survives else (dana, sam)
+    await db_session.execute(
+        text(
+            "UPDATE contacts SET merged_into_id = :survivor"
+            " WHERE id = :merged OR merged_into_id = :merged"
+        ),
+        {"survivor": survivor, "merged": merged},
+    )
+    await db_session.commit()
+
+    (mine,) = await _lines(pod, source.channel_id)
+    (theirs,) = await _lines(pod, source.channel_id, as_user=pod.editor)
+    assert mine["blocked"] and mine["text"] is None
+    assert theirs["text"] == "Where is my order?" and not theirs["blocked"]
+    blocks = BlockRepository(db_session)
+    one_person = frozenset({Principal.contact(sam), Principal.contact(dana)})
+    assert await blocks.of_reader(pod_id=pod_id, user_id=owner) == one_person
+    asked = {*one_person, Principal.contact(stranger)}
+    assert await blocks.among(pod_id=pod_id, people=asked) == {owner: one_person}
+
+    unblocked = await pod.client().delete(f"/pods/{pod.id}/blocks/CONTACT:{dana}")
+    assert unblocked.status_code == 204, unblocked.text
+    (back,) = await _lines(pod, source.channel_id)
+    assert back["text"] == "Where is my order?" and not back["blocked"]
+    assert await blocks.of_reader(pod_id=pod_id, user_id=owner) == frozenset()

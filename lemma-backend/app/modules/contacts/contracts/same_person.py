@@ -12,10 +12,31 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, func, or_, select
-from sqlalchemy.orm import InstrumentedAttribute
+from sqlalchemy import ColumnElement, Subquery, and_, func, or_, select
+from sqlalchemy.orm import InstrumentedAttribute, aliased
 
 from app.modules.contacts.infrastructure.models import ContactModel
+
+
+def same_person_ids(*, pod_id: UUID) -> Subquery:
+    """Each of the pod's contacts (``contact_id``) beside every id of the
+    person it names (``same_id``), itself among them: a table for another
+    statement to join, never a read of its own."""
+    asked = aliased(ContactModel)
+    same = aliased(ContactModel)
+    survivor = func.coalesce(asked.merged_into_id, asked.id)
+    return (
+        select(asked.id.label("contact_id"), same.id.label("same_id"))
+        .join(
+            same,
+            and_(
+                same.pod_id == asked.pod_id,
+                or_(same.id == survivor, same.merged_into_id == survivor),
+            ),
+        )
+        .where(asked.pod_id == pod_id)
+        .subquery("same_person_ids")
+    )
 
 
 def same_person(
@@ -23,18 +44,8 @@ def same_person(
 ) -> ColumnElement[bool]:
     """Whether ``column`` holds an id of the person ``contact_id`` names: a
     condition for another statement's ``where``, never a read of its own."""
-    c = ContactModel
-    survivor = (
-        select(func.coalesce(c.merged_into_id, c.id))
-        .where(c.id == contact_id, c.pod_id == pod_id)
-        .scalar_subquery()
-    )
-    return column.in_(
-        select(c.id).where(
-            c.pod_id == pod_id,
-            or_(c.id == contact_id, c.id == survivor, c.merged_into_id == survivor),
-        )
-    )
+    ids = same_person_ids(pod_id=pod_id)
+    return column.in_(select(ids.c.same_id).where(ids.c.contact_id == contact_id))
 
 
-__all__ = ["same_person"]
+__all__ = ["same_person", "same_person_ids"]

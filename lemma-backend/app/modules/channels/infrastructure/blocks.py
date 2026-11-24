@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.infrastructure.db.transaction_locks import mark_transaction_scoped_lock
 from app.modules.channels.domain.entities import Principal
 from app.modules.channels.infrastructure.block_models import PersonBlockModel
-from app.modules.contacts.contracts.same_person import same_person
+from app.modules.contacts.contracts.same_person import same_person, same_person_ids
 
 #: The most blocks one member keeps in one pod: what one read returns, so
 #: what ``block`` admits -- a block past it would be kept and never applied.
@@ -53,13 +53,32 @@ class BlockRepository:
         self._session = session
 
     async def of_reader(self, *, pod_id: UUID, user_id: UUID) -> frozenset[Principal]:
-        """Everybody this member blocked here: never more than ``MAX_BLOCKS``,
-        which ``block`` holds to."""
+        """Everybody this member blocked here, a contact under every id they
+        have had: a merge commits before the work that carries its blocks to
+        the survivor, and the person's new lines name the survivor meanwhile.
+        Never more than ``MAX_BLOCKS`` blocks, which ``block`` holds to."""
         b = PersonBlockModel
-        rows = await self._session.scalars(
-            select(b).where(b.pod_id == pod_id, b.user_id == user_id).limit(MAX_BLOCKS)
+        mine = (
+            select(b.blocked_user_id, b.blocked_contact_id)
+            .where(b.pod_id == pod_id, b.user_id == user_id)
+            .limit(MAX_BLOCKS)
+            .subquery()
         )
-        return frozenset(_blocked(row) for row in rows)
+        ids = same_person_ids(pod_id=pod_id)
+        rows = await self._session.execute(
+            select(mine.c.blocked_user_id, mine.c.blocked_contact_id, ids.c.same_id)
+            .select_from(mine)
+            .outerjoin(ids, ids.c.contact_id == mine.c.blocked_contact_id)
+        )
+        blocked: set[Principal] = set()
+        for member, contact, same in rows:
+            if member is not None:
+                blocked.add(Principal.member(member))
+            if contact is not None:
+                blocked.add(Principal.contact(contact))
+            if same is not None:
+                blocked.add(Principal.contact(same))
+        return frozenset(blocked)
 
     async def listed(
         self, *, pod_id: UUID, user_id: UUID
@@ -125,27 +144,34 @@ class BlockRepository:
     async def among(
         self, *, pod_id: UUID, people: Collection[Principal]
     ) -> dict[UUID, frozenset[Principal]]:
-        """For each member who blocked any of ``people`` here: which of them.
-        What a batch of lines needs to be shown to each of its readers."""
-        if not people:
-            return {}
+        """For each member who blocked any of ``people`` here: which of them,
+        a contact blocked under any id they have had (``of_reader``). What a
+        batch of lines needs to be shown to each of its readers."""
         b = PersonBlockModel
         members = {person.user_id for person in people if person.user_id is not None}
         contacts = {
             person.contact_id for person in people if person.contact_id is not None
         }
-        rows = await self._session.scalars(
-            select(b).where(
-                b.pod_id == pod_id,
-                or_(
-                    b.blocked_user_id.in_(members),
-                    b.blocked_contact_id.in_(contacts),
-                ),
-            )
-        )
         found: dict[UUID, set[Principal]] = {}
-        for row in rows:
-            found.setdefault(row.user_id, set()).add(_blocked(row))
+        if members:
+            rows = await self._session.execute(
+                select(b.user_id, b.blocked_user_id).where(
+                    b.pod_id == pod_id, b.blocked_user_id.in_(members)
+                )
+            )
+            for reader, member in rows:
+                found.setdefault(reader, set()).add(Principal.member(member))
+        if contacts:
+            ids = same_person_ids(pod_id=pod_id)
+            rows = await self._session.execute(
+                select(b.user_id, ids.c.contact_id)
+                .distinct()
+                .select_from(b)
+                .join(ids, ids.c.same_id == b.blocked_contact_id)
+                .where(b.pod_id == pod_id, ids.c.contact_id.in_(contacts))
+            )
+            for reader, contact in rows:
+                found.setdefault(reader, set()).add(Principal.contact(contact))
         return {user_id: frozenset(blocked) for user_id, blocked in found.items()}
 
     async def block(
@@ -212,9 +238,18 @@ class BlockRepository:
         )
 
     async def unblock(self, *, pod_id: UUID, user_id: UUID, person: Principal) -> bool:
-        """Lift the block; whether there was one."""
+        """Lift the block, a contact's under every id they have had, as
+        ``of_reader`` reads it; whether there was one."""
         b = PersonBlockModel
+        who = _is(person)
+        if person.contact_id is not None:
+            who = or_(
+                who,
+                same_person(
+                    b.blocked_contact_id, pod_id=pod_id, contact_id=person.contact_id
+                ),
+            )
         result = await self._session.execute(
-            delete(b).where(b.pod_id == pod_id, b.user_id == user_id, _is(person))
+            delete(b).where(b.pod_id == pod_id, b.user_id == user_id, who)
         )
         return bool(getattr(result, "rowcount", 0) or 0)

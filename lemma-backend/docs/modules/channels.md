@@ -212,12 +212,14 @@ mapper (`message_response(..., blocked=)`) -- and `fan_out` tells them of none
 of it outside the app. Nobody else's view changes, the person is not told,
 and the pod's agents answer them as before: stopping that is the contact's own
 `blocked` (`contacts`). A contact merged into another carries its blocks to
-the survivor (`contact_merged_work`). An agent cannot be blocked, nor the
-reader, nor somebody a platform did not vouch for, who has no contact. A
-reader keeps at most `MAX_BLOCKS` in a pod, counted under a lock for that
-reader and pod (409 `BLOCK_LIMIT` past it), so every block kept is one the
-read path applies. Nobody is pushed a line from a contact the pod stopped
-answering.
+the survivor (`contact_merged_work`); until that work runs, reads, pushes and
+unblocking all take a block under any id the person has had (`contacts`'
+`same_person`), so nothing of theirs shows in between. An agent cannot be
+blocked, nor the reader, nor somebody a platform did not vouch for, who has
+no contact. A reader keeps at most `MAX_BLOCKS` in a pod, counted under a lock
+for that reader and pod (409 `BLOCK_LIMIT` past it), so every block kept is
+one the read path applies. Nobody is pushed a line from a contact the pod
+stopped answering.
 
 Any line the reader can read, and did not write, can be reported to whoever
 runs the deployment (`/messages/{m}/report`, `reports`). The report keeps a
