@@ -76,7 +76,9 @@ async def _pod_organization(pod_id: UUID) -> UUID | None:
         return await pod_organization_id(uow, pod_id)
 
 
-def _github_binding(binding: TriggerBinding) -> ScheduleConfig:
+def _github_binding(
+    binding: TriggerBinding, config: ScheduleConfig | None = None
+) -> ScheduleConfig:
     """The routing key for a GitHub trigger, taken from what is already known.
 
     Nothing here is something a person could sensibly type into a form. The
@@ -85,6 +87,7 @@ def _github_binding(binding: TriggerBinding) -> ScheduleConfig:
     either would be asking someone to copy a number out of a URL, and getting it
     wrong routes another organization's events at their pod.
     """
+    del config  # the repository and actions an author scoped are refined on
     if not binding.installation_id:
         from app.modules.connectors.contracts.github import github_install_url
 
@@ -105,11 +108,59 @@ def _github_binding(binding: TriggerBinding) -> ScheduleConfig:
     }
 
 
+#: Slack's trigger events (the catalog's `event_type`), and what each needs
+#: its author to say. Every one is matched on the workspace and channel; a
+#: thread reply on the thread as well.
+_SLACK_TRIGGER_KEYS: dict[str, tuple[str, ...]] = {
+    "message": ("team_id", "channel_id"),
+    "message.thread": ("team_id", "channel_id", "thread_ts"),
+    "app_mention": ("team_id", "channel_id"),
+}
+
+
+def _slack_binding(
+    binding: TriggerBinding, config: ScheduleConfig | None = None
+) -> ScheduleConfig:
+    """The routing key for a Slack trigger: the event, and where it happens.
+
+    A Slack app has one event URL, and it is the pod's bot's: messages are
+    heard there, and fire schedules once they are logged in the channel they
+    were said in (`schedule.contracts.heard_events`). There is nothing to
+    subscribe to, so the key is all provisioning writes.
+
+    The workspace and channel are the author's to name -- which channel to
+    watch is the whole of what they are choosing -- and they are not what keeps
+    one tenant out of another's: a delivery fires only in pods that connected
+    that channel to their bot, whatever any config says. They are checked
+    here because the catalog marks them required and nothing else reads the
+    trigger's schema: a schedule missing one would be stored and never fire.
+    """
+    present = config or {}
+    required = _SLACK_TRIGGER_KEYS.get(binding.event_type)
+    if required is None:
+        raise ScheduleValidationError(
+            f"Slack has no trigger for '{binding.event_type}' that can fire."
+        )
+    named = {key: str(present.get(key) or "").strip() for key in required}
+    missing = [key for key, value in named.items() if not value]
+    if missing:
+        raise ScheduleValidationError(
+            "This Slack trigger fires on one channel, so its config names it: "
+            f"{', '.join(missing)} {'is' if len(missing) == 1 else 'are'} "
+            "missing. Slack ids, not names: the workspace's T..., the "
+            "channel's C..., a thread's ts."
+        )
+    return {"source": "slack", "event": binding.event_type, **named}
+
+
 # Connectors whose triggers need no remote subscription, only a routing key.
 # Absence from both this table and `TriggerBinding.subscribable` is an error,
 # not a shrug.
-_LOCAL_BINDERS: dict[str, Callable[[TriggerBinding], ScheduleConfig]] = {
+_LOCAL_BINDERS: dict[
+    str, Callable[[TriggerBinding, ScheduleConfig | None], ScheduleConfig]
+] = {
     "github": _github_binding,
+    "slack": _slack_binding,
 }
 
 
@@ -278,5 +329,5 @@ def _local_routing_key(
         )
     return {
         **defaults_the_author_left_out(binding, schedule.config),
-        **binder(binding),
+        **binder(binding, schedule.config),
     }

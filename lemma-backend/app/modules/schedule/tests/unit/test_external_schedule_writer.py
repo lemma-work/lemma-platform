@@ -138,8 +138,8 @@ async def test_a_connector_with_neither_a_subscription_nor_a_binder_is_refused()
     """
     adapter = _adapter(
         TriggerBinding(
-            connector_id="slack",
-            event_type="message_posted",
+            connector_id="notion",
+            event_type="page_updated",
             subscribable=False,
         ),
         [],
@@ -147,6 +147,41 @@ async def test_a_connector_with_neither_a_subscription_nor_a_binder_is_refused()
 
     with pytest.raises(ScheduleValidationError):
         await adapter.create_provider_trigger(_schedule())
+
+
+@pytest.mark.asyncio
+async def test_a_slack_trigger_is_routed_on_its_channel_with_nothing_subscribed():
+    """Slack's events reach the pod's bot, so there is no subscription to make:
+    the schedule stores the routing key the heard message will carry."""
+    subscribed: list[dict] = []
+    adapter = _adapter(
+        TriggerBinding(connector_id="slack", event_type="message", subscribable=False),
+        subscribed,
+    )
+
+    provisioned = await adapter.create_provider_trigger(
+        _schedule(config={"team_id": "T0INC", "channel_id": "C0INC42"})
+    )
+
+    assert subscribed == []
+    assert provisioned.provider_trigger_id is None
+    assert provisioned.bound_config == {
+        "source": "slack",
+        "event": "message",
+        "team_id": "T0INC",
+        "channel_id": "C0INC42",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_slack_trigger_with_no_channel_is_refused_rather_than_stored():
+    adapter = _adapter(
+        TriggerBinding(connector_id="slack", event_type="message", subscribable=False),
+        [],
+    )
+
+    with pytest.raises(ScheduleValidationError):
+        await adapter.create_provider_trigger(_schedule(config={"team_id": "T0INC"}))
 
 
 @pytest.mark.asyncio

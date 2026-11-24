@@ -186,8 +186,8 @@ class ProvisionedTrigger:
     decides which repositories it covers, so there is no remote subscription to
     create -- which used to be indistinguishable from finding no manager at all.
     In that case the row was written, nothing was provisioned, no error was
-    raised, and the schedule could never fire. Slack's three triggers have been
-    inert for exactly that reason since they were added.
+    raised, and the schedule could never fire. Slack's three triggers were
+    inert for exactly that reason until they were given a routing key.
 
     `bound_config` is merged into the schedule's config. It is where a source
     puts the routing key it can derive but the author cannot type -- GitHub's

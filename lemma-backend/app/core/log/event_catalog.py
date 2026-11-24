@@ -1182,6 +1182,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'schedule.webhook_controller.rejecting_unknown_webhook_source_s.degraded': EventSpec('warning', frozenset({'source'})),
     'schedule.webhook_controller.source_verifier_raised.degraded': EventSpec('warning', frozenset({'source'})),
     'schedule.webhook_controller.verified_whatsapp_webhook.observed': EventSpec('debug', frozenset()),
+    'schedule.webhook_handler.foreign_pod_schedules_skipped.denied': EventSpec('warning', frozenset({'skipped'})),
     'schedule.webhook_handler.foreign_tenant_schedules_skipped.denied': EventSpec('warning', frozenset({'skipped'})),
     'schedule.webhook_handler.quarantined_webhook_without_stable_provider.degraded': EventSpec('warning', frozenset()),
     'schedule.webhook_schedule_matcher.composio_webhook_missing_provider_id.diagnostic': EventSpec('debug', frozenset()),
