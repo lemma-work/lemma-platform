@@ -1100,6 +1100,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'pod_bundle.exporter.skipping_grant_export_s_s.diagnostic': EventSpec('debug', frozenset({'grantee_id', 'grantee_type'})),
     'pod_bundle.exporter.skipping_surface_export_pod_s.diagnostic': EventSpec('debug', frozenset({'pod_id'})),
     'pod_bundle.exporter.skipping_surface_s_pod_s.diagnostic': EventSpec('debug', frozenset({'pod_id'})),
+    'pod_bundle.github_fetcher.anonymous_fallback.observed': EventSpec('info', frozenset({'refusal_code'})),
     'pod_bundle.handlers.clean_staging_cancelled_import.diagnostic': EventSpec('debug', frozenset({'import_id'})),
     'pod_bundle.handlers.could_not_resolve_importer_pod.diagnostic': EventSpec('debug', frozenset({'pod_id', 'user_id'})),
     'pod_bundle.handlers.delete_staged_import_s_s.diagnostic': EventSpec('debug', frozenset({'import_id'})),

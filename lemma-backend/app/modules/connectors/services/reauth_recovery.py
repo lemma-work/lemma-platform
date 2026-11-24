@@ -100,6 +100,8 @@ async def clear_reauth_mark(
     account = await accounts.get(account_id)
     if account is None or account.status is not AccountStatus.REAUTH_REQUIRED:
         return
-    account.status = AccountStatus.CONNECTED
-    await accounts.update(account)
+    # The status alone. A whole-row write here would put back the credentials
+    # this session read, over a token refreshed since.
+    await accounts.set_status(account_id, AccountStatus.CONNECTED)
     await uow.commit()
+    account.status = AccountStatus.CONNECTED

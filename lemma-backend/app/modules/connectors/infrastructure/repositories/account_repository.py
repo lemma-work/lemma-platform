@@ -346,9 +346,11 @@ class AccountRepository(
 
         The status is written every time, not only when this session thinks it
         changed. A refresh that lost a race may have marked the account for a
-        reconnect a moment ago; the ORM would leave that mark standing, because
-        from here the status never moved, and an install that names its target
-        does not retry a marked account (``reauth_recovery``).
+        reconnect a moment ago. The ORM writes a column only when it differs
+        from the copy the session holds, and a copy read before the mark says
+        the status never moved -- so the mark could be left standing, and an
+        install that names its target does not retry a marked account
+        (``reauth_recovery``).
         """
         await self.session.execute(
             update(Account)
@@ -369,10 +371,12 @@ class AccountRepository(
         either committed before this read and is in it, or writes after
         whatever the caller does next.
 
-        A column select, not an entity one: the session keeps the first
-        instance it loaded and does not overwrite it with a later read, so
-        `get` here would answer with what this request saw when it started --
-        which is exactly what a caller asking this wants to look behind.
+        A column select, not an entity one. While the session still holds the
+        instance it loaded, an entity read answers with that instance and does
+        not overwrite it, so `get` here could answer with what this request saw
+        when it started -- exactly what a caller asking this wants to look
+        behind. Whether it still holds one is up to the garbage collector; a
+        column always comes from the row.
         """
         result = await self.session.execute(
             select(Account.credentials)

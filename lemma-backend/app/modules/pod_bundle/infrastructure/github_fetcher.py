@@ -10,12 +10,15 @@ from typing import Any
 import httpx
 
 from app.core.domain.errors import DomainError
+from app.core.log.log import get_logger
 from app.modules.pod_bundle.config import pod_bundle_settings
 from app.modules.pod_bundle.domain.errors import BundleInvalidError, GithubImportError
 
 _REPO_URL_RE = re.compile(
     r"^(?:https?://github\.com/)?(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+?)(?:\.git)?/?$"
 )
+
+logger = get_logger(__name__)
 
 OperationRunner = Callable[[str, dict], Awaitable[dict]]
 
@@ -95,6 +98,12 @@ class GithubBundleFetcher:
                 if not _is_connector_refusal(exc):
                     raise
                 refusal = exc
+                # The only trace of it: the import's own warning is shown only
+                # where the deployment has no GitHub token of its own.
+                logger.info(
+                    "pod_bundle.github_fetcher.anonymous_fallback.observed",
+                    refusal_code=str(getattr(exc, "code", "")),
+                )
         self.used_anonymous_access = True
         try:
             return await self._fetch_anonymous(owner=owner, repo=repo, ref=ref)

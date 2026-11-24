@@ -207,8 +207,8 @@ class TestWritesThatLeaveTheCredentialsAlone:
         assert "credentials" not in sql
 
     async def test_the_stored_credentials_are_read_as_a_column(self):
-        """Not as an entity: the session answers an entity read with the
-        instance it already holds, which is the copy being looked behind."""
+        """Not as an entity: while the session still holds an instance, an
+        entity read answers with it, and that is the copy being looked behind."""
         session = _FakeSession(existing={"access_token": "new"})
         repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
 
@@ -224,7 +224,7 @@ class TestWritesThatLeaveTheCredentialsAlone:
     async def test_a_refreshed_credential_always_says_the_account_is_connected(self):
         """The status is in the statement whether or not this session saw it
         change: a refresh that lost a race may have marked the account since,
-        and the ORM would have left that mark where it was."""
+        and the ORM writes a status only when its own copy says it changed."""
         session = _FakeSession()
         repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
 

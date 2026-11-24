@@ -40,6 +40,9 @@ class FakeGitHub:
     installations: dict[str, dict[str, Any]] = field(default_factory=dict)
     #: Refresh tokens GitHub would still honour, and whose each is.
     refresh_tokens: dict[str, str] = field(default_factory=dict)
+    #: Awaited with the form of each token request before it is answered: what
+    #: a test uses to have something else happen while a refresh is out.
+    before_token_request: Any = None
     _next_id: int = 1000
 
     def person(self, code: str, **kwargs: Any) -> str:
@@ -143,6 +146,8 @@ def _stand_in_front(monkeypatch: Any, library: Any, fake: FakeGitHub) -> None:
         if request.url.host not in HOSTS:
             return await real(self, request)
         body = await request.aread()
+        if request.url.host == "github.com" and fake.before_token_request:
+            await fake.before_token_request(parse_qs(body.decode()))
         status, payload = fake.answer(
             method=request.method,
             host=request.url.host,

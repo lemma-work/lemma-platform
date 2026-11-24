@@ -953,3 +953,100 @@ async def test_a_refresh_token_github_no_longer_honours_asks_for_a_reconnect(
     account = await db_session.get(Account, UUID(account_id))
     assert account.status == "REAUTH_REQUIRED"
     assert account.external_ref is None
+
+
+# -- two refreshes of one account, where a refresh token works once -------------
+
+
+async def _another_request_stores(account_id: str, credentials: dict) -> None:
+    """A refresh by another request going through: its token stored and
+    committed on a connection of its own."""
+    from app.core.crypto import get_secret_cipher
+    from app.core.infrastructure.db.session import async_session_maker
+
+    async with async_session_maker() as session:
+        await AccountRepository(
+            SqlAlchemyUnitOfWork(session), encryption=get_secret_cipher()
+        ).store_refreshed(UUID(account_id), credentials)
+        await session.commit()
+
+
+def _won(refresh_token: str = "ghr_won") -> dict:
+    from datetime import datetime, timedelta, timezone
+
+    return {
+        "access_token": "gho_mallory",
+        "refresh_token": refresh_token,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=8)).isoformat(),
+    }
+
+
+async def test_the_loser_of_a_refresh_race_uses_the_token_the_winner_stored(
+    scenario, db_session, github, github_sees
+):
+    """Another request refreshes the account while this one's refresh is on
+    its way to GitHub, so GitHub tells this one its token is no good -- what a
+    revoked account is told. The row says otherwise: it holds the other
+    request's token. This request reads that past the copy it started with,
+    carries on with it, and marks nothing."""
+    installation_id = _installation_id()
+    member, account_id = await _stale_account_on_org_a(
+        scenario, db_session, github, github_sees, installation_id, refreshable=False
+    )
+    raced: list[str] = []
+
+    async def the_other_refresh_lands_first(form: dict) -> None:
+        if (form.get("grant_type") or [""])[0] != "refresh_token" or raced:
+            return
+        raced.append((form.get("refresh_token") or [""])[0])
+        await _another_request_stores(account_id, _won())
+
+    github.before_token_request = the_other_refresh_lands_first
+
+    seen = await scenario.async_client.get(
+        f"/organizations/{scenario.org_id}/connectors/accounts/{account_id}"
+        "/github/installations",
+        headers=auth_headers(member),
+        params={"refresh": True},
+    )
+
+    assert raced == ["ghr_first"], "this request did go to GitHub with the old token"
+    assert seen.status_code == 200, seen.text
+    assert seen.json()["install_state"] == "READY", seen.json()
+    stored = await _stored_credentials(db_session, account_id)
+    assert stored["refresh_token"] == "ghr_won"
+    assert stored["access_token"] == "gho_mallory"
+    account = await db_session.get(Account, UUID(account_id))
+    assert account.status == "CONNECTED"
+    assert account.external_ref == installation_id
+
+
+async def test_a_mark_made_before_the_winner_stored_does_not_outlive_its_token(
+    scenario, db_session, github, github_sees
+):
+    """The other order. This request is refused and reads the row before the
+    winning refresh has stored anything, so it marks the account. The winner
+    then stores its token, and says the account is connected in the same
+    statement -- so the mark is gone, on any install, with nothing to retry."""
+    installation_id = _installation_id()
+    member, account_id = await _stale_account_on_org_a(
+        scenario, db_session, github, github_sees, installation_id, refreshable=False
+    )
+    refused = await scenario.async_client.get(
+        f"/organizations/{scenario.org_id}/connectors/accounts/{account_id}"
+        "/github/installations",
+        headers=auth_headers(member),
+        params={"refresh": True},
+    )
+    assert refused.status_code == 409, refused.text
+    db_session.expire_all()
+    assert (await db_session.get(Account, UUID(account_id))).status == (
+        "REAUTH_REQUIRED"
+    )
+
+    await _another_request_stores(account_id, _won())
+
+    stored = await _stored_credentials(db_session, account_id)
+    assert stored["refresh_token"] == "ghr_won"
+    account = await db_session.get(Account, UUID(account_id))
+    assert account.status == "CONNECTED"
