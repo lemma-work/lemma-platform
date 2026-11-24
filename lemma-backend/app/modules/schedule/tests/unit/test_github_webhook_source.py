@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from typing import NotRequired, TypedDict
 
 import pytest
 
@@ -751,9 +752,56 @@ class TestSourceEventIdRejectsIncompletePayloads:
         assert source_event_id(event, "1", 2, payload) is None
 
 
+class _AlertPackage(TypedDict):
+    ecosystem: str
+    name: str
+
+
+class _AlertDependency(TypedDict):
+    package: _AlertPackage
+    manifest_path: str
+
+
+class _AlertAdvisory(TypedDict):
+    ghsa_id: str
+
+
+class _Alert(TypedDict):
+    # Not required: the missing-identity test takes each of these away.
+    number: NotRequired[int]
+    updated_at: NotRequired[str]
+    state: str
+    dependency: _AlertDependency
+    security_advisory: _AlertAdvisory
+
+
+class _Owner(TypedDict):
+    login: str
+
+
+class _Repository(TypedDict):
+    id: int
+    name: str
+    owner: _Owner
+    default_branch: str
+
+
+class _Installation(TypedDict):
+    id: int
+
+
+class DependabotAlertDelivery(TypedDict):
+    """The fields of GitHub's `dependabot_alert` payload these tests read."""
+
+    action: str
+    alert: _Alert
+    repository: _Repository
+    installation: _Installation
+
+
 def _dependabot_alert(
     action: str = "created", *, updated_at: str = "2026-11-24T09:00:00Z"
-) -> dict:
+) -> DependabotAlertDelivery:
     return {
         "action": action,
         "alert": {
@@ -780,11 +828,11 @@ class TestDependabotAlerts:
     """An alert is a repository becoming exposed; the agent that wakes on it
     is there to bump the dependency in the repository's default branch."""
 
-    def _id(self, payload: dict) -> str | None:
-        return source_event_id("dependabot_alert", "1", 2, payload)
+    def _id(self, payload: DependabotAlertDelivery) -> str | None:
+        return source_event_id("dependabot_alert", "1", 2, dict(payload))
 
     async def test_an_alert_routes_on_its_own_tenant_scoped_key(self):
-        normalized = await _normalize(_dependabot_alert(), "dependabot_alert")
+        normalized = await _normalize(dict(_dependabot_alert()), "dependabot_alert")
         assert normalized is not None
         assert normalized.match == {
             "source": "github",
@@ -795,12 +843,12 @@ class TestDependabotAlerts:
     async def test_the_agent_wakes_in_the_repository_on_its_default_branch(self):
         """No `ref`: a clone lands on the default branch, which is where the
         vulnerable manifest is and where a fix branches from."""
-        normalized = await _normalize(_dependabot_alert(), "dependabot_alert")
+        normalized = await _normalize(dict(_dependabot_alert()), "dependabot_alert")
         assert normalized.context == {"repo": {"owner": "octo", "repo": "api"}}
 
     async def test_only_the_declared_alert_actions_match(self):
         normalized = await _normalize(
-            _dependabot_alert("dismissed"), "dependabot_alert"
+            dict(_dependabot_alert("dismissed")), "dependabot_alert"
         )
         assert normalized.refine is not None
         assert not normalized.refine({"actions": ["created", "reintroduced"]})
