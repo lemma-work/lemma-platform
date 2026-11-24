@@ -14,6 +14,7 @@ picks the GitHub user a callback comes back as by the code it sends.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import parse_qs
@@ -38,6 +39,13 @@ class GitHubUser:
 class FakeGitHub:
     users: dict[str, GitHubUser] = field(default_factory=dict)
     installations: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: Refresh tokens GitHub would still honour, and whose each is.
+    refresh_tokens: dict[str, str] = field(default_factory=dict)
+    #: Awaited with the form of each token request before it is answered: what
+    #: a test uses to have something else happen while a refresh is out.
+    before_token_request: Callable[[dict[str, list[str]]], Awaitable[None]] | None = (
+        None
+    )
     _next_id: int = 1000
 
     def person(self, code: str, **kwargs: Any) -> str:
@@ -65,6 +73,32 @@ class FakeGitHub:
             "repository_selection": "selected",
         }
 
+    def refreshable(self, refresh_token: str, *, code: str) -> None:
+        """``refresh_token`` renews the token of the person a callback with
+        ``code`` comes back as -- once, as GitHub's do."""
+        self.refresh_tokens[refresh_token] = code
+
+    def _refresh(self, refresh_token: str) -> dict[str, Any]:
+        code = self.refresh_tokens.pop(refresh_token, None)
+        if code is None:
+            # Spent, expired or never issued: GitHub answers 200 with this.
+            return {
+                "error": "bad_refresh_token",
+                "error_description": (
+                    "The refresh token passed is incorrect or expired."
+                ),
+            }
+        renewed = f"{refresh_token}+"
+        self.refresh_tokens[renewed] = code
+        return {
+            "access_token": f"gho_{code}",
+            "refresh_token": renewed,
+            "expires_in": 28800,
+            "refresh_token_expires_in": 15897600,
+            "token_type": "bearer",
+            "scope": "",
+        }
+
     def answer(
         self,
         *,
@@ -77,7 +111,10 @@ class FakeGitHub:
     ) -> tuple[int, dict[str, Any]]:
         """Status and JSON body for one request to GitHub."""
         if host == "github.com":
-            code = (parse_qs(body.decode()).get("code") or [""])[0]
+            form = parse_qs(body.decode())
+            if (form.get("grant_type") or [""])[0] == "refresh_token":
+                return 200, self._refresh((form.get("refresh_token") or [""])[0])
+            code = (form.get("code") or [""])[0]
             token = {"access_token": f"gho_{code}", "token_type": "bearer"}
             return 200, {**token, "scope": ""}
         user = self.users.get(authorization.removeprefix("Bearer "))
@@ -112,6 +149,8 @@ def _stand_in_front(monkeypatch: Any, library: Any, fake: FakeGitHub) -> None:
         if request.url.host not in HOSTS:
             return await real(self, request)
         body = await request.aread()
+        if request.url.host == "github.com" and fake.before_token_request:
+            await fake.before_token_request(parse_qs(body.decode()))
         status, payload = fake.answer(
             method=request.method,
             host=request.url.host,

@@ -276,9 +276,15 @@ class GithubInstallationReconciler:
             if not left:
                 return InstallationOutcome(InstallState.INSTALL_REQUIRED)
             return InstallationOutcome(InstallState.CHOOSE_INSTALL, choices=left)
-        account.external_ref = outcome.installation_id
-        await self._service.account_repository.update(account)
+        # The routing key alone. `account` was read before `_ask`, which may
+        # have refreshed its token since; writing the whole of it back put the
+        # token it had been read with over the new one, and GitHub's refresh
+        # tokens are single-use -- the account could never refresh again.
+        await self._service.account_repository.set_external_ref(
+            account.id, outcome.installation_id
+        )
         await self._service.uow.commit()
+        account.external_ref = outcome.installation_id
         logger.info(
             "connectors.github_reconciler.installation_bound.diagnostic",
             account_id=str(account.id),

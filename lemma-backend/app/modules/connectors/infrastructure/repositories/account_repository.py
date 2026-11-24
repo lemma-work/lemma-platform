@@ -316,6 +316,78 @@ class AccountRepository(
         )
         return int(result.rowcount or 0)
 
+    # Narrow statements, because `update` writes the whole row from the
+    # entity it is handed -- credentials included -- and an entity is a copy
+    # made when it was read. A token refreshed since (by this request or by
+    # another) is not on it, so marking an account or binding it with `update`
+    # put the old token back. For a provider whose refresh tokens are
+    # single-use, GitHub's among them, the old one is already spent: the
+    # account could never refresh again, and answered "Unable to refresh
+    # connector credentials." until somebody reconnected it.
+
+    async def set_status(self, account_id: UUID, status: AccountStatus) -> None:
+        """Write the status and nothing else."""
+        await self.session.execute(
+            update(Account).where(Account.id == account_id).values(status=status.value)
+        )
+
+    async def set_external_ref(
+        self, account_id: UUID, external_ref: str | None
+    ) -> None:
+        """Write the inbound routing key and nothing else."""
+        await self.session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(external_ref=external_ref)
+        )
+
+    async def store_refreshed(self, account_id: UUID, credentials: object) -> None:
+        """Write a refreshed credential, and that the account is connected.
+
+        The status is written every time, not only when this session thinks it
+        changed. A refresh that lost a race may have marked the account for a
+        reconnect a moment ago. The ORM writes a column only when it differs
+        from the copy the session holds, and a copy read before the mark says
+        the status never moved -- so the mark could be left standing, and an
+        install that names its target does not retry a marked account
+        (``reauth_recovery``).
+        """
+        await self.session.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(
+                credentials=await self.encryption.encrypt_json_async(
+                    self._serialize_credentials(credentials)
+                ),
+                status=AccountStatus.CONNECTED.value,
+            )
+        )
+
+    async def stored_credentials(self, account_id: UUID) -> dict[str, object] | None:
+        """The credentials the row holds now, read past this session's copy.
+
+        The row is locked until the transaction ends, so what is decided from
+        the answer cannot be overtaken: a refresh storing a new credential
+        either committed before this read and is in it, or writes after
+        whatever the caller does next.
+
+        A column select, not an entity one. While the session still holds the
+        instance it loaded, an entity read answers with that instance and does
+        not overwrite it, so `get` here could answer with what this request saw
+        when it started -- exactly what a caller asking this wants to look
+        behind. Whether it still holds one is up to the garbage collector; a
+        column always comes from the row.
+        """
+        result = await self.session.execute(
+            select(Account.credentials)
+            .where(Account.id == account_id)
+            .with_for_update()
+        )
+        encrypted = result.scalar_one_or_none()
+        if encrypted is None:
+            return None
+        return await self.encryption.decrypt_json_async(encrypted)
+
     async def list_by_auth_config(
         self,
         auth_config_id: UUID,

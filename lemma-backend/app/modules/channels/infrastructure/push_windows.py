@@ -24,6 +24,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.channels.domain.entities import (
+    ChannelMessage,
     Delivery,
     DeliveryReasonCode,
     DeliveryStatus,
@@ -33,7 +34,7 @@ from app.modules.channels.infrastructure.delivery_models import (
     ChannelPushPendingModel,
 )
 from app.modules.channels.infrastructure.models import ChannelMessageModel
-from app.modules.channels.infrastructure.rows import delivery_entity
+from app.modules.channels.infrastructure.rows import delivery_entity, message_entity
 
 #: After a push from a channel, how long its next lines wait to go together.
 PUSH_WINDOW = timedelta(minutes=5)
@@ -197,6 +198,22 @@ class PushWindows:
                 )
             )
         return windows
+
+    async def leads(
+        self, *, channel_id: UUID, windows: Sequence[Window]
+    ) -> dict[int, ChannelMessage]:
+        """The line each window leads with, by number: what its push says,
+        and who wrote it."""
+        if not windows:
+            return {}
+        m = ChannelMessageModel
+        rows = await self.session.scalars(
+            select(m).where(
+                m.channel_id == channel_id,
+                m.seq.in_(sorted({each.lead_seq for each in windows})),
+            )
+        )
+        return {row.seq: message_entity(row) for row in rows}
 
     async def plan_pushes(
         self, *, channel_id: UUID, pod_id: UUID, windows: Sequence[Window]

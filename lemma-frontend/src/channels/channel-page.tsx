@@ -12,6 +12,7 @@ import { AgentMark } from "@/space/agent-mark";
 import type { PersonRef } from "./waiting";
 import { ChannelMark } from "./chat-mark";
 import { channelAbilities } from "./abilities";
+import { ReportPlaceContext } from "@/reports/context";
 import { channelApi } from "./api";
 import { ChatDetails, type DetailsTab } from "./chat-details";
 import { Composer } from "./composer";
@@ -194,7 +195,11 @@ function ChannelView({ pod, channel, title, visible, onLeft, actions }: {
     const cache = useQueryClient();
     const timeline = useLines(pod.id, channel.id, visible);
     const live = useChannelLive(pod.id, channel, visible, me);
-    const may = channelAbilities(useAbilities(pod.id), channel, pod.name);
+    const abilities = useAbilities(pod.id);
+    const may = channelAbilities(abilities, channel, pod.name);
+    /* What a line's Report and Block say, and whether Block may also stop
+       the Lemma answering a contact. */
+    const reportPlace = useMemo(() => ({ lemma: pod.name, mayStopAnswering: abilities.known && abilities.podUpdate }), [pod.name, abilities.known, abilities.podUpdate]);
     const agents = useQuery({ queryKey: ["agents", pod.id], queryFn: () => source.listAgents(pod.id), staleTime: 5 * 60_000 });
     const online = useOnline(pod.id, visible);
     const [side, setSide] = useState<"thread" | null>(null);
@@ -330,6 +335,7 @@ function ChannelView({ pod, channel, title, visible, onLeft, actions }: {
         /* Who the box a line is changed in can name: as the composer's. */
         <MentionablesContext.Provider value={people}>
         <ChatFaces.Provider value={faces}>
+        <ReportPlaceContext.Provider value={reportPlace}>
         <div className="cpage" data-side={side ?? undefined}>
             <div className="cpage__main">
                 <header className="cpage__head">
@@ -409,6 +415,7 @@ function ChannelView({ pod, channel, title, visible, onLeft, actions }: {
             )}
             {details && <ChatDetails pod={pod} channel={channel} may={may} at={details} onAt={setDetails} onClose={() => setDetails(null)} onLeft={onLeft} />}
         </div>
+        </ReportPlaceContext.Provider>
         </ChatFaces.Provider>
         </MentionablesContext.Provider>
     );

@@ -32,6 +32,9 @@ class _FakeResult:
     def first(self):
         return self._instance
 
+    def scalar_one_or_none(self):
+        return self._instance
+
 
 class _FakeSession:
     def __init__(self, *, flush_exc: Exception | None = None, existing=None):
@@ -172,6 +175,73 @@ async def test_update_reraises_unrelated_integrity_error():
 
     with pytest.raises(IntegrityError):
         await repo.update(_account_entity(id=existing.id))
+
+
+class TestWritesThatLeaveTheCredentialsAlone:
+    """`update` writes the whole row from the entity it is handed, credentials
+    included, and an entity is a copy made when it was read. Marking an
+    account, or binding it, from a copy read before a token refresh put the
+    old token back -- a spent one, where refresh tokens are single-use."""
+
+    async def test_marking_an_account_writes_its_status_and_nothing_else(self):
+        session = _FakeSession()
+        repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
+
+        await repo.set_status(uuid4(), AccountStatus.REAUTH_REQUIRED)
+
+        (statement,) = session.statements
+        sql = str(statement)
+        assert sql.startswith("UPDATE accounts SET status=")
+        assert "credentials" not in sql
+        assert statement.compile().params["status"] == "REAUTH_REQUIRED"
+
+    async def test_binding_an_account_writes_its_routing_key_and_nothing_else(self):
+        session = _FakeSession()
+        repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
+
+        await repo.set_external_ref(uuid4(), "158040062")
+
+        (statement,) = session.statements
+        sql = str(statement)
+        assert sql.startswith("UPDATE accounts SET external_ref=")
+        assert "credentials" not in sql
+
+    async def test_the_stored_credentials_are_read_as_a_column(self):
+        """Not as an entity: while the session still holds an instance, an
+        entity read answers with it, and that is the copy being looked behind."""
+        session = _FakeSession(existing={"access_token": "new"})
+        repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
+
+        assert await repo.stored_credentials(uuid4()) == {"access_token": "new"}
+
+        (statement,) = session.statements
+        sql = str(statement)
+        assert sql.startswith("SELECT accounts.credentials")
+        # Locked, so a decision made from the answer cannot be overtaken by a
+        # refresh that commits a moment later.
+        assert sql.rstrip().endswith("FOR UPDATE")
+
+    async def test_a_refreshed_credential_always_says_the_account_is_connected(self):
+        """The status is in the statement whether or not this session saw it
+        change: a refresh that lost a race may have marked the account since,
+        and the ORM writes a status only when its own copy says it changed."""
+        session = _FakeSession()
+        repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
+
+        await repo.store_refreshed(uuid4(), {"access_token": "new"})
+
+        (statement,) = session.statements
+        params = statement.compile().params
+        assert params["status"] == "CONNECTED"
+        assert params["credentials"] == {"access_token": "new"}
+        # And nothing an older copy of the account could get wrong.
+        assert {"external_ref", "email", "display_name"}.isdisjoint(params)
+
+    async def test_an_account_that_is_gone_has_no_stored_credentials(self):
+        session = _FakeSession(existing=None)
+        repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
+
+        assert await repo.stored_credentials(uuid4()) is None
 
 
 class TestEveryAccountReadLoadsItsConnectorEagerly:

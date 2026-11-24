@@ -148,7 +148,8 @@ resumes exactly where it stopped.
 The core is [AGPLv3](LICENSE); the SDKs, CLI and skills are
 [Apache-2.0](LICENSES/Apache-2.0.txt). Run it on your laptop, your own server,
 or Lemma Cloud. To work on Lemma itself, start with
-[CONTRIBUTING.md](CONTRIBUTING.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
+[CONTRIBUTING.md](CONTRIBUTING.md) and [ARCHITECTURE.md](ARCHITECTURE.md);
+contributions are made under the [Contributor License Agreement](CLA.md).
 
 Questions go in [Discussions](https://github.com/lemma-work/lemma-platform/discussions)
 or [Discord](https://discord.gg/x2NVyNPQR).
