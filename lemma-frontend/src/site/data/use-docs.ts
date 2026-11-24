@@ -253,7 +253,7 @@ export const useLemmaPages: DocsPage[] = [
                     "Each row says how it is doing: Ran, Skipped, Failed, Paused or Waiting on a person.",
                     "Open a row to see its recent runs. “All runs” lists every one.",
                     "“Pause it” stops an automation and keeps it and its history. “Turn it on” starts it again from that point, without making up the runs it missed.",
-                    "You can stop a run in progress. A workflow run that failed can be tried again from the step that failed, without repeating the steps before it. If that step would have to ask a person again or redo an agent’s work, start a new run instead.",
+                    "You can stop a run in progress. A workflow run that failed can be tried again from the step that failed, without repeating the steps before it. If that step would have to ask a person again or redo an agent’s work, start a new run instead. A new run starts from the first step, so anything the earlier steps already did, such as sending a message, happens again: check what went out first.",
                     "What a scheduled run says lands in Chats.",
                 ],
             },
