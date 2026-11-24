@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { hydrate, QueryClient } from "@tanstack/react-query";
+import { hydrate, QueryClient, QueryObserver } from "@tanstack/react-query";
 import { KEPT_FOR_MS, keptOnDevice, keptState, readable } from "../src/session/device-cache.ts";
 import { channelsKey } from "../src/channels/queries.ts";
 
@@ -35,6 +35,35 @@ test("a list whose last read failed is kept as the answer it holds, and one that
     assert.deepEqual(next.getQueryData(["pods", "org-1"]), [{ id: "pod-1" }]);
     assert.equal(next.getQueryState(["pods", "org-1"])?.status, "success");
     assert.equal(next.getQueryState(["pods", "org-1"])?.error, null);
+});
+
+test("a kept list is read again once the frame shows it, however recently it was kept", async () => {
+    const client = new QueryClient();
+    client.setQueryData(["pods", "org-1"], [{ id: "pod-1" }]);
+    const keptAt = client.getQueryState(["pods", "org-1"])?.dataUpdatedAt ?? 0;
+
+    /* Read back moments later: well inside the list's ten minutes. */
+    const next = new QueryClient();
+    hydrate(next, JSON.parse(JSON.stringify(keptState(client))));
+    let reads = 0;
+    const observer = new QueryObserver(next, {
+        queryKey: ["pods", "org-1"],
+        queryFn: async () => {
+            reads += 1;
+            return [{ id: "pod-2" }];
+        },
+        staleTime: 10 * 60_000,
+    });
+    /* Drawn at once from what was kept, and stale, so it is read again. */
+    assert.deepEqual(observer.getCurrentResult().data, [{ id: "pod-1" }]);
+    assert.equal(observer.getCurrentResult().isStale, true);
+    assert.equal(next.getQueryState(["pods", "org-1"])?.dataUpdatedAt, keptAt);
+
+    const stop = observer.subscribe(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stop();
+    assert.equal(reads, 1);
+    assert.deepEqual(next.getQueryData(["pods", "org-1"]), [{ id: "pod-2" }]);
 });
 
 test("the device keeps the frame's lists, and nothing that is inside a chat, a file or a table", () => {
