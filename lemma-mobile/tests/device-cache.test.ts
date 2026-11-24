@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 
 /* The caches folder, in memory. */
 const files = new Map<string, string>();
@@ -139,8 +139,36 @@ describe("between launches", () => {
         expect(next.getQueryData(LINES)).toBeUndefined();
         expect(next.getQueryData(ROWS)).toBeUndefined();
         expect(files.get(FILE)).not.toContain("the words of a chat");
-        /* Stale on arrival past its staleTime, so the reads go out at once. */
-        expect(next.getQueryState(LEMMAS)?.dataUpdatedAt).toBeGreaterThan(0);
+    });
+
+    it("reads each kept list again once a screen shows it, however recently it was kept", async () => {
+        await launchedOnce();
+        const keptAt = Date.now();
+        /* The next launch a minute later: well inside the Lemmas' five minutes. */
+        await vi.advanceTimersByTimeAsync(60_000);
+        const next = new QueryClient();
+        await restoreFromDevice(next, ME);
+
+        let reads = 0;
+        const observer = new QueryObserver(next, {
+            queryKey: LEMMAS,
+            queryFn: async () => {
+                reads += 1;
+                return [{ id: "pod-2", name: "Sales" }];
+            },
+            staleTime: 5 * 60_000,
+        });
+        /* Drawn at once from what was kept, and stale, so it is read again. */
+        expect(observer.getCurrentResult().data).toEqual([{ id: "pod-1", name: "Support" }]);
+        expect(observer.getCurrentResult().isStale).toBe(true);
+        expect(next.getQueryState(LEMMAS)?.dataUpdatedAt).toBeLessThanOrEqual(keptAt);
+
+        const stop = observer.subscribe(() => undefined);
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+        stop();
+
+        expect(reads).toBe(1);
+        expect(next.getQueryData(LEMMAS)).toEqual([{ id: "pod-2", name: "Sales" }]);
     });
 
     it("writes once for a burst of answers, a second after the first", async () => {

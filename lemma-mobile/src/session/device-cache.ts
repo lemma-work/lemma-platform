@@ -75,7 +75,13 @@ export function keptOnDevice(queryKey: readonly unknown[], server: string): bool
  *  A list whose last read failed is kept too, as the answer it holds: a
  *  query that fails again after answering is an "error" holding its old
  *  data, and keeping only the successes would let one launch without signal
- *  cost the next launch every list. */
+ *  cost the next launch every list.
+ *
+ *  Every kept list comes back invalidated, so it is read again as soon as a
+ *  screen shows it, whatever its `staleTime`: a launch a minute after the
+ *  last write would otherwise take the kept answer as fresh and not read
+ *  the Lemmas again for up to five minutes. Its `dataUpdatedAt` stays the
+ *  time it was read, which is still true. */
 export function keptState(client: QueryClient, server: string): DehydratedState {
     const state = dehydrate(client, {
         shouldDehydrateQuery: (query) => query.state.data !== undefined && keptOnDevice(query.queryKey, server),
@@ -85,7 +91,15 @@ export function keptState(client: QueryClient, server: string): DehydratedState 
         ...state,
         queries: state.queries.map((query) => ({
             ...query,
-            state: { ...query.state, status: "success" as const, fetchStatus: "idle" as const, error: null, fetchFailureCount: 0, fetchFailureReason: null },
+            state: {
+                ...query.state,
+                status: "success" as const,
+                fetchStatus: "idle" as const,
+                error: null,
+                fetchFailureCount: 0,
+                fetchFailureReason: null,
+                isInvalidated: true,
+            },
         })),
     };
 }
