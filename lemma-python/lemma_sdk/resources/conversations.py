@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
 from uuid import uuid4
 
 import httpx
@@ -131,6 +133,8 @@ class PodConversations(BoundResource):
         metadata: Metadata | None = None,
         parent_id: str | None = None,
         repository: str | None = None,
+        ref: str | None = None,
+        agent_runtime: Mapping[str, Any] | None = None,
     ) -> ConversationResponse:
         """Open a conversation, in a worktree of a GitHub repository if one is named.
 
@@ -138,6 +142,12 @@ class PodConversations(BoundResource):
         refuses a repository the organization's GitHub installation does not
         cover for you. The conversation works in a git worktree of its own, on a
         branch of its own, made from one shared clone of the repository.
+
+        ``ref`` is where that branch starts: a branch, a tag, a commit or a pull
+        request's head as ``pull/<number>/head`` (default: the repository's
+        default branch). ``agent_runtime`` picks what runs it, as
+        ``{"profile_id": ..., "model_name": ...}`` from the organization's
+        runtime profiles; left out, the agent's own.
         """
         return self._call(
             agent_conversation_create,
@@ -150,6 +160,8 @@ class PodConversations(BoundResource):
                     "metadata": metadata,
                     "parent_id": parent_id,
                     "repository": repository,
+                    "ref": ref,
+                    "agent_runtime": dict(agent_runtime) if agent_runtime else None,
                 }
             ),
             body_model=CreateConversationRequest,

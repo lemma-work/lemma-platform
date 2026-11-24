@@ -18,7 +18,7 @@ from app.modules.agent.domain.workspace_location import (
     resolve_workspace_location,
 )
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.domain.project_repo import parse_repository_name
+from app.modules.agent.domain.project_repo import is_checkout_ref, parse_repository_name
 from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
     workspace_runtime_context,
 )
@@ -287,6 +287,39 @@ def test_a_picked_repository_name_is_an_owner_and_a_repo():
     assert parse_repository_name(" acme/web.git ") == ProjectRepo(
         owner="acme", repo="web"
     )
+
+
+@pytest.mark.parametrize(
+    "ref", ["main", "release/2.4", "v1.2.0", "pull/123/head", "3f2a9c1", "feat_x-1"]
+)
+def test_a_picked_repository_keeps_a_ref_a_checkout_can_start_from(ref):
+    assert is_checkout_ref(ref)
+    assert parse_repository_name("acme/web", ref=ref) == ProjectRepo(
+        owner="acme", repo="web", ref=ref
+    )
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "",
+        "-x",
+        "--upload-pack=x",
+        "main..evil",
+        "a/../b",
+        "feature/",
+        "x.",
+        "x.lock",
+        "a b",
+        "a;b",
+        "a@{1}",
+        "x" * 256,
+    ],
+)
+def test_a_ref_git_would_misread_or_refuse_is_not_a_checkout_ref(ref):
+    assert not is_checkout_ref(ref)
+    repo = parse_repository_name("acme/web", ref=ref)
+    assert repo is not None and repo.ref is None
 
 
 def test_parse_project_repo_drops_a_ref_git_would_read_as_a_flag():

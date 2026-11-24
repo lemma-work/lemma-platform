@@ -11,6 +11,10 @@ export type CreateConversationRequest = {
     metadata?: (Record<string, any> | null);
     parent_id?: (string | null);
     /**
+     * Where in `repository` the worktree starts: a branch, a tag, a commit, or a pull request's head as 'pull/<number>/head'. The conversation still works on a branch of its own (lemma/<slug>), made from this point; without it, from the default branch. Only with `repository`.
+     */
+    ref?: (string | null);
+    /**
      * A GitHub repository to work in, as 'owner/name': one the organization's GitHub installation covers for you, as listed by the conversation repositories endpoint. The conversation's workspace_cwd is then a git worktree of it on a branch of its own (lemma/<slug>), made before the agent's first command from one clone of the repository, which is fetched first. Other conversations in the repository get worktrees of their own.
      */
     repository?: (string | null);
