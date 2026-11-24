@@ -253,7 +253,7 @@ export const useLemmaPages: DocsPage[] = [
                     "Each row says how it is doing: Ran, Skipped, Failed, Paused or Waiting on a person.",
                     "Open a row to see its recent runs. “All runs” lists every one.",
                     "“Pause it” stops an automation and keeps it and its history. “Turn it on” starts it again from that point, without making up the runs it missed.",
-                    "You can stop a run in progress. A workflow run that failed can be tried again from the step that failed, without repeating the steps before it.",
+                    "You can stop a run in progress. A workflow run that failed can be tried again from the step that failed, without repeating the steps before it. If that step would have to ask a person again or redo an agent’s work, start a new run instead.",
                     "What a scheduled run says lands in Chats.",
                 ],
             },
@@ -430,7 +430,7 @@ export const useLemmaPages: DocsPage[] = [
                 items: [
                     "A Lemma starts by answering only the people in it. Where it has a number or an address of its own, you can set it to answer anyone who writes, or only contacts it already knows.",
                     "Contacts never sign in.",
-                    "A contact is answered only from what the Lemma has marked Public. Nothing else it keeps is used.",
+                    "A contact is answered only from what the Lemma has marked Public, and from the rows about that contact in tables set aside for its contacts. Nothing else it keeps is used.",
                     "What it cannot answer is passed to the person who looks after its contacts.",
                     "Each contact has a conversation of their own. Contacts lists them for whoever looks after them.",
                 ],

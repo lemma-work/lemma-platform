@@ -21,6 +21,13 @@ import { CHAPTERS } from "./contents";
  * `gb-live`, so a reader with scripts off, or one who asked for reduced
  * motion, gets every word and figure in its finished state.
  */
+/** The theme on show: the one chosen, or else the system's. */
+function shownTheme(): "dark" | "light" {
+    const chosen = document.documentElement.dataset.theme;
+    if (chosen === "dark" || chosen === "light") return chosen;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
 export function GuideHeader() {
     const head = useRef<HTMLElement>(null);
     const bar = useRef<HTMLSpanElement>(null);
@@ -28,14 +35,14 @@ export function GuideHeader() {
     const [where, setWhere] = useState<{ chapter: number; section: string }>({ chapter: 0, section: "" });
     const [dark, setDark] = useState(false);
 
+    /* The switch follows the theme on show, including a system change while
+       no choice has been made. */
     useEffect(() => {
-        const root = document.documentElement;
-        const current = () => {
-            const chosen = root.dataset.theme;
-            if (chosen === "dark" || chosen === "light") return chosen;
-            return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-        };
-        setDark(current() === "dark");
+        const system = window.matchMedia("(prefers-color-scheme: dark)");
+        const sync = () => setDark(shownTheme() === "dark");
+        sync();
+        system.addEventListener("change", sync);
+        return () => system.removeEventListener("change", sync);
     }, []);
 
     /* Where the reader is: the last chapter and section whose top has passed under the header. */
@@ -43,15 +50,19 @@ export function GuideHeader() {
         const root = document.documentElement;
         const line = bar.current;
         const bands = [...document.querySelectorAll<HTMLElement>(".gb-band[data-chapter]")];
-        const sections = [...document.querySelectorAll<HTMLElement>(".gb-s[id]")];
         let frame = 0;
         const measure = () => {
             frame = 0;
             const edge = (head.current?.offsetHeight ?? 56) + 24;
             let chapter = 0;
             for (const band of bands) if (band.getBoundingClientRect().top <= edge) chapter = Number(band.dataset.chapter);
+            /* Only the chapter's own sections count, so a new chapter opens with
+               none marked until its first section reaches the header. */
             let section = "";
-            for (const each of sections) if (each.getBoundingClientRect().top <= edge) section = each.id;
+            for (const { id } of CHAPTERS.find((c) => c.n === chapter)?.sections ?? []) {
+                const each = document.getElementById(id);
+                if (each && each.getBoundingClientRect().top <= edge) section = id;
+            }
             setWhere((was) => (was.chapter === chapter && was.section === section ? was : { chapter, section }));
             if (line) {
                 const distance = root.scrollHeight - window.innerHeight;
@@ -119,14 +130,14 @@ export function GuideHeader() {
     }, []);
 
     const flip = () => {
-        const next = dark ? "light" : "dark";
+        const next = shownTheme() === "dark" ? "light" : "dark";
         document.documentElement.dataset.theme = next;
         try {
             localStorage.setItem(key("theme"), next);
         } catch {
             // A browser that refuses storage still gets the switch for this visit.
         }
-        setDark(!dark);
+        setDark(next === "dark");
     };
 
     const open = CHAPTERS.find((chapter) => chapter.n === where.chapter);

@@ -191,7 +191,9 @@ export function PluginStore() {
                             <ul>
                                 {planned.map((p) => (
                                     <li key={p.slug}>
-                                        <span className={s.soonItem}>{p.name}</span>
+                                        <Link className={s.soonItem} href={`/templates/${p.slug}`}>
+                                            {p.name}
+                                        </Link>
                                         <span className={s.soonOne}>{p.one}</span>
                                     </li>
                                 ))}

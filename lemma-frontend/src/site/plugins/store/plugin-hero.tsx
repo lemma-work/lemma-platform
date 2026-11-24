@@ -86,7 +86,7 @@ export function PluginHero({
                     <span className={p.soon}>You can add it soon</span>
                 )}
             </p>
-            <div ref={stage} className={p.stage} id="try-it">
+            <div ref={stage} className={p.stage} id="try">
                 <div className={s.window}>
                     <span className={s.windowBar} aria-hidden="true">
                         <i />

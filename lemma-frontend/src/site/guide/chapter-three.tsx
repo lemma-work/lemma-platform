@@ -110,7 +110,7 @@ export function ChapterThree() {
             </Section>
             <Section id="rules">
                 <p><b className="gb-lead">Who may do what.</b> Every table, file, function and app has a stated reach: one person, a few people, a role, or the whole team. Narrowing it takes access away at once. Whatever an agent or automation does, it does with the authority of the person it is working for, and nothing is deleted unless someone allowed it.</p>
-                <p><b className="gb-lead">What was done.</b> Every action carries the name of who or what took it. Every run can be opened and followed step by step. A run can be stopped, and one that failed can be picked up again from the step that failed.</p>
+                <p><b className="gb-lead">What was done.</b> Every action carries the name of who or what took it. Every run can be opened and followed step by step. A run can be stopped, and one that failed can be picked up again from the step that failed, unless that step would have to ask a person or pay for an agent’s work a second time; then you start a new run.</p>
                 <p>These two are what make it safe to let the work run. A team can hand over the doing because it keeps the control.</p>
             </Section>
             <Section id="quote">
