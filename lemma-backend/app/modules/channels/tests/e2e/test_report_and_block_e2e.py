@@ -178,6 +178,39 @@ async def test_a_block_hides_their_lines_from_the_blocker_alone(pod: Pod, db_ses
     assert back["text"] == "Where is my order?" and not back["blocked"]
 
 
+async def test_a_file_a_blocked_member_shared_is_closed_to_the_blocker_alone(
+    pod: Pod,
+):
+    """A link to the file kept from before the block opens nothing for the
+    one who blocked its writer -- the line reads empty to them -- and still
+    opens it for everybody else."""
+    crew = await group(pod, members=[pod.editor["id"], pod.user["id"]])
+    uploaded = await pod.client(pod.user).post(
+        f"/pods/{pod.id}/datastore/files",
+        data={"directory_path": "/me", "search_enabled": "false"},
+        files={"data": ("notes.txt", b"standup notes", "text/plain")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    said = await say(
+        pod,
+        crew["id"],
+        "the notes",
+        as_user=pod.user,
+        parts=[{"type": "file", "path": uploaded.json()["path"], "name": "notes.txt"}],
+    )
+    [part] = said["parts"]
+    url = f"{pod.base}/{crew['id']}/messages/{said['id']}/files/{part['file_id']}"
+    assert (await pod.client().get(url)).status_code == 200
+
+    blocked = await pod.client().put(f"/pods/{pod.id}/blocks/MEMBER:{pod.user['id']}")
+    assert blocked.status_code == 200, blocked.text
+
+    assert (await pod.client().get(url)).status_code == 404
+    theirs = await pod.client(pod.editor).get(url)
+    assert theirs.status_code == 200, theirs.text
+    assert theirs.content == b"standup notes"
+
+
 async def test_only_a_person_in_the_pod_can_be_blocked_and_never_oneself(pod: Pod):
     me = await pod.client().put(f"/pods/{pod.id}/blocks/MEMBER:{pod.owner['id']}")
     assert me.status_code == 422, me.text
