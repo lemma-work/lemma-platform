@@ -71,12 +71,24 @@ export function keptOnDevice(queryKey: readonly unknown[]): boolean {
 
 /** What of the cache the device keeps: the lists that have answered, and no
  *  mutations -- by default a paused one, a message sent offline, would be
- *  kept words and all. */
+ *  kept words and all.
+ *
+ *  A list whose last read failed is kept too, as the answer it holds: a
+ *  query that fails after answering is an "error" still holding its data,
+ *  and keeping only the successes would let one visit while the API is
+ *  failing cost the next visit every list. */
 export function keptState(client: QueryClient): DehydratedState {
-    return dehydrate(client, {
-        shouldDehydrateQuery: (query) => query.state.status === "success" && keptOnDevice(query.queryKey),
+    const state = dehydrate(client, {
+        shouldDehydrateQuery: (query) => query.state.data !== undefined && keptOnDevice(query.queryKey),
         shouldDehydrateMutation: () => false,
     });
+    return {
+        ...state,
+        queries: state.queries.map((query) => ({
+            ...query,
+            state: { ...query.state, status: "success" as const, fetchStatus: "idle" as const, error: null, fetchFailureCount: 0, fetchFailureReason: null },
+        })),
+    };
 }
 
 /** Whether a kept record may be read back now, for this person. `api` is the

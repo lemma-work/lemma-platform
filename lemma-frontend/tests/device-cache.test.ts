@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { QueryClient } from "@tanstack/react-query";
+import { hydrate, QueryClient } from "@tanstack/react-query";
 import { KEPT_FOR_MS, keptOnDevice, keptState, readable } from "../src/session/device-cache.ts";
 import { channelsKey } from "../src/channels/queries.ts";
 
@@ -17,6 +17,24 @@ test("the device keeps lists that answered, and no change still on its way, not 
     const state = keptState(client);
     assert.deepEqual(state.queries.map((query) => query.queryKey), [["pods", "org-1"]]);
     assert.deepEqual(state.mutations, []);
+});
+
+test("a list whose last read failed is kept as the answer it holds, and one that never answered is not", async () => {
+    const client = new QueryClient();
+    const offline = () => Promise.reject(new Error("the API is failing"));
+    client.setQueryData(["pods", "org-1"], [{ id: "pod-1" }]);
+    await client.fetchQuery({ queryKey: ["pods", "org-1"], queryFn: offline, retry: false, staleTime: 0 }).catch(() => undefined);
+    await client.fetchQuery({ queryKey: ["orgs"], queryFn: offline, retry: false }).catch(() => undefined);
+    assert.equal(client.getQueryState(["pods", "org-1"])?.status, "error");
+
+    const state = keptState(client);
+    assert.deepEqual(state.queries.map((query) => query.queryKey), [["pods", "org-1"]]);
+
+    const next = new QueryClient();
+    hydrate(next, JSON.parse(JSON.stringify(state)));
+    assert.deepEqual(next.getQueryData(["pods", "org-1"]), [{ id: "pod-1" }]);
+    assert.equal(next.getQueryState(["pods", "org-1"])?.status, "success");
+    assert.equal(next.getQueryState(["pods", "org-1"])?.error, null);
 });
 
 test("the device keeps the frame's lists, and nothing that is inside a chat, a file or a table", () => {
