@@ -25,7 +25,8 @@ takes the copy from its own records:
 Both take `{reason, note?}` -- `reason` one of `OFFENSIVE`, `HARMFUL`,
 `SEXUAL`, `SPAM`, `OTHER`, `note` up to 1000 characters -- and answer 201 with
 the report's `id`. Reporting the same message again replaces the reporter's
-report and opens it again; the same `id` comes back.
+report and opens it again, keeping the team's `outcome` from last time; the
+same `id` comes back.
 
 `contracts.file_report` keeps the report and queues the email in the caller's
 unit of work. `events/report_email` is a `delivery` job keyed by the report:

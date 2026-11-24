@@ -76,6 +76,15 @@ async def test_a_report_keeps_a_copy_and_is_the_reporters_to_replace(
 
     first = await pod.client().post(url, json={"reason": "SPAM"})
     assert first.status_code == 201, first.text
+    # The team closes it with a note, the only record of what they did.
+    await db_session.execute(
+        text(
+            "UPDATE content_reports SET status = 'CLOSED', closed_at = now(), "
+            "outcome = 'Warned the sender.' WHERE id = :id"
+        ),
+        {"id": UUID(first.json()["id"])},
+    )
+    await db_session.commit()
     again = await pod.client().post(
         url, json={"reason": "OFFENSIVE", "note": "  Rude to the team.  "}
     )
@@ -94,6 +103,9 @@ async def test_a_report_keeps_a_copy_and_is_the_reporters_to_replace(
         "Rude to the team.",
         "OPEN",
     )
+    # Open again, with what the team decided last time still beside it.
+    assert row.closed_at is None
+    assert row.outcome == "Warned the sender."
     assert row.excerpt[-1]["text"] == "Where is my order?"
     assert row.excerpt[-1]["reported"] is True
     # Told to the team once, however often it was replaced while queued.

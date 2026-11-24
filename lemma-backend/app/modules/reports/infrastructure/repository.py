@@ -37,7 +37,9 @@ class ReportRepository:
     async def file(self, report: NewReport) -> FiledReport:
         """Keep the report. The same person reporting the same message again
         replaces their report -- its reason, words and copy -- and opens it
-        again if the team had closed it; it keeps its id and first date."""
+        again if the team had closed it; it keeps its id, its first date and
+        the team's ``outcome``, which is the only record of what they did
+        last time and is theirs to rewrite, not the reporter's."""
         at = datetime.now(timezone.utc)
         values = {
             "organization_id": report.organization_id,
@@ -78,7 +80,6 @@ class ReportRepository:
                         **replaced,
                         "status": ReportStatus.OPEN.value,
                         "closed_at": None,
-                        "outcome": None,
                     },
                 ).returning(ContentReportModel.id, ContentReportModel.created_at)
             )
