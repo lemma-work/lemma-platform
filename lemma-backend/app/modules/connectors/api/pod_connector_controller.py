@@ -28,7 +28,7 @@ from app.modules.connectors.api.dependencies import (
 from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationDetail,
     OperationDiscoverResponse,
-    OperationExecutionRequest,
+    PodOperationExecutionRequest,
     OperationExecutionResponse,
 )
 from app.modules.connectors.services.install_on_connect import install_to_connect
@@ -244,14 +244,16 @@ async def get_pod_connector_operation(
         "decided by the connector: the caller's own for a PER_MEMBER connector, "
         "the shared one for a SHARED connector. Typed refusals: "
         "`CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), "
-        "`CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`."
+        "`CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`; with "
+        "`act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and "
+        "`APP_IDENTITY_UNAVAILABLE`."
     ),
 )
 async def execute_pod_connector_operation(
     pod_id: UUID,
     slug: str,
     operation_name: str,
-    body: OperationExecutionRequest,
+    body: PodOperationExecutionRequest,
     request: Request,
     user: CurrentUser,
     use_cases: ConnectorOperationUseCasesDep,
@@ -266,6 +268,7 @@ async def execute_pod_connector_operation(
         payload=body.payload,
         user_id=user.id,
         request=request,
+        act_as=body.act_as,
     )
 
 

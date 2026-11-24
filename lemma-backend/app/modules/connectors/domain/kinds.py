@@ -50,8 +50,10 @@ class ResolvedInstall:
 #: outlives the person who set it up; pod publish, pod import and the sandbox's
 #: `git`/`gh` act as the person, so the work is attributed to whoever owns the
 #: repository. Defaulting to "user" keeps every caller that says nothing on the
-#: behaviour it had before there was an app to be.
-ActingIdentity = Literal["user", "app"]
+#: behaviour it had before there was an app to be. "app_only" is a function that
+#: asked for the app by name: the app or a refusal, never the person in its
+#: place (``domain/app_identity.py``).
+ActingIdentity = Literal["user", "app", "app_only"]
 
 ExecutionResult = Any
 

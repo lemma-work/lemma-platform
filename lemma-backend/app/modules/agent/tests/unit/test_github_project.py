@@ -533,3 +533,17 @@ def test_a_pull_request_is_checked_out_by_its_own_head(git: LocalGit) -> None:
     assert (code, run_code) == (0, 0)
     assert git.run("-C", str(worktree), "rev-parse", "HEAD") == head
     assert git.run("-C", str(run_dir), "rev-parse", "HEAD") == head
+
+
+def test_a_commit_is_checked_out_even_on_no_branch(git: LocalGit) -> None:
+    """A reviewer pinned to the commit it was asked about: a fork's head is on
+    no branch a clone fetches, and `git clone --branch` refuses a sha, so the
+    first checkout fetches the commit by name. GitHub serves any reachable
+    commit that way; a local origin has to be told to."""
+    git.run("-C", str(git.origin), "config", "uploadpack.allowAnySHA1InWant", "true")
+    head = git.open_pull_request(7)
+
+    code, worktree = git.step("one", ref=head)
+
+    assert code == 0
+    assert git.run("-C", str(worktree), "rev-parse", "HEAD") == head

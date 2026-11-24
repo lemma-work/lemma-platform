@@ -181,6 +181,54 @@ def test_execute_runs_through_the_pod_connector_named_by_slug() -> None:
     assert json.loads(request.content) == {"payload": {"to": "a@b.c"}}
 
 
+def test_a_function_can_ask_to_act_as_the_app() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"result": {"id": 1}})
+
+    connectors = _pod_connectors_over(handler)
+
+    connectors.execute("github", "checks_create", {"name": "Lemma check"}, act_as="app")
+
+    [request] = seen
+    assert json.loads(request.content) == {
+        "payload": {"name": "Lemma check"},
+        "act_as": "app",
+    }
+
+
+def test_acting_as_the_app_is_never_sent_down_the_deprecated_route() -> None:
+    """That route names an account; the app is a pod connector's to present."""
+    connectors = _pod_connectors_over(lambda request: httpx.Response(500))
+
+    with pytest.raises(ValueError, match="act_as='app'"):
+        connectors.execute(
+            "github", "checks_create", {}, act_as="app", account_id=ACCOUNT_ID
+        )
+
+
+def test_a_refusal_to_act_as_the_app_is_not_retried_as_an_installation() -> None:
+    """A 404 for a slug falls back to the installation route as the person;
+    a call that asked for the app must not end up as the person."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            404,
+            json={"code": "POD_CONNECTOR_NOT_FOUND", "message": "No connector 'gh'"},
+        )
+
+    connectors = _pod_connectors_over(handler)
+
+    with pytest.raises(LemmaNotFoundError):
+        connectors.execute("gh", "checks_create", {}, act_as="app")
+
+    assert len(seen) == 1
+
+
 # --- Deprecated: an installation and an account, as before pod connectors ---
 
 

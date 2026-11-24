@@ -33,6 +33,8 @@ pile up. The person's own worktree sweep does not run there.
 A pull request (``pull/123/head``) is not among what a clone fetches, so it is
 fetched by name, into ``origin/pull/123/head``, and checked out from there --
 a review sees the pull request itself rather than a branch that may be gone.
+A commit is fetched by its sha the same way: `git clone --branch` takes a branch
+or a tag and refuses a sha, and a fork's commit is on no branch a clone gets.
 
 Once a checkout has run, the person's finished worktrees are cleared
 (``worktree_sweep``): this is where worktrees are made, and the one moment the
@@ -91,6 +93,8 @@ _FETCH_FAILED_EXIT = 75
 _WORKTREE_FAILED_EXIT = 76
 # A pull request's head, which only a fetch by name brings into a clone.
 _PULL_REQUEST_REF = re.compile(r"^pull/[0-9]+/head$")
+#: A full commit id. An abbreviated one cannot be fetched by name.
+_COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _clone_or_fetch(*, url: str, path: str, ref: str | None) -> str:
@@ -101,7 +105,10 @@ def _clone_or_fetch(*, url: str, path: str, ref: str | None) -> str:
     fails sets `stale` for the end of the step, so a worktree is still made.
     """
     pull_request = bool(ref and _PULL_REQUEST_REF.match(ref))
-    branch = f"--branch {shlex.quote(ref)} " if ref and not pull_request else ""
+    commit = bool(ref and _COMMIT_SHA.match(ref))
+    branch = (
+        f"--branch {shlex.quote(ref)} " if ref and not (pull_request or commit) else ""
+    )
     clone = shlex.quote(path)
     command = (
         f"if [ -e {shlex.quote(path + '/.git')} ]; then "
@@ -111,6 +118,12 @@ def _clone_or_fetch(*, url: str, path: str, ref: str | None) -> str:
     if pull_request:
         refspec = shlex.quote(f"+refs/{ref}:refs/remotes/origin/{ref}")
         command += f"; git -C {clone} fetch --quiet origin {refspec} || stale=1"
+    elif commit and ref:
+        # GitHub serves any reachable commit by its sha; `_start_point` then
+        # finds no `origin/<sha>` and starts from the commit itself.
+        command += (
+            f"; git -C {clone} fetch --quiet origin {shlex.quote(ref)} || stale=1"
+        )
     return command
 
 

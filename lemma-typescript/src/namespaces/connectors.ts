@@ -3,7 +3,7 @@ import type { HttpClient } from "../http.js";
 import type { ConnectRequestInitiateSchema } from "../openapi_client/models/ConnectRequestInitiateSchema.js";
 import type { ConnectRequestResponseSchema } from "../openapi_client/models/ConnectRequestResponseSchema.js";
 import type { OperationDetailsBatchRequest } from "../openapi_client/models/OperationDetailsBatchRequest.js";
-import type { OperationExecutionRequest } from "../openapi_client/models/OperationExecutionRequest.js";
+import type { PodOperationExecutionRequest } from "../openapi_client/models/PodOperationExecutionRequest.js";
 import type { OperationExecutionResponse } from "../openapi_client/models/OperationExecutionResponse.js";
 import type { PodAccountCreateRequest } from "../openapi_client/models/PodAccountCreateRequest.js";
 import type { PodAccountUpdateRequest } from "../openapi_client/models/PodAccountUpdateRequest.js";
@@ -204,7 +204,9 @@ export class ConnectorsNamespace {
         operationName,
       )),
     execute: (slug: string, operationName: string, payload: Record<string, unknown>) => {
-      const body: OperationExecutionRequest = { payload };
+      // No `act_as`: presenting as the app is a function run's to ask for,
+      // and a page that asked would be refused.
+      const body: PodOperationExecutionRequest = { payload };
       return this.client.request(() => ConnectorsService.podConnectorOperationExecute(
         this.podId(),
         slug,

@@ -15,8 +15,12 @@ from uuid import UUID
 
 from app.core.domain.generation import GenerationSettings
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.errors import AgentNotFoundError
+from app.modules.agent.domain.errors import (
+    AgentNotFoundError,
+    ConversationValidationError,
+)
 from app.modules.agent.domain.outsiders import OUTSIDE_ROW_KEY
+from app.modules.agent.domain.project_repo import parse_project_repo
 from app.modules.agent.domain.value_objects import ConversationOrigin
 from app.modules.agent.infrastructure.repositories import AgentRepository
 from app.modules.workflow.contracts import AgentPort
@@ -61,6 +65,8 @@ class _AgentDriver(AgentPort):
         agent = await self.agents.get_by_pod_and_name(pod_id=pod_id, name=agent_name)
         if agent is None:
             raise AgentNotFoundError("Workflow agent target was not found")
+        if source != SCHEDULE_SOURCE:
+            _require_named_checkout(conversation_metadata)
         override = None
         if model_name is not None or generation is not None:
             base = agent.agent_runtime or await self.starts.default_runtime(pod_id)
@@ -113,6 +119,29 @@ class _AgentDriver(AgentPort):
     async def stop_conversation(self, conversation_id: UUID, user_id: UUID) -> None:
         del user_id  # the engine already authorized the cancel
         await self.outcomes.stop(conversation_id)
+
+
+def _require_named_checkout(metadata: dict[str, object] | None) -> None:
+    """A step that names a repository gets that checkout or fails.
+
+    The run's start drops a ``repo`` it cannot parse, and a ref it cannot take
+    becomes the default branch: right for a webhook's payload, which says
+    whatever GitHub sent, and wrong for an author's step, where a reviewer
+    quietly reading ``main`` instead of the pull request is the failure.
+    """
+    raw = (metadata or {}).get("repo")
+    if raw is None:
+        return
+    repo = parse_project_repo(raw)
+    if repo is None:
+        raise ConversationValidationError(
+            f"Not a GitHub repository to check out: {raw!r}"
+        )
+    asked = raw.get("ref") if isinstance(raw, dict) else None
+    if asked and repo.ref != str(asked).strip():
+        raise ConversationValidationError(
+            f"Not a ref a checkout can start from: {asked!r}"
+        )
 
 
 def build_agent_control_adapter(uow: SqlAlchemyUnitOfWork) -> AgentPort:
