@@ -304,11 +304,10 @@
     top: 60px;
     z-index: 2;
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
     margin: 0;
     padding: 10px 0;
-    overflow-x: auto;
-    scrollbar-width: none;
     background: var(--bg);
     font-family: var(--jost);
 }

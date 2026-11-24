@@ -359,6 +359,7 @@ html:has(.guidebook) { scroll-behavior: smooth; }
     .guidebook .gb-head-a { display: none; }
     .guidebook .gb-where > a { display: none; }
     .guidebook .gb-where-ch::before { content: none; }
+    .guidebook .gb-where::before { content: none; }
     .guidebook .gb-q { min-height: 0; }
     .guidebook .gb-pin { position: static; margin-top: 6px; }
     .guidebook .gb-ax-y { font-size: 9.5px; letter-spacing: 0.14em; }
