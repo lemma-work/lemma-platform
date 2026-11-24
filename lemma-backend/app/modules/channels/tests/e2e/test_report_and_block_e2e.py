@@ -4,7 +4,7 @@ A report keeps who reported what, why, and a copy of it, and is the
 reporter's to replace; it refuses one's own line. A block is the blocker's
 alone: the blocked person's lines come to them marked and empty, and to
 everybody else as before. Blocking a contact for the pod stops its agents
-writing to them, and leaves members free to.
+writing to them -- what they write starts no run -- and leaves members free to.
 """
 
 from __future__ import annotations
@@ -16,11 +16,14 @@ from uuid import UUID
 import pytest
 from sqlalchemy import select, text
 
+from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.infrastructure.models.conversation import (
     ConversationModel,
     MessageModel,
 )
+from app.modules.agent_surfaces.services.outside_cap import held_for_a_person
 from app.modules.channels.contracts import NewLine, Sender, post
 from app.modules.channels.domain.entities import Principal
 from app.modules.channels.services.pushes import contact_blockers
@@ -28,7 +31,11 @@ from app.modules.channels.tests.e2e.push_support import pushed, waiting
 from app.modules.channels.infrastructure import blocks as blocks_module
 from app.modules.channels.infrastructure.blocks import BlockRepository
 from app.modules.channels.tests.e2e.channel_pod import Pod, contact_place, group, say
-from app.modules.contacts.contracts import IdentityStrength, open_contact
+from app.modules.contacts.contracts import (
+    IdentityStrength,
+    contact_by_id,
+    open_contact,
+)
 from app.modules.contacts.contracts.outreach import (
     Address,
     OutreachKind,
@@ -228,6 +235,43 @@ async def test_a_contact_the_pod_blocked_gets_nothing_from_an_agent(
         f"/pods/{pod.id}/contacts/{dana}", json={"blocked": False}
     )
     assert lifted.json()["blocked_at"] is None
+
+
+async def test_a_contact_the_pod_blocked_starts_no_run_by_writing(pod: Pod, db_session):
+    """Neither past the cap nor answered by a member's hand, her turn waits
+    for the block alone -- and takes no place in the count of contacts the
+    organization's agents answer. Unblocked, the same turn runs."""
+    _, dana = await contact_place(db_session, pod)
+    pod_id = UUID(pod.id)
+    conversation = ConversationModel(
+        user_id=UUID(pod.owner["id"]), pod_id=pod_id, contact_id=dana
+    )
+    db_session.add(conversation)
+    await db_session.commit()
+
+    async def her_turn_waits() -> bool:
+        async with create_uow_from_session_maker(async_session_maker) as uow:
+            waits = await held_for_a_person(
+                uow, pod_id=pod_id, conversation_id=conversation.id, capped=False
+            )
+            await uow.commit()
+        return waits
+
+    async def answered() -> bool:
+        async with create_uow_from_session_maker(async_session_maker) as uow:
+            found = await contact_by_id(uow, pod_id=pod_id, contact_id=dana)
+        return found is not None and found.answered
+
+    contact = f"/pods/{pod.id}/contacts/{dana}"
+    stopped = await pod.client().patch(contact, json={"blocked": True})
+    assert stopped.status_code == 200, stopped.text
+    assert await her_turn_waits()
+    assert not await answered()
+
+    lifted = await pod.client().patch(contact, json={"blocked": False})
+    assert lifted.status_code == 200, lifted.text
+    assert not await her_turn_waits()
+    assert await answered()
 
 
 async def test_the_owner_of_a_chat_reports_a_reply_nobody_else_can(
