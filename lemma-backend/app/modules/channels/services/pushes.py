@@ -12,8 +12,9 @@ question waiting on them; a line in their own channel they did not write; a
 contact's line in a channel assigned to them (seated or not); and, set to ``ALL``, any line
 written in Lemma in a group they are in. Never an agent's line at a platform
 (seen there) or answering in a thread (seen in the app), nor a line withheld
-from them (they could not read it), nor a line from somebody they blocked;
-nobody hears of a line from a contact the pod stopped answering. ``MENTIONS`` -- a group seat's default --
+from them (they could not read it), nor a line from somebody they blocked --
+asked again as a push that waited goes (``_not_blocked_now``); nobody hears
+of a line from a contact the pod stopped answering. ``MENTIONS`` -- a group seat's default --
 keeps only the first two, and so does a note for members only; ``NONE`` and a
 mute stop them all. Somebody named or asked who is not in the channel is told
 too, when they may see it. The first two *call* them: due at once, never held
@@ -48,7 +49,12 @@ from app.modules.channels.infrastructure.blocks import BlockRepository
 from app.modules.channels.infrastructure.lines import LineRepository
 from app.modules.channels.infrastructure.members import MAX_MEMBERS, MemberRepository
 from app.modules.channels.infrastructure.models import ChannelMentionModel
-from app.modules.channels.infrastructure.push_windows import Fold, Folded, PushWindows
+from app.modules.channels.infrastructure.push_windows import (
+    Fold,
+    Folded,
+    PushWindows,
+    Window,
+)
 from app.modules.channels.infrastructure.questions import QuestionRepository
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.rows import now
@@ -398,7 +404,9 @@ async def _send(
     windows = PushWindows(uow.session)
     taken = await windows.take(channel_id=channel.id, user_ids=user_ids)
     for delivery in await windows.plan_pushes(
-        channel_id=channel.id, pod_id=channel.pod_id, windows=taken
+        channel_id=channel.id,
+        pod_id=channel.pod_id,
+        windows=await _not_blocked_now(uow, channel, taken),
     ):
         await facts.emit(
             uow,
@@ -408,6 +416,28 @@ async def _send(
                 target=delivery.target_key,
             ),
         )
+
+
+async def _not_blocked_now(
+    uow: SqlAlchemyUnitOfWork, channel: Channel, windows: list[Window]
+) -> list[Window]:
+    """The windows whose push still goes, asked as it goes: a line waits in a
+    window -- for its end, or held while the member had the app open -- and
+    its writer may be blocked meanwhile. A push leads with one line, so one
+    led by somebody the member now blocks (``_not_blocking``) goes nowhere;
+    its window is emptied all the same, and its lines wait in the app."""
+    leads = await PushWindows(uow.session).leads(channel_id=channel.id, windows=windows)
+    kept: list[Window] = []
+    for seq in sorted(leads):
+        leading = {each.user_id: each for each in windows if each.lead_seq == seq}
+        told = await _not_blocking(
+            uow,
+            channel,
+            leads[seq],
+            {user_id: each.urgent for user_id, each in leading.items()},
+        )
+        kept.extend(leading[user_id] for user_id in sorted(told))
+    return kept
 
 
 __all__ = [

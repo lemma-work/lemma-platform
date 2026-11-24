@@ -210,7 +210,10 @@ them marked `blocked`, with no text, parts or question -- in a page, a thread,
 search, the channel list's last line and the live socket alike, from the same
 mapper (`message_response(..., blocked=)`) -- a file one of their lines shares
 is not served to them either, though they kept its link (`line_file`, 404),
-and `fan_out` tells them of none of it outside the app. Nobody else's view
+and `fan_out` tells them of none of it outside the app. A push already waiting
+in their window when they block -- for the window's end, or held while they
+had the app open -- is asked again as it goes, and one led by that person's
+line goes nowhere (`pushes._send`). Nobody else's view
 changes, the person is not told, and the pod's agents answer them as before:
 stopping that is the contact's own `blocked` (`contacts`). A contact merged
 into another carries its blocks to the survivor (`contact_merged_work`); until

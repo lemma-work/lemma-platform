@@ -9,7 +9,7 @@ writing to them -- what they write starts no run -- and leaves members free to.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TypedDict
 from uuid import UUID
 
@@ -24,10 +24,22 @@ from app.modules.agent.infrastructure.models.conversation import (
     MessageModel,
 )
 from app.modules.agent_surfaces.services.outside_cap import held_for_a_person
-from app.modules.channels.contracts import NewLine, Sender, post
+from app.modules.channels.contracts import (
+    DeliveryReasonCode,
+    DeliveryStatus,
+    NewLine,
+    Sender,
+    post,
+)
+from app.modules.channels.contracts.deliveries import delivery_folded
 from app.modules.channels.domain.entities import Principal
 from app.modules.channels.services.pushes import contact_blockers
-from app.modules.channels.tests.e2e.push_support import pushed, waiting
+from app.modules.channels.tests.e2e.push_support import (
+    pushed,
+    pushes_of,
+    waiting,
+    window_ends_now,
+)
 from app.modules.channels.infrastructure import blocks as blocks_module
 from app.modules.channels.infrastructure.blocks import BlockRepository
 from app.modules.channels.tests.e2e.channel_pod import Pod, contact_place, group, say
@@ -469,6 +481,45 @@ async def test_a_contact_the_pod_stopped_answering_is_pushed_to_nobody(
     second = await dana_says("Hello again?")
     assert editor not in await pushed(second)
     assert await waiting(source.channel_id, editor) == held
+
+
+@pytest.mark.drives_work
+async def test_a_held_push_goes_nowhere_once_its_writer_is_blocked(pod: Pod):
+    """The editor names the owner and the user, who both have the app open:
+    each push waits in their window. The owner blocks the editor before it
+    ends; when it does, the user's push goes and the owner's does not."""
+    crew = await group(pod, members=[pod.editor["id"], pod.user["id"]])
+    owner, user = pod.owner["id"], pod.user["id"]
+    named = await say(
+        pod,
+        crew["id"],
+        "Can you both look?",
+        as_user=pod.editor,
+        parts=[
+            {"type": "mention", "kind": "MEMBER", "id": who, "name": "x"}
+            for who in (owner, user)
+        ],
+    )
+    held = await pushes_of(named["id"])
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        for who in (owner, user):
+            await delivery_folded(
+                uow, held[who], reason="Held for now.", hold_for=timedelta(minutes=30)
+            )
+        await uow.commit()
+
+    blocked = await pod.client().put(f"/pods/{pod.id}/blocks/MEMBER:{pod.editor['id']}")
+    assert blocked.status_code == 200, blocked.text
+    for who in (owner, user):
+        await window_ends_now(crew["id"], who)
+    sent = await pushes_of(named["id"])
+
+    assert sent[user].status is DeliveryStatus.PENDING
+    assert (sent[owner].status, sent[owner].reason_code) == (
+        DeliveryStatus.SKIPPED,
+        DeliveryReasonCode.FOLDED,
+    )
+    assert await waiting(crew["id"], owner) == 0
 
 
 async def test_a_block_holds_through_successive_merges_and_their_carries(
