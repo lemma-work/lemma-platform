@@ -13,6 +13,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.askable_pod.list` | GET | `/pods/{pod_id}/askable-pods` | List Pods This Pod Can Ask |
 | `agent.conversation.approval.list` | GET | `/pods/{pod_id}/conversations/{conversation_id}/approvals` | List Agent Run Approvals |
 | `agent.conversation.approval.resolve` | POST | `/pods/{pod_id}/conversations/{conversation_id}/approvals/{approval_id}/decision` | Resolve User Approval |
+| `agent.conversation.changes.get` | GET | `/pods/{pod_id}/conversations/{conversation_id}/changes` | Get Conversation Changes |
 | `agent.conversation.create` | POST | `/pods/{pod_id}/conversations` | Create Pod Agent Conversation |
 | `agent.conversation.get` | GET | `/pods/{pod_id}/conversations/{conversation_id}` | Get Pod Conversation |
 | `agent.conversation.list` | GET | `/pods/{pod_id}/conversations` | List Pod Agent Conversations |

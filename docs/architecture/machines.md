@@ -50,6 +50,17 @@ third line (`agent/contracts/run_audience.py`). Nobody else reaches `me`: not a
 function, not an app's page, not another person. An app's page acts as its
 viewer inside its own pod, and a person's own machine is not a pod resource.
 
+One read crosses that line, narrowly: a repository conversation's **changes**
+(`GET /pods/{pod_id}/conversations/{conversation_id}/changes`, for a Changes
+card). It is a conversation route, so only the conversation's owner may call
+it -- an app's page as its viewer, for the viewer's own conversations -- and
+it runs one fixed, read-only `git` command, built by the backend, in that
+conversation's checkout on the machine a run of it would use, decided by
+`resolve_agent_machine`. It never starts a sleeping machine
+(`agent_machines.read_if_awake`) and accepts no command from the caller. An
+app's script can therefore read its viewer's diff; it could already read most
+of it in the conversation's `edit_file` calls.
+
 A run reading what people outside the pod wrote — a group's strangers, or a
 row a contact wrote that started a schedule — is held on `me` exactly as on a
 pod machine: using it waits for its person's approval

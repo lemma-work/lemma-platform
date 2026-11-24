@@ -12079,6 +12079,31 @@ var LemmaClient = (() => {
       const podId = this.requirePodId(options.pod_id);
       return this.http.request("GET", `/pods/${podId}/conversations/${conversationId}`).then(normalizeConversation);
     }
+    /** What a conversation opened with `repository` has changed in its checkout:
+     *  every file that differs from where its branch left the start point --
+     *  commits not yet pushed, edits not yet committed -- and its untracked
+     *  files, with line counts. `patch: true` adds the unified diff, cut at
+     *  `max_patch_bytes` (`truncated` says so).
+     *
+     *  `state` is `ready` when it was read. Otherwise it says why not:
+     *  `no_repository`, `not_checked_out` (no command has run yet),
+     *  `machine_unavailable` (the machine is asleep and is not woken to answer)
+     *  or `elsewhere` (its last run worked on the person's own Mac). Only the
+     *  conversation's owner may read it. */
+    changes(conversationId, options = {}) {
+      var _a;
+      const podId = this.requirePodId(options.pod_id);
+      return this.http.request(
+        "GET",
+        `/pods/${podId}/conversations/${conversationId}/changes`,
+        {
+          params: {
+            patch: options.patch ? true : void 0,
+            max_patch_bytes: (_a = options.max_patch_bytes) != null ? _a : void 0
+          }
+        }
+      );
+    }
     async update(conversationId, payload, options = {}) {
       const podId = this.requirePodId(options.pod_id);
       const { harness_kind, model, model_name, profile_id, ...requestBody } = payload;

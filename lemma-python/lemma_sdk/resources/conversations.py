@@ -7,6 +7,7 @@ import httpx
 from ..openapi_client.api.agent_conversations import (
     agent_conversation_approval_list,
     agent_conversation_approval_resolve,
+    agent_conversation_changes_get,
     agent_conversation_create,
     agent_conversation_get,
     agent_conversation_list,
@@ -25,6 +26,9 @@ from ..openapi_client.api.agent_conversations import (
 from ..openapi_client.models.approval_decision_response import ApprovalDecisionResponse
 from ..openapi_client.models.agent_run_response import AgentRunResponse
 from ..openapi_client.models.agent_run_start_response import AgentRunStartResponse
+from ..openapi_client.models.conversation_changes_response import (
+    ConversationChangesResponse,
+)
 from ..openapi_client.models.conversation_list_response import ConversationListResponse
 from ..openapi_client.models.conversation_repository_list_response import (
     ConversationRepositoryListResponse,
@@ -162,6 +166,32 @@ class PodConversations(BoundResource):
     def get(self, conversation_id: str) -> ConversationResponse:
         return self._call(
             agent_conversation_get, self._pod_uuid(), as_uuid(conversation_id)
+        )
+
+    def changes(
+        self,
+        conversation_id: str,
+        *,
+        patch: bool = False,
+        max_patch_bytes: int | None = None,
+    ) -> ConversationChangesResponse:
+        """What a conversation opened in a repository has changed in its checkout.
+
+        Every file that differs from where its branch left the start point --
+        commits not yet pushed, edits not yet committed -- and its untracked
+        files, with line counts; ``patch=True`` adds the unified diff, cut at
+        ``max_patch_bytes``. ``state`` is ``ready`` when it was read, else
+        ``no_repository``, ``not_checked_out``, ``machine_unavailable`` (the
+        machine is asleep, and is not woken to answer) or ``elsewhere`` (its
+        last run worked on your own Mac). Only the conversation's owner may
+        read it.
+        """
+        return self._call(
+            agent_conversation_changes_get,
+            self._pod_uuid(),
+            as_uuid(conversation_id),
+            patch=patch,
+            max_patch_bytes=UNSET if max_patch_bytes is None else max_patch_bytes,
         )
 
     def run(self, conversation_id: str, run_id: str) -> AgentRunResponse:

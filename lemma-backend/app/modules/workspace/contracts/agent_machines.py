@@ -336,6 +336,84 @@ async def reset_for_agent(
     return freed, details
 
 
+async def usable_agent_machine(
+    *,
+    ref: str | None,
+    user_id: UUID,
+    pod_id: UUID,
+    agent_id: UUID | None,
+    agent_name: str | None,
+    conversation_id: UUID,
+) -> AgentMachine | None:
+    """The machine a command of this conversation's agent would run on now,
+    or None where it would be refused -- not found, not usable, held for its
+    person's approval, or being moved to a new size.
+
+    For a read made on the conversation's behalf, which should say "not
+    available" rather than fail where a run of the conversation would.
+    """
+    from app.modules.workspace.domain.machine_errors import MachineMoving
+
+    try:
+        return await resolve_agent_machine(
+            ref=ref,
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            conversation_id=conversation_id,
+            # The conversation, as a command passes it: a shared machine's
+            # directory is the conversation's, not one run's.
+            run_id=conversation_id,
+        )
+    except MachineNotFound, MachineAccessDenied, MachineMoving:
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class MachineRead:
+    """What a read on a machine printed, and how it ended."""
+
+    exit_code: int | None
+    stdout: str
+    stderr: str
+
+
+async def read_if_awake(
+    machine: AgentMachine,
+    *,
+    acting_user: UUID,
+    command: str,
+    timeout_seconds: int,
+) -> MachineRead | None:
+    """Run one fixed, read-only command on a machine that is running now.
+
+    None when it is not: a released or paused machine is not woken to answer
+    a question about it, and the caller says so instead. The command runs as
+    housekeeping does (``machine_shell``): no Lemma token in its environment,
+    in the home, never in a run's slot. Being asked is still use, so a
+    running machine's idle clock starts again -- as listing its files does.
+
+    Not a general way to run things: the caller is a route that builds its own
+    command, never one a client sent.
+    """
+    from app.modules.workspace.services.machine_shell import run_on_machine
+    from app.modules.workspace.services.sandbox_composition import get_sandbox_service
+
+    info = await get_sandbox_service().describe(machine.machine_id)
+    if info is None or info.status != "RUNNING":
+        return None
+    outcome = await run_on_machine(
+        machine.machine_id,
+        acting_user=acting_user,
+        command=command,
+        timeout_seconds=timeout_seconds,
+    )
+    return MachineRead(
+        exit_code=outcome.exit_code, stdout=outcome.stdout, stderr=outcome.stderr
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class MachineBrief:
     """What the run context says about the machine, in a few lines."""
@@ -419,6 +497,9 @@ __all__ = [
     "reset_for_agent",
     "sync_files",
     "AgentMachine",
+    "MachineRead",
+    "read_if_awake",
+    "usable_agent_machine",
     "begin_run",
     "end_run",
     "park_run",
