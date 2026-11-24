@@ -292,7 +292,7 @@ async def _account_in(
     external_ref=None,
     token: str = "gho_mallory",
     auth_config_id: UUID | None = None,
-    credentials: dict | None = None,
+    credentials: dict[str, str] | None = None,
 ) -> str:
     """An account of ``user_id``'s, on a new install unless one is named."""
     if auth_config_id is None:
@@ -819,12 +819,15 @@ async def test_an_organization_reads_back_every_installation_it_holds_and_no_oth
 # -- a token refreshed on the way to a binding is the one that is kept ---------
 
 
-async def _stored_credentials(db_session: AsyncSession, account_id: str) -> dict:
+async def _stored_credentials(
+    db_session: AsyncSession, account_id: str
+) -> dict[str, object]:
     from app.core.crypto import get_secret_cipher
 
     db_session.expire_all()
     account = await db_session.get(Account, UUID(account_id))
-    return await get_secret_cipher().decrypt_json_async(account.credentials)
+    stored = await get_secret_cipher().decrypt_json_async(account.credentials)
+    return dict(stored or {})
 
 
 async def _stale_account_on_org_a(
@@ -958,7 +961,7 @@ async def test_a_refresh_token_github_no_longer_honours_asks_for_a_reconnect(
 # -- two refreshes of one account, where a refresh token works once -------------
 
 
-async def _another_request_stores(account_id: str, credentials: dict) -> None:
+async def _another_request_stores(account_id: str, credentials: dict[str, str]) -> None:
     """A refresh by another request going through: its token stored and
     committed on a connection of its own."""
     from app.core.crypto import get_secret_cipher
@@ -971,7 +974,7 @@ async def _another_request_stores(account_id: str, credentials: dict) -> None:
         await session.commit()
 
 
-def _won(refresh_token: str = "ghr_won") -> dict:
+def _won(refresh_token: str = "ghr_won") -> dict[str, str]:
     from datetime import datetime, timedelta, timezone
 
     return {
@@ -995,7 +998,7 @@ async def test_the_loser_of_a_refresh_race_uses_the_token_the_winner_stored(
     )
     raced: list[str] = []
 
-    async def the_other_refresh_lands_first(form: dict) -> None:
+    async def the_other_refresh_lands_first(form: dict[str, list[str]]) -> None:
         if (form.get("grant_type") or [""])[0] != "refresh_token" or raced:
             return
         raced.append((form.get("refresh_token") or [""])[0])

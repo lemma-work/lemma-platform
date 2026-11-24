@@ -14,6 +14,7 @@ picks the GitHub user a callback comes back as by the code it sends.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import parse_qs
@@ -42,7 +43,9 @@ class FakeGitHub:
     refresh_tokens: dict[str, str] = field(default_factory=dict)
     #: Awaited with the form of each token request before it is answered: what
     #: a test uses to have something else happen while a refresh is out.
-    before_token_request: Any = None
+    before_token_request: Callable[[dict[str, list[str]]], Awaitable[None]] | None = (
+        None
+    )
     _next_id: int = 1000
 
     def person(self, code: str, **kwargs: Any) -> str:
