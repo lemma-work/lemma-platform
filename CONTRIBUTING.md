@@ -118,7 +118,7 @@ Each component has its own setup and its own checks. Run the ones you touched.
 | `lemma-backend/` | [backend README](lemma-backend/README.md), [development guidelines](lemma-backend/docs/development.md), [module guide](lemma-backend/docs/modules/README.md) | see below |
 | `lemma-backend/sandbox-images/streamer/` | [streamer README](lemma-backend/sandbox-images/streamer/README.md), [live browser view](docs/architecture/sandbox/live-browser-view.md) | `make streamer-test`, and `test_browser_stream_e2e.py` (workspace e2e: a real image, coturn and `streamcheck`) for a change to capture, input or signalling |
 | `lemma-frontend/` | [frontend README](lemma-frontend/README.md) | `npm run check && npm test && npm run build` |
-| `lemma-mobile/` | [mobile README](lemma-mobile/README.md) | `npm run check` |
+| `lemma-mobile/` | [mobile README](lemma-mobile/README.md) | `npm run check`, after `npm ci` in `lemma-typescript/` (then `npm run build`) and `lemma-frontend/`; CI runs it as "Phone app checks" |
 | `lemma-cli/` | [CLI README](lemma-cli/README.md), [conventions](lemma-cli/CONVENTIONS.md) | `make test && make lint` |
 | `lemma-typescript/` | [SDK README](lemma-typescript/README.md) | `npm run build && npm test` |
 | `lemma-python/` | [SDK README](lemma-python/README.md) | `uv run pytest` |

@@ -1,20 +1,22 @@
 # Lemma mobile
 
-The phone app, in the Lemma-first direction of the web's `/o` frame: three
-tabs, **Home · Lemmas · Apps**. Expo (SDK 57), TypeScript, Expo Router, for
-Android and iOS from one codebase.
+The phone app, shaped like the web: three tabs, **Home · Needs you · Apps**,
+the places in the web's sidebar. Connectors and Settings sit behind your
+picture, top right. Expo (SDK 57), TypeScript, Expo Router, for Android and iOS
+from one codebase.
 
 | Screen | Where |
 |---|---|
-| Home: what needs you, answered in place; the ask box with its Lemma picker | `src/app/(tabs)/(home)/index.tsx` |
-| Needs you, all of it: filters, then Behind / Today / Earlier | `src/app/(tabs)/(home)/needs.tsx` |
-| Lemmas: the web sidebar, full width | `src/app/(tabs)/lemmas.tsx` |
-| A Lemma's page: owns line, its number, Recently | `src/app/lemma/[podId].tsx` |
+| Home: the ask box, your Lemmas, the last one you opened unfolded into its apps and chats | `src/app/(in)/(tabs)/(home)/index.tsx` |
+| Needs you: Decide, Answer and Do, oldest first, answered in place | `src/app/(in)/(tabs)/needs.tsx` |
+| Apps, by Lemma; an app full screen | `src/app/(in)/(tabs)/apps.tsx`, `src/app/(in)/app/[podId]/[name].tsx` |
+| A Lemma's page: its scene, the ask box, what needs you there, its apps and chats, what it holds and how it works | `src/app/(in)/lemma/[podId]/index.tsx` |
 | A chat: the web's thread for a phone (PARITY.md, A): cards, approvals and questions docked above the box, attachments, the model | `src/app/(in)/chat/[podId]/[id].tsx` |
-| New chat, and starting one with people | `src/app/new-chat/[podId].tsx` |
-| A shared chat, a person's line, a contact waiting on a person | `src/app/shared/[podId]/[id].tsx` |
-| Apps, by Lemma; an app full screen | `src/app/(tabs)/apps.tsx`, `src/app/app/[podId]/[name].tsx` |
-| Notifications with actions (a mock: there is no push yet) | `src/app/notices.tsx` |
+| New chat, and starting one with people | `src/app/(in)/new-chat/[podId].tsx` |
+| A shared chat, a person's line, a contact waiting on a person; report a line, block a person | `src/app/(in)/shared/[podId]/[id].tsx` |
+| A new Lemma | `src/app/(in)/new-lemma.tsx` |
+| Settings and Connectors, yours and the organization's | `src/app/(in)/account.tsx`, `src/app/(in)/settings/` |
+| Notifications with actions (a mock: there is no push yet, and no screen links to it) | `src/app/(in)/notices.tsx` |
 
 ## Run it
 
@@ -49,7 +51,9 @@ the app at the stack with "Change" on the sign-in screen: Custom, the API
 `localhost:8761` and the web app `localhost:3761` on an emulator, after
 `adb reverse` for both ports.
 
-**Checks:** `npm run check` (types, then the model tests in `tests/`).
+**Checks:** `npm run check` (types, then the model tests in `tests/`). The app
+compiles the web's own modules, so run `npm ci` in `lemma-frontend/` first; CI
+runs the same checks in the "Phone app checks" job.
 
 A release APK, signed with the debug key, for installing by hand:
 
@@ -140,11 +144,9 @@ live source and a sample one. `src/data/live.ts` reads **main's API as it is**,
 per Lemma: conversations, pending asks, workflow waits, channels, contacts
 waiting on a person, and tables, for each Lemma, polled once a minute. Its
 shapes mirror the org-level reads proposed in #1045 (`needs-you`, `recents`,
-`apps`, `home/seen`) and #1046's owns line and number, so when those land only
-`live.ts` changes. Until #1046 does, what a Lemma owns comes from `/plan.md`,
-parsed as `/o` parses it, and its number from the plan's measure.
+`apps`, `home/seen`), so when those land only `live.ts` changes.
 
-**By area.** Everything past Home, Needs you and the Lemmas list is split by
+**By area.** Everything past Home, Needs you and Apps is split by
 area under `src/areas/<area>/`: chat, tables, files, work, chats, admin and
 more. Each has its own reads and writes (`source.ts`, `live.ts`,
 `sample.ts`), hooks, routes and its tab on a Lemma's page, and screens reach
@@ -174,11 +176,9 @@ The pure logic is ported from the web, not reinvented:
 ## Not built yet
 
 - **Push notifications.** The backend sends none, so `notices.tsx` is the canvas's
-  lock screen as a mock, reachable from the account screen.
+  lock screen as a mock, and nothing links to it.
 - **Everything PARITY.md does not mark done.** Each place is reachable: a tab or
   screen says it is on the web for now and opens the workspace page in the app.
-- **The rule suggestion** on Needs you shows in sample data only: nothing on the
-  server suggests rules.
 
 Fonts are built into the app (`expo-font` in `app.json`), so text is never laid
 out in a fallback face and then clipped when the real one loads. A built-in font
