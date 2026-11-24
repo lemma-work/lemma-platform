@@ -112,9 +112,12 @@ export function Launch({ ready, onGone }: { ready: boolean; onGone: () => void }
         useAnimatedStyle(() => ({ transform: [{ scaleY: third.value }] })),
     ];
 
+    /* It takes every touch while it is up, as the native splash did: a tap
+       during the lift or the sink would otherwise land on the screen beneath
+       and open something nobody meant to. It is gone once the veil is. */
     return (
         <Animated.View
-            pointerEvents="none"
+            pointerEvents="auto"
             onLayout={handOver}
             style={[StyleSheet.absoluteFill, { backgroundColor: ground, alignItems: "center", justifyContent: "center", zIndex: 10 }, veilStyle]}
             accessibilityElementsHidden
