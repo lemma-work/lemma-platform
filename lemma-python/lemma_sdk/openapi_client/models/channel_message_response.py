@@ -37,6 +37,8 @@ class ChannelMessageResponse:
             of its contacts, or one of its agents. There is nobody else -- everybody
             outside the pod is a contact.
         seq (int): Its place in the channel's timeline.
+        blocked (bool | Unset): Written by somebody the reader blocked (`/pods/{pod}/blocks`): shown only that it is
+            there, until they unblock them. Default: False.
         can_share (bool | Unset): The reader is the member an `asker_only` answer was made for, and may share it with
             the channel (`…/messages/{id}/share`). Default: False.
         client_message_id (None | str | Unset): On the reader's own line: the name their client gave it, as sent
@@ -60,7 +62,8 @@ class ChannelMessageResponse:
         shared_at (datetime.datetime | None | Unset): When it was shared with the channel: by the member it was made
             for, or as it was posted, in a group that shows agents' answers to everybody (`answers_shared`).
         source_id (None | Unset | UUID): Where it was said or sent; absent for a line only in Lemma.
-        text (None | str | Unset): Absent where the line is withheld from the reader, or deleted.
+        text (None | str | Unset): Absent where the line is withheld from the reader, written by somebody they blocked,
+            or deleted.
         thread_root_id (None | Unset | UUID): The line this one is a reply in the thread of.
         visibility (ChannelMessageResponseVisibility | Unset): `asker_only`: an agent's answer made with one member's
             own access, read in full by that member alone; everybody else here is shown it `withheld`. `channel`: everybody
@@ -74,6 +77,7 @@ class ChannelMessageResponse:
     id: UUID
     sender: PersonRef
     seq: int
+    blocked: bool | Unset = False
     can_share: bool | Unset = False
     client_message_id: None | str | Unset = UNSET
     conversation_id: None | Unset | UUID = UNSET
@@ -113,6 +117,8 @@ class ChannelMessageResponse:
         sender = self.sender.to_dict()
 
         seq = self.seq
+
+        blocked = self.blocked
 
         can_share = self.can_share
 
@@ -257,6 +263,8 @@ class ChannelMessageResponse:
                 "seq": seq,
             }
         )
+        if blocked is not UNSET:
+            field_dict["blocked"] = blocked
         if can_share is not UNSET:
             field_dict["can_share"] = can_share
         if client_message_id is not UNSET:
@@ -319,6 +327,8 @@ class ChannelMessageResponse:
         sender = PersonRef.from_dict(d.pop("sender"))
 
         seq = d.pop("seq")
+
+        blocked = d.pop("blocked", UNSET)
 
         can_share = d.pop("can_share", UNSET)
 
@@ -590,6 +600,7 @@ class ChannelMessageResponse:
             id=id,
             sender=sender,
             seq=seq,
+            blocked=blocked,
             can_share=can_share,
             client_message_id=client_message_id,
             conversation_id=conversation_id,

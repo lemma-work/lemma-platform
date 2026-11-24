@@ -87,6 +87,8 @@ def _contact(row: ContactModel, identities: Sequence[ContactIdentityModel]) -> C
         merged_into_id=row.merged_into_id,
         merged_into_user_id=row.merged_into_user_id,
         answered_at=row.answered_at,
+        blocked_at=row.blocked_at,
+        blocked_by_user_id=row.blocked_by_user_id,
     )
 
 
@@ -301,9 +303,15 @@ class ContactRepository:
     async def rename(
         self, *, pod_id: UUID, contact_id: UUID, display_name: str | None
     ) -> bool:
+        """Whether it was written: not on a contact merged into another
+        meanwhile, whose name is never shown again."""
         result = await self.session.execute(
             update(ContactModel)
-            .where(ContactModel.id == contact_id, ContactModel.pod_id == pod_id)
+            .where(
+                ContactModel.id == contact_id,
+                ContactModel.pod_id == pod_id,
+                ContactModel.merged_into_id.is_(None),
+            )
             .values(display_name=_clean_name(display_name))
         )
         return bool(result.rowcount)
@@ -485,6 +493,39 @@ class ContactRepository:
                 .where(ContactModel.id == survivor.id)
                 .values(answered_at=merged.answered_at)
             )
+        if merged.blocked_at is not None and survivor.blocked_at is None:
+            # The same person, still blocked: merging must not lift it.
+            await self.session.execute(
+                update(ContactModel)
+                .where(ContactModel.id == survivor.id)
+                .values(
+                    blocked_at=merged.blocked_at,
+                    blocked_by_user_id=merged.blocked_by_user_id,
+                )
+            )
+
+    async def set_blocked(
+        self, *, pod_id: UUID, contact_id: UUID, by: UUID | None
+    ) -> bool:
+        """Stop the pod's agents answering them (``by`` the member who did),
+        or, ``by`` None, let them answer again. Blocking one already blocked
+        keeps when and by whom it was first done. Whether it was written: not
+        on a contact merged into another meanwhile, which holds nothing."""
+        c = ContactModel
+        blocking = by is not None
+        result = await self.session.execute(
+            update(c)
+            .where(c.id == contact_id, c.pod_id == pod_id, c.merged_into_id.is_(None))
+            .values(
+                blocked_at=func.coalesce(c.blocked_at, func.now())
+                if blocking
+                else None,
+                blocked_by_user_id=(
+                    func.coalesce(c.blocked_by_user_id, by) if blocking else None
+                ),
+            )
+        )
+        return bool(result.rowcount)
 
     async def note_answered(self, *, pod_id: UUID, contact_id: UUID) -> bool:
         """Record the first time an agent answered them; whether this was it."""

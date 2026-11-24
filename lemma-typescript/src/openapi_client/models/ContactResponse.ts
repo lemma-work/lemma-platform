@@ -9,6 +9,10 @@ export type ContactResponse = {
      */
     answered_at?: (string | null);
     /**
+     * When the pod's agents were stopped from answering them: what they write still reaches the pod's chats, and no agent answers it or writes to them. Members still can.
+     */
+    blocked_at?: (string | null);
+    /**
      * Their own chat with the pod, to open it without looking it up; absent until they first write.
      */
     channel_id?: (string | null);

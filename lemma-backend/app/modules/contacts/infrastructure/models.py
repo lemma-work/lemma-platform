@@ -67,6 +67,15 @@ class ContactModel(UUIDAuditBase):
     answered_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    #: When somebody who runs the pod stopped its agents answering them: no
+    #: run starts for anything they write, and no agent writes to them.
+    blocked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    blocked_by_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL", name="fk_contacts_blocked_by"),
+        nullable=True,
+    )
 
 
 class ContactIdentityModel(UUIDAuditBase):
