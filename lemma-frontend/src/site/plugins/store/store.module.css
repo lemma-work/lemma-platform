@@ -1,0 +1,583 @@
+/* `/templates` in the docs' and the guide's look. The colours and faces are
+   the guide's (`guide-tokens.css` under `.site--dev`: Lemma's violet on the
+   app's paper and ink, light and dark), the rows are the guide's (a tracked
+   label at the left, the content beside it), headings are thin lowercase
+   Jost, the words Newsreader. Every picture is a window into a real capture
+   of the plugin's app, cropped to the part that reads at card size. */
+.page {
+    background: var(--bg);
+    color: var(--ink);
+}
+.page a {
+    color: inherit;
+    text-decoration: none;
+}
+.page a:focus-visible,
+.page button:focus-visible,
+.page summary:focus-visible {
+    outline: 2px solid var(--co);
+    outline-offset: 3px;
+    border-radius: 8px;
+}
+.main {
+    box-sizing: border-box;
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: clamp(40px, 6vw, 80px) clamp(20px, 4vw, 44px) 0;
+}
+
+/* ── A window into a capture ─────────────────────────────────────────── */
+.crop {
+    display: block;
+    position: relative;
+    aspect-ratio: 4 / 3;
+    overflow: hidden;
+    background: var(--card);
+}
+.crop img {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: calc(100% / var(--w));
+    max-width: none;
+    height: auto;
+    transform: translate(calc(var(--x) * -100%), calc(var(--y) * -100%));
+}
+.crop .dark {
+    display: none;
+}
+:global(:root[data-theme="dark"]) .crop .light {
+    display: none;
+}
+:global(:root[data-theme="dark"]) .crop .dark {
+    display: block;
+}
+@media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme="light"])) .crop .light {
+        display: none;
+    }
+    :global(:root:not([data-theme="light"])) .crop .dark {
+        display: block;
+    }
+}
+
+/* ── The guide's type ────────────────────────────────────────────────── */
+.eyebrow,
+.lab {
+    margin: 0;
+    font-family: var(--jost);
+    font-weight: 500;
+    font-size: 12px;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: var(--mu);
+    line-height: 1.6;
+}
+.title {
+    margin: 22px 0 0;
+    font-family: var(--jost);
+    font-weight: 200;
+    font-size: clamp(46px, 6.2vw, 88px);
+    line-height: 0.98;
+    letter-spacing: -0.025em;
+    text-transform: lowercase;
+    text-wrap: balance;
+}
+.intro {
+    margin: 26px 0 0;
+    max-width: 28em;
+    font-family: var(--jost);
+    font-weight: 300;
+    font-size: clamp(18px, 1.7vw, 21px);
+    line-height: 1.5;
+    color: var(--mu);
+}
+.h2 {
+    margin: 0;
+    font-family: var(--jost);
+    font-weight: 300;
+    font-size: clamp(30px, 3.8vw, 44px);
+    line-height: 1.06;
+    letter-spacing: -0.02em;
+    text-transform: lowercase;
+    color: var(--co);
+}
+.text {
+    margin: 0;
+    max-width: 36em;
+    font-family: var(--serif);
+    font-size: 18.5px;
+    line-height: 1.62;
+}
+
+/* ── Hero ────────────────────────────────────────────────────────────── */
+.hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+    gap: clamp(32px, 5vw, 64px);
+    align-items: center;
+}
+.heroActs {
+    margin: 32px 0 0;
+}
+.primary {
+    display: inline-flex;
+    align-items: center;
+    height: 46px;
+    padding: 0 22px;
+    border-radius: 999px;
+    background: var(--co);
+    font-family: var(--jost);
+    font-size: 16px;
+    font-weight: 500;
+    transition: filter 0.2s;
+}
+.page .primary {
+    color: var(--on-co);
+}
+.primary:hover {
+    filter: brightness(1.08);
+}
+.heroNote {
+    margin: 12px 0 0;
+    font-family: var(--jost);
+    font-weight: 300;
+    font-size: 15px;
+    color: var(--mu);
+}
+.heroPicture {
+    margin: 0;
+    min-width: 0;
+}
+.heroPicture figcaption {
+    margin-top: 12px;
+    font-family: var(--jost);
+    font-weight: 300;
+    font-size: 15px;
+    color: var(--mu);
+}
+.window {
+    display: block;
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--card);
+    border: 1px solid var(--hair);
+    box-shadow: var(--shadow);
+}
+.windowBar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 34px;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--hair);
+    background: var(--disc);
+    font-family: var(--jost);
+    font-size: 12.5px;
+    color: var(--mu);
+}
+.windowBar i {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    border: 1px solid var(--ring);
+}
+.windowBar span {
+    margin-left: 8px;
+}
+
+/* ── The guide's labelled rows ───────────────────────────────────────── */
+.row {
+    display: grid;
+    grid-template-columns: minmax(0, 170px) minmax(0, 1fr);
+    column-gap: clamp(18px, 3.4vw, 44px);
+    padding-top: clamp(72px, 9vw, 120px);
+    scroll-margin-top: 80px;
+}
+.row .lab {
+    position: sticky;
+    top: 96px;
+    align-self: start;
+    padding-top: 0.8em;
+}
+.body {
+    display: grid;
+    gap: 22px;
+    min-width: 0;
+    align-content: start;
+}
+
+/* How it works */
+.steps {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: clamp(16px, 3vw, 36px);
+    margin: 6px 0 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--hair);
+}
+.steps li {
+    display: grid;
+    gap: 6px;
+    align-content: start;
+    padding-top: 18px;
+}
+.stepN {
+    font-family: var(--jost);
+    font-weight: 200;
+    font-size: 40px;
+    line-height: 1;
+    color: var(--co);
+}
+.steps b {
+    font-family: var(--jost);
+    font-weight: 400;
+    font-size: 19px;
+}
+.steps li > span:last-child {
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.55;
+    color: var(--mu);
+}
+
+/* Plugins that bring others */
+.sets {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    margin: 4px 0 0;
+    padding: 0;
+    list-style: none;
+}
+.set {
+    display: grid;
+    gap: 4px;
+    align-content: start;
+    height: 100%;
+    box-sizing: border-box;
+    padding: 18px 20px 20px;
+    border: 1px solid var(--hair);
+    border-radius: 12px;
+    background: var(--card);
+    box-shadow: var(--shadow);
+    font-family: var(--jost);
+    transition: border-color 0.25s;
+}
+.set:hover {
+    border-color: var(--co);
+}
+.setFaces {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-bottom: 10px;
+}
+.setFaces img {
+    width: 28px;
+    height: 28px;
+}
+.setFaces .setLead {
+    width: 44px;
+    height: 44px;
+}
+.setPlus {
+    margin: 0 6px;
+    font-weight: 300;
+    font-size: 20px;
+    color: var(--mu);
+}
+.setName {
+    font-size: 20px;
+    font-weight: 400;
+}
+.setBrings {
+    font-weight: 300;
+    font-size: 15px;
+    color: var(--mu);
+}
+
+/* The shelf */
+.filter {
+    position: sticky;
+    top: 60px;
+    z-index: 2;
+    display: flex;
+    gap: 6px;
+    margin: 0;
+    padding: 10px 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    background: var(--bg);
+    font-family: var(--jost);
+}
+.filter button {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 34px;
+    padding: 0 14px;
+    border: 1px solid var(--ring);
+    border-radius: 999px;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 15px;
+    cursor: pointer;
+    transition: border-color 0.2s;
+}
+.filter button:hover {
+    border-color: var(--co);
+}
+.filter button[aria-pressed="true"] {
+    background: var(--co);
+    border-color: var(--co);
+    color: var(--on-co);
+}
+.filterCount {
+    font-size: 12.5px;
+    opacity: 0.65;
+}
+.shelf {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 30px 18px;
+    margin: 6px 0 0;
+    padding: 0;
+    list-style: none;
+}
+.card {
+    grid-column: span 2;
+    display: grid;
+    align-content: start;
+    gap: 14px;
+    min-width: 0;
+}
+/* Ten plugins in rows of three leave one alone, so after six the shelf
+   widens to two a row, and those pictures read larger. */
+.card:nth-child(n + 7) {
+    grid-column: span 3;
+}
+.card[hidden] {
+    display: none;
+}
+.cardPicture {
+    display: block;
+    border: 1px solid var(--hair);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    transition: border-color 0.25s;
+}
+.card:hover .cardPicture {
+    border-color: var(--co);
+}
+.cardBody {
+    display: grid;
+    gap: 3px;
+    font-family: var(--jost);
+}
+.cardBody p {
+    margin: 0;
+}
+.cardHead {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 20px;
+    font-weight: 400;
+}
+.cardHead img {
+    width: 28px;
+    height: 28px;
+}
+.cardJob {
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.5;
+}
+.cardBrings {
+    font-weight: 300;
+    font-size: 14.5px;
+    color: var(--mu);
+}
+.cardActs {
+    display: flex;
+    gap: 18px;
+    margin-top: 8px !important;
+    font-size: 15px;
+}
+.page .try {
+    color: var(--co);
+    font-weight: 500;
+}
+.page .more {
+    color: var(--mu);
+}
+.try:hover,
+.more:hover {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+/* What comes next */
+.soon {
+    border-top: 1px solid var(--hair);
+    font-family: var(--jost);
+}
+.soonLine {
+    border-bottom: 1px solid var(--hair);
+}
+.soonLine summary {
+    display: grid;
+    grid-template-columns: minmax(0, 200px) minmax(0, 1fr) auto;
+    gap: 16px;
+    align-items: baseline;
+    padding: 16px 2px;
+    cursor: pointer;
+    list-style: none;
+    transition: padding-left 0.3s var(--ease);
+}
+.soonLine summary:hover {
+    padding-left: 10px;
+}
+.soonLine summary::-webkit-details-marker {
+    display: none;
+}
+.soonLine summary::after {
+    content: "+";
+    font-weight: 300;
+    font-size: 22px;
+    line-height: 1;
+    color: var(--co);
+    transition: transform 0.25s;
+}
+.soonLine[open] summary::after {
+    transform: rotate(45deg);
+}
+.soonName {
+    font-weight: 400;
+    font-size: 20px;
+    text-transform: lowercase;
+}
+.soonSome {
+    font-weight: 300;
+    font-size: 15.5px;
+    color: var(--mu);
+}
+.soonLine ul {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px 32px;
+    margin: 0;
+    padding: 4px 2px 26px;
+    list-style: none;
+}
+.soonLine li {
+    display: grid;
+    gap: 2px;
+}
+.soonItem {
+    font-weight: 400;
+    font-size: 16.5px;
+}
+.soonOne {
+    font-family: var(--serif);
+    font-size: 16px;
+    line-height: 1.5;
+    color: var(--mu);
+}
+
+/* Make your own: the guide's statement band */
+.band {
+    margin-top: clamp(90px, 11vw, 140px);
+    padding-block: clamp(54px, 8vw, 104px);
+    background: var(--band);
+    color: var(--band-fg);
+}
+.bandIn {
+    box-sizing: border-box;
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 clamp(20px, 4vw, 44px);
+    display: grid;
+    grid-template-columns: minmax(0, 170px) minmax(0, 1fr);
+    column-gap: clamp(18px, 3.4vw, 44px);
+}
+.band .lab {
+    color: var(--band-fg);
+    opacity: 0.85;
+    padding-top: 0.8em;
+}
+.big {
+    margin: 0;
+    font-family: var(--jost);
+    font-weight: 200;
+    font-size: clamp(36px, 5.4vw, 76px);
+    line-height: 1.02;
+    letter-spacing: -0.025em;
+    text-transform: lowercase;
+    text-wrap: balance;
+}
+.bandText {
+    margin: 0;
+    max-width: 34em;
+    font-family: var(--jost);
+    font-weight: 400;
+    font-size: clamp(18px, 1.9vw, 21px);
+    line-height: 1.5;
+}
+.page .bandLink {
+    justify-self: start;
+    display: inline-flex;
+    align-items: center;
+    height: 44px;
+    padding: 0 20px;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    font-family: var(--jost);
+    font-size: 16px;
+    color: var(--band-fg);
+}
+
+/* ── Narrow screens ──────────────────────────────────────────────────── */
+@media (max-width: 960px) {
+    .hero {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .row,
+    .bandIn {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .row .lab {
+        position: static;
+        padding: 0 0 10px;
+    }
+    .band .lab {
+        padding: 0 0 10px;
+    }
+    .sets,
+    .shelf {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .card,
+    .card:nth-child(n + 7) {
+        grid-column: auto;
+    }
+}
+@media (max-width: 640px) {
+    .steps,
+    .sets,
+    .shelf,
+    .soonLine ul {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .soonLine summary {
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+    .soonSome {
+        grid-column: 1;
+    }
+}
