@@ -250,6 +250,7 @@ fn start_command(harness_id: Uuid, expires_at: chrono::DateTime<Utc>) -> Command
         prompt: vec![serde_json::json!({"type": "text", "text": "hi"})],
         resume_session_id: None,
         workspace_cwd: None,
+        repository: None,
         context: JsonMap::new(),
         mcp: serde_json::json!({}),
         run_deadline: Utc::now() + chrono::Duration::minutes(5),

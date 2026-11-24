@@ -11,7 +11,9 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use lemma_agent_host::protocol::{EventType, JsonMap, RunSpec, ToolCallPayload, ToolResultPayload};
+use lemma_agent_host::protocol::{
+    EventType, JsonMap, RunRepository, RunSpec, ToolCallPayload, ToolResultPayload,
+};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -222,6 +224,7 @@ fn sample_run_spec() -> RunSpec {
         prompt: vec![serde_json::json!({"type": "text", "text": "hello"})],
         resume_session_id: Some("session".to_owned()),
         workspace_cwd: Some("project".to_owned()),
+        repository: Some(sample_repository()),
         context: JsonMap::new(),
         mcp: serde_json::json!({}),
         run_deadline: chrono::Utc::now(),
@@ -233,4 +236,63 @@ fn sample_run_spec() -> RunSpec {
             decision: "APPROVE_ONCE".to_owned(),
         }],
     }
+}
+
+fn sample_repository() -> RunRepository {
+    RunRepository {
+        owner: "octo".to_owned(),
+        repo: "widgets".to_owned(),
+        reference: Some("main".to_owned()),
+        slug: "ab3f2k7q".to_owned(),
+    }
+}
+
+/// `repository`'s own fields, which the backend's model declares too.
+#[test]
+fn the_run_repository_carries_the_fields_the_contract_names() {
+    let declared = contract()["run_spec"]["repository"]["fields"]
+        .as_array()
+        .expect("run_spec.repository.fields is a list")
+        .iter()
+        .map(|value| value.as_str().expect("a field name is a string").to_owned())
+        .collect::<BTreeSet<_>>();
+    let ours = serde_json::to_value(sample_repository())
+        .expect("a repository serializes")
+        .as_object()
+        .expect("as an object")
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(ours, declared);
+}
+
+/// `repository` was added without a protocol bump, which holds only while
+/// both directions of version skew still read a run spec.
+///
+/// A backend that predates it sends no `repository`: the spec must still
+/// read, as no repository. A host that predates it is sent one: that host is
+/// this struct before the field existed, so what keeps it working is that
+/// `RunSpec` ignores a field it does not know -- asserted with a field no
+/// release has, so a `deny_unknown_fields` added later fails here rather than
+/// every run an older host is sent.
+#[test]
+fn a_run_spec_reads_across_the_repository_field_in_both_directions() {
+    let mut wire = serde_json::to_value(sample_run_spec()).expect("a run spec serializes");
+    let fields = wire.as_object_mut().expect("as an object");
+
+    fields.remove("repository");
+    let from_older_backend: RunSpec =
+        serde_json::from_value(wire.clone()).expect("a spec without `repository` reads");
+    assert_eq!(from_older_backend.repository, None);
+
+    wire.as_object_mut().expect("as an object").insert(
+        "a_field_from_a_newer_backend".to_owned(),
+        serde_json::json!({"owner": "octo"}),
+    );
+    serde_json::from_value::<RunSpec>(wire).expect("an unknown field is ignored");
+
+    let without_ref: RunRepository =
+        serde_json::from_value(serde_json::json!({"owner": "o", "repo": "r", "slug": "s"}))
+            .expect("`ref` is optional");
+    assert_eq!(without_ref.reference, None);
 }

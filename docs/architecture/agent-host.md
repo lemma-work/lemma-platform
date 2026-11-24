@@ -353,6 +353,57 @@ without that field preserve it for the same provider session. Conversation
 directories are retained across turns and idle periods; starting another run
 does not delete older conversations' files.
 
+### A repository conversation's folder
+
+A conversation opened with `repository: 'owner/name'` works in
+`/home/user/lemma/worktrees/{owner}/{repo}/{slug}`, which the cloud sandbox
+makes a worktree of the repository before the agent's first command
+(`workspace_cli/github_project.py`). For a coding agent on the person's
+computer the run spec names the repository too -- `repository: {owner, repo,
+ref?, slug}`, set only when `workspace_cwd` is that worktree
+(`agent_host/harness/run_repository.py`) -- and Agent Host makes the same layout under
+`~/lemma` with the person's own `git`, before the agent starts in the folder
+(`src/repository_checkout.rs`):
+
+- **One clone per repository**, `~/lemma/repos/{owner}/{repo}`, cloned from
+  `https://github.com/{owner}/{repo}.git` without a working tree (`--no-checkout`)
+  into a hidden folder beside it and moved into place when complete, so a clone
+  cut short is never mistaken for one. After that it is only fetched. The clone is
+  claimed in the directory registry for the paired workspace that made it; another
+  paired workspace on the same computer is refused it.
+- **A worktree per conversation** on `lemma/{slug}`, from `origin/<ref>`, the
+  ref itself for a tag or commit, or `origin/HEAD`; `pull/<n>/head` is fetched by
+  name into `origin/pull/<n>/head` first. A `lemma/{slug}` branch left by a lost
+  worktree is checked out again rather than re-made.
+- **Whatever is already there stays.** The conversation's own worktree (its
+  `.git` file points into this clone) is not fetched, reset or run git in on a
+  later turn; a folder holding anything else is not cloned over. A folder the
+  person bound on this computer (`conversation_folders.rs`) and a conversation
+  still in its legacy scratch directory are never checked out.
+- **The person's git, unattended.** `git` is Homebrew's if present, else the
+  first on the search path; `/usr/bin/git` only when `xcode-select -p` reports
+  the Command Line Tools, because the stub opens an installer dialog otherwise.
+  Each command is an argument list (no shell), with `GIT_TERMINAL_PROMPT=0` and
+  `GCM_INTERACTIVE=never`, stdin closed, in its own process group. Their
+  credential helper, `gh` sign-in or SSH `insteadOf` answer as they do in their
+  terminal. Owner, repository, ref and slug are checked against the backend's
+  `project_repo.py` patterns first, and the checkout happens only when the
+  worktree derived from them is the folder `workspace_cwd` resolved to.
+- **Bounded, never blocking.** The whole checkout gets 300 seconds -- the cloud
+  sandbox's clone timeout -- or what is left of the run's deadline, and is given
+  up when the person presses Stop. No git, no access, no network, a ref that is
+  not there, or the timeout: the agent starts in the empty folder anyway. It is
+  told once, in a `<workspace-notice>` ahead of that turn's message (so it
+  arrives even on a turn that does not re-send the instructions), and the host
+  logs it. A fetch that failed is said the same way. A worktree that is there is
+  described in **Native Working Directory**.
+
+`repository` is optional on both sides, so it needed no protocol bump: a host
+that predates it ignores the field and starts in the empty folder, as before,
+and a backend that predates it never sends one. `wire_contract.json` pins the
+field and its shape; `tests/repository_checkout.rs` clones a bare repository
+fixture, pull request ref included.
+
 What has to stay true across them:
 
 **One derived answer crosses the seam.** What leaves the subsystem is a single

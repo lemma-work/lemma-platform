@@ -138,6 +138,7 @@ async fn a_probed_model_and_reasoning_level_are_applied_to_a_real_turn() {
                     prompt: vec![json!({"type": "text", "text": "Say ready."})],
                     resume_session_id: None,
                     workspace_cwd: None,
+                    repository: None,
                     context: BTreeMap::new(),
                     mcp: Value::Null,
                     run_deadline: Utc::now() + chrono::Duration::minutes(5),

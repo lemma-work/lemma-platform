@@ -27,6 +27,7 @@ pub(super) fn fixture() -> (TempDir, Journal, Uuid, Command, RunSpec) {
         prompt: vec![serde_json::json!({"role": "user", "content": "hello"})],
         resume_session_id: None,
         workspace_cwd: None,
+        repository: None,
         context: JsonMap::new(),
         mcp: serde_json::json!({
             "url": "https://lemma.test/mcp",

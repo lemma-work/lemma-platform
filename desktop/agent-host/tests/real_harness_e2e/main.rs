@@ -171,6 +171,7 @@ pub(crate) async fn one_turn(
                 prompt: vec![json!({"type": "text", "text": prompt})],
                 resume_session_id,
                 workspace_cwd: None,
+                repository: None,
                 context: BTreeMap::new(),
                 mcp: Value::Null,
                 run_deadline: Utc::now() + chrono::Duration::minutes(5),

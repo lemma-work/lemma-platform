@@ -472,6 +472,23 @@ class AgentHostPreApproval(BaseModel):
     decision: AgentRunApprovalDecision
 
 
+class AgentHostRunRepository(BaseModel):
+    """The repository a run's ``workspace_cwd`` is a worktree of.
+
+    The host derives every path from these -- the clone at
+    ``~/lemma/repos/{owner}/{repo}``, the worktree at
+    ``~/lemma/worktrees/{owner}/{repo}/{slug}`` on ``lemma/{slug}`` -- and acts
+    only when the worktree is the directory ``workspace_cwd`` names, so nothing
+    here can point git at another folder. The values are the conversation's
+    ``ProjectRepo``, already held to its patterns; the host checks them again.
+    """
+
+    owner: str = Field(min_length=1, max_length=39)
+    repo: str = Field(min_length=1, max_length=100)
+    ref: str | None = Field(default=None, max_length=255)
+    slug: str = Field(min_length=1, max_length=64)
+
+
 class AgentHostRunSpec(BaseModel):
     agent_run_id: UUID
     conversation_id: UUID
@@ -486,6 +503,15 @@ class AgentHostRunSpec(BaseModel):
         default=None,
         max_length=4096,
         description="Saved conversation cwd under /home/user/lemma; the host maps its suffix under ~/lemma.",
+    )
+    repository: AgentHostRunRepository | None = Field(
+        default=None,
+        description=(
+            "Set when workspace_cwd is a worktree of a conversation's "
+            "repository. A host that knows it makes that worktree with the "
+            "person's own git before the agent starts; an older host ignores "
+            "it and starts in the empty directory, as it always has."
+        ),
     )
     # Declared on both sides of the wire and read by neither; dispatch leaves it
     # empty (`dispatch.run_spec_from`), because the spec rests on the host.

@@ -221,6 +221,11 @@ pub struct RunSpec {
     /// accepted; a remote command cannot choose an arbitrary host directory.
     #[serde(default)]
     pub workspace_cwd: Option<String>,
+    /// The repository `workspace_cwd` is a worktree of, when it is one. See
+    /// [`RunRepository`]. Absent from a backend that predates it, which is
+    /// read as a directory that is not a checkout.
+    #[serde(default)]
+    pub repository: Option<RunRepository>,
     #[serde(default)]
     pub context: JsonMap,
     /// Run-scoped Lemma MCP configuration, delivered inline with the command.
@@ -242,6 +247,27 @@ pub struct RunSpec {
     /// `pre_approval`.
     #[serde(default)]
     pub pre_approvals: Vec<PreApproval>,
+}
+
+/// A GitHub repository whose worktree a run's directory should be.
+///
+/// Names only: every path is derived on this side from the workspace root
+/// (`repository_checkout`), and the checkout happens only when the worktree it
+/// derives is the directory `workspace_cwd` already resolved to -- so the
+/// backend cannot point git anywhere it could not already point the agent.
+/// Strings rather than validated types, so a value this host would refuse
+/// costs the checkout and not the whole run spec; they are validated where
+/// they are used.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunRepository {
+    pub owner: String,
+    pub repo: String,
+    /// A branch, tag, commit or `pull/<n>/head` to start from; absent means the
+    /// repository's default branch.
+    #[serde(default, rename = "ref")]
+    pub reference: Option<String>,
+    /// The worktree's directory name, and its branch after `lemma/`.
+    pub slug: String,
 }
 
 /// A permission the person granted for a call an earlier turn never made.

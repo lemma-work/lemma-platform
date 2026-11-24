@@ -33,18 +33,57 @@ fn suffix(cwd: &str) -> anyhow::Result<&str> {
         .strip_prefix(SANDBOX_ROOT)
         .ok_or_else(|| anyhow::anyhow!("conversation cwd must be beneath {SANDBOX_ROOT}"))?;
     anyhow::ensure!(
-        suffix.len() <= 4096
-            && suffix.split('/').all(|part| {
-                !part.is_empty()
-                    && part != "."
-                    && part != ".."
-                    && part != ".lemma"
-                    && !part.contains(['\\', ':'])
-                    && !part.chars().any(char::is_control)
-            }),
+        safe_relative(suffix),
         "conversation cwd contains an unsafe path component"
     );
     Ok(suffix)
+}
+
+fn safe_relative(relative: &str) -> bool {
+    relative.len() <= 4096
+        && relative.split('/').all(|part| {
+            !part.is_empty()
+                && part != "."
+                && part != ".."
+                && part != ".lemma"
+                && !part.contains(['\\', ':'])
+                && !part.chars().any(char::is_control)
+        })
+}
+
+/// The folder `relative` under `root`, claimed for `target` and made, with
+/// every folder above it, as `prepare` makes a conversation's.
+///
+/// For a folder several of one workspace's conversations share -- a
+/// repository's clone, which every worktree of it points into -- so, unlike
+/// `prepare`, it may already hold files: they are this workspace's own. One
+/// another paired workspace owns is refused, because its worktrees' history
+/// and hooks would be this workspace's agents' to rewrite.
+pub fn claim_shared(root: &Path, target: Uuid, relative: &str) -> anyhow::Result<PathBuf> {
+    anyhow::ensure!(
+        safe_relative(relative),
+        "{relative} contains an unsafe path component"
+    );
+    let mut connection = open_registry(root)?;
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let target = target.to_string();
+    let owners = overlapping_owners(&transaction, relative)?;
+    anyhow::ensure!(
+        owners.iter().all(|(_, owner)| owner == &target),
+        "{relative} belongs to another paired workspace"
+    );
+    let mut path = root.to_path_buf();
+    for part in relative.split('/') {
+        path.push(part);
+        directory(&path)?;
+    }
+    transaction.execute(
+        "INSERT OR IGNORE INTO directory_owners (path, target) VALUES (?1, ?2)",
+        [relative, &target],
+    )?;
+    transaction.commit()?;
+    Ok(path)
 }
 
 fn directory(path: &Path) -> anyhow::Result<()> {
@@ -397,6 +436,26 @@ mod tests {
         assert!(prepare(&root, Uuid::new_v4(), "/home/user/lemma/a/b/c").is_err());
         // And its own owner is still let back in.
         assert!(prepare(&root, mine, "/home/user/lemma/a/b/c/d").is_ok());
+    }
+
+    /// A clone is shared by its workspace's worktrees, so it may hold files
+    /// and is let back in; another workspace is refused, and a path that
+    /// climbs out is refused before anything is made.
+    #[test]
+    fn a_shared_folder_is_claimed_once_and_only_for_its_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("lemma");
+        let mine = Uuid::new_v4();
+        let clone = claim_shared(&root, mine, "repos/octo/widgets").unwrap();
+        assert_eq!(clone, root.join("repos/octo/widgets"));
+        std::fs::write(clone.join("objects"), "x").unwrap();
+        assert_eq!(
+            claim_shared(&root, mine, "repos/octo/widgets").unwrap(),
+            clone
+        );
+        assert!(claim_shared(&root, Uuid::new_v4(), "repos/octo/widgets").is_err());
+        assert!(claim_shared(&root, Uuid::new_v4(), "repos/../escape").is_err());
+        assert!(!temp.path().join("escape").exists());
     }
 
     #[cfg(unix)]

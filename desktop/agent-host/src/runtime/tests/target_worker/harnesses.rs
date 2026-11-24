@@ -95,6 +95,7 @@ fn start_command(harness_id: Uuid, run_id: Uuid, revision: &str) -> Command {
         prompt: vec![serde_json::json!({"type": "text", "text": "hi"})],
         resume_session_id: None,
         workspace_cwd: None,
+        repository: None,
         context: JsonMap::new(),
         // Not an object, so the spawned run journals its failure and ends
         // without going anywhere near a driver. This test is about whether

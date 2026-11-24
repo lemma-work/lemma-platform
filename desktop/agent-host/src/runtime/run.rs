@@ -5,9 +5,9 @@ use super::{
     EnvVariable, EventType, JournalCallbacks, JsonMap, McpServer, McpServerStdio, Ordering,
     OwnedSemaphorePermit, OwnedTask, PERMISSION_DECISION_TIMEOUT, ResolvedAdapter, RunSpec,
     RunState, SteerInbox, StreamSegments, TargetWorker, Utc, Value, adapter_failure_message,
-    authentication_hint, host_directory_instructions, prepare_run_directory,
-    publish_generated_images, redact_error, start_timeout_message, terminal_failure,
-    terminal_failure_detail, usage_limit_message, watch, without_error_data,
+    authentication_hint, host_directory_instructions, prepare_repository_checkout,
+    prepare_run_directory, publish_generated_images, redact_error, start_timeout_message,
+    terminal_failure, terminal_failure_detail, usage_limit_message, watch, without_error_data,
 };
 
 impl TargetWorker {
@@ -87,6 +87,33 @@ impl TargetWorker {
                 .to_owned();
             spec.system_prompt
                 .push_str(&host_directory_instructions(&host_cwd));
+            // Before the agent starts in the folder, so it opens on the
+            // repository rather than on an empty directory. Bounded by the
+            // run's own deadline as well as the clone's, and given up the
+            // moment the person presses Stop: the agent is then started only
+            // to be stopped, which is how every other stop is reported.
+            // Its own measurement: the agent's is taken again just before it
+            // starts, after this and the CLI have had their time.
+            let run_deadline = spec.run_deadline;
+            let checkout_budget = time_left(run_deadline, Utc::now() + clock_offset)
+                .map_or(Duration::ZERO, |left| {
+                    left.min(crate::repository_checkout::CHECKOUT_TIMEOUT)
+                });
+            let mut stop = cancel_rx.clone();
+            let checkout = tokio::select! {
+                report = prepare_repository_checkout(
+                    &paths, target_id, &spec, &scratch, checkout_budget,
+                ) => report,
+                () = async {
+                    // A sender gone is not a stop; only `true` is.
+                    if stop.wait_for(|stopped| *stopped).await.is_err() {
+                        std::future::pending::<()>().await;
+                    }
+                } => None,
+            };
+            if let Some(report) = checkout {
+                report.apply(&mut spec);
+            }
             // The name Lemma published for this run's server, not a name of our
             // own. An agent namespaces every MCP tool with the server it came
             // from, so registering a different name here made the same tool
