@@ -1005,6 +1005,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'identity.account.cached_standing_kept.degraded': EventSpec('warning', frozenset({'error_type', 'user_id'})),
     'identity.account.deleted': EventSpec('info', frozenset({'organizations_deleted', 'organizations_left', 'pods_deleted', 'user_id'})),
     'identity.account.deletion_retried_without_apple': EventSpec('warning', frozenset({'reason', 'user_id'})),
+    'identity.apple_sign_in.code_not_traded': EventSpec('warning', frozenset({'apple_error', 'reason', 'status_code'})),
     'identity.apple_sign_in.private_key_unusable': EventSpec('warning', frozenset({'reason'})),
     'identity.apple_sign_in.revocation_unreadable': EventSpec('warning', frozenset({'reason'})),
     'identity.apple_sign_in.revoke_abandoned': EventSpec('warning', frozenset({'reason', 'user_id'})),
