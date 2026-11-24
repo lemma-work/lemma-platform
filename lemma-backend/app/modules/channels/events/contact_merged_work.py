@@ -26,6 +26,7 @@ from app.core.infrastructure.work import (
 from app.modules.agent.contracts.channels import (
     move_channel_conversations,
 )
+from app.modules.channels.infrastructure.blocks import BlockRepository
 from app.modules.channels.infrastructure.contact_channels import ContactChannels
 from app.modules.contacts.contracts import contact_by_id
 from app.modules.contacts.contracts.facts import ContactMerged
@@ -40,6 +41,9 @@ async def fold_channels(ctx: FastContext, payload: ContactMerged) -> None:
     if survivor is None:
         # Forgotten since, and the merged contact with them: nothing is left.
         return
+    await BlockRepository(ctx.uow.session).carry(
+        pod_id=payload.pod_id, merged_id=payload.merged_id, survivor_id=survivor.id
+    )
     channels = ContactChannels(ctx.uow.session)
     fold = await channels.fold(
         pod_id=payload.pod_id, merged_id=payload.merged_id, survivor_id=survivor.id
