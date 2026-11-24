@@ -567,6 +567,11 @@
     }
 }
 @media (max-width: 640px) {
+    /* On a phone the wrapped row is a quarter of the screen and the site
+       header grows when its nav wraps, so the row scrolls with the page. */
+    .filter {
+        position: static;
+    }
     .steps,
     .sets,
     .shelf,
