@@ -68,7 +68,8 @@ async def _lines(pod: Pod, channel_id, *, as_user=None) -> list[ShownLine]:
 async def test_a_report_keeps_a_copy_and_is_the_reporters_to_replace(
     pod: Pod, db_session, monkeypatch
 ):
-    monkeypatch.setattr(reports_settings, "reports_email", "team@reports.example")
+    # Queued with no address set too: the job logs each one it cannot send.
+    monkeypatch.setattr(reports_settings, "reports_email", None)
     source, dana = await contact_place(db_session, pod)
     (line,) = await _lines(pod, source.channel_id)
     url = f"{pod.base}/{source.channel_id}/messages/{line['id']}/report"

@@ -20,8 +20,8 @@ class ReportsSettings(BaseSettings):
             "Where each report a person files is emailed: the inbox of whoever "
             "runs this deployment and answers for what is said in it. The email "
             "carries the report and a copy of what was reported, with Reply-To "
-            "set to the person who reported it. Unset, reports are kept and "
-            "nothing is sent."
+            "set to the person who reported it. Unset, reports are kept, "
+            "nothing is sent, and each is logged as reports.email_skipped."
         ),
     )
 

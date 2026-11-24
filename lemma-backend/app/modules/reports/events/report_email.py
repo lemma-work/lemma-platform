@@ -179,20 +179,24 @@ async def _names(uow: SqlAlchemyUnitOfWork, report: StoredReport) -> ReportNames
 
 
 async def run_report_email(ctx: JobContext, payload: ReportEmailPayload) -> None:
+    """Send the report to ``REPORTS_EMAIL``. Every report ends in one line
+    naming it: sent, or why not -- with no address set, that line is how
+    whoever runs the deployment learns a report was filed."""
+    report_id = str(payload.report_id)
     to = reports_settings.reports_email
     if to is None:
-        logger.info("reports.email_skipped", reason="no_address")
+        logger.info("reports.email_skipped", reason="no_address", report_id=report_id)
         return
     async with ctx.checkpoint() as uow:
         report = await ReportRepository(uow.session).get(payload.report_id)
         names = await _names(uow, report) if report is not None else None
     if report is None or names is None:
-        logger.info("reports.email_skipped", reason="report_gone")
+        logger.info("reports.email_skipped", reason="report_gone", report_id=report_id)
         return
     try:
         sender = EmailSender.from_settings()
     except EmailNotConfiguredError:
-        logger.warning("reports.email.not_configured.degraded")
+        logger.warning("reports.email.not_configured.degraded", report_id=report_id)
         return
     subject, rendered = render_report_email(report, names)
     await sender.send_email(
@@ -221,9 +225,8 @@ register_report_work(default_registry)
 async def add_report_email_work(
     uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, report_id: UUID
 ) -> None:
-    """Queue the email, when this deployment sends reports anywhere."""
-    if reports_settings.reports_email is None:
-        return
+    """Queue the email, whether or not an address is set: the job reads the
+    address when it runs, and says when there is none."""
     await WorkWriter.of(uow).add(
         REPORT_EMAIL,
         pod_namespace(pod_id),

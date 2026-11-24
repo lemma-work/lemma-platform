@@ -31,9 +31,12 @@ report and opens it again; the same `id` comes back.
 unit of work. `events/report_email` is a `delivery` job keyed by the report:
 it reads the report, the reporter's name and address, the Lemma and the
 organization, and sends one email to `REPORTS_EMAIL` with `Reply-To` set to
-the reporter, so the team answers them by replying. With `REPORTS_EMAIL`
-unset, reports are kept and nothing is queued; with mail not configured, the
-job logs `reports.email.not_configured.degraded` and sends nothing.
+the reporter, so the team answers them by replying. Every report ends in one
+log line naming it: `reports.email_sent`, or why not. With `REPORTS_EMAIL`
+unset, the job still runs, sends nothing, and logs `reports.email_skipped`
+with `reason=no_address`, so a deployment that never set it still hears of
+each report; with mail not configured, it logs
+`reports.email.not_configured.degraded` and sends nothing.
 
 ## Storage
 
@@ -62,4 +65,4 @@ service's administration, not here.
 
 | Setting | Meaning |
 | --- | --- |
-| `REPORTS_EMAIL` | Where each report is emailed. Unset by default: a deployment that sets nothing keeps its reports and sends them nowhere |
+| `REPORTS_EMAIL` | Where each report is emailed. Unset by default: a deployment that sets nothing keeps its reports, sends them nowhere, and logs each (`reports.email_skipped`) |
