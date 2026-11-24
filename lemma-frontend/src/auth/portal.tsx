@@ -12,7 +12,7 @@ import { CliLogin } from "./cli-login-screen";
 import { McpConsent } from "./mcp-consent-screen";
 import { PORTAL_PATH, asksForSignUp } from "./config";
 import { hasApiUrl } from "@/session/client";
-import { holdRequestId, requestIdFromSearch, shouldUseBrowserHandoff } from "@/desktop/auth-handoff";
+import { handoffAppFromSearch, holdRequestId, requestIdFromSearch, shouldUseBrowserHandoff } from "@/desktop/auth-handoff";
 import { DesktopReturn, DesktopSignIn } from "@/desktop/sign-in";
 
 /** The portal, mounted.
@@ -36,7 +36,7 @@ export function Portal({ path }: { path?: string[] }) {
            in goes straight to handing the session back. */
         const desktopRequest = requestIdFromSearch(window.location.search);
         if (desktopRequest) {
-            holdRequestId(desktopRequest);
+            holdRequestId(desktopRequest, handoffAppFromSearch(window.location.search));
             void Session.doesSessionExist().then((signedIn) => {
                 if (signedIn) window.location.replace(PORTAL_PATH + "/desktop");
             });

@@ -9,16 +9,10 @@ import { characterUrl, type CharacterName } from "@/shell/character";
 import { usePanelFocus } from "@/ui/focus-trap";
 import { addLemmaPeople, createLemma, freshFace, type LemmaReach } from "./data";
 import { useOrgPeople, type OrgPerson } from "./new-lemma";
+import { READY } from "./ready-starts";
 import { SharedLink } from "./shared-link";
 import { Avatar } from "./parts";
 
-/** Ready starts: a name and what it does, filled in with one tap. */
-const READY: readonly { name: string; purpose: string }[] = [
-    { name: "Hiring", purpose: "Takes every candidate from the careers form to an offer" },
-    { name: "Support", purpose: "Answers every customer question, and raises the hard ones" },
-    { name: "Follow-ups", purpose: "Follows up every lead before it goes cold" },
-    { name: "Reviews", purpose: "Reviews every pull request, so nobody waits" },
-];
 
 type Step = "name" | "people" | "apps";
 
