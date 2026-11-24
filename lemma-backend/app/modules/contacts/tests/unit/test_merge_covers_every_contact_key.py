@@ -17,6 +17,7 @@ import pytest
 
 from app.core.infrastructure.db.base import Base
 from app.modules.agent.application.channels.fold import FoldConversations
+from app.modules.channels.infrastructure.blocks import BlockRepository
 from app.modules.channels.infrastructure.contact_channels import (
     DEDUPED_ON_MERGE,
     RENAMED_ON_MERGE,
@@ -39,6 +40,8 @@ _MOVED_ELSEWHERE: dict[tuple[str, str], Callable[..., object]] = {
     ("agent_conversations", "contact_id"): FoldConversations.merge_contact,
     # The merged contact's own channel folds into the survivor's.
     ("channels", "contact_id"): ContactChannels.fold,
+    # Whoever blocked the merged contact blocks the survivor.
+    ("person_blocks", "blocked_contact_id"): BlockRepository.carry,
 }
 
 

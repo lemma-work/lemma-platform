@@ -1123,6 +1123,8 @@ def _import_e2e_models() -> None:
         visitor_sessions as visitor_session_models,
     )
     from app.modules.agent_surfaces.infrastructure import web_widget_models
+    from app.modules.channels.infrastructure import block_models
+    from app.modules.reports.infrastructure import models as report_models
     from app.modules.datastore.infrastructure.models import datastore_models
     from app.modules.function.infrastructure import models as function_models
     from app.modules.mcp_access.infrastructure import models as mcp_access_models
@@ -1162,6 +1164,8 @@ def _import_e2e_models() -> None:
         channel_models,
         visitor_session_models,
         web_widget_models,
+        block_models,
+        report_models,
     )
 
 

@@ -14,6 +14,10 @@ this order, and the first that refuses decides:
 4. **The contact's day** (member lines only, counted elsewhere: see
    ``services.outreach.count_against_today``).
 
+Apart from these, a contact the pod blocked gets nothing from an agent --
+neither an answer nor an acknowledgement -- whatever the rules above would
+let through. A member writing to them by hand is still held only to the rules.
+
 Pushes to members never come here: they go to members, never to contacts.
 """
 
@@ -48,6 +52,9 @@ class RefusalCode(StrEnum):
     RATE_LIMITED = "rate_limited"
     #: The rules could not be read (Redis away): try again, do not give up.
     UNAVAILABLE = "unavailable"
+    #: The pod stopped its agents answering this contact: an agent's line or an
+    #: acknowledgement does not go. A member's own line still does.
+    BLOCKED = "blocked"
 
 
 class Address(BaseModel):
@@ -109,6 +116,7 @@ RATE_LIMITED_REASON = "That is as many messages as one contact gets in a day"
 UNAVAILABLE_REASON = (
     "Messages to contacts are unavailable right now. Try again shortly."
 )
+BLOCKED_REASON = "This Lemma no longer answers this contact"
 
 
 def decide(

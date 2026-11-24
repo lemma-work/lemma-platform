@@ -362,7 +362,8 @@ def _refusing_session(error: str):
 
 
 @pytest.mark.parametrize(
-    "error", ["invalid_grant", "invalid_client", "unauthorized_client"]
+    "error",
+    ["invalid_grant", "invalid_client", "unauthorized_client", "bad_refresh_token"],
 )
 async def test_a_withdrawn_grant_asks_for_a_reconnect(error):
     """The token endpoint answered, and the answer is the person's to fix.

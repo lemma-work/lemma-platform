@@ -30,6 +30,7 @@ from app.modules.contacts.domain.entities import ContactHandle
 from app.modules.contacts.domain.handles import handle_hash, normalize_handle
 from app.modules.contacts.domain.kinds import IdentityKind
 from app.modules.contacts.domain.outreach import (
+    BLOCKED_REASON,
     RATE_LIMITED_REASON,
     UNAVAILABLE_REASON,
     Address,
@@ -79,15 +80,23 @@ async def may_send(
 ) -> Verdict:
     """Whether a line of ``kind`` may go to this contact at ``to`` now.
 
-    Opt-out first, then a handle, then the platform's window (``domain``).
+    Opt-out first, then a handle, then the platform's window (``domain``);
+    an agent's line or an acknowledgement never goes to a contact the pod
+    blocked.
+
     A contact since merged answers as the one it became; one forgotten has no
     handles, and the place's own address is still checked for an opt-out.
     """
-    del kind  # Every kind is held to the same rules; only the count differs.
     contacts = ContactRepository(uow.session)
     contact = await contacts.get(pod_id=pod_id, contact_id=contact_id)
     if contact is not None and contact.merged_into_id is not None:
         contact = await contacts.get(pod_id=pod_id, contact_id=contact.merged_into_id)
+    if (
+        contact is not None
+        and contact.blocked_at is not None
+        and kind is not OutreachKind.MEMBER_LINE
+    ):
+        return Verdict.refused(RefusalCode.BLOCKED, BLOCKED_REASON)
     handles = list(contact.identities) if contact is not None else []
     values = {handle.value for handle in handles if handle.kind is to.kind}
     if to.value is not None:
