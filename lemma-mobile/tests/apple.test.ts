@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { APPLE_CLIENT_TYPE, CODE_KEY, emailOf, heldNameFor, nameFrom, replyOf, signInUpBody } from "../src/session/apple-link";
+import { APPLE_CLIENT_TYPE, CODE_KEY, emailOf, heldNameFor, nameFrom, replyOf, signInUpBody, whyNoApple } from "../src/session/apple-link";
 
 const base64Url = (text: string) => Buffer.from(text).toString("base64url");
 const idToken = (claims: Record<string, unknown>) => `${base64Url('{"alg":"RS256"}')}.${base64Url(JSON.stringify(claims))}.signature`;
@@ -82,5 +82,31 @@ describe("what the server answers", () => {
         expect(replyOf(400, headers({}), null, now)).toEqual({ problem: "This server does not offer Sign in with Apple on the phone." });
         expect(replyOf(429, headers({}), null, now)).toEqual({ problem: "Too many sign-ins were tried from here. Wait a minute and try again." });
         expect(replyOf(502, headers({}), null, now)).toEqual({ problem: "Signing in with Apple did not work (502). Try again." });
+    });
+});
+
+describe("whether the server offers Apple", () => {
+    const offer = { status: "OK", urlWithQueryParams: "https://appleid.apple.com/auth/authorize?client_id=work.lemma.mobile", pkceCodeVerifier: null };
+
+    it("is offered on SuperTokens' own answer: 200, OK, and a URL on Apple's sign-in page", () => {
+        expect(whyNoApple({ status: 200, body: offer })).toBeNull();
+    });
+
+    it("is not offered by a server without the phone's client, and says what to set", () => {
+        expect(whyNoApple({ status: 400, body: { message: "Client type ios not found" } })).toMatch(/400.*APPLE_APP_BUNDLE_ID/);
+    });
+
+    it("is not offered on a wrong path, a server error, or no answer at all", () => {
+        expect(whyNoApple({ status: 404, body: null })).toBe("the server answered 404");
+        expect(whyNoApple({ status: 500, body: null })).toBe("the server answered 500");
+        expect(whyNoApple(null)).toBe("the server could not be reached");
+    });
+
+    it("is not offered on a 200 that is not SuperTokens' answer: a captive portal's page, or a URL elsewhere", () => {
+        expect(whyNoApple({ status: 200, body: null })).toBe("the server answered 200 without an Apple sign-in URL");
+        expect(whyNoApple({ status: 200, body: { status: "OK" } })).toBe("the server answered 200 without an Apple sign-in URL");
+        expect(whyNoApple({ status: 200, body: { ...offer, urlWithQueryParams: "not a url" } })).toBe("the server answered 200 without an Apple sign-in URL");
+        expect(whyNoApple({ status: 200, body: { ...offer, status: "GENERAL_ERROR" } })).toBe("the server answered 200 without an Apple sign-in URL");
+        expect(whyNoApple({ status: 200, body: { ...offer, urlWithQueryParams: "https://portal.example/login" } })).toBe("the server's sign-in URL is on portal.example, not Apple's");
     });
 });

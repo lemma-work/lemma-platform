@@ -97,6 +97,33 @@ export function emailOf(identityToken: string): string | null {
     return typeof payload?.email === "string" ? payload.email : null;
 }
 
+/** What the server answered when asked for this app's Apple sign-in
+ *  (`GET /st/auth/authorisationurl` with `clientType: "ios"`): its status
+ *  and body, or null when it could not be reached. */
+export type AppleCheck = { status: number; body: unknown } | null;
+
+/** Apple's own sign-in page, where SuperTokens' Apple provider sends people. */
+const APPLE_SIGN_IN_HOST = "appleid.apple.com";
+
+/** Why "Continue with Apple" is not offered, or null when it is. Only
+ *  SuperTokens' own answer counts as an offer: a 200 whose body is
+ *  `status: "OK"` with a URL on Apple's sign-in page. A 200 alone is not
+ *  enough -- a captive portal or a proxy's page answers 200 too. */
+export function whyNoApple(check: AppleCheck): string | null {
+    if (!check) return "the server could not be reached";
+    if (check.status === 400) return "the server has no Apple client for this app (400); set APPLE_APP_BUNDLE_ID there";
+    if (check.status !== 200) return `the server answered ${check.status}`;
+    const body = check.body && typeof check.body === "object" ? (check.body as Record<string, unknown>) : {};
+    if (body.status !== "OK" || typeof body.urlWithQueryParams !== "string") return "the server answered 200 without an Apple sign-in URL";
+    let host: string;
+    try {
+        host = new URL(body.urlWithQueryParams).host;
+    } catch {
+        return "the server answered 200 without an Apple sign-in URL";
+    }
+    return host === APPLE_SIGN_IN_HOST ? null : `the server's sign-in URL is on ${host}, not Apple's`;
+}
+
 export type SignInReply = { tokens: Tokens } | { problem: string };
 
 /** What `/st/auth/signinup` answered: the session, or what to tell the

@@ -2,7 +2,7 @@ import { Platform } from "react-native";
 import * as AppleAuthentication from "expo-apple-authentication";
 import * as SecureStore from "expo-secure-store";
 import { fetch as expoFetch } from "expo/fetch";
-import { APPLE_CLIENT_TYPE, emailOf, heldNameFor, nameFrom, replyOf, signInUpBody, type AppleName } from "./apple-link";
+import { APPLE_CLIENT_TYPE, emailOf, heldNameFor, nameFrom, replyOf, signInUpBody, whyNoApple, type AppleCheck, type AppleName } from "./apple-link";
 import type { Tokens } from "./auth";
 import type { Server } from "./server";
 
@@ -35,24 +35,44 @@ async function holdName(appleUser: string, name: AppleName | null): Promise<void
     }
 }
 
+/** Ask the server for this app's Apple sign-in: SuperTokens' own
+ *  `GET /authorisationurl` answers for the phone's client, or 400 when the
+ *  server has none. */
+async function checkApple(server: Server): Promise<AppleCheck> {
+    const query = new URLSearchParams({
+        thirdPartyId: "apple",
+        clientType: APPLE_CLIENT_TYPE,
+        redirectURIOnProviderDashboard: `${server.api}/st/auth/callback/apple`,
+    });
+    try {
+        const response = await expoFetch(`${server.api}/st/auth/authorisationurl?${query}`, { headers: { Accept: "application/json" } });
+        return { status: response.status, body: await response.json().catch(() => null) };
+    } catch {
+        return null;
+    }
+}
+
+/** Servers already told, in a development build, why Apple is hidden. */
+const explained = new Set<string>();
+
 /** Whether to show "Continue with Apple" for `server`: on iOS, where the
- *  sheet is there, and only when the server registered this app's client.
- *  SuperTokens' own `GET /authorisationurl` answers for that client, or
- *  answers 400 when there is none, so a button never leads nowhere. */
+ *  sheet is there, and only when the server offers this app's client
+ *  (`whyNoApple`), so a button never leads nowhere. A development build
+ *  says once per server why it is hidden, since the button decides whether
+ *  App Review's guideline 4.8 is met and a silent "no" is easy to miss. */
 export async function offersApple(server: Server): Promise<boolean> {
     if (Platform.OS !== "ios") return false;
     try {
         if (!(await AppleAuthentication.isAvailableAsync())) return false;
-        const query = new URLSearchParams({
-            thirdPartyId: "apple",
-            clientType: APPLE_CLIENT_TYPE,
-            redirectURIOnProviderDashboard: `${server.api}/st/auth/callback/apple`,
-        });
-        const response = await expoFetch(`${server.api}/st/auth/authorisationurl?${query}`, { headers: { Accept: "application/json" } });
-        return response.ok;
     } catch {
         return false;
     }
+    const why = whyNoApple(await checkApple(server));
+    if (why && typeof __DEV__ !== "undefined" && __DEV__ && !explained.has(server.id)) {
+        explained.add(server.id);
+        console.warn(`Sign in with Apple is hidden for ${server.label}: ${why}.`);
+    }
+    return why === null;
 }
 
 function cancelled(error: unknown): boolean {
