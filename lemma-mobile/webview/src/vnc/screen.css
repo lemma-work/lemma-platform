@@ -1,0 +1,95 @@
+/* The screen's page: the picture, and the thin bar under it in full screen.
+   Colours come from the app (`chrome`), set on :root as it draws. */
+html,
+body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+    touch-action: none;
+}
+
+#root {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--ground, transparent);
+}
+
+#screen {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+}
+
+/* One surface per connection: the last picture stays until the next one
+   has connected, so a reconnect does not flash an empty glass. */
+.surface {
+    position: absolute;
+    inset: 0;
+}
+
+#bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 48px;
+    padding: 0 8px;
+    border-top: 1px solid var(--line, transparent);
+    font-family: "Albert Sans", system-ui, sans-serif;
+}
+
+#bar[hidden] {
+    display: none;
+}
+
+#bar button {
+    appearance: none;
+    border: 0;
+    margin: 0;
+    min-width: 44px;
+    height: 44px;
+    padding: 0 12px;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--ink, inherit);
+    font: inherit;
+    font-size: 15px;
+    font-weight: 400;
+}
+
+#bar button[aria-pressed="true"] {
+    background: var(--press, transparent);
+    font-weight: 500;
+}
+
+#bar button:active {
+    opacity: 0.55;
+}
+
+#bar .grow {
+    flex: 1;
+}
+
+/* Where the phone's keyboard types: on screen, so it can be focused, and
+   unseen. 16px so iOS does not zoom to it. */
+#typing {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    border: 0;
+    opacity: 0;
+    resize: none;
+    font-size: 16px;
+    color: transparent;
+    background: transparent;
+    caret-color: transparent;
+}

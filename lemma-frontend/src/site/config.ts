@@ -33,3 +33,12 @@ export const config = {
 export function isLocalDeployment() {
     return config.DEPLOYMENT === "local";
 }
+
+/** Whether this page may offer plans, prices or checkout. Not on a local
+ *  installation, which has nothing to sell, and not inside the Lemma phone
+ *  app, which sells nothing for now: its WebViews add `LemmaApp/` to their
+ *  user agent (`lemma-mobile/src/ui/framed.tsx`). */
+export function sellsHere() {
+    if (isLocalDeployment()) return false;
+    return typeof navigator === "undefined" || !/\bLemmaApp\//.test(navigator.userAgent);
+}
