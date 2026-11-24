@@ -63,15 +63,33 @@ For local work `make dev-public` prints the public API URL to use for both.
 |---|---|
 | `metadata: read` | Mandatory for every App |
 | `contents: write` | Cloning, pushing, branches, and the sandbox's `git` |
+| `workflows: write` | Pushing a commit that touches `.github/workflows/` — GitHub refuses it from an App's token without this, whatever `contents` says, so an agent bumping a repository's dependencies could update everything but its CI's own actions |
 | `pull_requests: write` | Opening, reviewing and merging pull requests; reacting to reviews and review comments |
 | `issues: write` | Issues, comments, labels, assignees |
 | `actions: write` | Runs, re-runs, cancels, `workflow_dispatch` |
-| `checks: read` | Reacting to `check_suite` and `check_run` (`created` and `completed` only — GitHub sends `rerequested` and `requested_action` to Apps with write access) |
+| `checks: write` | `checks_create` and `checks_update`, and reacting to `check_suite` and `check_run` — every action, since GitHub sends `rerequested` and `requested_action` only to Apps with write access |
 | `deployments: write` | Approving pending deployments |
 | `secrets: read`, `actions_variables: read` | Listing only — Lemma never writes either |
+| `vulnerability_alerts: read` | Reading Dependabot alerts (`dependabot_list_alerts_for_repo`, `dependabot_get_alert`), and the `dependabot_alert` event, which GitHub delivers only to an App holding it |
 
 Secrets and variables are deliberately read-only. Nothing in the operation set
 writes one, and an App that cannot write them cannot be made to.
+
+Code scanning and secret scanning alerts have operations in the catalog but no
+permission here (`security_events`, `secret_scanning_alerts`), so those calls
+answer 403. Nothing uses them yet; ask for the permission in the release that
+does.
+
+## Adding a permission to an App that exists
+
+Editing the manifest changes nothing for an App already created from it. In
+every environment, under the App's **Permissions & events**: set the
+permission, tick any event that needs it (`dependabot_alert` appears only once
+**Dependabot alerts** is read), and save. GitHub then asks every organization
+that installed the App to accept the new permissions; until an owner does,
+that installation's tokens work exactly as before and calls needing the new
+permission answer 403. Accepting sends `installation.new_permissions_accepted`.
+A new trigger also needs the catalog imported, as above.
 
 ## The two tokens, and which acts when
 

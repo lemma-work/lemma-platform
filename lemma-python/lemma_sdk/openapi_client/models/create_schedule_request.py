@@ -33,7 +33,9 @@ class CreateScheduleRequest:
         config (CreateScheduleRequestConfig | Unset): Settings for the schedule's type: `cron`/`scheduled_at`/`timezone`
             for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5
             fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`;
-            **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. Any type may set
+            **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. A TIME schedule
+            may set `repository` to a GitHub repository as `owner/name`: its agent runs then start in a checkout of it on
+            the default branch, cloned as the person the run is for, as a webhook-triggered run does. Any type may set
             `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that
             finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and
             `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default
