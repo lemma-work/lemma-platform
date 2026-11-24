@@ -329,6 +329,32 @@ async def test_H20_an_app_reads_writes_and_chats_in_its_pod_as_its_viewer(
     assert chat.json()["id"] in {item["id"] for item in listed.json()["items"]}
 
 
+async def test_an_app_reads_what_its_viewers_conversation_cost_but_not_all_their_usage(
+    browser: AsyncClient, world
+):
+    """A coding app shows each of its viewer's conversations with what it cost:
+    one conversation in its own pod, never the viewer's spend everywhere."""
+    headers = _from_app(world["origin"], world["owner"])
+    chat = await browser.post(
+        f"/pods/{world['pod_id']}/conversations",
+        headers=headers,
+        json={"agent_runtime": {"profile_id": "system:lemma"}},
+    )
+    assert chat.status_code == status.HTTP_201_CREATED, chat.text
+
+    usage = await browser.get(
+        f"/pods/{world['pod_id']}/conversations/{chat.json()['id']}/usage",
+        headers=headers,
+    )
+    everywhere = await browser.get("/usage/me/events", headers=headers)
+
+    assert usage.status_code == status.HTTP_200_OK, usage.text
+    assert usage.json()["totals"]["cost_usd"] == 0
+    assert usage.json()["run_count"] == 0
+    assert everywhere.status_code == status.HTTP_403_FORBIDDEN, everywhere.text
+    assert _code(everywhere) == APP_ROUTE_NOT_ALLOWED
+
+
 async def test_H20_an_app_is_held_to_its_viewers_own_access_in_its_pod(
     authenticated_client: AsyncClient,
     async_client: AsyncClient,

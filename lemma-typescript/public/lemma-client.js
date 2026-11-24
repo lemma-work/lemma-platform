@@ -12079,6 +12079,16 @@ var LemmaClient = (() => {
       const podId = this.requirePodId(options.pod_id);
       return this.http.request("GET", `/pods/${podId}/conversations/${conversationId}`).then(normalizeConversation);
     }
+    /** What a conversation has cost its owner so far, in US dollars and model
+     *  tokens: `totals` over every run, and `runs` (newest first) each with its
+     *  own `usage`. A run with `usage: null` reported nothing -- an Agent Host
+     *  harness that sends no usage, or a turn not finished yet -- and is counted
+     *  in `unreported_run_count`; show the total as incomplete then, not as $0.
+     *  Sub-agent conversations are not included: read each one's own. */
+    usage(conversationId, options = {}) {
+      const podId = this.requirePodId(options.pod_id);
+      return this.http.request("GET", `/pods/${podId}/conversations/${conversationId}/usage`);
+    }
     async update(conversationId, payload, options = {}) {
       const podId = this.requirePodId(options.pod_id);
       const { harness_kind, model, model_name, profile_id, ...requestBody } = payload;

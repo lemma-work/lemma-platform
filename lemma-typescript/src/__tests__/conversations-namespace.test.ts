@@ -47,6 +47,18 @@ describe("ConversationsNamespace.repositories", () => {
   });
 });
 
+describe("ConversationsNamespace.usage", () => {
+  it("reads what one conversation cost, in the pod named or the client's own", async () => {
+    const { conversations, request } = setup();
+
+    await conversations.usage("conv-1");
+    await conversations.usage("conv-2", { pod_id: "pod-2" });
+
+    expect(request).toHaveBeenNthCalledWith(1, "GET", "/pods/pod-1/conversations/conv-1/usage");
+    expect(request).toHaveBeenNthCalledWith(2, "GET", "/pods/pod-2/conversations/conv-2/usage");
+  });
+});
+
 describe("ConversationsNamespace.list", () => {
   it("omits agent_name when listing conversations across the pod", async () => {
     const { conversations, request } = setup();
