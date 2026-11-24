@@ -2,19 +2,34 @@
 // (`lemma-frontend/src/app/characters/`), at rest, on a transparent ground.
 // The web animates that rig wherever a face is 30px or more
 // (`shell/character-puppet.tsx`); the phone shows it still, from these
-// files. Run `node scripts/faces.mjs` from lemma-mobile/ after the web's
-// characters change; the WebP files in assets/rig/ are committed.
+// files, which are committed in assets/rig/.
+//
+// The committed stills were drawn with Playwright 1.64.1 and its headless
+// Chromium, revision 1248 (Chromium 156.0.8078.4). Another Chromium, or
+// even another run, draws the same pose with slightly different bytes, so
+// a run is a 700 KB diff nobody can read. So by default it draws into a
+// temporary folder and says which files differ from the committed ones:
+//
+//   node scripts/faces.mjs           # draw, compare, change nothing
+//   node scripts/faces.mjs --write   # replace assets/rig/
+//
+// Replace them only when a character changed on the web.
 //
 // Needs `npm ci` in lemma-frontend (React, and Playwright with its Chromium)
 // and in lemma-typescript (esbuild).
 import { createRequire } from "node:module";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PHONE = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WEB = join(PHONE, "..", "lemma-frontend");
-const OUT = join(PHONE, "assets", "rig");
+const COMMITTED = join(PHONE, "assets", "rig");
+const WRITE = process.argv.includes("--write");
+const OUT = WRITE ? COMMITTED : mkdtempSync(join(tmpdir(), "lemma-faces-"));
+/** The Chromium the committed stills were drawn with. */
+const DRAWN_WITH = "156.0.8078.4";
 /** Drawn at most 135pt wide on a 3x screen. */
 const PIXELS = 512;
 const QUALITY = 0.9;
@@ -63,6 +78,9 @@ const page = `<!doctype html><html><head><meta charset="utf-8">
 
 mkdirSync(OUT, { recursive: true });
 const browser = await chromium.launch();
+if (browser.version() !== DRAWN_WITH) {
+    console.warn(`Drawing with Chromium ${browser.version()}; the committed stills were drawn with ${DRAWN_WITH}.`);
+}
 const tab = await browser.newPage({ viewport: { width: PIXELS, height: PIXELS }, deviceScaleFactor: 1 });
 /* The rigs ask for their layers at the web's own paths. */
 await tab.route("**/*", (route) => {
@@ -88,7 +106,15 @@ for (const character of CAST) {
         canvas.getContext("2d").drawImage(picture, 0, 0);
         return canvas.toDataURL("image/webp", quality).split(",")[1];
     }, { base64: png.toString("base64"), quality: QUALITY });
-    writeFileSync(join(OUT, `${character}.webp`), Buffer.from(webp, "base64"));
-    console.log(`assets/rig/${character}.webp`);
+    const drawn = Buffer.from(webp, "base64");
+    writeFileSync(join(OUT, `${character}.webp`), drawn);
+    if (WRITE) {
+        console.log(`assets/rig/${character}.webp`);
+    } else {
+        const committed = join(COMMITTED, `${character}.webp`);
+        const same = existsSync(committed) && readFileSync(committed).equals(drawn);
+        console.log(`${character}.webp ${same ? "same as committed" : "differs from committed"}`);
+    }
 }
 await browser.close();
+if (!WRITE) console.log(`Drawn into ${OUT}. Compare with assets/rig/; run with --write to replace them.`);
