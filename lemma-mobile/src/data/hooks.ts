@@ -44,11 +44,14 @@ export function useOrg(): { org: Org | null; orgs: Org[]; pick: (id: string) => 
     const orgs = useQuery({ queryKey: [key, "orgs"], queryFn: () => source.orgs(), staleTime: 10 * 60_000 });
     const chosen = useQuery({ queryKey: ["org-choice"], queryFn: async () => (await store.org()) ?? "", staleTime: Infinity });
     const list = orgs.data ?? [];
-    const org = list.find((one) => one.id === chosen.data) ?? list[0] ?? null;
+    /* None until the choice is read: the list can be back from the phone
+       first (`device-cache.ts`), and falling back to the first in it would
+       draw, and start reading, the wrong organization's Lemmas. */
+    const org = chosen.isPending ? null : list.find((one) => one.id === chosen.data) ?? list[0] ?? null;
     const pick = useCallback((id: string) => {
         void store.setOrg(id).then(() => cache.setQueryData(["org-choice"], id));
     }, [cache]);
-    return { org, orgs: list, pick, pending: orgs.isPending, error: orgs.error };
+    return { org, orgs: list, pick, pending: orgs.isPending || chosen.isPending, error: orgs.error };
 }
 
 export function useLemmas() {
