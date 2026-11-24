@@ -430,7 +430,7 @@ export const useLemmaPages: DocsPage[] = [
                 items: [
                     "A Lemma starts by answering only the people in it. Where it has a number or an address of its own, you can set it to answer anyone who writes, or only contacts it already knows.",
                     "Contacts never sign in.",
-                    "A contact is answered only from what the Lemma has marked Public, and from the rows about that contact in tables set aside for its contacts. Nothing else it keeps is used.",
+                    "A contact is answered only from what the Lemma has marked Public, and from the rows about that contact in tables set aside for its contacts, limited to the columns someone in the Lemma chose to share with contacts. Nothing else it keeps is used.",
                     "What it cannot answer is passed to the person who looks after its contacts.",
                     "Each contact has a conversation of their own. Contacts lists them for whoever looks after them.",
                 ],
