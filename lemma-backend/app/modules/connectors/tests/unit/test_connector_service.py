@@ -721,6 +721,31 @@ async def test_a_withdrawn_grant_is_a_409_that_asks_for_a_reconnect(expired):
     service.account_repository.update.assert_not_awaited()
 
 
+async def test_a_refusal_for_an_account_already_marked_lets_go_of_its_row():
+    """Checking for a lost race locks the account's row. An account that is
+    already marked needs no write, so nothing would commit before the refusal
+    is raised, and a caller that catches it and carries on would keep the row
+    locked -- with the reconnect that fixes the account waiting behind it."""
+    service, account = _refreshing_service(
+        OAuthCredentials(
+            access_token="old",
+            refresh_token="refresh",
+            expires_at=datetime.now() + timedelta(minutes=5),
+        ),
+        refresh_error=ConnectorReauthRequiredError(reason="bad_refresh_token"),
+    )
+    account.status = AccountStatus.REAUTH_REQUIRED
+
+    with pytest.raises(ConnectorReauthRequiredError):
+        await service.get_account_credentials(
+            account.id, account.user_id, force_refresh=True
+        )
+
+    service.account_repository.stored_credentials.assert_awaited_once_with(account.id)
+    service.account_repository.set_status.assert_not_awaited()
+    service.uow.commit.assert_awaited()
+
+
 async def test_losing_a_refresh_race_uses_the_token_the_winner_stored():
     """Two refreshes of one account, where a refresh token works once.
 

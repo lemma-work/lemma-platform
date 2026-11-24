@@ -969,6 +969,9 @@ class ConnectorService:
                         await self._persist_account_status(
                             account, AccountStatus.REAUTH_REQUIRED
                         )
+                        # An account already marked gets no write and so no
+                        # commit; the read above locked its row all the same.
+                        await self.uow.commit()
                         raise_refresh_failure(account, exc)
                     logger.warning(
                         "connectors.connector_service.credential_refresh_rejected.degraded",
