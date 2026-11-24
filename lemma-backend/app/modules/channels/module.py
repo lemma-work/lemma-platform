@@ -5,16 +5,18 @@ from app.core.registry import LemmaModule
 
 def _routers():
     from app.modules.channels.api.attachments import router as files
+    from app.modules.channels.api.block_controller import router as blocks
     from app.modules.channels.api.controller import router as channels
     from app.modules.channels.api.grant_controller import router as table_grants
     from app.modules.channels.api.inbox_controller import router as inbox
     from app.modules.channels.api.member_controller import router as members
     from app.modules.channels.api.message_controller import router as lines
+    from app.modules.channels.api.report_controller import router as reports
 
     # The inbox and search have fixed segments under the pod, and
     # `/channels/me` is declared before `/channels/{channel_id}`; members'
     # `me` routes before `{kind}:{id}`.
-    return [inbox, channels, members, lines, files, table_grants]
+    return [inbox, channels, members, lines, files, table_grants, blocks, reports]
 
 
 def _register_work() -> None:

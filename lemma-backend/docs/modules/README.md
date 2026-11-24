@@ -31,7 +31,7 @@ flowchart LR
 
 The canonical registration order is identity, pod, pod bundle, datastore,
 schedule, connectors, agent, function, apps, workflow, agent surfaces,
-contacts, channels, icon, usage, workspace, web login, MCP access, decisions, calls, and analytics. Order affects router and lifespan registration, but
+contacts, channels, reports, icon, usage, workspace, web login, MCP access, decisions, calls, and analytics. Order affects router and lifespan registration, but
 modules should communicate through explicit ports or domain events rather than
 depending on import order.
 
@@ -59,7 +59,8 @@ protocol and how a module adds a topic.
 | [workspace](workspace.md) | sandbox/session access and workspace tool runtime | `sandboxes`, `sandbox_instances`; live process/session state stays in the sandbox runtime and Redis |
 | [mcp_access](mcp_access.md) | Outside MCP clients: the OAuth authorization server, consent, and connected clients | `mcp_oauth_clients`, `mcp_oauth_grants`, `mcp_oauth_tokens`; pending authorizations and codes are short-lived Redis keys |
 | [contacts](contacts.md) | People a pod's bots answer who are not members, and the handles they are known by | `contacts`, `contact_identities` |
-| [channels](channels.md) | The places members, contacts and agents talk: one timeline per place, fed by outside sources | `external_accounts`, `channels`, `channel_members`, `channel_read_state`, `channel_sources`, `channel_messages`, `channel_mentions`, `channel_questions`, `channel_message_deliveries` |
+| [channels](channels.md) | The places members, contacts and agents talk: one timeline per place, fed by outside sources | `external_accounts`, `channels`, `channel_members`, `channel_read_state`, `channel_sources`, `channel_messages`, `channel_mentions`, `channel_questions`, `channel_message_deliveries`, `person_blocks` |
+| [reports](reports.md) | What a person reports to whoever runs the deployment, kept with a copy and emailed to the team | `content_reports` |
 | [decisions](decisions.md) | Stateless closed-question decisions over pluggable providers | None; the per-organization rate window is a short-lived Redis counter |
 | [calls](calls.md) | Live voice calls: the socket, voice engines, the gate, relays and the call canvas | None; a call is a conversation, its slots a short-lived Redis set |
 

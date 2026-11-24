@@ -7,6 +7,14 @@ the only one that outlives the sign-in. So it is kept, sealed with the secret
 cipher, in the SuperTokens user's own metadata -- which needs no table of ours
 and goes when that user does -- and the deletion's work item spends it just
 before it deletes the user.
+
+The phone app signs in with Apple natively rather than through the web's
+redirect. Apple issues that sign-in to the app's bundle id, so the provider
+carries a second client for it, and the phone names it (`clientType: "ios"`)
+when it posts the id token to SuperTokens' `/signinup`. A native sign-in brings
+no refresh token, only a one-time authorization code beside the id token; it is
+traded for one here, so a phone's account is revoked on deletion like a web
+one.
 """
 
 from __future__ import annotations
@@ -23,9 +31,13 @@ from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.fernet import InvalidToken
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from supertokens_python.exceptions import BadInputError
+from supertokens_python.recipe.thirdparty.exceptions import ClientTypeNotFoundError
 from supertokens_python.recipe.thirdparty.provider import (
+    Provider,
     ProviderClientConfig,
     ProviderConfig,
+    ProviderConfigForClient,
     ProviderInput,
 )
 from supertokens_python.recipe.usermetadata.asyncio import (
@@ -45,6 +57,19 @@ logger = get_logger(__name__)
 # the reason Telegram's are (`identity/config.py`).
 APPLE_AUDIENCE = "https://appleid.apple.com"
 APPLE_REVOKE_ENDPOINT = "https://appleid.apple.com/auth/revoke"
+APPLE_TOKEN_ENDPOINT = "https://appleid.apple.com/auth/token"
+
+#: The provider's two clients, as a sign-in names them (SuperTokens'
+#: `clientType`). The web names none, so naming none is the web's.
+WEB_CLIENT_TYPE = "web"
+NATIVE_CLIENT_TYPE = "ios"
+
+#: Where a native sign-in puts Apple's one-time authorization code, beside the
+#: id token in `oAuthTokens`.
+NATIVE_CODE_KEY = "authorization_code"
+
+#: Apple answers in a second or two; a sign-in waits no longer than this.
+_APPLE_TIMEOUT_SECONDS = 10
 
 #: The SuperTokens user-metadata key holding what a revocation needs.
 REVOCATION_METADATA_KEY = "apple_revocation"
@@ -106,34 +131,84 @@ def is_apple_sign_in_available(config: IdentitySettings) -> bool:
     return config.is_apple_oauth_configured() and apple_private_key(config) is not None
 
 
+def apple_app_bundle_id(config: IdentitySettings) -> str | None:
+    """The phone app's bundle id, when one is set."""
+    return (config.apple_app_bundle_id or "").strip() or None
+
+
 def apple_provider(config: IdentitySettings) -> ProviderInput | None:
-    """Sign in with Apple, or None until all four values are set and usable."""
+    """Sign in with Apple, or None until all four values are set and usable.
+
+    The web's client always; the phone's beside it once its bundle id is set.
+    It is signed with the same team, key id and key, and never registered
+    without the web's, so the phone is never offered Apple where the web is
+    not.
+    """
     if not is_apple_sign_in_available(config):
         return None
     private_key = apple_private_key(config)
     assert private_key is not None and config.apple_client_id is not None
+    signing = {
+        "teamId": config.apple_team_id,
+        "keyId": config.apple_key_id,
+        "privateKey": private_key,
+    }
+    # SuperTokens asks for openid and email only. Apple sends the name when
+    # asked, and only on the first sign-in, so asking later cannot recover it.
+    scope = ["openid", "email", "name"]
+    clients = [
+        ProviderClientConfig(
+            client_type=WEB_CLIENT_TYPE,
+            client_id=config.apple_client_id,
+            scope=scope,
+            additional_config=signing,
+        ),
+    ]
+    bundle_id = apple_app_bundle_id(config)
+    if bundle_id is not None:
+        # The id token a phone gets is issued to the bundle id, and verified
+        # against it: with only the Services ID registered it would not be.
+        clients.append(
+            ProviderClientConfig(
+                client_type=NATIVE_CLIENT_TYPE,
+                client_id=bundle_id,
+                scope=scope,
+                additional_config=signing,
+            )
+        )
     return ProviderInput(
         config=ProviderConfig(
             # SuperTokens picks its Apple implementation by this id: OIDC
             # discovery, `response_mode=form_post`, and the client secret
-            # signed from the three values below.
+            # signed from the three values above.
             third_party_id="apple",
-            clients=[
-                ProviderClientConfig(
-                    client_id=config.apple_client_id,
-                    # SuperTokens asks for openid and email only. Apple sends
-                    # the name when asked, and only on the first sign-in, so
-                    # asking later cannot recover it.
-                    scope=["openid", "email", "name"],
-                    additional_config={
-                        "teamId": config.apple_team_id,
-                        "keyId": config.apple_key_id,
-                        "privateKey": private_key,
-                    },
-                ),
-            ],
+            clients=clients,
         ),
+        override=_web_unless_named,
     )
+
+
+def _web_unless_named(provider: Provider) -> Provider:
+    """The web's client when a call names none; a 400 for one not registered.
+
+    With more than one client SuperTokens refuses any call that does not name
+    one, and the web's sign-in -- every browser holding an older page too --
+    names none. A client that is not registered (the phone's, before its
+    bundle id is set) is the caller's mistake, not a 500: it is also how the
+    phone asks whether to offer the button.
+    """
+    choose = provider.get_config_for_client_type
+
+    async def get_config_for_client_type(
+        client_type: str | None, user_context: dict[str, object]
+    ) -> ProviderConfigForClient:
+        try:
+            return await choose(client_type or WEB_CLIENT_TYPE, user_context)
+        except ClientTypeNotFoundError as missing:
+            raise BadInputError(missing.message) from missing
+
+    provider.get_config_for_client_type = get_config_for_client_type
+    return provider
 
 
 def apple_client_secret(config: IdentitySettings, client_id: str) -> str | None:
@@ -164,6 +239,81 @@ def apple_client_secret(config: IdentitySettings, client_id: str) -> str | None:
         algorithm="ES256",
         headers={"kid": config.apple_key_id},
     )
+
+
+async def with_native_refresh_token(
+    oauth_tokens: Mapping[str, object],
+    id_token_payload: Mapping[str, object] | None,
+    *,
+    config: IdentitySettings = identity_settings,
+    http: httpx.AsyncClient | None = None,
+) -> Mapping[str, object]:
+    """``oauth_tokens`` with a refresh token, traded for a phone's code.
+
+    A native sign-in sends the verified id token and Apple's one-time
+    authorization code, never a refresh token. The code is traded here with a
+    client secret signed for the bundle id -- the only client it was issued to
+    -- so the sign-in can be revoked later like a web one. Anything short of
+    a refresh token for the same person returns the tokens as they came: the
+    sign-in goes ahead, and :func:`remember_apple_refresh_token` logs that
+    nothing was kept.
+    """
+    if oauth_tokens.get("refresh_token"):
+        return oauth_tokens
+    code = oauth_tokens.get(NATIVE_CODE_KEY)
+    payload = id_token_payload or {}
+    bundle_id = apple_app_bundle_id(config)
+    if not (isinstance(code, str) and code and bundle_id):
+        return oauth_tokens
+    if payload.get("aud") != bundle_id:
+        return oauth_tokens
+    client_secret = apple_client_secret(config, bundle_id)
+    if client_secret is None:
+        return oauth_tokens
+    form = {
+        "client_id": bundle_id,
+        "client_secret": client_secret,
+        "code": code,
+        "grant_type": "authorization_code",
+    }
+    try:
+        if http is not None:
+            answer = await http.post(APPLE_TOKEN_ENDPOINT, data=form)
+        else:
+            async with httpx.AsyncClient(timeout=_APPLE_TIMEOUT_SECONDS) as client:
+                answer = await client.post(APPLE_TOKEN_ENDPOINT, data=form)
+    except httpx.HTTPError as unreachable:
+        logger.warning(
+            "identity.apple_sign_in.code_not_traded",
+            reason=f"Apple's token endpoint unreachable: {type(unreachable).__name__}",
+        )
+        return oauth_tokens
+    if not answer.is_success:
+        logger.warning(
+            "identity.apple_sign_in.code_not_traded",
+            reason="Apple refused the code",
+            status_code=answer.status_code,
+            apple_error=_error_code(answer),
+        )
+        return oauth_tokens
+    traded = _json_object(answer)
+    refresh_token = traded.get("refresh_token")
+    if not (isinstance(refresh_token, str) and refresh_token):
+        logger.warning(
+            "identity.apple_sign_in.code_not_traded",
+            reason="Apple's answer held no refresh token",
+        )
+        return oauth_tokens
+    # The code is the phone's word, the id token is verified: a code someone
+    # else signed in with must not be kept on this account, where deleting it
+    # would revoke theirs. Apple's own answer names whose code it was.
+    if _subject_of(traded.get("id_token")) != payload.get("sub"):
+        logger.warning(
+            "identity.apple_sign_in.code_not_traded",
+            reason="the code was issued to someone else",
+        )
+        return oauth_tokens
+    return {**oauth_tokens, "refresh_token": refresh_token}
 
 
 async def remember_apple_refresh_token(
@@ -335,6 +485,29 @@ def _error_code(answer: httpx.Response) -> str | None:
     return error if isinstance(error, str) and error.isidentifier() else None
 
 
+def _json_object(answer: httpx.Response) -> Mapping[str, object]:
+    try:
+        body = answer.json()
+    except ValueError:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _subject_of(id_token: object) -> object:
+    """``sub`` of an id token Apple's token endpoint just answered with.
+
+    Not verified: it came from Apple over TLS in answer to this server's own
+    request, which is all the signature would prove.
+    """
+    if not isinstance(id_token, str):
+        return None
+    try:
+        claims = jwt.decode(id_token, options={"verify_signature": False})
+    except jwt.InvalidTokenError:
+        return None
+    return claims.get("sub") if isinstance(claims, dict) else None
+
+
 def _retry_after(answer: httpx.Response) -> timedelta | None:
     raw = answer.headers.get("retry-after", "")
     return timedelta(seconds=int(raw)) if raw.isdigit() else None
@@ -342,8 +515,13 @@ def _retry_after(answer: httpx.Response) -> timedelta | None:
 
 __all__ = [
     "APPLE_REVOKE_ENDPOINT",
+    "APPLE_TOKEN_ENDPOINT",
+    "NATIVE_CLIENT_TYPE",
+    "NATIVE_CODE_KEY",
     "REVOCATION_METADATA_KEY",
     "Revocation",
+    "WEB_CLIENT_TYPE",
+    "apple_app_bundle_id",
     "apple_client_secret",
     "apple_private_key",
     "apple_provider",
@@ -351,4 +529,5 @@ __all__ = [
     "remember_apple_refresh_token",
     "revoke_apple_sign_in",
     "revoke_refresh_token",
+    "with_native_refresh_token",
 ]

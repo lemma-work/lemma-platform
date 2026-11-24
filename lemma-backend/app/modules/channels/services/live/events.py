@@ -43,6 +43,7 @@ from app.modules.channels.domain.entities import (
     Principal,
     QuestionState,
 )
+from app.modules.channels.infrastructure.blocks import BlockRepository
 from app.modules.channels.infrastructure.change_models import ChannelChangeModel
 from app.modules.channels.infrastructure.inbox import Totals, Unread
 from app.modules.channels.infrastructure.models import ChannelModel
@@ -158,18 +159,25 @@ class LinesView:
     since_seq: int
     #: Where each line went outside Lemma: shown to everybody who reads it.
     deliveries: dict[UUID, list[Delivery]] = field(default_factory=dict)
-    _encoded: dict[tuple[UUID, bool, bool, bool], list[str]] = field(
+    #: For each member who blocked a writer of the batch: whom.
+    blocks: dict[UUID, frozenset[Principal]] = field(default_factory=dict)
+    _encoded: dict[tuple[UUID, bool, bool, bool, bool], list[str]] = field(
         default_factory=dict
     )
 
+    def blocked_by(self, reader_id: UUID) -> frozenset[Principal]:
+        return self.blocks.get(reader_id, frozenset())
+
     def events_for(self, reader_id: UUID) -> list[str]:
         events: list[str] = []
+        blocked = self.blocked_by(reader_id)
         for line in self.lines:
             hidden = hidden_from(line, self.channel, reader_id)
             behalf = line.sender.on_behalf_of
             # The member an answer was made for reads it with ``can_share``.
             for_them = behalf is not None and behalf.user_id == reader_id
-            key = (line.id, hidden, wrote(line, reader_id), for_them)
+            by_blocked = line.sender.principal in blocked
+            key = (line.id, hidden, wrote(line, reader_id), for_them, by_blocked)
             if key not in self._encoded:
                 self._encoded[key] = self._encode(line, reader_id)
             events.extend(self._encoded[key])
@@ -183,6 +191,7 @@ class LinesView:
             names=self.names,
             agents=self.agents,
             deliveries=self.deliveries.get(line.id, ()),
+            blocked=self.blocked_by(reader_id),
         )
         encoded = [
             _event(
@@ -223,6 +232,10 @@ async def lines_view(
         ),
         since_seq=since_seq,
         deliveries=await deliveries_of(uow, [line.id for line in lines]),
+        blocks=await BlockRepository(uow.session).among(
+            pod_id=channel.pod_id,
+            people={person for line in lines if (person := line.sender.principal)},
+        ),
     )
 
 
@@ -278,6 +291,7 @@ def question_waiting(view: LinesView, reader_id: UUID) -> list[str]:
             reader_id=reader_id,
             names=view.names,
             agents=view.agents,
+            blocked=view.blocked_by(reader_id),
         )
         waiting.append(
             _event(

@@ -4,6 +4,10 @@
 /* eslint-disable */
 import type { PersonRef } from './PersonRef.js';
 export type LinePreview = {
+    /**
+     * Written by somebody the reader blocked.
+     */
+    blocked?: boolean;
     created_at: string;
     /**
      * Its writer deleted it.
@@ -13,7 +17,7 @@ export type LinePreview = {
     sender: PersonRef;
     seq: number;
     /**
-     * The start of what was said; empty when withheld or deleted.
+     * The start of what was said; empty when withheld, written by somebody the reader blocked, or deleted.
      */
     text: string;
     withheld?: boolean;

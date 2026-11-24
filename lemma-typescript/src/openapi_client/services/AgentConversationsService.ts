@@ -6,6 +6,8 @@ import type { AgentRunResponse } from '../models/AgentRunResponse.js';
 import type { AgentRunStartResponse } from '../models/AgentRunStartResponse.js';
 import type { ApprovalDecisionResponse } from '../models/ApprovalDecisionResponse.js';
 import type { ConversationListResponse } from '../models/ConversationListResponse.js';
+import type { ConversationReportRequest } from '../models/ConversationReportRequest.js';
+import type { ConversationReportResponse } from '../models/ConversationReportResponse.js';
 import type { ConversationRepositoryListResponse } from '../models/ConversationRepositoryListResponse.js';
 import type { ConversationResponse } from '../models/ConversationResponse.js';
 import type { ConversationStatus } from '../models/ConversationStatus.js';
@@ -375,6 +377,38 @@ export class AgentConversationsService {
                 404: `Conversation was not found or is not visible`,
                 409: `The message is no longer queued`,
                 422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Report Conversation Message
+     * Report a reply of the Lemma's, or a message from somebody outside, to the team that runs Lemma: why, and anything to add. Reporting it again replaces the report.
+     * @param podId
+     * @param conversationId
+     * @param messageId
+     * @param requestBody
+     * @returns ConversationReportResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentConversationMessageReport(
+        podId: string,
+        conversationId: string,
+        messageId: string,
+        requestBody: ConversationReportRequest,
+    ): CancelablePromise<ConversationReportResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/conversations/{conversation_id}/messages/{message_id}/report',
+            path: {
+                'pod_id': podId,
+                'conversation_id': conversationId,
+                'message_id': messageId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                404: `Conversation or message not found, or not visible`,
+                422: `Not something that can be reported`,
             },
         });
     }
