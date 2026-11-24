@@ -1,0 +1,369 @@
+/* The guide: a long read with its own look. Thin lowercase headings, a serif
+   reading column with a narrow label column beside it, full-width bands for
+   chapter openers and for the lines that matter most. Colours live in
+   `guide-tokens.css`; every class here is `gb-*` inside `.guidebook`.
+
+   Each figure is drawn as the thing it is about: a quote, a chat, a code
+   review, a list waiting for a yes. They share one kit (a card, a tag, a
+   button, a number) so the page reads as one piece, and differ in layout
+   because their subjects do.
+
+   Motion is quiet on purpose. A block eases in once as it is reached. One
+   thing keeps moving: the run in figure 9 lights each step in turn and rests
+   on the step that waits for a person, because that wait is the point. */
+@property --gb-dot { syntax: "<color>"; inherits: true; initial-value: transparent; }
+
+html:has(.guidebook) { scroll-behavior: smooth; }
+.guidebook { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--serif); font-size: 19.5px; line-height: 1.66; transition: background-color 0.6s var(--ease), color 0.6s var(--ease); overflow-x: clip; }
+.guidebook h1, .guidebook h2, .guidebook h3, .guidebook h4, .guidebook p, .guidebook ul, .guidebook ol, .guidebook figure, .guidebook dl, .guidebook dd { margin: 0; }
+.guidebook a { color: inherit; }
+.guidebook [id] { scroll-margin-top: 76px; }
+.guidebook .gb-k { font-family: var(--jost); font-weight: 500; font-size: 12px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--mu); line-height: 1.6; }
+
+/* ── The header ─────────────────────────────────────────────── */
+.guidebook .gb-head { position: sticky; top: 0; z-index: 40; background: var(--head); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border-bottom: 1px solid var(--hair); font-family: var(--jost); transition: background-color 0.6s var(--ease); }
+.guidebook .gb-head-in { box-sizing: border-box; max-width: 1140px; height: 58px; margin-inline: auto; display: flex; align-items: center; gap: 14px;
+    padding-left: max(20px, env(safe-area-inset-left, 0px)); padding-right: max(20px, env(safe-area-inset-right, 0px)); }
+.guidebook .gb-home { display: flex; color: var(--ink); text-decoration: none; flex: none; }
+.guidebook .gb-where { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px; font-size: 15px; white-space: nowrap; }
+.guidebook .gb-where::before { content: ""; align-self: center; width: 1px; height: 18px; background: var(--ring); margin-right: 2px; }
+.guidebook .gb-where a { color: var(--mu); text-decoration: none; transition: color 0.3s; }
+.guidebook .gb-where a:hover, .guidebook .gb-where a:focus-visible { color: var(--co); outline: none; }
+.guidebook .gb-where-ch { display: flex; gap: 8px; min-width: 0; color: var(--ink); }
+.guidebook .gb-where-ch::before { content: "/"; color: var(--ring); }
+.guidebook .gb-where-n { color: var(--co); }
+.guidebook .gb-where-t { overflow: hidden; text-overflow: ellipsis; text-transform: lowercase; }
+.guidebook .gb-head-b, .guidebook .gb-head-a { flex: none; font: inherit; font-size: 15px; height: 34px; padding: 0 14px; display: inline-flex; align-items: center; border-radius: 999px; cursor: pointer; text-decoration: none; transition: border-color 0.3s, color 0.3s; }
+.guidebook .gb-head-b { border: 1px solid var(--ring); background: none; color: var(--ink); }
+.guidebook .gb-head-b:hover, .guidebook .gb-head-b:focus-visible { border-color: var(--co); color: var(--co); outline: none; }
+.guidebook .gb-head-a { border: 0; color: var(--mu); padding-inline: 6px; }
+.guidebook .gb-head-a:hover, .guidebook .gb-head-a:focus-visible { color: var(--co); outline: none; }
+.guidebook .gb-theme { flex: none; width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--ring); background: none; cursor: pointer; display: grid; place-items: center; padding: 0; transition: border-color 0.3s; }
+.guidebook .gb-theme:hover { border-color: var(--co); }
+.guidebook .gb-theme:focus-visible { outline: 2px solid var(--co); outline-offset: 3px; }
+.guidebook .gb-theme i { width: 14px; height: 14px; border-radius: 50%; background: var(--co); box-shadow: inset 0 0 0 0 var(--bg); transition: box-shadow 0.6s var(--ease), transform 0.6s var(--ease); }
+.guidebook .gb-theme[aria-pressed="true"] i { box-shadow: inset -5px -3px 0 0 var(--bg); transform: rotate(-28deg); }
+.guidebook .gb-prog { position: absolute; left: 0; bottom: -1px; width: 100%; height: 2px; background: var(--co); transform: scaleX(0); transform-origin: 0 50%; }
+
+/* The contents, opened from the header */
+.guidebook .gb-tocpop { position: fixed; inset: 66px max(16px, env(safe-area-inset-right, 0px)) auto auto; margin: 0; box-sizing: border-box; width: min(430px, calc(100vw - 32px)); max-height: calc(100dvh - 90px); overflow: auto; overscroll-behavior: contain;
+    padding: 8px; border: 1px solid var(--ring); border-radius: 16px; background: var(--card); color: var(--ink); box-shadow: var(--pop-shadow); font-family: var(--jost); }
+.guidebook .gb-tocpop ol { list-style: none; margin: 0; padding: 0; }
+.guidebook .gb-tocpop > nav > ol > li { padding: 4px 0 8px; }
+.guidebook .gb-tocpop > nav > ol > li + li { border-top: 1px solid var(--hair); padding-top: 8px; }
+.guidebook .gb-tocpop a { display: grid; grid-template-columns: 2.4em minmax(0, 1fr); gap: 6px; align-items: baseline; padding: 6px 10px; border-radius: 9px; text-decoration: none; color: var(--ink); font-size: 17px; line-height: 1.3; }
+.guidebook .gb-tocpop li li a { font-size: 14.5px; color: var(--mu); padding-block: 4px; }
+.guidebook .gb-tocpop a:hover, .guidebook .gb-tocpop a:focus-visible { background: var(--disc); outline: none; }
+.guidebook .gb-tocpop a[aria-current] { color: var(--co); }
+.guidebook .gb-tocpop .gb-n { color: var(--co); font-weight: 300; font-size: 20px; line-height: 1; }
+.guidebook .gb-tocpop .gb-sn { font-size: 12px; letter-spacing: 0.06em; color: var(--mu); }
+.guidebook .gb-tocpop .gb-on > a { color: var(--co); }
+
+/* ── The reading grid ───────────────────────────────────────── */
+.guidebook .gb-g { box-sizing: border-box; max-width: 1140px; margin-inline: auto; display: grid; grid-template-columns: minmax(0, 170px) minmax(0, 1fr); column-gap: clamp(18px, 3.4vw, 44px);
+    padding-left: max(20px, env(safe-area-inset-left, 0px)); padding-right: max(20px, env(safe-area-inset-right, 0px)); }
+.guidebook .gb-lab { position: sticky; top: 84px; align-self: start; padding-top: 0.75em; }
+.guidebook .gb-c { display: grid; gap: 22px; min-width: 0; align-content: start; }
+.guidebook .gb-c > * { max-width: 640px; }
+.guidebook .gb-c > .gb-wide { max-width: 900px; }
+.guidebook .gb-s { padding-top: clamp(54px, 7.4vw, 96px); }
+.guidebook .gb-s.gb-s-tight { padding-top: clamp(30px, 4vw, 48px); }
+.guidebook h3 { font-family: var(--jost); font-weight: 300; font-size: clamp(29px, 3.9vw, 44px); line-height: 1.06; letter-spacing: -0.02em; text-transform: lowercase; color: var(--co); padding-bottom: 4px; text-wrap: balance; }
+.guidebook .gb-lede { font-size: 1.12em; line-height: 1.55; }
+.guidebook .gb-lead { font-family: var(--jost); font-weight: 500; font-size: 0.95em; }
+.guidebook .gb-dots { list-style: none; padding: 0; display: grid; gap: 12px; }
+.guidebook .gb-dots li { display: grid; grid-template-columns: 28px minmax(0, 1fr); }
+.guidebook .gb-dots li::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--co); margin-top: 0.62em; }
+.guidebook .gb-pull { font-family: var(--jost); font-weight: 200; font-size: clamp(32px, 5.2vw, 62px); line-height: 1.04; letter-spacing: -0.025em; text-transform: lowercase; color: var(--co); padding-block: clamp(10px, 2vw, 24px); text-wrap: balance; }
+
+/* Cover */
+.guidebook .gb-cover { position: relative; overflow: hidden; padding-block: clamp(36px, 5vw, 70px) clamp(40px, 6vw, 80px); }
+.guidebook .gb-cover .gb-g { grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr); align-items: center; }
+.guidebook .gb-cover .gb-t { display: grid; gap: clamp(20px, 3vw, 34px); }
+.guidebook h1 { font-family: var(--jost); font-weight: 200; font-size: clamp(48px, 8.4vw, 122px); line-height: 0.98; letter-spacing: -0.025em; text-transform: lowercase; }
+.guidebook h1 em { font-style: normal; color: var(--co); }
+.guidebook .gb-sub { font-family: var(--jost); font-weight: 300; font-size: clamp(19px, 2.1vw, 23px); line-height: 1.45; max-width: 24em; color: var(--mu); }
+.guidebook .gb-hero { display: block; width: 128%; max-width: none; height: auto; margin-right: -28%; }
+.guidebook .gb-hero .gb-r { fill: none; stroke: currentColor; stroke-width: 1; opacity: 0.4; }
+.guidebook .gb-hero .gb-l { fill: none; stroke: currentColor; stroke-width: 1.3; }
+.guidebook .gb-hero .gb-lf { fill: none; stroke: currentColor; stroke-width: 1.1; opacity: 0.45; }
+.guidebook .gb-hero .gb-cc { fill: var(--co); }
+.guidebook .gb-hero .gb-sk { fill: var(--bg); stroke: currentColor; stroke-width: 1.3; transition: fill 0.6s var(--ease); }
+
+/* Contents under the short version */
+.guidebook .gb-toc { list-style: none; padding: 0; margin-top: 10px; border-top: 1px solid var(--hair); font-family: var(--jost); }
+.guidebook .gb-toc li { border-bottom: 1px solid var(--hair); }
+.guidebook .gb-toc a { display: grid; grid-template-columns: 2.2em minmax(0, 1fr); gap: 2px 12px; align-items: baseline; padding: 14px 2px; text-decoration: none; color: var(--ink); transition: padding-left 0.4s var(--ease), color 0.3s; }
+.guidebook .gb-toc .gb-n { font-weight: 200; font-size: 30px; line-height: 1; color: var(--co); grid-row: 1 / 3; }
+.guidebook .gb-toc .gb-tt { font-weight: 400; font-size: 20px; text-transform: lowercase; }
+.guidebook .gb-toc .gb-gist { font-weight: 300; font-size: 15.5px; color: var(--mu); }
+.guidebook .gb-toc a:hover, .guidebook .gb-toc a:focus-visible { padding-left: 12px; outline: none; }
+.guidebook .gb-toc a:hover .gb-tt, .guidebook .gb-toc a:focus-visible .gb-tt { color: var(--co); }
+
+/* Chapter band, with a ruled measure along its foot */
+.guidebook .gb-band { position: relative; overflow: hidden; background: var(--band); color: var(--band-fg); margin-top: clamp(70px, 10vw, 130px); padding-block: clamp(50px, 7.5vw, 100px) clamp(74px, 9vw, 120px); transition: background-color 0.6s var(--ease), color 0.6s var(--ease); }
+.guidebook .gb-band .gb-k { color: var(--band-fg); opacity: 0.85; position: static; }
+.guidebook .gb-band::after { content: ""; position: absolute; left: 0; right: 0; bottom: 24px; height: 6px; border-top: 1px solid currentColor; opacity: 0.5; background-image: linear-gradient(90deg, currentColor 1px, transparent 1px); background-size: 28px 6px; }
+.guidebook h2 { font-family: var(--jost); font-weight: 200; font-size: clamp(40px, 7.4vw, 104px); line-height: 0.98; letter-spacing: -0.025em; text-transform: lowercase; text-wrap: balance; max-width: 10em; }
+
+/* Statement band: always coral */
+.guidebook .gb-state { background: var(--co); color: var(--on-co); margin-top: clamp(54px, 7.4vw, 96px); padding-block: clamp(54px, 8vw, 110px); transition: background-color 0.6s var(--ease), color 0.6s var(--ease); }
+.guidebook .gb-state .gb-k { color: var(--on-co); }
+.guidebook .gb-state .gb-big { font-family: var(--jost); font-weight: 200; font-size: clamp(34px, 5.6vw, 80px); line-height: 1.03; letter-spacing: -0.025em; text-transform: lowercase; text-wrap: balance; max-width: 14em; }
+.guidebook .gb-state p:not(.gb-big):not(.gb-k) { font-family: var(--jost); font-weight: 400; font-size: clamp(18.5px, 2vw, 21px); line-height: 1.5; }
+
+/* ── Figures: the shared kit ────────────────────────────────── */
+.guidebook .gb-fig { display: grid; gap: 16px; padding-block: 10px; }
+.guidebook .gb-fk { display: flex; gap: 14px; align-items: baseline; }
+.guidebook .gb-fk .gb-k { white-space: nowrap; }
+.guidebook .gb-ft { font-family: var(--jost); font-weight: 400; font-size: 19px; line-height: 1.25; text-transform: lowercase; }
+.guidebook .gb-fnote { font-family: var(--jost); font-weight: 300; font-size: 15.5px; color: var(--mu); }
+.guidebook .gb-card { box-sizing: border-box; min-width: 0; background: var(--card); border: 1px solid var(--hair); border-radius: 12px; box-shadow: var(--shadow); font-family: var(--jost); font-size: 15px; line-height: 1.4; color: var(--ink); transition: background-color 0.6s var(--ease); }
+.guidebook .gb-card p { margin: 0; }
+.guidebook .gb-tag { font-family: var(--jost); font-weight: 500; font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--mu); border: 1px solid var(--ring); border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
+.guidebook .gb-num { font-family: var(--mono); font-size: 13.5px; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.guidebook .gb-btn { font-size: 12.5px; font-weight: 500; padding: 3px 11px; border-radius: 999px; background: var(--co); color: var(--on-co); white-space: nowrap; }
+.guidebook .gb-flag { font-family: var(--mono); font-size: 13px; color: var(--co); }
+.guidebook .gb-pct { font-family: var(--mono); font-size: 13px; color: var(--mu); }
+.guidebook .gb-ok { color: var(--mu); }
+.guidebook .gb-no { color: var(--co); }
+.guidebook .gb-cap { font-family: var(--jost); font-weight: 300; font-size: 15px; line-height: 1.4; color: var(--mu); }
+.guidebook .gb-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(16px, 3vw, 36px); max-width: 860px; }
+.guidebook .gb-pane { display: grid; gap: 10px; align-content: start; min-width: 0; }
+.guidebook .gb-pane-k { font-family: var(--jost); font-weight: 500; font-size: 11px; letter-spacing: 0.24em; text-transform: uppercase; color: var(--mu); }
+.guidebook .gb-mark { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-left: 5px; border-radius: 50%; background: var(--co); color: var(--on-co); font-family: var(--jost); font-style: normal; font-weight: 500; font-size: 11px; line-height: 1; vertical-align: 1px; }
+.guidebook .gb-av { flex: none; width: 28px; height: 28px; border-radius: 8px; background: var(--disc); display: grid; place-items: center; font-style: normal; font-size: 13px; color: var(--ink); }
+.guidebook .gb-av-l { background: var(--co); color: var(--on-co); }
+.guidebook .gb-av-l svg { width: 13px; height: 13px; fill: currentColor; }
+.guidebook .gb-av-ai { border-radius: 50%; background: var(--mu); }
+
+/* Fig. 1: the quote, with a note for each person who touches it */
+.guidebook .gb-annot { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: clamp(18px, 3vw, 40px); align-items: center; max-width: 860px; }
+.guidebook .gb-doc { padding: 16px 20px 18px; }
+.guidebook .gb-doc-h { display: flex; justify-content: space-between; align-items: center; padding-bottom: 12px; border-bottom: 1px solid var(--hair); font-weight: 300; font-size: 22px; }
+.guidebook .gb-doc-who { display: grid; gap: 4px; padding-block: 12px; }
+.guidebook .gb-doc-who div { display: grid; grid-template-columns: 3.4em minmax(0, 1fr); }
+.guidebook .gb-doc-who dt { color: var(--mu); font-size: 13.5px; }
+.guidebook .gb-doc-lines { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 9px 14px; align-items: baseline; padding-top: 12px; border-top: 1px solid var(--hair); font-size: 14.5px; }
+.guidebook .gb-doc-lines b { font-weight: 500; }
+.guidebook .gb-notes { list-style: none; counter-reset: gb-note; padding: 0; display: grid; gap: 14px; font-family: var(--jost); font-weight: 300; font-size: 16px; line-height: 1.42; }
+.guidebook .gb-notes li { counter-increment: gb-note; display: grid; grid-template-columns: 28px minmax(0, 1fr); }
+.guidebook .gb-notes li::before { content: counter(gb-note); display: grid; place-items: center; width: 18px; height: 18px; margin-top: 2px; border-radius: 50%; background: var(--co); color: var(--on-co); font-weight: 500; font-size: 11px; }
+.guidebook .gb-notes b { font-weight: 500; }
+
+/* Fig. 2: a chat thread beside a list made for the job */
+.guidebook .gb-chat { padding: 14px; height: 236px; overflow: hidden; display: grid; gap: 8px; align-content: end; -webkit-mask-image: linear-gradient(to bottom, transparent, var(--ink) 42%); mask-image: linear-gradient(to bottom, transparent, var(--ink) 42%); }
+.guidebook .gb-msg { max-width: 86%; justify-self: start; padding: 8px 12px; border-radius: 12px; background: var(--disc); font-size: 14px; }
+.guidebook .gb-msg.gb-me { justify-self: end; background: none; border: 1px solid var(--hair); }
+.guidebook .gb-app { padding-bottom: 2px; }
+.guidebook .gb-app-h { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--hair); font-weight: 500; font-size: 14.5px; }
+.guidebook .gb-count { min-width: 22px; height: 22px; padding-inline: 6px; box-sizing: border-box; border-radius: 999px; background: var(--co); color: var(--on-co); display: grid; place-items: center; font-size: 12px; font-weight: 500; }
+.guidebook .gb-app-r { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 12px; align-items: center; padding: 11px 14px; border-bottom: 1px solid var(--hair); font-size: 14.5px; }
+.guidebook .gb-app-r:last-child { border-bottom: 0; }
+
+/* Fig. 3: one correction, this week and next */
+.guidebook .gb-weeks { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr); gap: 12px clamp(12px, 2.4vw, 26px); align-items: stretch; max-width: 860px; }
+.guidebook .gb-wk { align-self: center; font-family: var(--jost); font-weight: 500; font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--mu); }
+.guidebook .gb-snip { padding: 14px 16px; display: grid; gap: 8px; align-content: start; }
+.guidebook .gb-snip p:first-child { font-family: var(--serif); font-size: 16.5px; }
+.guidebook .gb-del { text-decoration: line-through; text-decoration-color: var(--co); text-decoration-thickness: 2px; color: var(--mu); }
+.guidebook .gb-who { font-size: 14px; color: var(--mu); }
+.guidebook .gb-add { display: block; margin-top: 4px; color: var(--co); font-weight: 500; }
+.guidebook .gb-bad, .guidebook .gb-good { font-size: 14px; display: grid; grid-template-columns: 18px minmax(0, 1fr); }
+.guidebook .gb-bad { color: var(--co); }
+.guidebook .gb-bad::before { content: "✕"; }
+.guidebook .gb-good::before { content: "✓"; color: var(--co); }
+
+/* Fig. 4: what it has been taught */
+.guidebook .gb-page { max-width: 640px; }
+.guidebook .gb-page-h { display: flex; gap: 12px; align-items: center; padding: 12px 18px; border-bottom: 1px solid var(--hair); font-size: 17px; }
+.guidebook .gb-page ul { list-style: none; margin: 0; padding: 2px 18px; }
+.guidebook .gb-page li { display: flex; justify-content: space-between; gap: 16px; align-items: baseline; padding: 11px 0; border-bottom: 1px dashed var(--hair); }
+.guidebook .gb-page li span { font-family: var(--serif); font-size: 16.5px; }
+.guidebook .gb-page li em { font-style: normal; font-size: 12.5px; color: var(--co); white-space: nowrap; }
+.guidebook .gb-page-f { padding: 10px 18px 14px; font-size: 13.5px; color: var(--mu); }
+
+/* Fig. 5: the map */
+.guidebook .gb-map { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px 14px; max-width: 780px; }
+.guidebook .gb-ax { font-family: var(--jost); font-weight: 500; font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--mu); display: flex; justify-content: space-between; }
+.guidebook .gb-ax-y { flex-direction: column; text-align: right; padding-block: 14px; }
+.guidebook .gb-ax-y span:first-child::after { content: " ↑"; }
+.guidebook .gb-ax-y span:last-child::after { content: " ↓"; }
+.guidebook .gb-ax-x { grid-column: 2; }
+.guidebook .gb-ax-x span:first-child::before { content: "← "; }
+.guidebook .gb-ax-x span:last-child::after { content: " →"; }
+.guidebook .gb-quad { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); border: 1px solid var(--ring); border-radius: 14px; overflow: hidden; }
+.guidebook .gb-q { position: relative; min-height: 150px; display: grid; align-content: start; gap: 6px; padding: clamp(14px, 2.4vw, 24px); font-family: var(--jost); }
+.guidebook .gb-q:nth-child(-n + 2) { border-bottom: 1px solid var(--ring); }
+.guidebook .gb-q:nth-child(odd) { border-right: 1px solid var(--ring); }
+.guidebook .gb-q h4 { font-weight: 300; font-size: clamp(22px, 2.6vw, 30px); line-height: 1.05; letter-spacing: -0.01em; }
+.guidebook .gb-q p { font-weight: 300; font-size: 15px; line-height: 1.4; color: var(--mu); max-width: 20em; }
+.guidebook .gb-q.gb-on { background: var(--co); color: var(--on-co); }
+.guidebook .gb-q.gb-on p { color: var(--on-co); font-weight: 400; }
+.guidebook .gb-pin { position: absolute; right: 14px; bottom: 12px; display: flex; gap: 7px; align-items: center; font-weight: 500; font-size: 10.5px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--co); }
+.guidebook .gb-pin::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--co); }
+
+/* Fig. 6: five rows, a code change beside a quote */
+.guidebook .gb-five { display: grid; grid-template-columns: minmax(0, 0.75fr) minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto repeat(5, auto); column-gap: clamp(10px, 2vw, 20px); max-width: 900px; }
+.guidebook .gb-five-k { grid-column: 1; grid-row: 2 / 7; display: grid; grid-template-rows: subgrid; list-style: none; margin: 0; padding: 0; }
+.guidebook .gb-five-k li { display: flex; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--hair); font-family: var(--jost); font-size: 15.5px; line-height: 1.25; text-transform: lowercase; }
+.guidebook .gb-five > :nth-child(2) { grid-column: 2; }
+.guidebook .gb-five > :nth-child(3) { grid-column: 3; }
+.guidebook .gb-five-col { grid-row: 1 / 7; display: grid; grid-template-rows: subgrid; }
+.guidebook .gb-five-us { border-color: var(--co); }
+.guidebook .gb-five-h { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 11px 14px; border-bottom: 1px solid var(--hair); font-weight: 500; font-size: 14.5px; }
+.guidebook .gb-five-col > p { padding: 10px 14px; border-bottom: 1px solid var(--hair); font-size: 14.5px; align-self: stretch; }
+.guidebook .gb-five-col > p:last-child { border-bottom: 0; }
+.guidebook .gb-five-col code { font-family: var(--mono); font-size: 13px; }
+
+/* The four tests */
+.guidebook .gb-tests { list-style: none; counter-reset: gb-test; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: clamp(18px, 3vw, 40px); max-width: 820px; border-top: 1px solid var(--hair); }
+.guidebook .gb-tests li { counter-increment: gb-test; display: grid; gap: 6px; align-content: start; padding: 18px 0 20px; border-bottom: 1px solid var(--hair); }
+.guidebook .gb-tests b { font-family: var(--jost); font-weight: 300; font-size: 32px; line-height: 1; color: var(--co); }
+.guidebook .gb-tests b::before { content: counter(gb-test); font-size: 13px; letter-spacing: 0.1em; color: var(--mu); margin-right: 12px; vertical-align: 6px; }
+.guidebook .gb-tests span { font-size: 0.92em; line-height: 1.5; }
+
+/* Fig. 7: the layers, filled in */
+.guidebook .gb-stack { display: grid; grid-template-columns: minmax(0, 1fr) 44px; gap: 10px; max-width: 880px; }
+.guidebook .gb-layers { display: grid; gap: 8px; }
+.guidebook .gb-layer { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.4fr); gap: 16px; align-items: center; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--hair); background: var(--card); box-shadow: var(--shadow); font-family: var(--jost); }
+.guidebook .gb-layer:last-child { background: var(--disc); }
+.guidebook .gb-layer-k { display: grid; gap: 2px; }
+.guidebook .gb-layer-k b { font-weight: 400; font-size: 19px; line-height: 1.2; }
+.guidebook .gb-layer-k span { font-weight: 300; font-size: 14px; line-height: 1.35; color: var(--mu); }
+.guidebook .gb-layer-v { display: flex; flex-wrap: wrap; gap: 6px; }
+.guidebook .gb-chip { display: inline-flex; gap: 7px; align-items: center; padding: 4px 11px; border-radius: 999px; border: 1px solid var(--ring); background: var(--bg); font-size: 13.5px; line-height: 1.3; }
+.guidebook .gb-chip code { font-family: var(--mono); font-size: 12.5px; }
+.guidebook .gb-chip i { font-style: normal; font-size: 11.5px; padding: 0 6px; border-radius: 999px; background: var(--co); color: var(--on-co); }
+.guidebook .gb-rail { margin: 0; display: flex; justify-content: space-around; align-items: center; writing-mode: vertical-rl; border: 1.5px dashed var(--co); border-radius: 12px; font-family: var(--jost); font-weight: 500; font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--co); }
+
+/* Fig. 8: a function's sum beside an agent's reading */
+.guidebook .gb-fn-h { padding: 10px 14px; border-bottom: 1px solid var(--hair); }
+.guidebook .gb-fn-h code { font-family: var(--mono); font-size: 13.5px; color: var(--co); }
+.guidebook .gb-fn-rows { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px 16px; padding: 12px 14px 14px; font-family: var(--mono); font-size: 13.5px; }
+.guidebook .gb-fn-rows b { font-weight: 500; padding-top: 9px; border-top: 1px solid var(--hair); }
+.guidebook .gb-io { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: center; padding: 11px 14px; border-bottom: 1px solid var(--hair); }
+.guidebook .gb-io:last-child { border-bottom: 0; }
+.guidebook .gb-ask { font-family: var(--serif); font-style: italic; font-size: 15px; line-height: 1.35; }
+.guidebook .gb-ans { position: relative; padding-left: 20px; font-size: 14px; }
+.guidebook .gb-ans::before { content: "→"; position: absolute; left: 0; color: var(--co); }
+
+/* Fig. 9: the quote's run, which rests on the step that waits */
+.guidebook .gb-run { position: relative; list-style: none; padding: 0; max-width: 740px; font-family: var(--jost); }
+.guidebook .gb-run::before { content: ""; position: absolute; left: 66px; top: 18px; bottom: 18px; border-left: 1px solid var(--ring); }
+.guidebook .gb-run li { --gb-dot: var(--bg); display: grid; grid-template-columns: 52px 28px 104px minmax(0, 1fr); align-items: baseline; padding: 10px 14px 10px 0; border-radius: 12px; }
+.guidebook .gb-run li::before { content: ""; grid-column: 2; grid-row: 1; justify-self: center; align-self: center; width: 11px; height: 11px; box-sizing: border-box; border-radius: 50%; border: 1.4px solid var(--ring); background: var(--gb-dot); position: relative; }
+.guidebook .gb-run time { grid-column: 1; grid-row: 1; font-family: var(--mono); font-size: 13px; color: var(--mu); }
+.guidebook .gb-run .gb-by { grid-column: 3; grid-row: 1; font-weight: 500; font-size: 10.5px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--mu); }
+.guidebook .gb-run p { grid-column: 4; grid-row: 1; font-size: 16px; line-height: 1.4; }
+.guidebook .gb-run .gb-hold::before { border-color: var(--co); }
+.guidebook .gb-run .gb-hold .gb-by { color: var(--co); }
+.guidebook .gb-fig.gb-in .gb-run li:nth-child(1) { animation: gb-run1 16s linear infinite; }
+.guidebook .gb-fig.gb-in .gb-run li:nth-child(2) { animation: gb-run2 16s linear infinite; }
+.guidebook .gb-fig.gb-in .gb-run li:nth-child(3) { animation: gb-run3 16s linear infinite; }
+.guidebook .gb-fig.gb-in .gb-run li:nth-child(4) { animation: gb-run4 16s linear infinite; }
+.guidebook .gb-fig.gb-in .gb-run li:nth-child(5) { animation: gb-run5 16s linear infinite; }
+.guidebook .gb-fig.gb-in .gb-run li:nth-child(6) { animation: gb-run6 16s linear infinite; }
+@keyframes gb-run1 { 0%, 1%, 11%, 100% { background-color: transparent; --gb-dot: var(--bg); } 2%, 10% { background-color: var(--disc); --gb-dot: var(--co); } }
+@keyframes gb-run2 { 0%, 11%, 21%, 100% { background-color: transparent; --gb-dot: var(--bg); } 12%, 20% { background-color: var(--disc); --gb-dot: var(--co); } }
+@keyframes gb-run3 { 0%, 21%, 31%, 100% { background-color: transparent; --gb-dot: var(--bg); } 22%, 30% { background-color: var(--disc); --gb-dot: var(--co); } }
+@keyframes gb-run4 { 0%, 31%, 63%, 100% { background-color: transparent; --gb-dot: var(--bg); } 32%, 62% { background-color: var(--disc); --gb-dot: var(--co); } }
+@keyframes gb-run5 { 0%, 63%, 73%, 100% { background-color: transparent; --gb-dot: var(--bg); } 64%, 72% { background-color: var(--disc); --gb-dot: var(--co); } }
+@keyframes gb-run6 { 0%, 73%, 90%, 100% { background-color: transparent; --gb-dot: var(--bg); } 74%, 89% { background-color: var(--disc); --gb-dot: var(--co); } }
+
+/* Fig. 10: what still needs you, stage by stage */
+.guidebook .gb-stages { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(12px, 2.4vw, 26px); max-width: 900px; }
+.guidebook .gb-stages li { display: grid; gap: 10px; align-content: start; min-width: 0; }
+.guidebook .gb-stage-k { display: flex; gap: 10px; align-items: baseline; font-family: var(--jost); font-size: 18px; line-height: 1.2; text-transform: lowercase; }
+.guidebook .gb-stage-k b { font-weight: 300; font-size: 26px; line-height: 1; color: var(--co); }
+.guidebook .gb-inbox-h { display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--hair); font-weight: 500; font-size: 14px; }
+.guidebook .gb-inbox-h i { font-style: normal; min-width: 22px; height: 22px; padding-inline: 6px; box-sizing: border-box; border-radius: 999px; background: var(--co); color: var(--on-co); display: grid; place-items: center; font-size: 12px; }
+.guidebook .gb-inbox-sent { padding: 7px 12px; border-bottom: 1px solid var(--hair); font-size: 13px; color: var(--mu); }
+.guidebook .gb-inbox-sent::before { content: "✓ "; color: var(--co); }
+.guidebook .gb-inbox-r { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--hair); font-size: 13.5px; line-height: 1.3; }
+.guidebook .gb-inbox-r:last-child { border-bottom: 0; }
+
+/* Fig. 11: four places to meet one Lemma */
+.guidebook .gb-ways { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px clamp(14px, 2.6vw, 28px); max-width: 880px; }
+.guidebook .gb-tile { padding-bottom: 10px; }
+.guidebook .gb-tile-h { padding: 10px 14px; border-bottom: 1px solid var(--hair); font-weight: 500; font-size: 14px; }
+.guidebook .gb-say { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; padding: 10px 14px 0; }
+.guidebook .gb-say p { font-size: 14.5px; line-height: 1.4; }
+.guidebook .gb-say b { display: block; font-weight: 500; font-size: 12.5px; color: var(--mu); }
+
+/* Fig. 12: three windows, one Lemma */
+.guidebook .gb-places { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(12px, 2.4vw, 26px); max-width: 900px; }
+.guidebook .gb-place { display: grid; gap: 8px; align-content: start; font-family: var(--jost); min-width: 0; }
+.guidebook .gb-place h4 { margin-top: 6px; font-weight: 400; font-size: 19px; text-transform: lowercase; }
+.guidebook .gb-place > p { font-weight: 300; font-size: 15px; line-height: 1.4; color: var(--mu); }
+.guidebook .gb-win { overflow: hidden; }
+.guidebook .gb-win-bar { display: flex; align-items: center; gap: 5px; padding: 8px 10px; border-bottom: 1px solid var(--hair); background: var(--disc); font-size: 12px; color: var(--mu); white-space: nowrap; }
+.guidebook .gb-win-bar i { flex: none; width: 8px; height: 8px; border-radius: 50%; border: 1px solid var(--ring); }
+.guidebook .gb-win-bar span { margin-left: 6px; overflow: hidden; text-overflow: ellipsis; }
+.guidebook .gb-win-web .gb-win-bar span { flex: 1; padding: 1px 8px; border-radius: 6px; background: var(--card); }
+.guidebook .gb-win-srv .gb-win-bar i { display: none; }
+.guidebook .gb-win-srv .gb-win-bar span { margin-left: 0; font-family: var(--mono); }
+.guidebook .gb-win-srv .gb-win-bar span::before { content: "$ ssh "; color: var(--co); }
+.guidebook .gb-same { display: grid; gap: 6px; padding: 12px 14px 14px; }
+.guidebook .gb-same-h { display: flex; gap: 9px; align-items: center; margin-bottom: 4px; font-weight: 500; font-size: 15px; }
+.guidebook .gb-same-h .gb-av { width: 22px; height: 22px; border-radius: 6px; }
+.guidebook .gb-same p:not(.gb-same-h) { display: flex; justify-content: space-between; padding-bottom: 5px; border-bottom: 1px dashed var(--hair); font-size: 13.5px; }
+
+/* The end: where next */
+.guidebook .gb-foot { margin-top: clamp(70px, 10vw, 130px); padding-block: 34px 64px; border-top: 1px solid var(--hair); }
+.guidebook .gb-next { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; font-family: var(--jost); }
+.guidebook .gb-next a { display: grid; gap: 4px; height: 100%; box-sizing: border-box; padding: 16px 18px; border: 1px solid var(--ring); border-radius: 12px; text-decoration: none; color: var(--ink); transition: border-color 0.3s; }
+.guidebook .gb-next a:hover, .guidebook .gb-next a:focus-visible { border-color: var(--co); outline: none; }
+.guidebook .gb-next b { font-weight: 400; font-size: 19px; }
+.guidebook .gb-next span { font-weight: 300; font-size: 15px; line-height: 1.4; color: var(--mu); }
+
+/* ── Entrances: only once the script has run, so the page is complete without it */
+.guidebook .gb-cover .gb-k, .guidebook .gb-cover .gb-sub { animation: rise 1s var(--ease) both; }
+.guidebook .gb-cover .gb-sub { animation-delay: 0.6s; }
+.guidebook.gb-live .gb-rv { opacity: 0; transform: translateY(12px); transition: opacity 0.8s var(--ease), transform 0.8s var(--ease); transition-delay: calc(var(--i, 0) * 70ms); }
+.guidebook.gb-live .gb-rv.gb-in { opacity: 1; transform: none; }
+
+/* ── Narrow screens ─────────────────────────────────────────── */
+@media (max-width: 860px) {
+    .guidebook { font-size: 18px; }
+    .guidebook .gb-g, .guidebook .gb-cover .gb-g { grid-template-columns: minmax(0, 1fr); }
+    .guidebook .gb-lab { position: static; padding-top: 0; padding-bottom: 8px; }
+    .guidebook .gb-hero { width: 100%; margin-right: 0; max-width: 460px; justify-self: center; margin-top: 10px; }
+    .guidebook .gb-pair, .guidebook .gb-annot, .guidebook .gb-ways { grid-template-columns: minmax(0, 1fr); }
+    .guidebook .gb-weeks { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .guidebook .gb-weeks > span:first-child { display: none; }
+    .guidebook .gb-wk { grid-column: 1 / 3; padding-top: 6px; }
+    .guidebook .gb-snip { padding: 12px; }
+    .guidebook .gb-five { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; row-gap: 14px; }
+    .guidebook .gb-five-k { display: none; }
+    .guidebook .gb-five > :nth-child(n) { grid-column: 1; }
+    .guidebook .gb-five-col { grid-row: auto; grid-template-rows: none; }
+    .guidebook .gb-five-col > p::before { content: attr(data-k); display: block; font-weight: 500; font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--mu); }
+    .guidebook .gb-tests { grid-template-columns: minmax(0, 1fr); }
+    .guidebook .gb-stack { grid-template-columns: minmax(0, 1fr); }
+    .guidebook .gb-layer { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+    .guidebook .gb-rail { writing-mode: horizontal-tb; padding: 8px; }
+    .guidebook .gb-io { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+    .guidebook .gb-run::before { left: 14px; }
+    .guidebook .gb-run li { grid-template-columns: 28px minmax(0, 1fr); padding-right: 10px; row-gap: 2px; }
+    .guidebook .gb-run li::before { grid-column: 1; grid-row: 1 / 3; align-self: start; margin-top: 6px; }
+    .guidebook .gb-run time { grid-column: 2; grid-row: 1; }
+    .guidebook .gb-run .gb-by { grid-column: 2; grid-row: 1; justify-self: start; margin-left: 56px; }
+    .guidebook .gb-run p { grid-column: 2; grid-row: 2; }
+    .guidebook .gb-stages, .guidebook .gb-places, .guidebook .gb-next { grid-template-columns: minmax(0, 1fr); }
+    .guidebook .gb-stages, .guidebook .gb-places { max-width: 420px; }
+}
+@media (max-width: 600px) {
+    .guidebook .gb-head-in { gap: 10px; }
+    .guidebook .gb-home .lemma-wordmark { display: none; }
+    .guidebook .gb-head-a { display: none; }
+    .guidebook .gb-where > a { display: none; }
+    .guidebook .gb-where-ch::before { content: none; }
+    .guidebook .gb-q { min-height: 0; }
+    .guidebook .gb-pin { position: static; margin-top: 6px; }
+    .guidebook .gb-ax-y { font-size: 9.5px; letter-spacing: 0.14em; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .guidebook *, .guidebook *::before, .guidebook *::after { animation: none !important; transition: none !important; }
+    html:has(.guidebook) { scroll-behavior: auto; }
+}

@@ -2,90 +2,61 @@
 
 import { useId } from "react";
 import Link from "next/link";
-import type { DocsNavGroup } from "./docs-content";
+import type { DocsDoor, DocsNavGroup } from "./docs-content";
 
-export type DocsDoor = "use" | "build";
+const DOORS: [DocsDoor, string][] = [
+    ["use", "Use Lemma"],
+    ["build", "Build on Lemma"],
+];
 
-/** The guide list: which half of the docs at its top, then that half's
- *  pages. Every page written so far is for builders; the other half lists
- *  what it will hold, none of it linked yet. */
+/** The list of every docs page: the guide first, then each half of the docs
+ *  under its own heading, group by group. Nothing is hidden behind a switch,
+ *  so any page is one look away. */
 export function DocsNav({
     nav,
-    topics,
-    door,
-    onDoor,
     current,
     onNavigate,
 }: {
+    /** Every group, each marked with the half that lists it. */
     nav: DocsNavGroup[];
-    topics: readonly string[];
-    door: DocsDoor;
-    onDoor: (door: DocsDoor) => void;
     /** The current page's slug, "" on the docs home. */
     current: string;
     onNavigate?: () => void;
 }) {
     const id = useId();
     return (
-        <div className="docs-list">
-            <div className="docs-switch" role="group" aria-label="Which docs">
-                <button
-                    type="button"
-                    aria-pressed={door === "use"}
-                    onClick={() => onDoor("use")}
-                >
-                    Use Lemma
-                </button>
-                <button
-                    type="button"
-                    aria-pressed={door === "build"}
-                    onClick={() => onDoor("build")}
-                >
-                    Build on Lemma
-                </button>
-            </div>
-            {door === "use" ? (
-                <section aria-labelledby={`${id}-use`}>
-                    <p className="docs-list__h" id={`${id}-use`}>
-                        Use Lemma
+        <nav className="docs-list" aria-label="Docs">
+            <Link className="docs-list__guide" href="/guide" onClick={onNavigate}>
+                <span>The guide</span>
+                <span className="docs-list__guide-d">Why Lemma works the way it does</span>
+            </Link>
+            {DOORS.map(([door, label]) => (
+                <section key={door} className="docs-list__door" aria-labelledby={`${id}-${door}`}>
+                    <p className="docs-list__door-h" id={`${id}-${door}`}>
+                        {label}
                     </p>
-                    <ul>
-                        {topics.map((topic) => (
-                            <li key={topic} className="docs-list__soon">
-                                {topic}
-                                <span>Being written</span>
-                            </li>
+                    {nav
+                        .filter((group) => group.door === door)
+                        .map((group) => (
+                            <div key={group.title} className="docs-list__group">
+                                {group.title !== label && <p className="docs-list__h">{group.title}</p>}
+                                <ul>
+                                    {group.pages.map((page) => (
+                                        <li key={page.slug}>
+                                            <Link
+                                                href={"/docs/" + page.slug}
+                                                aria-current={page.slug === current ? "page" : undefined}
+                                                onClick={onNavigate}
+                                            >
+                                                {page.title}
+                                            </Link>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
                         ))}
-                    </ul>
                 </section>
-            ) : (
-                <nav aria-label="Build on Lemma">
-                    {nav.map((group, g) => (
-                        <section key={group.title} aria-labelledby={`${id}-${g}`}>
-                            <p className="docs-list__h" id={`${id}-${g}`}>
-                                {group.title}
-                            </p>
-                            <ul>
-                                {group.pages.map((page) => (
-                                    <li key={page.slug}>
-                                        <Link
-                                            href={"/docs/" + page.slug}
-                                            aria-current={
-                                                page.slug === current
-                                                    ? "page"
-                                                    : undefined
-                                            }
-                                            onClick={onNavigate}
-                                        >
-                                            {page.title}
-                                        </Link>
-                                    </li>
-                                ))}
-                            </ul>
-                        </section>
-                    ))}
-                </nav>
-            )}
-        </div>
+            ))}
+        </nav>
     );
 }

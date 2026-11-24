@@ -5,6 +5,11 @@ import {
     howLemmaWorksStub,
 } from "@/site/data/concept-docs";
 import { educationGuidePages } from "@/site/data/education-guides";
+import {
+    runItYourselfPage,
+    useLemmaGroups,
+    useLemmaPages,
+} from "@/site/data/use-docs";
 
 export type DocsBlock =
     | {
@@ -39,6 +44,14 @@ export type DocsBlock =
           rows: string[][];
       }
     | {
+          /** Places to go next: other docs pages, or a guide kept with the
+           *  code. The one block whose addresses are followed, not typed. */
+          type: "links";
+          title: string;
+          body?: string;
+          items: { label: string; href: string; note?: string }[];
+      }
+    | {
           type: "callout";
           tone?: "note" | "warning" | "success";
           title: string;
@@ -57,6 +70,9 @@ export type DocsPage = {
 export type DocsGroup = {
     title: string;
     pages: string[];
+    /** Which half of the docs lists it: the pages for people using Lemma, or
+     *  (left out) the pages for people building on it. */
+    door?: "use";
 };
 
 const baseDocsPages: DocsPage[] = [
@@ -1330,6 +1346,8 @@ lemma connector operation-execute gmail messages_send \
 ];
 
 export const docsPages: DocsPage[] = [
+    ...useLemmaPages,
+    runItYourselfPage,
     ...baseDocsPages,
     howLemmaWorksStub,
     ...conceptDocsPages,
@@ -1338,6 +1356,7 @@ export const docsPages: DocsPage[] = [
 ];
 
 export const docsGroups: DocsGroup[] = [
+    ...useLemmaGroups,
     {
         title: "Start",
         pages: ["getting-started", "overview", "quickstart"],
