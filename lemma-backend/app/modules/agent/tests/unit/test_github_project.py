@@ -547,3 +547,25 @@ def test_a_commit_is_checked_out_even_on_no_branch(git: LocalGit) -> None:
 
     assert code == 0
     assert git.run("-C", str(worktree), "rev-parse", "HEAD") == head
+
+
+def test_a_branch_named_like_a_sha_does_not_shadow_the_commit(git: LocalGit) -> None:
+    """A branch can legally be named a 40-char hex string; ``origin/<sha>`` then
+    resolves to that branch, not to the commit just fetched by its sha -- so a
+    commit ref must set the start point directly and skip the ``origin/``
+    probe."""
+    git.run("-C", str(git.origin), "config", "uploadpack.allowAnySHA1InWant", "true")
+    head = git.open_pull_request(9)
+    scratch = git.root / "shadow"
+    git.run("clone", "-q", str(git.origin), str(scratch))
+    git.run("-C", str(scratch), "commit", "-q", "--allow-empty", "-m", "shadow")
+    shadow = git.run("-C", str(scratch), "rev-parse", "HEAD")
+    assert shadow != head
+    git.run("-C", str(scratch), "push", "-q", "origin", f"HEAD:refs/heads/{head}")
+
+    code, worktree = git.step("one", ref=head)
+    run_code, run_dir = git.run_step("one", ref=head)
+
+    assert (code, run_code) == (0, 0)
+    assert git.run("-C", str(worktree), "rev-parse", "HEAD") == head
+    assert git.run("-C", str(run_dir), "rev-parse", "HEAD") == head
