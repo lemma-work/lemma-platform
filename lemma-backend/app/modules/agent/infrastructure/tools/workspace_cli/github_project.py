@@ -127,8 +127,14 @@ def _clone_or_fetch(*, url: str, path: str, ref: str | None) -> str:
     return command
 
 
-def _start_point(git: str, ref: str | None) -> str:
-    """Set `start` to `origin/<ref>`, or the ref itself for a tag or a commit."""
+def _start_point(git: str, ref: str | None, *, commit: bool = False) -> str:
+    """Set `start` to `origin/<ref>`, or the ref itself for a tag or a commit.
+
+    A commit never goes through the `origin/` probe: a branch can be named
+    exactly a 40-char sha, and `origin/<sha>` would resolve to that branch
+    rather than the commit just fetched."""
+    if commit and ref is not None:
+        return f"start={shlex.quote(ref)}"
     target = ref or "HEAD"
     return (
         f"start={shlex.quote('origin/' + target)}; "
@@ -159,10 +165,11 @@ def _checkout_command(
     """
     steps = [_clone_or_fetch(url=url, path=clone_dir, ref=ref)]
     git = f"git -C {shlex.quote(clone_dir)}"
+    commit = bool(ref and _COMMIT_SHA.match(ref))
     if run_dir is not None:
         steps.append(
             f"if [ ! -e {shlex.quote(run_dir + '/.git')} ]; then "
-            f"{git} worktree prune; {_start_point(git, ref)}; "
+            f"{git} worktree prune; {_start_point(git, ref, commit=commit)}; "
             f'{git} worktree add --quiet --detach {shlex.quote(run_dir)} "$start" '
             f"|| exit {_WORKTREE_FAILED_EXIT}; fi"
         )
@@ -171,7 +178,7 @@ def _checkout_command(
         path = shlex.quote(worktree)
         steps.append(
             f"if [ ! -e {shlex.quote(worktree + '/.git')} ]; then "
-            f"{git} worktree prune; {_start_point(git, ref)}; "
+            f"{git} worktree prune; {_start_point(git, ref, commit=commit)}; "
             f"if {git} show-ref --verify --quiet {shlex.quote('refs/heads/' + branch)}; "
             f"then {git} worktree add --quiet {path} {shlex.quote(branch)}; "
             f'else {git} worktree add --quiet -b {shlex.quote(branch)} {path} "$start"; '
