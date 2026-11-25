@@ -14,6 +14,7 @@ Connectors page would have left them.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -64,6 +65,38 @@ def _bundle(tmp_path: Path, connector_id: str) -> bytes:
         },
     )
     return pack_bundle(root)
+
+
+async def _blocked_on_a_lock(task: asyncio.Task[object], label: str) -> None:
+    """Wait until Postgres shows a backend waiting on an advisory lock -- the
+    declaration ``task`` stuck behind the step -- failing at once if ``task``
+    finishes instead, which means nothing held it back."""
+    from sqlalchemy import text
+
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.modules.test_support.e2e.waiters import eventually
+
+    async def waiting() -> int:
+        async with async_session_maker() as probe:
+            count = await probe.scalar(
+                text(
+                    "SELECT count(*) FROM pg_locks "
+                    "WHERE locktype = 'advisory' AND NOT granted"
+                )
+            )
+        return int(count or 0)
+
+    await eventually(
+        label=label,
+        probe=waiting,
+        done=lambda count: count > 0,
+        timeout_seconds=10,
+        fail_fast=lambda _count: (
+            "it finished without waiting: nothing held the lock"
+            if task.done()
+            else None
+        ),
+    )
 
 
 async def _connector_grants(client, pod_id: str) -> list[dict[str, object]]:
@@ -289,7 +322,6 @@ async def test_a_declaration_racing_the_grant_step_settles_only_after_it(
     a declaration settling the same key in another transaction waits for the
     step, then finds the waiting grant the step removed gone, and grants
     nothing."""
-    import asyncio
     from types import SimpleNamespace
 
     from app.core.authorization.context import ResourceType
@@ -343,8 +375,7 @@ async def test_a_declaration_racing_the_grant_step_settles_only_after_it(
                 resource_id=connector_id,
             )
         )
-        await asyncio.sleep(0.5)
-        assert not settling.done(), "the declaration read past the step's lock"
+        await _blocked_on_a_lock(settling, "settlement waits for the step")
 
         await delete_grantee_pending_grants(
             step, pod_id=pod_id, grantee_type="FUNCTION", grantee_id=grantee
@@ -363,7 +394,6 @@ async def test_a_replayed_grant_step_leaves_no_removed_grant_active(
     connector in another transaction. That declaration must wait for the
     step -- past its authorization checks -- and then find nothing to grant,
     so the grant the replay removed never becomes active."""
-    import asyncio
 
     from app.core.authorization.context import ResourceRef
     from app.core.authorization.permissions import Permissions
@@ -448,32 +478,29 @@ async def test_a_replayed_grant_step_leaves_no_removed_grant_active(
             await session.commit()
 
     declaring: list[asyncio.Task[None]] = []
-
-    step_ctx: list = []
-
-    async def lookup_while_declaring(_uow, *, organization_id, name):
-        # Mid-step, after the step locked what the agent waits for: an
-        # uncached authorization check on the step's own session, which
-        # commits a clean session to give its connection back...
-        assert await step_ctx[0].can(
-            Permissions.POD_CONNECTOR_MANAGE, ResourceRef.pod(pod_id)
-        )
-        # ...then the organization has the calendar now, so the replay drops
-        # the grant, while somebody declares the connector elsewhere.
-        declaring.append(asyncio.create_task(declare_elsewhere()))
-        await asyncio.sleep(0.5)
-        assert not declaring[0].done(), "the declaration read past the step"
-        return install_id
-
-    monkeypatch.setattr(
-        "app.modules.connectors.contracts.provisioning.installation_for_bundle_name",
-        lookup_while_declaring,
-    )
     async with async_session_maker() as step:
         ctx = await AuthorizationDataService(step).build_user_context(
             user_id=user_id, pod_id=pod_id
         )
-        step_ctx.append(ctx)
+
+        async def lookup_while_declaring(_uow, *, organization_id, name):
+            # Mid-step, after the step locked what the agent waits for: an
+            # uncached authorization check on the step's own session, which
+            # commits a clean session to give its connection back...
+            assert await ctx.can(
+                Permissions.POD_CONNECTOR_MANAGE, ResourceRef.pod(pod_id)
+            )
+            # ...then the organization has the calendar now, so the replay
+            # drops the grant, while somebody declares the connector elsewhere.
+            declaring.append(asyncio.create_task(declare_elsewhere()))
+            await _blocked_on_a_lock(declaring[0], "the declaration waits")
+            return install_id
+
+        monkeypatch.setattr(
+            "app.modules.connectors.contracts.provisioning."
+            "installation_for_bundle_name",
+            lookup_while_declaring,
+        )
         made = CreatedParts()
         made.add(StepKind.AGENT, "briefer")
         await BundleApplier(
