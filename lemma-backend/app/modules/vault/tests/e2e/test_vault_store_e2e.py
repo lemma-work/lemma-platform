@@ -7,7 +7,7 @@ disk are the thing a leaked dump would expose.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import asyncio
@@ -311,6 +311,16 @@ async def test_a_key_is_retired_only_once_nothing_is_wrapped_under_it(
         await keyring.retire(old_kek)
 
     await rewrap_all(db_manager.session_factory, keyring, batch_size=50)
+    # Other processes may still write under the old key until they refresh.
+    with pytest.raises(KeyRetirementRefused, match="rotated out less than"):
+        await keyring.retire(old_kek)
+    await db_session.execute(
+        text(
+            "UPDATE vault_keys SET created_at = now() - interval '1 day' "
+            "WHERE purpose = 'encrypt' AND state = 'active'"
+        )
+    )
+    await db_session.commit()
     await keyring.retire(old_kek)
 
     # A process that had not refreshed would still write under the old key;
@@ -347,3 +357,56 @@ async def test_rewrap_does_not_stop_at_a_row_live_traffic_is_holding(
     await asyncio.wait_for(rewrap, timeout=10)
 
     assert (await secrets_per_key(db_session)).get(old_kek, 0) == 0
+
+
+async def test_a_lease_token_ends_only_its_own_lease(db_session):
+    scope = _scope()
+    ref = await _put(db_session, scope, "refresh-token")
+    vault = vault_for(db_session)
+
+    async def lease():
+        token = await vault.try_lease(
+            ref.id,
+            expect=scope,
+            purpose=PURPOSE,
+            holder="worker",
+            ttl=timedelta(seconds=30),
+            if_version=1,
+        )
+        await db_session.commit()
+        return token
+
+    first = await lease()
+    await vault.release_lease(first)
+    await db_session.commit()
+    second = await lease()
+    assert first is not None and second is not None
+    assert first.holder != second.holder
+
+    # The first acquisition's token, same caller name, cannot touch the second.
+    await vault.release_lease(first)
+    await db_session.commit()
+    with pytest.raises(SecretVersionConflict):
+        await vault.replace(
+            ref.id, expect=scope, purpose=PURPOSE, value="stale", lease=first
+        )
+    await db_session.rollback()
+    meta = await vault.meta(ref.id, expect=scope, purpose=PURPOSE)
+    assert meta is not None and meta.lease_until is not None
+
+    # Writing the same value back still ends the lease and sets the expiry.
+    expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+    kept = await vault.replace(
+        ref.id,
+        expect=scope,
+        purpose=PURPOSE,
+        value="refresh-token",
+        lease=second,
+        expires_at=expiry,
+        skip_if_equal=True,
+    )
+    await db_session.commit()
+    meta = await vault.meta(ref.id, expect=scope, purpose=PURPOSE)
+    assert kept.version == 1
+    assert meta is not None and meta.lease_until is None
+    assert meta.expires_at == expiry
