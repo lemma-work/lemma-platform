@@ -374,33 +374,46 @@ ref?, slug}`, set only when `workspace_cwd` is that worktree
 - **A worktree per conversation** on `lemma/{slug}`, from `origin/<ref>`, the
   ref itself for a tag or commit, or `origin/HEAD`; `pull/<n>/head` is fetched by
   name into `origin/pull/<n>/head` first. A `lemma/{slug}` branch left by a lost
-  worktree is checked out again rather than re-made.
+  worktree is checked out again rather than re-made. `git worktree add` writes
+  the worktree's `.git` file before it fills the tree, so a marker,
+  `<clone>/.git/lemma-populating/{slug}`, is written before the add and removed
+  only once it has succeeded.
 - **Whatever is already there stays.** The conversation's own worktree (its
   `.git` file points into this clone, by an absolute path or one relative to
   the worktree as `worktree.useRelativePaths` writes it) is not fetched, reset
-  or run git in on a later turn; a folder holding anything else is not cloned
-  over, and the agent is told in a `<workspace-notice>` that the folder is not
-  the repository. A folder the
-  person bound on this computer (`conversation_folders.rs`) and a conversation
-  still in its legacy scratch directory are never checked out.
+  or run git in on a later turn -- unless its marker is still there: an add the
+  timeout, Stop or the host stopping cut short, whose `git status` would show
+  every tracked file deleted. That folder is emptied, the clone's record of it
+  unlocked and pruned, and the worktree made again on its `lemma/{slug}`
+  branch. A worktree with no marker, including every one made before the
+  marker existed, is trusted exactly as before. A folder holding anything else
+  is not cloned over, and the agent is told in a `<workspace-notice>` that the
+  folder is not the repository. A folder the person bound on this computer
+  (`conversation_folders.rs`) and a conversation still in its legacy scratch
+  directory are never checked out.
 - **The person's git, unattended.** `git` is Homebrew's if present, else the
   first on the search path; `/usr/bin/git` only when `xcode-select -p` reports
   the Command Line Tools, because the stub opens an installer dialog otherwise.
   Each command is an argument list (no shell), with `GIT_TERMINAL_PROMPT=0` and
-  `GCM_INTERACTIVE=never`, stdin closed, in its own process group. Their
-  credential helper, `gh` sign-in or SSH `insteadOf` answer as they do in their
-  terminal. Owner, repository, ref and slug are checked against the backend's
-  `project_repo.py` patterns first, and the checkout happens only when the
-  worktree derived from them is the folder `workspace_cwd` resolved to.
+  `GCM_INTERACTIVE=never`, stdin closed, in its own process group -- on
+  Windows, which has none, in a job object -- so the helpers it starts end with
+  it on a timeout. Their credential helper, `gh` sign-in or SSH `insteadOf`
+  answer as they do in their terminal. Owner, repository, ref and slug are
+  checked against the backend's `project_repo.py` patterns first, and the
+  checkout happens only when the worktree derived from them is the folder
+  `workspace_cwd` resolved to.
 - **Bounded, never blocking.** The whole checkout gets 300 seconds -- the cloud
   sandbox's clone timeout -- or what is left of the run's deadline, and is given
-  up when the person presses Stop. No git, no access, no network, a ref that is
-  not there, or the timeout: the agent starts in the empty folder anyway. It is
+  up when the person presses Stop. A run whose deadline has already passed
+  starts no checkout at all, and nothing about it is remembered. No git, no
+  access, no network, a ref that is not there, or the timeout: the agent starts
+  in the empty folder anyway. It is
   told, in a `<workspace-notice>` ahead of that turn's message (so it arrives
   even on a turn that does not re-send the instructions), and the host logs it.
   git's own error is passed on as it is: a clone git cannot read is not
-  reported as a ref that does not exist. A failure is remembered in the host's
-  memory for 300 seconds -- the cloud sandbox's failure cache -- per paired
+  reported as a ref that does not exist, and neither is a ref whose fetch
+  failed: the fetch's error is given instead. A failure is remembered in the
+  host's memory for 300 seconds -- the cloud sandbox's failure cache -- per paired
   workspace, conversation folder and ref, so a later turn in that time is given
   the same reason without running git again; the notice says it will be tried
   again in a few minutes. A fetch that failed is said the same way. A worktree

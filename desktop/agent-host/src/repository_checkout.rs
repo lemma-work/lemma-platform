@@ -21,7 +21,13 @@
 //! - **A folder that already holds something is left exactly as it is.** The
 //!   conversation's own worktree is not fetched, reset or even looked into on
 //!   a later turn, and a folder holding anything else is not cloned over --
-//!   the agent is told it is not the repository.
+//!   the agent is told it is not the repository. The one exception is a
+//!   worktree this host started and never finished: `git worktree add` writes
+//!   the `.git` file before it fills the tree, so a marker in the clone says
+//!   which worktree is being made until the add has succeeded, and a folder
+//!   whose marker is still there is made again rather than trusted. A
+//!   worktree with no marker -- every one made before the marker was -- is
+//!   trusted as it always was.
 //! - **Failing never stops the run.** No `git`, no access, no network, a ref
 //!   that does not exist: the agent starts in the empty folder anyway and is
 //!   told, in plain words, why it is empty. The failure is remembered for a
@@ -132,6 +138,17 @@ impl Checkout {
     #[must_use]
     pub fn worktree_dir(&self) -> &Path {
         &self.worktree_dir
+    }
+
+    /// Present from just before this worktree's `git worktree add` until it
+    /// has succeeded: in the clone's own git folder, which git leaves alone,
+    /// and named for the worktree's folder, which is unique in its clone.
+    #[must_use]
+    pub fn populating_marker(&self) -> PathBuf {
+        self.clone_dir
+            .join(".git")
+            .join("lemma-populating")
+            .join(&self.slug)
     }
 
     /// The clone's path relative to the workspace root, as the directory
@@ -277,32 +294,51 @@ pub async fn ensure(request: &Request<'_>) -> Outcome {
     if let Some(outcome) = already_there(checkout) {
         return outcome;
     }
-    // Under the lock too, so a run that waited on one that failed is told
-    // that failure rather than making the same attempt straight after it.
-    let key = failure_key(request.target, checkout);
-    if let Some(reason) = failures().recent(&key, Instant::now()) {
-        return Outcome::Failed(reason);
+    let outcome = attempt(request).await;
+    // Not started in a tree git never finished, as if it were the repository:
+    // emptied now, and its record cleared on the next attempt.
+    if matches!(outcome, Outcome::Failed(_)) {
+        empty_unfinished(checkout);
     }
-    let git = Git {
-        program: request.git,
-        deadline: tokio::time::Instant::now() + request.timeout,
-        timeout: request.timeout,
-    };
-    let outcome = match make_worktree(request, &git).await {
-        Ok(stale) => Outcome::Ready { made: true, stale },
-        Err(reason) => {
-            failures().record(key, reason.clone(), Instant::now());
-            Outcome::Failed(reason)
-        }
-    };
-    // A failed `worktree add` may take the folder with it, and the agent is
-    // started in it regardless.
+    // A failed `worktree add` may take the folder with it, as emptying an
+    // unfinished one does, and the agent is started in it regardless.
     if !checkout.worktree_dir().exists()
         && let Err(error) = std::fs::create_dir_all(checkout.worktree_dir())
     {
         tracing::warn!(%error, "could not make the conversation folder again");
     }
     outcome
+}
+
+/// What a run with no time left is told: no git was started.
+const NO_TIME_LEFT: &str = "there was no time left in this run to check it out.";
+
+async fn attempt(request: &Request<'_>) -> Outcome {
+    let checkout = request.checkout;
+    // Under the lock, so a run that waited on one that failed is told that
+    // failure rather than making the same attempt straight after it.
+    let key = failure_key(request.target, checkout);
+    if let Some(reason) = failures().recent(&key, Instant::now()) {
+        return Outcome::Failed(reason);
+    }
+    // Every git started with no time would time out at once, and remembering
+    // that would tell the turns after it, with time of their own, that git
+    // "did not finish within 0 seconds". Nothing is started or remembered.
+    if request.timeout.is_zero() {
+        return Outcome::Failed(NO_TIME_LEFT.to_owned());
+    }
+    let git = Git {
+        program: request.git,
+        deadline: tokio::time::Instant::now() + request.timeout,
+        timeout: request.timeout,
+    };
+    match make_worktree(request, &git).await {
+        Ok(stale) => Outcome::Ready { made: true, stale },
+        Err(reason) => {
+            failures().record(key, reason.clone(), Instant::now());
+            Outcome::Failed(reason)
+        }
+    }
 }
 
 /// One conversation's checkout of one ref, for one paired workspace: another
@@ -351,7 +387,20 @@ fn already_there(checkout: &Checkout) -> Option<Outcome> {
             stale: None,
         }),
         Existing::Other => Some(Outcome::LeftAlone),
-        Existing::Empty => None,
+        Existing::Empty | Existing::Unfinished => None,
+    }
+}
+
+/// Empty the folder of a worktree whose `git worktree add` never finished.
+///
+/// Only that: the marker says this host was still making it, so nothing in it
+/// is anyone's work. Its folder goes, and `ensure` makes it again; the clone's
+/// record of it is cleared by the next `make_worktree`.
+fn empty_unfinished(checkout: &Checkout) {
+    if matches!(existing_worktree(checkout), Existing::Unfinished)
+        && let Err(error) = std::fs::remove_dir_all(checkout.worktree_dir())
+    {
+        tracing::warn!(%error, "could not empty an unfinished worktree");
     }
 }
 
@@ -378,6 +427,17 @@ async fn make_worktree(request: &Request<'_>, git: &Git<'_>) -> Result<Option<St
     {
         stale.get_or_insert_with(|| error.describe(git));
     }
+    let marker = checkout.populating_marker();
+    if marker.exists() {
+        // An add that never finished -- the timeout, Stop, the host itself
+        // stopping -- left the clone's record of it locked as `initializing`,
+        // which `prune` keeps, and the branch checked out in it. Unlocked and
+        // emptied, the prune below clears it, and the add reuses the branch.
+        let mut unlock = git_in(&clone, ["worktree", "unlock"]);
+        unlock.push(checkout.worktree_dir().into());
+        let _ = git.run(&unlock).await;
+        empty_unfinished(checkout);
+    }
     // A worktree whose folder went missing is still registered, and would
     // refuse to be made again until it is pruned.
     let _ = git.run(&git_in(&clone, ["worktree", "prune"])).await;
@@ -393,8 +453,28 @@ async fn make_worktree(request: &Request<'_>, git: &Git<'_>) -> Result<Option<St
     let start = if branch_exists {
         None
     } else {
-        Some(start_point(&clone, checkout, git).await?)
+        match start_point(&clone, checkout, git).await? {
+            Some(start) => Some(start),
+            // Not there because it could not be fetched: the fetch's own
+            // error is the reason, not a ref that does not exist.
+            None => return Err(not_found(checkout, stale.as_deref())),
+        }
     };
+    // Written before the add and removed only once it has succeeded, so a
+    // later turn can tell a worktree git finished from one it was killed in.
+    std::fs::create_dir_all(marker.parent().unwrap_or(&clone))
+        .and_then(|()| {
+            std::fs::write(
+                &marker,
+                checkout.worktree_dir().to_string_lossy().as_bytes(),
+            )
+        })
+        .map_err(|error| {
+            format!(
+                "the worktree could not be marked as being made in the clone at {}: {error}.",
+                clone.display()
+            )
+        })?;
     git.run(&worktree_add_args(
         &clone,
         checkout.worktree_dir(),
@@ -409,7 +489,28 @@ async fn make_worktree(request: &Request<'_>, git: &Git<'_>) -> Result<Option<St
             error.describe(git)
         )
     })?;
+    // If this fails the worktree is still taken for unfinished, and emptied:
+    // nothing has worked in it yet.
+    std::fs::remove_file(&marker).map_err(|error| {
+        format!("the worktree was made, but its marker could not be removed: {error}.")
+    })?;
     Ok(stale)
+}
+
+/// Why no start point was found, given the fetch that failed, if one did.
+fn not_found(checkout: &Checkout, fetch_failed: Option<&str>) -> String {
+    match (&checkout.reference, fetch_failed) {
+        (Some(reference), None) => format!("`{reference}` is not a branch, tag or commit of it."),
+        (None, None) => "it has no default branch to start from.".to_owned(),
+        (Some(reference), Some(detail)) => {
+            format!("`{reference}` is not in the clone, and fetching it failed: {detail}")
+        }
+        (None, Some(detail)) => {
+            format!(
+                "the clone has no default branch to start from, and fetching it failed: {detail}"
+            )
+        }
+    }
 }
 
 /// Clone beside the clone's folder and move it into place, so a clone cut
@@ -461,8 +562,13 @@ impl Drop for Partial {
     }
 }
 
-/// The first of `start_candidates` that names a commit in the clone.
-async fn start_point(clone: &Path, checkout: &Checkout, git: &Git<'_>) -> Result<String, String> {
+/// The first of `start_candidates` that names a commit in the clone, or
+/// `None` when none of them does.
+async fn start_point(
+    clone: &Path,
+    checkout: &Checkout,
+    git: &Git<'_>,
+) -> Result<Option<String>, String> {
     for candidate in start_candidates(checkout.reference.as_deref()) {
         let commit = format!("{candidate}^{{commit}}");
         let found = git
@@ -472,7 +578,7 @@ async fn start_point(clone: &Path, checkout: &Checkout, git: &Git<'_>) -> Result
             ))
             .await;
         match found {
-            Ok(_) => return Ok(candidate),
+            Ok(_) => return Ok(Some(candidate)),
             // `--quiet` makes a name that is not there a failure git says
             // nothing about; anything it does say is a clone it could not
             // read, which is not a missing branch.
@@ -486,10 +592,7 @@ async fn start_point(clone: &Path, checkout: &Checkout, git: &Git<'_>) -> Result
             }
         }
     }
-    Err(match &checkout.reference {
-        Some(reference) => format!("`{reference}` is not a branch, tag or commit of it."),
-        None => "it has no default branch to start from.".to_owned(),
-    })
+    Ok(None)
 }
 
 /// Where a worktree may start, best first: the remote's branch, then the ref
@@ -559,13 +662,17 @@ fn git_in<'a>(clone: &Path, rest: impl IntoIterator<Item = &'a str>) -> Vec<OsSt
 enum Existing {
     Empty,
     Ours,
+    /// Ours by its `.git` file, but its marker says the add that made it
+    /// never finished.
+    Unfinished,
     Other,
 }
 
 /// What the conversation's folder already holds.
 ///
 /// "Ours" is read from the worktree's `.git` file, which names the clone's
-/// record of it, so a later turn runs no git at all.
+/// record of it, so a later turn runs no git at all. A marker that cannot be
+/// read counts as none: in doubt a worktree is trusted, never emptied.
 fn existing_worktree(checkout: &Checkout) -> Existing {
     let folder = checkout.worktree_dir();
     let dot_git = folder.join(".git");
@@ -573,10 +680,12 @@ fn existing_worktree(checkout: &Checkout) -> Existing {
         let ours = metadata.is_file()
             && std::fs::read_to_string(&dot_git)
                 .is_ok_and(|text| belongs_to(text.trim(), folder, checkout.clone_dir()));
-        return if ours {
-            Existing::Ours
-        } else {
+        return if !ours {
             Existing::Other
+        } else if checkout.populating_marker().exists() {
+            Existing::Unfinished
+        } else {
+            Existing::Ours
         };
     }
     let holds_anything =
@@ -666,6 +775,13 @@ impl Git<'_> {
         command.creation_flags(0x0800_0000);
         let child = command.spawn().map_err(GitError::Spawn)?;
         let group = child.id();
+        // Windows has no process group to signal. A job object ends git's
+        // helpers instead: closed on every way out of this function -- the
+        // timeout, Stop dropping the checkout, or git finishing -- it takes
+        // whatever git left running, including a helper whose parent is
+        // already gone, which still holds the clone's folder open.
+        #[cfg(windows)]
+        let _job = adopt_into_job(&child);
         match tokio::time::timeout_at(self.deadline, child.wait_with_output()).await {
             Err(_) => {
                 kill_group(group);
@@ -690,8 +806,21 @@ fn kill_group(group: Option<u32>) {
     }
 }
 
+/// Nothing to signal: on Windows the job `Git::run` holds ends the tree.
 #[cfg(not(unix))]
 fn kill_group(_group: Option<u32>) {}
+
+/// Put a freshly started git, and everything it goes on to start, in a job,
+/// as `acp::supervision` does for an agent.
+///
+/// Best effort: a job that cannot be made leaves the leak there was before,
+/// and is no reason not to check the repository out.
+#[cfg(windows)]
+fn adopt_into_job(child: &tokio::process::Child) -> Option<lemma_job_object::Job> {
+    let job = lemma_job_object::Job::new().ok()?;
+    job.adopt(child.raw_handle()?).ok()?;
+    Some(job)
+}
 
 /// git's error as one line the agent can read: its last lines, whitespace
 /// collapsed, nothing that could close the notice around it.

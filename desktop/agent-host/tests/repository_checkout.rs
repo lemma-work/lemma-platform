@@ -442,7 +442,7 @@ async fn a_folder_holding_anything_else_is_never_cloned_over() {
     assert_eq!(outcome, Outcome::LeftAlone);
 }
 
-/// No access, no git, a ref that is not there, no time: the folder is left
+/// No access, no git, a ref that is not there: the folder is left
 /// empty and in place for the agent, with a reason to give it, and a failed
 /// clone leaves nothing half-made behind for the next turn to trust.
 #[tokio::test]
@@ -474,14 +474,6 @@ async fn every_failure_leaves_an_empty_folder_and_a_reason() {
             program: PathBuf::from("/nonexistent/git"),
             timeout: Duration::from_secs(60),
             expected: "git could not be started",
-        },
-        Case {
-            slug: "notime0",
-            reference: None,
-            remote: remote_of(&fixture),
-            program: git_program(),
-            timeout: Duration::ZERO,
-            expected: "did not finish within 0 seconds",
         },
         // Last: it is the one case whose clone succeeds.
         Case {
@@ -661,4 +653,251 @@ async fn a_damaged_clone_is_not_mistaken_for_a_missing_ref() {
         "{reason}"
     );
     assert!(reason.contains("config"), "{reason}");
+}
+
+/// Where a checkout marks a worktree it has started and not yet finished: in
+/// the clone's own git folder, named for the worktree.
+fn populating_marker(checkout: &Checkout, slug: &str) -> PathBuf {
+    checkout
+        .clone_dir()
+        .join(".git")
+        .join("lemma-populating")
+        .join(slug)
+}
+
+/// The clone's record of the worktree at `folder`, as its `.git` file names it.
+fn worktree_record(folder: &Path) -> PathBuf {
+    let dot_git = std::fs::read_to_string(folder.join(".git")).unwrap();
+    PathBuf::from(dot_git.trim().strip_prefix("gitdir:").unwrap().trim())
+}
+
+/// `git worktree add` writes the worktree's `.git` file before it fills the
+/// tree, so one killed part-way -- the timeout, or Stop dropping the checkout
+/// -- leaves a folder that looks like this conversation's worktree and holds
+/// none of its files: `git status` there shows every tracked file deleted.
+/// The marker the checkout wrote before the add is still there, so the next
+/// turn makes the worktree again, on the branch it already had.
+#[tokio::test]
+async fn a_worktree_whose_add_was_cut_short_is_made_again() {
+    let fixture = fixture();
+    let target = Uuid::new_v4();
+    let remote = remote_of(&fixture);
+    let checkout = conversation(&fixture, target, None, "cut0");
+    let made = check_out(
+        &fixture,
+        target,
+        &checkout,
+        &remote,
+        &git_program(),
+        Duration::from_secs(60),
+    )
+    .await;
+    assert_eq!(
+        made,
+        Outcome::Ready {
+            made: true,
+            stale: None
+        }
+    );
+    let marker = populating_marker(&checkout, "cut0");
+    assert!(!marker.exists(), "a finished worktree carries no marker");
+    // A commit on the branch, so making the worktree again can be seen to
+    // reuse the branch rather than start a new one.
+    let folder = checkout.worktree_dir();
+    std::fs::write(folder.join("kept.txt"), "kept\n").unwrap();
+    git(folder, &["add", "kept.txt"]);
+    git(folder, &["commit", "--quiet", "-m", "kept"]);
+    let branch_commit = git(folder, &["rev-parse", "HEAD"]);
+
+    // What a killed `worktree add` leaves: the `.git` file and nothing else,
+    // the clone's record of it still locked as `initializing`, no index, and
+    // the marker.
+    for entry in std::fs::read_dir(folder).unwrap().flatten() {
+        if entry.file_name() != ".git" {
+            let path = entry.path();
+            if path.is_dir() {
+                std::fs::remove_dir_all(path).unwrap();
+            } else {
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+    }
+    let record = worktree_record(folder);
+    std::fs::remove_file(record.join("index")).unwrap();
+    std::fs::write(record.join("locked"), "initializing\n").unwrap();
+    std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+    std::fs::write(&marker, "").unwrap();
+
+    let outcome = check_out(
+        &fixture,
+        target,
+        &checkout,
+        &remote,
+        &git_program(),
+        Duration::from_secs(60),
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        Outcome::Ready {
+            made: true,
+            stale: None
+        }
+    );
+    assert!(!marker.exists());
+    assert_eq!(
+        std::fs::read_to_string(folder.join("README.md"))
+            .unwrap()
+            .replace("\r\n", "\n"),
+        "main\n"
+    );
+    assert!(folder.join("kept.txt").exists());
+    assert_eq!(git(folder, &["branch", "--show-current"]), "lemma/cut0");
+    assert_eq!(git(folder, &["rev-parse", "HEAD"]), branch_commit);
+    assert_eq!(git(folder, &["status", "--porcelain"]), "");
+}
+
+/// A worktree made before checkouts carried a marker has none, and holds real
+/// work: it is trusted exactly as it always was, however it looks -- here with
+/// a tracked file deleted, as a cut-short one would show it, and the person's
+/// own file beside it. Never made again, never fetched, no git run at all.
+#[tokio::test]
+async fn a_worktree_with_no_marker_is_left_exactly_as_it_is() {
+    let fixture = fixture();
+    let target = Uuid::new_v4();
+    let remote = remote_of(&fixture);
+    let first = conversation(&fixture, target, None, "first0");
+    check_out(
+        &fixture,
+        target,
+        &first,
+        &remote,
+        &git_program(),
+        Duration::from_secs(60),
+    )
+    .await;
+    let older = conversation(&fixture, target, None, "older0");
+    let folder = older.worktree_dir();
+    git(
+        older.clone_dir(),
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "lemma/older0",
+            folder.to_str().unwrap(),
+            "origin/HEAD",
+        ],
+    );
+    std::fs::remove_file(folder.join("README.md")).unwrap();
+    std::fs::write(folder.join("notes.txt"), "mine\n").unwrap();
+
+    let outcome = check_out(
+        &fixture,
+        target,
+        &older,
+        &remote,
+        Path::new("/nonexistent/git"),
+        Duration::from_secs(60),
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        Outcome::Ready {
+            made: false,
+            stale: None
+        }
+    );
+    assert!(!folder.join("README.md").exists());
+    assert!(folder.join("notes.txt").exists());
+}
+
+/// A pull request whose fetch failed is not reported as a ref that does not
+/// exist: the agent is given the fetch's own error. The remote here hides its
+/// pull request refs, so the clone works and the fetch by name is refused.
+#[tokio::test]
+async fn a_pull_request_the_remote_will_not_serve_is_reported_as_a_failed_fetch() {
+    let fixture = fixture();
+    git(
+        &fixture.remote,
+        &["config", "uploadpack.hideRefs", "refs/pull"],
+    );
+    let target = Uuid::new_v4();
+    let checkout = conversation(&fixture, target, Some("pull/7/head"), "hidden0");
+
+    let outcome = check_out(
+        &fixture,
+        target,
+        &checkout,
+        &remote_of(&fixture),
+        &git_program(),
+        Duration::from_secs(60),
+    )
+    .await;
+
+    let Outcome::Failed(reason) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert!(reason.contains("fetching it failed"), "{reason}");
+    assert!(reason.contains("refs/pull/7/head"), "{reason}");
+    assert!(
+        !reason.contains("is not a branch, tag or commit"),
+        "{reason}"
+    );
+    assert_eq!(
+        std::fs::read_dir(checkout.worktree_dir()).unwrap().count(),
+        0
+    );
+}
+
+/// A run whose deadline has already gone by has no time to give git. No git
+/// is started only to time out at once, and nothing is remembered: the next
+/// turn, with time, checks the repository out rather than being told that
+/// git "did not finish within 0 seconds".
+#[tokio::test]
+async fn a_checkout_with_no_time_left_runs_no_git_and_is_not_remembered() {
+    let fixture = fixture();
+    let target = Uuid::new_v4();
+    let remote = remote_of(&fixture);
+    let checkout = conversation(&fixture, target, None, "notime0");
+
+    let outcome = check_out(
+        &fixture,
+        target,
+        &checkout,
+        &remote,
+        &git_program(),
+        Duration::ZERO,
+    )
+    .await;
+
+    let Outcome::Failed(reason) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert!(reason.contains("no time left"), "{reason}");
+    assert!(!checkout.clone_dir().exists(), "no git was run");
+    assert_eq!(
+        std::fs::read_dir(checkout.worktree_dir()).unwrap().count(),
+        0
+    );
+
+    let again = check_out(
+        &fixture,
+        target,
+        &checkout,
+        &remote,
+        &git_program(),
+        Duration::from_secs(60),
+    )
+    .await;
+    assert_eq!(
+        again,
+        Outcome::Ready {
+            made: true,
+            stale: None
+        }
+    );
 }

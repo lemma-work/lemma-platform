@@ -93,23 +93,25 @@ impl TargetWorker {
             // moment the person presses Stop: the agent is then started only
             // to be stopped, which is how every other stop is reported.
             // Its own measurement: the agent's is taken again just before it
-            // starts, after this and the CLI have had their time.
-            let run_deadline = spec.run_deadline;
-            let checkout_budget = time_left(run_deadline, Utc::now() + clock_offset)
-                .map_or(Duration::ZERO, |left| {
-                    left.min(crate::repository_checkout::CHECKOUT_TIMEOUT)
-                });
-            let mut stop = cancel_rx.clone();
-            let checkout = tokio::select! {
-                report = prepare_repository_checkout(
-                    &paths, target_id, &spec, &scratch, checkout_budget,
-                ) => report,
-                () = async {
-                    // A sender gone is not a stop; only `true` is.
-                    if stop.wait_for(|stopped| *stopped).await.is_err() {
-                        std::future::pending::<()>().await;
+            // starts, after this and the CLI have had their time. With none
+            // left there is no checkout at all: the run is ended below,
+            // before its agent starts.
+            let checkout = match checkout_budget(spec.run_deadline, Utc::now() + clock_offset) {
+                None => None,
+                Some(budget) => {
+                    let mut stop = cancel_rx.clone();
+                    tokio::select! {
+                        report = prepare_repository_checkout(
+                            &paths, target_id, &spec, &scratch, budget,
+                        ) => report,
+                        () = async {
+                            // A sender gone is not a stop; only `true` is.
+                            if stop.wait_for(|stopped| *stopped).await.is_err() {
+                                std::future::pending::<()>().await;
+                            }
+                        } => None,
                     }
-                } => None,
+                }
             };
             if let Some(report) = checkout {
                 report.apply(&mut spec);
@@ -349,4 +351,15 @@ pub(super) fn time_left(
         .to_std()
         .ok()
         .filter(|left| !left.is_zero())
+}
+
+/// How long a repository checkout may take at `now`: what is left of the run,
+/// at most `CHECKOUT_TIMEOUT`, or `None` once the deadline has passed -- when
+/// no checkout is started at all, rather than one whose every git times out at
+/// once and is remembered as a failure for the turns after it.
+pub(super) fn checkout_budget(
+    deadline: chrono::DateTime<Utc>,
+    now: chrono::DateTime<Utc>,
+) -> Option<Duration> {
+    time_left(deadline, now).map(|left| left.min(crate::repository_checkout::CHECKOUT_TIMEOUT))
 }
