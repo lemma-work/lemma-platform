@@ -22,6 +22,7 @@ is somewhere the caller did not ask about.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from typing import Protocol
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -67,6 +68,31 @@ ConnectorResolver = Callable[
 ]
 
 
+class PodHearsChannel(Protocol):
+    """Whether a pod's bot hears a Slack channel: somebody connected it."""
+
+    async def __call__(
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        *,
+        pod_id: UUID,
+        team_id: str,
+        channel_id: str,
+    ) -> bool: ...
+
+
+async def _pod_hears_slack_channel(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, team_id: str, channel_id: str
+) -> bool:
+    from app.modules.agent_surfaces.contracts.slack_channels import (
+        pod_hears_slack_channel,
+    )
+
+    return await pod_hears_slack_channel(
+        uow.session, pod_id=pod_id, team_id=team_id, channel_id=channel_id
+    )
+
+
 async def _pod_organization(pod_id: UUID) -> UUID | None:
     from app.core.infrastructure.db.session import async_session_maker
     from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -76,7 +102,9 @@ async def _pod_organization(pod_id: UUID) -> UUID | None:
         return await pod_organization_id(uow, pod_id)
 
 
-def _github_binding(binding: TriggerBinding) -> ScheduleConfig:
+def _github_binding(
+    binding: TriggerBinding, config: ScheduleConfig | None = None
+) -> ScheduleConfig:
     """The routing key for a GitHub trigger, taken from what is already known.
 
     Nothing here is something a person could sensibly type into a form. The
@@ -85,6 +113,7 @@ def _github_binding(binding: TriggerBinding) -> ScheduleConfig:
     either would be asking someone to copy a number out of a URL, and getting it
     wrong routes another organization's events at their pod.
     """
+    del config  # the repository and actions an author scoped are refined on
     if not binding.installation_id:
         from app.modules.connectors.contracts.github import github_install_url
 
@@ -105,11 +134,59 @@ def _github_binding(binding: TriggerBinding) -> ScheduleConfig:
     }
 
 
+#: Slack's trigger events (the catalog's `event_type`), and what each needs
+#: its author to say. Every one is matched on the workspace and channel; a
+#: thread reply on the thread as well.
+_SLACK_TRIGGER_KEYS: dict[str, tuple[str, ...]] = {
+    "message": ("team_id", "channel_id"),
+    "message.thread": ("team_id", "channel_id", "thread_ts"),
+    "app_mention": ("team_id", "channel_id"),
+}
+
+
+def _slack_binding(
+    binding: TriggerBinding, config: ScheduleConfig | None = None
+) -> ScheduleConfig:
+    """The routing key for a Slack trigger: the event, and where it happens.
+
+    A Slack app has one event URL, and it is the pod's bot's: messages are
+    heard there, and fire schedules once they are logged in the channel they
+    were said in (`schedule.contracts.heard_events`). There is nothing to
+    subscribe to, so the key is all provisioning writes.
+
+    The workspace and channel are the author's to name -- which channel to
+    watch is the whole of what they are choosing -- and they are not what keeps
+    one tenant out of another's: a delivery fires only in pods that connected
+    that channel to their bot, whatever any config says. They are checked
+    here because the catalog marks them required and nothing else reads the
+    trigger's schema: a schedule missing one would be stored and never fire.
+    """
+    present = config or {}
+    required = _SLACK_TRIGGER_KEYS.get(binding.event_type)
+    if required is None:
+        raise ScheduleValidationError(
+            f"Slack has no trigger for '{binding.event_type}' that can fire."
+        )
+    named = {key: str(present.get(key) or "").strip() for key in required}
+    missing = [key for key, value in named.items() if not value]
+    if missing:
+        raise ScheduleValidationError(
+            "This Slack trigger fires on one channel, so its config names it: "
+            f"{', '.join(missing)} {'is' if len(missing) == 1 else 'are'} "
+            "missing. Slack ids, not names: the workspace's T..., the "
+            "channel's C..., a thread's ts."
+        )
+    return {"source": "slack", "event": binding.event_type, **named}
+
+
 # Connectors whose triggers need no remote subscription, only a routing key.
 # Absence from both this table and `TriggerBinding.subscribable` is an error,
 # not a shrug.
-_LOCAL_BINDERS: dict[str, Callable[[TriggerBinding], ScheduleConfig]] = {
+_LOCAL_BINDERS: dict[
+    str, Callable[[TriggerBinding, ScheduleConfig | None], ScheduleConfig]
+] = {
     "github": _github_binding,
+    "slack": _slack_binding,
 }
 
 
@@ -144,8 +221,10 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
         stop_listening_to_mcp: TriggerUnsubscriber = unsubscribe_from_mcp_event,
         pod_organization: PodOrganization = _pod_organization,
         resolve_connector: ConnectorResolver = resolve_as_owner,
+        pod_hears_channel: PodHearsChannel = _pod_hears_slack_channel,
     ) -> None:
         self.uow = uow
+        self._pod_hears_channel = pod_hears_channel
         self._resolve_connector = resolve_connector
         self._resolve_binding = resolve_binding
         self._subscribe = subscribe
@@ -184,9 +263,9 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
         if binding is None:
             return ProvisionedTrigger()
         if not binding.subscribable:
-            return ProvisionedTrigger(
-                bound_config=_local_routing_key(binding, schedule)
-            )
+            bound_config = _local_routing_key(binding, schedule)
+            await self._require_a_heard_channel(schedule, bound_config)
+            return ProvisionedTrigger(bound_config=bound_config)
         if not binding.connection_id:
             raise ScheduleValidationError("Connector account is not active")
         try:
@@ -198,6 +277,29 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
         except ConnectorInfrastructureError as exc:
             raise ScheduleInfrastructureError(str(exc)) from exc
         return ProvisionedTrigger(provider_trigger_id=provider_id)
+
+    async def _require_a_heard_channel(
+        self, schedule: ScheduleEntity, bound_config: ScheduleConfig
+    ) -> None:
+        """A Slack trigger fires only on a channel the pod's bot hears
+        (`agent_surfaces.services.channel_triggers`). On any other it would be
+        stored and never fire, with no run, no skip and no log to tell its
+        author, so it is refused here, where they are still asking."""
+        if bound_config.get("source") != "slack" or schedule.pod_id is None:
+            return
+        channel_id = str(bound_config.get("channel_id") or "")
+        if await self._pod_hears_channel(
+            self.uow,
+            pod_id=schedule.pod_id,
+            team_id=str(bound_config.get("team_id") or ""),
+            channel_id=channel_id,
+        ):
+            return
+        raise ScheduleValidationError(
+            f"This pod's Slack bot is not in channel {channel_id}, so nothing "
+            "said there reaches it and the schedule would never fire. Connect "
+            "the channel to the pod's bot first, then create the schedule."
+        )
 
     async def delete_provider_trigger(self, schedule: ScheduleEntity) -> None:
         if schedule.schedule_type is not ScheduleType.WEBHOOK:
@@ -278,5 +380,5 @@ def _local_routing_key(
         )
     return {
         **defaults_the_author_left_out(binding, schedule.config),
-        **binder(binding),
+        **binder(binding, schedule.config),
     }

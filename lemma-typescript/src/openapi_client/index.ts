@@ -145,6 +145,9 @@ export type { ContactsCapResponse } from './models/ContactsCapResponse.js';
 export type { ContactsCapUpdate } from './models/ContactsCapUpdate.js';
 export { ContactStatus } from './models/ContactStatus.js';
 export type { ContactUpdateRequest } from './models/ContactUpdateRequest.js';
+export { ConversationChangedFile } from './models/ConversationChangedFile.js';
+export { ConversationChangesResponse } from './models/ConversationChangesResponse.js';
+export type { ConversationChangesTotals } from './models/ConversationChangesTotals.js';
 export type { ConversationListResponse } from './models/ConversationListResponse.js';
 export type { ConversationReportRequest } from './models/ConversationReportRequest.js';
 export type { ConversationReportResponse } from './models/ConversationReportResponse.js';
@@ -371,7 +374,6 @@ export type { OperationDetailsBatchResponse } from './models/OperationDetailsBat
 export type { OperationDiscoverResponse } from './models/OperationDiscoverResponse.js';
 export type { OperationDiscoverySchema } from './models/OperationDiscoverySchema.js';
 export { OperationDiscoveryStatus } from './models/OperationDiscoveryStatus.js';
-export type { OperationExecutionRequest } from './models/OperationExecutionRequest.js';
 export type { OperationExecutionResponse } from './models/OperationExecutionResponse.js';
 export type { OperationSummary } from './models/OperationSummary.js';
 export type { OrganizationAppListResponse } from './models/OrganizationAppListResponse.js';
@@ -452,6 +454,7 @@ export type { PodMemberDetailResponse } from './models/PodMemberDetailResponse.j
 export type { PodMemberListResponse } from './models/PodMemberListResponse.js';
 export type { PodMemberResponse } from './models/PodMemberResponse.js';
 export type { PodMemberUpdateRoleRequest } from './models/PodMemberUpdateRoleRequest.js';
+export { PodOperationExecutionRequest } from './models/PodOperationExecutionRequest.js';
 export type { PodOutcome } from './models/PodOutcome.js';
 export type { PodPermissionCatalogResponse } from './models/PodPermissionCatalogResponse.js';
 export type { PodPermissionResponse } from './models/PodPermissionResponse.js';

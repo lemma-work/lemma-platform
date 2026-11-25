@@ -53,6 +53,7 @@ SUPPORTED_EVENTS = frozenset(
         "check_suite",
         "check_run",
         "release",
+        "dependabot_alert",
     }
 )
 
@@ -209,6 +210,21 @@ def _release_key(payload: WebhookPayload) -> str | None:
     return f"{release_id}:{action}"
 
 
+def _dependabot_alert_key(payload: WebhookPayload) -> str | None:
+    # An alert has no global id, only a number within its repository -- which
+    # `source_event_id` already folds in. One alert walks through created,
+    # dismissed, reopened, fixed and reintroduced, possibly more than once;
+    # `updated_at` moves on each transition, so a second dismissal is a new
+    # event while a redelivery of the first names the same instant.
+    alert = _mapping(payload.get("alert"))
+    number = _required_id(alert.get("number"))
+    action = _required_text(payload.get("action"))
+    updated_at = _required_text(alert.get("updated_at"))
+    if not all((number, action, updated_at)):
+        return None
+    return f"{number}:{action}:{updated_at}"
+
+
 # Dict dispatch rather than a chain of `if event == ...`: one function per event
 # stays under the complexity gate, and an event with no entry is a lookup miss
 # rather than a fall-through into the wrong branch.
@@ -223,6 +239,7 @@ _EVENT_KEYS: dict[str, Callable[[WebhookPayload], str | None]] = {
     "check_suite": _check_suite_key,
     "check_run": _check_run_key,
     "release": _release_key,
+    "dependabot_alert": _dependabot_alert_key,
 }
 
 

@@ -92,6 +92,10 @@ class Workload:
     #: are the workload half of the intersection.
     principal_refs: frozenset[PrincipalRef] = frozenset()
     delegation: Delegation = Delegation()
+    #: The principal type the token named, lower-cased. ``kind`` folds anything
+    #: that is not an agent into FUNCTION, so a check that means functions and
+    #: nothing else reads this.
+    principal_type: str | None = None
 
 
 class OutsiderKind(str, Enum):

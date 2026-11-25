@@ -115,6 +115,23 @@ def test_repositories_asks_the_pod_what_a_conversation_can_open_in():
     assert call["path_args"] == (UUID("22222222-2222-4222-8222-222222222222"),)
 
 
+def test_changes_reads_one_conversations_checkout_with_the_patch_on_request():
+    pod, transport = _pod()
+    conversation_id = "33333333-3333-4333-8333-333333333333"
+
+    pod.conversations.changes(conversation_id)
+    pod.conversations.changes(conversation_id, patch=True, max_patch_bytes=4096)
+
+    counts_only, with_patch = transport.calls
+    assert counts_only["endpoint"].endswith(".agent_conversation_changes_get")
+    assert counts_only["path_args"] == (
+        UUID("22222222-2222-4222-8222-222222222222"),
+        UUID(conversation_id),
+    )
+    assert counts_only["kwargs"] == {"patch": False, "max_patch_bytes": UNSET}
+    assert with_patch["kwargs"] == {"patch": True, "max_patch_bytes": 4096}
+
+
 def test_usage_asks_the_pod_what_one_conversation_cost():
     pod, transport = _pod()
 

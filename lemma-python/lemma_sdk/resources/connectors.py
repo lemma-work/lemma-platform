@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import warnings
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from ..openapi_client.api.connectors import (
@@ -118,8 +118,8 @@ from ..openapi_client.api.connectors import (
 from ..openapi_client.models.installation_operation_execution_request import (
     InstallationOperationExecutionRequest,
 )
-from ..openapi_client.models.operation_execution_request import (
-    OperationExecutionRequest,
+from ..openapi_client.models.pod_operation_execution_request import (
+    PodOperationExecutionRequest,
 )
 from ..openapi_client.models.pod_account_create_request import PodAccountCreateRequest
 from ..openapi_client.models.pod_account_list_response import PodAccountListResponse
@@ -430,6 +430,7 @@ class BoundConnectors(BoundResource):
         operation: str,
         payload: ConnectorPayload,
         *,
+        act_as: Literal["user", "app"] = "user",
         account_id: str | None = None,
         pod_id: str | None = None,
     ) -> OperationExecutionResponse:
@@ -437,6 +438,13 @@ class BoundConnectors(BoundResource):
 
         A file argument takes a reference -- ``lemma_sdk.pod_file("/me/a.pdf")``
         -- which resolves in this pod.
+
+        ``act_as="app"`` presents as the connector's app instead of the person
+        the call runs for -- for GitHub, the Lemma App's bot, which is the only
+        identity GitHub takes a check run from. Only a function run may ask
+        (``APP_IDENTITY_FUNCTIONS_ONLY`` otherwise), and it is the app or
+        nothing: a call the app cannot make is refused with
+        ``APP_IDENTITY_UNAVAILABLE`` rather than made as the person.
 
         A connector that cannot run says why, as a typed error whose
         ``code`` names the remedy and whose ``connect_url`` (when there is one)
@@ -451,6 +459,13 @@ class BoundConnectors(BoundResource):
         and warns: when ``account_id`` or ``pod_id`` is given, when there is no
         pod, or when ``connector`` is not one of the pod's connectors.
         """
+        if act_as == "app" and (
+            account_id is not None or pod_id is not None or self.pod_id is None
+        ):
+            raise ValueError(
+                "act_as='app' runs through a pod connector: bind a pod "
+                "(ctx.pod.connectors) and drop account_id and pod_id."
+            )
         if account_id is not None or pod_id is not None or self.pod_id is None:
             warnings.warn(
                 "connectors.execute(..., account_id=, pod_id=) is deprecated: "
@@ -468,11 +483,15 @@ class BoundConnectors(BoundResource):
                 self._pod_uuid(),
                 connector,
                 operation,
-                body={"payload": payload},
-                body_model=OperationExecutionRequest,
+                # Said only when asked, so every other call's body is unchanged.
+                body={
+                    "payload": payload,
+                    **({"act_as": "app"} if act_as == "app" else {}),
+                },
+                body_model=PodOperationExecutionRequest,
             )
         except LemmaNotFoundError as missing:
-            if missing.code != "POD_CONNECTOR_NOT_FOUND":
+            if missing.code != "POD_CONNECTOR_NOT_FOUND" or act_as == "app":
                 raise
             # Not a slug: most likely an installation name, as written before
             # pod connectors. The server answers that one with its own warning.

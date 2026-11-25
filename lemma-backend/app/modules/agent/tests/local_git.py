@@ -35,6 +35,10 @@ class LocalGit:
             "GIT_COMMITTER_EMAIL": "ada@example.test",
         }
         self.origin = root / "origin.git"
+        #: What the checkout clones. A plain path, by default; `file://` makes
+        #: git fetch over its protocol instead of hardlinking the object store,
+        #: so an object reaches the clone only if something fetches it.
+        self.url = str(self.origin)
         self.clone = root / "repos" / "acme" / "web"
         source = root / "source"
         self.run("init", "-q", "-b", "main", str(source))
@@ -75,7 +79,7 @@ class LocalGit:
         # The session has already made its cwd by the time this runs.
         worktree.mkdir(parents=True, exist_ok=True)
         command = github_project._checkout_command(
-            url=str(self.origin),
+            url=self.url,
             clone_dir=str(self.clone),
             ref=ref,
             worktree=str(worktree),
@@ -88,7 +92,7 @@ class LocalGit:
         run_dir = self.root / "runs" / "agent" / name
         run_dir.mkdir(parents=True, exist_ok=True)
         command = github_project._checkout_command(
-            url=str(self.origin),
+            url=self.url,
             clone_dir=str(self.clone),
             ref=ref,
             worktree=None,
