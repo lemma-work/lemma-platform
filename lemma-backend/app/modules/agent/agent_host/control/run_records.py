@@ -27,6 +27,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.agent_host.control.models import AgentHostRunRecordModel
 from app.modules.agent.domain.value_objects import RunTrigger
 from app.modules.agent.infrastructure.models.conversation import AgentRunModel
+from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
 
 #: A field of the record. ``execution`` is ``{"target": "vm"}`` or ``{"target":
 #: "host", "host_id": ..., "sandbox_id": ..., "root": ...}``;
@@ -132,3 +133,22 @@ async def earlier_run_triggers(
         )
     ).scalars()
     return list(rows)
+
+
+async def ran_on_a_mac(uow: SqlAlchemyUnitOfWork, run_id: UUID) -> bool:
+    """Whether this run worked on its person's Mac rather than a Lemma machine.
+
+    Either it was a coding agent's run, dispatched to an Agent Host (it holds
+    a dispatch lease), or a Lemma run that chose host execution (its record
+    says ``host``). Its files -- a repository checkout among them -- are on
+    that Mac, where nothing in the backend reads them.
+    """
+    leased = await uow.session.scalar(
+        select(AgentHostRunLeaseModel.run_id).where(
+            AgentHostRunLeaseModel.run_id == run_id
+        )
+    )
+    if leased is not None:
+        return True
+    execution = await read_run_execution(uow, run_id)
+    return execution is not None and execution.get("target") == HOST_TARGET

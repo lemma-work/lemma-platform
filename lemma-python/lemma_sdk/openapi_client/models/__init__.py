@@ -194,6 +194,11 @@ _NAME_TO_MODULE = {
     'ContactUpdateRequest': 'contact_update_request',
     'ContactsCapResponse': 'contacts_cap_response',
     'ContactsCapUpdate': 'contacts_cap_update',
+    'ConversationChangedFile': 'conversation_changed_file',
+    'ConversationChangedFileStatus': 'conversation_changed_file_status',
+    'ConversationChangesResponse': 'conversation_changes_response',
+    'ConversationChangesResponseState': 'conversation_changes_response_state',
+    'ConversationChangesTotals': 'conversation_changes_totals',
     'ConversationListResponse': 'conversation_list_response',
     'ConversationReportRequest': 'conversation_report_request',
     'ConversationReportResponse': 'conversation_report_response',
@@ -1075,6 +1080,11 @@ if TYPE_CHECKING:
     from .contact_update_request import ContactUpdateRequest
     from .contacts_cap_response import ContactsCapResponse
     from .contacts_cap_update import ContactsCapUpdate
+    from .conversation_changed_file import ConversationChangedFile
+    from .conversation_changed_file_status import ConversationChangedFileStatus
+    from .conversation_changes_response import ConversationChangesResponse
+    from .conversation_changes_response_state import ConversationChangesResponseState
+    from .conversation_changes_totals import ConversationChangesTotals
     from .conversation_list_response import ConversationListResponse
     from .conversation_report_request import ConversationReportRequest
     from .conversation_report_response import ConversationReportResponse
@@ -1969,6 +1979,11 @@ __all__ = [
     'ContactUpdateRequest',
     'ContactsCapResponse',
     'ContactsCapUpdate',
+    'ConversationChangedFile',
+    'ConversationChangedFileStatus',
+    'ConversationChangesResponse',
+    'ConversationChangesResponseState',
+    'ConversationChangesTotals',
     'ConversationListResponse',
     'ConversationReportRequest',
     'ConversationReportResponse',

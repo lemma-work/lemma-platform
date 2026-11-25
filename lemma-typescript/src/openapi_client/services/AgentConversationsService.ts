@@ -5,6 +5,7 @@
 import type { AgentRunResponse } from '../models/AgentRunResponse.js';
 import type { AgentRunStartResponse } from '../models/AgentRunStartResponse.js';
 import type { ApprovalDecisionResponse } from '../models/ApprovalDecisionResponse.js';
+import type { ConversationChangesResponse } from '../models/ConversationChangesResponse.js';
 import type { ConversationListResponse } from '../models/ConversationListResponse.js';
 import type { ConversationReportRequest } from '../models/ConversationReportRequest.js';
 import type { ConversationReportResponse } from '../models/ConversationReportResponse.js';
@@ -251,6 +252,38 @@ export class AgentConversationsService {
             },
             body: requestBody,
             mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Get Conversation Changes
+     * What a conversation opened in a repository has changed in its checkout, live: every file that differs from where its branch left the start point (`origin/<ref>`, else `origin/HEAD`) -- commits not yet pushed, staged and unstaged edits -- and its untracked files, with line counts, and the patch with `patch=true`. Read-only: nothing is fetched and the repository is not written. A machine that is not running is not started (`machine_unavailable`); a conversation whose last run worked on its person's Mac answers `elsewhere`. A read that runs past its ceiling is a 504, `CONVERSATION_CHANGES_TIMED_OUT`. Only the conversation's owner may read it.
+     * @param podId
+     * @param conversationId
+     * @param patch Include the unified diff.
+     * @param maxPatchBytes Cut the patch at this many bytes; `truncated` says so.
+     * @returns ConversationChangesResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentConversationChangesGet(
+        podId: string,
+        conversationId: string,
+        patch: boolean = false,
+        maxPatchBytes: number = 262144,
+    ): CancelablePromise<ConversationChangesResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/conversations/{conversation_id}/changes',
+            path: {
+                'pod_id': podId,
+                'conversation_id': conversationId,
+            },
+            query: {
+                'patch': patch,
+                'max_patch_bytes': maxPatchBytes,
+            },
             errors: {
                 422: `Validation Error`,
             },
