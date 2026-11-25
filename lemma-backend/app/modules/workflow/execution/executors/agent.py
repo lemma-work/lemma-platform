@@ -77,8 +77,11 @@ def _checkout(node: AgentNode, step: StepContext) -> dict[str, object]:
             f"repository resolved to {values.get('repository')!r}, expected 'owner/name'",
         )
     ref = values.get("ref")
-    if ref is not None and not isinstance(ref, str):
+    if ref is not None and (not isinstance(ref, str) or not ref.strip()):
         raise NodeExecutionError(
-            node.id, f"ref resolved to {type(ref).__name__}, expected a string"
+            node.id,
+            f"ref resolved to {ref!r}, expected a branch, tag, sha or pull/<n>/head",
         )
+    if isinstance(ref, str):
+        ref = ref.strip()
     return {"repo": {"owner": owner, "repo": name, "ref": ref}}

@@ -145,6 +145,29 @@ async def test_a_ref_a_checkout_cannot_take_fails_rather_than_reading_main() -> 
     created.create_conversation.assert_not_awaited()
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("ref", ["", "   ", 42])
+async def test_an_empty_or_blank_ref_fails_the_step(ref: object) -> None:
+    """An empty ref is not "the default branch": like a name the checkout
+    cannot take, it fails the step instead of quietly reading main."""
+    step, created = _step({"repository": "acme/web", "ref": ref})
+
+    with pytest.raises(NodeExecutionError, match="ref resolved to"):
+        await AgentExecutor().execute(_node(), step)
+
+    created.create_conversation.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_a_ref_is_stripped_before_the_checkout_sees_it() -> None:
+    step, created = _step({"repository": "acme/web", "ref": "  main "})
+
+    await AgentExecutor().execute(_node(), step)
+
+    conversation = created.create_conversation.await_args.args[0]
+    assert conversation.repo == ProjectRepo(owner="acme", repo="web", ref="main")
+
+
 def test_a_ref_needs_a_repository() -> None:
     with pytest.raises(ValidationError, match="repository"):
         AgentNodeConfig(agent_name="reviewer", ref=LiteralInputBinding(value="main"))
