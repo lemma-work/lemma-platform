@@ -122,12 +122,15 @@ class _AgentDriver(AgentPort):
 
 
 def _require_named_checkout(metadata: dict[str, object] | None) -> None:
-    """A step that names a repository gets that checkout or fails.
+    """A step that names a repository and ref of the wrong shape fails.
 
     The run's start drops a ``repo`` it cannot parse, and a ref it cannot take
     becomes the default branch: right for a webhook's payload, which says
     whatever GitHub sent, and wrong for an author's step, where a reviewer
-    quietly reading ``main`` instead of the pull request is the failure.
+    quietly reading ``main`` instead of the pull request is the failure. Only
+    the shape is checked here: whether git can fetch the ref is found out in
+    the sandbox at the agent's first command, and reaches the agent as a
+    workspace notice rather than the step as an error.
     """
     raw = (metadata or {}).get("repo")
     if raw is None:
