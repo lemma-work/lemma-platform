@@ -40,7 +40,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.conferral import CONFERRAL_EXCEEDS_HOLDER, assert_can_confer
 from app.core.authorization.context import Context, ResourceType
-from app.core.authorization.grants import replace_resource_grantee_grant
 from app.core.authorization.models import PendingResourceGrantModel
 from app.core.authorization.permission_rows import ensure_permission_rows
 from app.core.domain.errors import DomainError
@@ -51,6 +50,7 @@ logger = get_logger(__name__)
 __all__ = [
     "PendingGrant",
     "delete_grantee_pending_grants",
+    "forget_grantee_pending_grants",
     "lock_grantee_pending_keys",
     "lock_pending_key",
     "pending_lock_name",
@@ -247,6 +247,38 @@ async def replace_grantee_pending_grants(
     return True
 
 
+async def forget_grantee_pending_grants(
+    session: AsyncSession, pod_id: UUID, grantee_type: str, grantee_id: UUID
+) -> None:
+    """Forget everything ``grantee_id`` waits for, of every resource type:
+    what it holds was just replaced whole, or it is gone. Each key is locked
+    first, so a settlement racing this cannot grant from a row it deletes."""
+    if not await _table_ready(session):
+        return
+    types = await session.execute(
+        select(PendingResourceGrantModel.resource_type)
+        .where(
+            PendingResourceGrantModel.pod_id == pod_id,
+            PendingResourceGrantModel.grantee_type == grantee_type,
+            PendingResourceGrantModel.grantee_id == grantee_id,
+        )
+        .distinct()
+        .order_by(PendingResourceGrantModel.resource_type)
+        .limit(_SETTLE_BATCH)
+    )
+    for resource_type in types.scalars().all():
+        await lock_grantee_pending_keys(
+            session,
+            pod_id=pod_id,
+            resource_type=ResourceType(resource_type),
+            grantee_type=grantee_type,
+            grantee_id=grantee_id,
+        )
+    await delete_grantee_pending_grants(
+        session, pod_id=pod_id, grantee_type=grantee_type, grantee_id=grantee_id
+    )
+
+
 async def delete_grantee_pending_grants(
     session: AsyncSession,
     *,
@@ -300,6 +332,9 @@ async def settle_pending_grants(
         await _delete_rows(session, (row[0] for row in batch))
         if len(batch) < _SETTLE_BATCH:
             break
+    # Imported here: `grants` imports this module.
+    from app.core.authorization.grants import replace_resource_grantee_grant
+
     for grantee_type, grantee_id in sorted(
         permissions, key=lambda g: (g[0], str(g[1]))
     ):

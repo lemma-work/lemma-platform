@@ -563,3 +563,36 @@ async def test_a_replayed_grant_step_leaves_no_removed_grant_active(
     await declaring[0]
 
     assert await _connector_grants(client, str(pod_id)) == []
+
+
+async def test_saving_an_agents_permissions_clears_what_it_was_waiting_for(
+    scenario, db_session, worker, tmp_path
+):
+    """Saving an agent's permissions replaces everything it holds. A grant
+    the import left waiting is part of that: once an editor has saved the
+    agent without it, declaring the connector grants nothing."""
+    connector_id = await _catalog_connector(db_session)
+    await scenario.create_org_with_pod(name_prefix="Trimmed")
+    client, pod_id = scenario.owner_client, scenario.pod_id
+    import_id = await start_and_plan_import(
+        client, pod_id, _bundle(tmp_path, connector_id)
+    )
+    applied = await client.post(
+        f"/pods/{pod_id}/bundle/imports/{import_id}/apply", json={}
+    )
+    assert applied.status_code == status.HTTP_202_ACCEPTED, applied.text
+    final = await wait_import(client, pod_id, import_id, until={"COMPLETED", "FAILED"})
+    assert final["status"] == "COMPLETED", final
+
+    saved = await client.put(
+        f"/pods/{pod_id}/agents/briefer/permissions", json={"grants": []}
+    )
+    assert saved.status_code == status.HTTP_200_OK, saved.text
+
+    install_id = await _install(db_session, scenario.org_id, connector_id)
+    declared = await client.post(
+        f"/pods/{pod_id}/connectors",
+        json={"auth_config_id": install_id, "slug": "my-cal", "mode": "PER_MEMBER"},
+    )
+    assert declared.status_code == status.HTTP_201_CREATED, declared.text
+    assert await _connector_grants(client, pod_id) == []
