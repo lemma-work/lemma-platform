@@ -20,7 +20,8 @@
 //!   `origin/pull/<n>/head` first, since a clone does not fetch it.
 //! - **A folder that already holds something is left exactly as it is.** The
 //!   conversation's own worktree is not fetched, reset or even looked into on
-//!   a later turn, and a folder holding anything else is not cloned over.
+//!   a later turn, and a folder holding anything else is not cloned over --
+//!   the agent is told it is not the repository.
 //! - **Failing never stops the run.** No `git`, no access, no network, a ref
 //!   that does not exist: the agent starts in the empty folder anyway and is
 //!   told once, in plain words, why it is empty.
@@ -180,7 +181,15 @@ impl Report {
                     ))
                 }),
             },
-            Outcome::LeftAlone => Self::default(),
+            Outcome::LeftAlone => Self {
+                instructions: None,
+                notice: Some(notice(&format!(
+                    "{name} was not checked out in this directory: it already \
+                     holds files that are not this conversation's worktree of \
+                     it, so it was left exactly as it is. Your native tools work \
+                     here as usual."
+                ))),
+            },
             Outcome::Failed(reason) => Self {
                 instructions: None,
                 notice: Some(notice(&format!(
@@ -494,7 +503,7 @@ fn existing_worktree(checkout: &Checkout) -> Existing {
     if let Ok(metadata) = std::fs::symlink_metadata(&dot_git) {
         let ours = metadata.is_file()
             && std::fs::read_to_string(&dot_git)
-                .is_ok_and(|text| belongs_to(text.trim(), checkout.clone_dir()));
+                .is_ok_and(|text| belongs_to(text.trim(), folder, checkout.clone_dir()));
         return if ours {
             Existing::Ours
         } else {
@@ -510,16 +519,19 @@ fn existing_worktree(checkout: &Checkout) -> Existing {
     }
 }
 
-fn belongs_to(dot_git: &str, clone: &Path) -> bool {
+/// Whether the `.git` file of the worktree at `folder` points into `clone`.
+fn belongs_to(dot_git: &str, folder: &Path, clone: &Path) -> bool {
     let Some(gitdir) = dot_git.strip_prefix("gitdir:") else {
         return false;
     };
+    // A relative path (`worktree.useRelativePaths`) is relative to the
+    // worktree, as git reads it; `canonicalize` alone would read it against
+    // the host's own working directory.
+    let gitdir = folder.join(gitdir.trim());
     // git writes the path it resolved, which on macOS is `/private/var/...`
     // for a `/var/...` it was given.
-    let (Ok(gitdir), Ok(clone)) = (
-        std::fs::canonicalize(gitdir.trim()),
-        std::fs::canonicalize(clone),
-    ) else {
+    let (Ok(gitdir), Ok(clone)) = (std::fs::canonicalize(gitdir), std::fs::canonicalize(clone))
+    else {
         return false;
     };
     gitdir.starts_with(clone.join(".git").join("worktrees"))

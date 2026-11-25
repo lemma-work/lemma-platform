@@ -339,6 +339,59 @@ async fn an_existing_worktree_is_left_exactly_as_it_is() {
     assert!(checkout.worktree_dir().join("new.txt").exists());
 }
 
+/// git 2.48's `worktree.useRelativePaths` writes the worktree's `.git` file
+/// with a path relative to the worktree, which git resolves against that
+/// folder and not against whatever directory the host happens to run in. The
+/// file is rewritten here as such a git writes it, so the test holds on a git
+/// that predates the setting.
+#[tokio::test]
+async fn a_worktree_whose_git_file_is_relative_is_still_this_clones() {
+    let fixture = fixture();
+    let target = Uuid::new_v4();
+    let remote = remote_of(&fixture);
+    let checkout = conversation(&fixture, target, None, "relative0");
+    check_out(
+        &fixture,
+        target,
+        &checkout,
+        &remote,
+        &git_program(),
+        Duration::from_secs(60),
+    )
+    .await;
+    let dot_git = checkout.worktree_dir().join(".git");
+    let absolute = std::fs::read_to_string(&dot_git).unwrap();
+    let record = Path::new(absolute.trim().strip_prefix("gitdir:").unwrap().trim());
+    let under_root = record
+        .strip_prefix(std::fs::canonicalize(&fixture.root).unwrap())
+        .expect("the clone's record of the worktree is under the root");
+    // worktrees/octo/widgets/relative0 -> back up to the root.
+    let relative = Path::new("../../../..").join(under_root);
+    std::fs::write(&dot_git, format!("gitdir: {}\n", relative.display())).unwrap();
+    assert_eq!(
+        git(checkout.worktree_dir(), &["branch", "--show-current"]),
+        "lemma/relative0"
+    );
+
+    let outcome = check_out(
+        &fixture,
+        target,
+        &checkout,
+        &remote,
+        Path::new("/nonexistent/git"),
+        Duration::from_secs(60),
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        Outcome::Ready {
+            made: false,
+            stale: None
+        }
+    );
+}
+
 #[tokio::test]
 async fn a_folder_holding_anything_else_is_never_cloned_over() {
     let fixture = fixture();

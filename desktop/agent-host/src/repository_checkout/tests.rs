@@ -221,10 +221,14 @@ fn the_agent_is_told_what_its_directory_is_and_once_why_it_is_empty() {
     assert!(notice.starts_with("<workspace-notice>\n"));
     assert!(notice.contains("empty for a reason: git is not installed"));
 
-    assert_eq!(
-        Report::of(&checkout, &Outcome::LeftAlone),
-        Report::default()
-    );
+    // A folder that already held something else is not the repository, and
+    // the agent starting in it is told so rather than left to assume it is.
+    let left_alone = Report::of(&checkout, &Outcome::LeftAlone);
+    assert_eq!(left_alone.instructions, None);
+    let notice = left_alone.notice.expect("a folder left alone is said");
+    assert!(notice.starts_with("<workspace-notice>\n"));
+    assert!(notice.contains("octo-org/widgets.js was not checked out in this directory"));
+    assert!(notice.contains("left exactly as it is"));
 }
 
 /// The notice goes ahead of the person's words as a turn-scoped fact, so it
@@ -277,16 +281,16 @@ fn only_a_gitdir_inside_this_clones_worktrees_is_ours() {
     std::fs::create_dir_all(&record).unwrap();
     let elsewhere = temp.path().join("other/.git/worktrees/ab3f2k7q");
     std::fs::create_dir_all(&elsewhere).unwrap();
+    let folder = temp.path().join("worktrees/ab3f2k7q");
+    std::fs::create_dir_all(&folder).unwrap();
 
-    assert!(belongs_to(&format!("gitdir: {}", record.display()), &clone));
-    assert!(!belongs_to(
-        &format!("gitdir: {}", elsewhere.display()),
-        &clone
-    ));
-    assert!(!belongs_to(
-        &format!("gitdir: {}", clone.join(".git").display()),
-        &clone
-    ));
-    assert!(!belongs_to("gitdir: /nowhere/at/all", &clone));
-    assert!(!belongs_to(&record.display().to_string(), &clone));
+    let ours = |dot_git: &str| belongs_to(dot_git, &folder, &clone);
+    assert!(ours(&format!("gitdir: {}", record.display())));
+    assert!(!ours(&format!("gitdir: {}", elsewhere.display())));
+    assert!(!ours(&format!("gitdir: {}", clone.join(".git").display())));
+    assert!(!ours("gitdir: /nowhere/at/all"));
+    assert!(!ours(&record.display().to_string()));
+    // Relative to the worktree, as `worktree.useRelativePaths` writes it.
+    assert!(ours("gitdir: ../../clone/.git/worktrees/ab3f2k7q"));
+    assert!(!ours("gitdir: ../../other/.git/worktrees/ab3f2k7q"));
 }

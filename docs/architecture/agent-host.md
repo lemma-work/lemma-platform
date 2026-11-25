@@ -376,8 +376,11 @@ ref?, slug}`, set only when `workspace_cwd` is that worktree
   name into `origin/pull/<n>/head` first. A `lemma/{slug}` branch left by a lost
   worktree is checked out again rather than re-made.
 - **Whatever is already there stays.** The conversation's own worktree (its
-  `.git` file points into this clone) is not fetched, reset or run git in on a
-  later turn; a folder holding anything else is not cloned over. A folder the
+  `.git` file points into this clone, by an absolute path or one relative to
+  the worktree as `worktree.useRelativePaths` writes it) is not fetched, reset
+  or run git in on a later turn; a folder holding anything else is not cloned
+  over, and the agent is told in a `<workspace-notice>` that the folder is not
+  the repository. A folder the
   person bound on this computer (`conversation_folders.rs`) and a conversation
   still in its legacy scratch directory are never checked out.
 - **The person's git, unattended.** `git` is Homebrew's if present, else the

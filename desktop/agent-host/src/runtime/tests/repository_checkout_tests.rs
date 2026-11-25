@@ -1,7 +1,5 @@
 //! Which run folders a repository checkout may touch at all.
 
-use crate::repository_checkout::Report;
-
 fn spec(conversation: uuid::Uuid, slug: &str) -> super::RunSpec {
     serde_json::from_value(serde_json::json!({
         "agent_run_id": uuid::Uuid::new_v4(), "conversation_id": conversation,
@@ -24,7 +22,8 @@ async fn only_the_folder_the_run_spec_resolved_to_is_ever_checked_out() {
     let target = uuid::Uuid::new_v4();
     let budget = std::time::Duration::from_secs(1);
 
-    // A folder holding something else is left alone, and nothing is said.
+    // A folder holding something else is left alone, and the agent is told
+    // the folder is not the repository.
     let run = spec(uuid::Uuid::now_v7(), "busy0");
     let folder = crate::conversation_directory::prepare(
         &root,
@@ -33,9 +32,23 @@ async fn only_the_folder_the_run_spec_resolved_to_is_ever_checked_out() {
     )
     .unwrap();
     std::fs::write(folder.join("notes.txt"), "mine").unwrap();
+    let report = super::repository_checkout_under(&root, &paths, target, &run, &folder, budget)
+        .await
+        .expect("a checkout was asked for");
+    assert_eq!(report.instructions, None);
+    assert!(
+        report
+            .notice
+            .expect("a folder left alone is said")
+            .contains("was not checked out in this directory")
+    );
     assert_eq!(
-        super::repository_checkout_under(&root, &paths, target, &run, &folder, budget).await,
-        Some(Report::default())
+        std::fs::read_dir(&folder)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name())
+            .collect::<Vec<_>>(),
+        ["notes.txt"]
     );
 
     // The run started somewhere else -- a legacy scratch folder -- so the
