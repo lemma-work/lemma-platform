@@ -9,6 +9,7 @@ import type { ConversationListResponse } from "../openapi_client/models/Conversa
 import type { ConversationRepositoryListResponse } from "../openapi_client/models/ConversationRepositoryListResponse.js";
 import type { ConversationStatus } from "../openapi_client/models/ConversationStatus.js";
 import type { ConversationType } from "../openapi_client/models/ConversationType.js";
+import type { ConversationUsageResponse } from "../openapi_client/models/ConversationUsageResponse.js";
 import type { CreateConversationRequest } from "../openapi_client/models/CreateConversationRequest.js";
 import type { HarnessKind } from "../openapi_client/models/HarnessKind.js";
 import type { PendingInteractionListResponse } from "../openapi_client/models/PendingInteractionListResponse.js";
@@ -344,6 +345,17 @@ export class ConversationsNamespace {
         },
       },
     );
+  }
+
+  /** What a conversation has cost its owner so far, in US dollars and model
+   *  tokens: `totals` over every run, and `runs` (newest first) each with its
+   *  own `usage`. A run with `usage: null` reported nothing -- an Agent Host
+   *  harness that sends no usage, or a turn not finished yet -- and is counted
+   *  in `unreported_run_count`; show the total as incomplete then, not as $0.
+   *  Sub-agent conversations are not included: read each one's own. */
+  usage(conversationId: string, options: { pod_id?: string | null } = {}): Promise<ConversationUsageResponse> {
+    const podId = this.requirePodId(options.pod_id);
+    return this.http.request<ConversationUsageResponse>("GET", `/pods/${podId}/conversations/${conversationId}/usage`);
   }
 
   async update(

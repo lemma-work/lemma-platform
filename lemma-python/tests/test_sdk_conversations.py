@@ -132,6 +132,19 @@ def test_changes_reads_one_conversations_checkout_with_the_patch_on_request():
     assert with_patch["kwargs"] == {"patch": True, "max_patch_bytes": 4096}
 
 
+def test_usage_asks_the_pod_what_one_conversation_cost():
+    pod, transport = _pod()
+
+    pod.conversations.usage("33333333-3333-4333-8333-333333333333")
+
+    (call,) = transport.calls
+    assert call["endpoint"].endswith(".agent_conversation_usage_get")
+    assert call["path_args"] == (
+        UUID("22222222-2222-4222-8222-222222222222"),
+        UUID("33333333-3333-4333-8333-333333333333"),
+    )
+
+
 def test_pending_interactions_asks_the_pod_and_pages_by_token():
     pod, transport = _pod()
 

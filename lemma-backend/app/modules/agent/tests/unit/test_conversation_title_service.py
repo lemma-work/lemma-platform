@@ -186,10 +186,19 @@ class _FakeGenerator:
         self.calls: list[dict] = []
 
     async def generate(
-        self, *, user_id, organization_id, pod_id, user_text, reply_text, audience=None
+        self,
+        *,
+        user_id,
+        organization_id,
+        pod_id,
+        user_text,
+        reply_text,
+        audience=None,
+        conversation_id=None,
     ) -> str | None:
         self.calls.append(
             {
+                "conversation_id": conversation_id,
                 "user_id": user_id,
                 "organization_id": organization_id,
                 "pod_id": pod_id,
@@ -921,3 +930,48 @@ def test_the_prompt_names_english_as_the_default() -> None:
     assert "same script" in prompt
     assert "English is the default" in prompt
     assert "Never translate" in prompt
+
+
+@pytest.mark.asyncio
+async def test_a_title_is_recorded_against_its_conversation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A title belongs to no run, so the conversation is the only thing its
+    spend can be summed under: a conversation's usage reads it from there."""
+    _enable_llm_titling(monkeypatch)
+    conv = _conversation()
+    generator = _FakeGenerator()
+
+    await _service(_FakeUow(conv, []), generator=generator).generate_title_if_absent(
+        conv.id
+    )
+
+    assert generator.calls[0]["conversation_id"] == conv.id
+
+    seen: dict[str, object] = {}
+    real, _ = _generator()
+    provider = real._background.provider
+    original = provider._agent_factory
+
+    def _watching_agent(model, system_prompt=None, **kwargs):
+        agent = original(model, system_prompt=system_prompt, **kwargs)
+        run = agent.run
+
+        async def _run(*args, **kwargs):
+            seen["context"] = current_usage_context()
+            return await run(*args, **kwargs)
+
+        agent.run = _run
+        return agent
+
+    provider._agent_factory = _watching_agent
+    await real.generate(
+        user_id=uuid4(),
+        organization_id=None,
+        pod_id=uuid4(),
+        conversation_id=conv.id,
+        user_text="hi",
+        reply_text=None,
+    )
+
+    assert seen["context"].conversation_id == conv.id

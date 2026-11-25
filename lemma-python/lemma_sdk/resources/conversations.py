@@ -24,6 +24,7 @@ from ..openapi_client.api.agent_conversations import (
     agent_conversation_stream,
     agent_conversation_stop,
     agent_conversation_update,
+    agent_conversation_usage_get,
 )
 from ..openapi_client.models.approval_decision_response import ApprovalDecisionResponse
 from ..openapi_client.models.agent_run_response import AgentRunResponse
@@ -38,6 +39,9 @@ from ..openapi_client.models.conversation_repository_list_response import (
 from ..openapi_client.models.conversation_response import ConversationResponse
 from ..openapi_client.models.conversation_status import ConversationStatus
 from ..openapi_client.models.conversation_type import ConversationType
+from ..openapi_client.models.conversation_usage_response import (
+    ConversationUsageResponse,
+)
 from ..openapi_client.models.create_conversation_request import (
     CreateConversationRequest,
 )
@@ -214,6 +218,18 @@ class PodConversations(BoundResource):
             self._pod_uuid(),
             as_uuid(conversation_id),
             as_uuid(run_id),
+        )
+
+    def usage(self, conversation_id: str) -> ConversationUsageResponse:
+        """What a conversation has cost you so far, in US dollars and tokens:
+        ``totals`` over every run, and ``runs`` (newest first) each with its
+        own ``usage``. A run whose ``usage`` is ``None`` reported nothing and
+        is counted in ``unreported_run_count``. Sub-agent conversations are
+        not included; read each one's own."""
+        return self._call(
+            agent_conversation_usage_get,
+            self._pod_uuid(),
+            as_uuid(conversation_id),
         )
 
     def update(
