@@ -247,6 +247,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/pods/{pod_id}/datastore/files/by-path` | `file.delete` | Delete File Or Folder |
 | DELETE | `/pods/{pod_id}/datastore/files/by-path/markdown` | `file.markdown.detach` | Detach Document Markdown |
 | DELETE | `/pods/{pod_id}/datastore/files/signed-urls/{code}` | `file.signed_url.revoke` | Revoke a public signed URL |
+| DELETE | `/pods/{pod_id}/datastore/hooks/{name}` | `hook.delete` | Delete A Hook |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}` | `table.delete` | Delete Table |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/columns/{column_name}` | `table.column.remove` | Remove Column |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/public-rows` | `table.public_rows.close` | Stop People Outside Adding Rows |
@@ -260,6 +261,8 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/datastore/files/tree` | `file.tree` | Get Directory Tree |
 | GET | `/pods/{pod_id}/datastore/files/url` | `file.url` | Get a short-lived URL for a file |
 | GET | `/pods/{pod_id}/datastore/files/{file_id}` | `file.get_by_id` | Get File by ID |
+| GET | `/pods/{pod_id}/datastore/hooks` | `hook.list` | List Hooks |
+| GET | `/pods/{pod_id}/datastore/hooks/{name}` | `hook.get` | Get A Hook |
 | GET | `/pods/{pod_id}/datastore/public-rows` | `table.public_rows.list` | Tables Open To People Outside |
 | GET | `/pods/{pod_id}/datastore/tables` | `table.list` | List Tables |
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}` | `table.get` | Get Table |
@@ -269,6 +272,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/outcome/history` | `outcome.history` | Where the pod has stood, week by week |
 | GET | `/pods/{pod_id}/outcome/standing` | `outcome.standing` | Where the pod stands |
 | PATCH | `/pods/{pod_id}/datastore/files/by-path` | `file.update` | Update File |
+| PATCH | `/pods/{pod_id}/datastore/hooks/{name}` | `hook.update` | Change A Hook |
 | PATCH | `/pods/{pod_id}/datastore/tables/{table_name}` | `table.update` | Update Table |
 | PATCH | `/pods/{pod_id}/datastore/tables/{table_name}/columns/{column_name}` | `table.column.update` | Update Column |
 | PATCH | `/pods/{pod_id}/datastore/tables/{table_name}/records/{record_id}` | `record.update` | Update Record |
@@ -277,6 +281,8 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/datastore/files/folders` | `file.folder.create` | Create Folder |
 | POST | `/pods/{pod_id}/datastore/files/search` | `file.search` | Search Files |
 | POST | `/pods/{pod_id}/datastore/files/signed-url` | `file.signed_url` | Create a public, hit-capped signed URL for a file |
+| POST | `/pods/{pod_id}/datastore/hooks` | `hook.create` | Make A Hook |
+| POST | `/pods/{pod_id}/datastore/hooks/{name}/rotate` | `hook.rotate` | Give A Hook A New Secret |
 | POST | `/pods/{pod_id}/datastore/query` | `query.execute` | Execute Query |
 | POST | `/pods/{pod_id}/datastore/tables` | `table.create` | Create Table |
 | POST | `/pods/{pod_id}/datastore/tables/{table_name}/columns` | `table.column.add` | Add Column |

@@ -127,6 +127,27 @@ about it when it eventually cannot.
 
 **Contracts:** `schedule.create`, `record.create`, `record.update`, `record.delete`
 
+### PS-SCHED-014 — A service that cannot sign posts to a pod's own address
+**Status:** planned
+
+- When a member makes a hook on a table, the system shall give them an address
+  a form tool or an automation service can post JSON to, and show it once.
+- When a delivery arrives at that address, the system shall add it to the
+  table as one row -- the whole body, or the fields the hook maps -- so a
+  schedule watching the table can react to it.
+- The system shall treat a hook's row as written from outside the pod: it
+  starts only the schedules that accept outside rows, and the work they start
+  is told the content is untrusted.
+- If a delivery cannot be taken -- the hook is switched off, the body is not
+  JSON, it is too large, too many arrive -- then the system shall tell the
+  sender why and keep the reason on the hook for its members to see.
+- The system shall refuse a delivery to an address whose secret is wrong or
+  was rotated, saying nothing about the hook.
+- The system shall let only someone who may change the table make, change,
+  rotate or delete a hook on it.
+
+**Contracts:** `hook.create`, `hook.update`, `hook.rotate`, `hook.delete`, `hook.list`
+
 ### PS-SCHED-013 — Work starts on an event from a server a person connected
 **Status:** planned
 

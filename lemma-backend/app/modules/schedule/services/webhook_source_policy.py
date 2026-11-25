@@ -17,7 +17,10 @@ owner can no longer rename or switch off.
 
 from __future__ import annotations
 
-from app.modules.schedule.contracts.webhook_source import WebhookSourceRegistry
+from app.modules.schedule.contracts.webhook_source import (
+    KeepingWebhookSource,
+    WebhookSourceRegistry,
+)
 from app.modules.schedule.domain.errors import ScheduleValidationError
 from app.modules.schedule.domain.schedule import (
     MCP_EVENT_SOURCE,
@@ -64,9 +67,16 @@ def validate_webhook_source(
         return
     if named is None:
         return
-    if isinstance(named, str) and sources.for_source(named) is not None:
+    plugin = sources.for_source(named) if isinstance(named, str) else None
+    if isinstance(plugin, KeepingWebhookSource):
+        raise ScheduleValidationError(
+            f"Deliveries to a '{named}' address become rows in the table it "
+            "writes to, so no WEBHOOK schedule hears them. Watch that table "
+            "with a DATASTORE schedule that sets include_outside_rows."
+        )
+    if plugin is not None:
         return
-    accepted = ", ".join(sources.sources)
+    accepted = ", ".join(sources.schedulable_sources)
     raise ScheduleValidationError(
         f"No webhook source named '{named}' delivers to this deployment, so a "
         "schedule listening for it could never fire. Accepted sources: "

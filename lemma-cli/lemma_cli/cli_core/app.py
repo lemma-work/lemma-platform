@@ -89,6 +89,18 @@ LAZY_GROUPS: dict[str, LazyEntry] = {
         "Decision commands: closed questions about some evidence.",
         False,
     ),
+    "hook": (
+        f"{_CMD}.hooks",
+        "app",
+        "Hooks: addresses services post JSON to, each delivery a row in a table.",
+        False,
+    ),
+    "hooks": (
+        f"{_CMD}.hooks",
+        "app",
+        "Hooks: addresses services post JSON to, each delivery a row in a table.",
+        False,
+    ),
     "file": (
         f"{_CMD}.files",
         "app",

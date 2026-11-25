@@ -28,6 +28,7 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | --- | --- |
 | `datastore_tables` | Registry and JSON column schema for each logical table |
 | `datastore_public_rows` | Tables open to people outside the pod: one grant per table saying who may add rows (`contacts` or `anyone`), which columns, and the member who opened it. Rows are added as that member, through `RecordService`. A form is any page that adds such a row; see `domain/public_rows.py` and `PUT /pods/{pod_id}/datastore/tables/{table}/public-rows`. Columns people outside fill: TEXT, INTEGER, FLOAT, BOOLEAN, DATE, DATETIME, ENUM and UUID, plus FILE_PATH where the page can upload. Never a USER column (the write checks it names a member, so the answer would say who belongs), JSON, VECTOR, or anything the table fills itself; a unique or foreign-key column opens to confirmed contacts only. A refused opening is 422 `TABLE_OPENING_REFUSED`, naming each column and why |
+| `datastore_hooks` | Hooks: addresses a service outside the pod posts JSON to, each delivery one row in the hook's table. The table to write, how a body becomes a row (`fields`), the SHA-256 of the secret its address carries (never the secret), on or off, the member rows are added as, and the last delivery and last refusal. See [Hooks](#hooks) |
 | `datastore_channel_grants` | Tables a group in channels was given: one grant per (table, group) naming the columns everybody in the group may read and the columns they may fill in a new row, and the member who granted it. A guest's run reads and adds as that member, their access rebuilt on every call, so a grant goes inert when they lose the table or leave the pod. Granting asks the table's settings and its rows (and writing them, to give adding) of a person, never an agent. Per-user (RLS) tables are refused, and closed if made per-user later; on a contact-owned table a guest reads and adds only their own rows, and reads only the columns contacts are shown. No unique or foreign-key column is one a guest fills, and a value for a column not granted refuses the row. Reads are rows, never SQL, filtered by equality on the read columns only, and say how many matched. See `services/channel_grants.py` and `PUT /pods/{pod_id}/channels/{channel_id}/table-grants/{table}` |
 | Per-pod PostgreSQL schema | Physical record tables, constraints, indexes, and RLS policies. Born readable by the ad-hoc query role (schema `USAGE` plus a per-schema default privilege for its tables); a schema from before that heals on its first query |
 | `datastore_files` | Hierarchical metadata, ownership, processing status, Markdown/index metadata |
@@ -55,6 +56,7 @@ never parse a string a second time.
 | --- | --- |
 | `/pods/{pod_id}/datastore/tables` | Create/list/get/update/delete tables; add and remove columns, add options to an ENUM column, and drop a foreign key (see [Changing a column](#changing-a-column)) |
 | `/.../tables/{table}/records` | CRUD, filter/sort/page, and bulk create/update/delete records |
+| `/pods/{pod_id}/datastore/hooks` | Make, list, change, rotate and delete a pod's hooks (see [Hooks](#hooks)); deliveries arrive at `POST /webhooks/hook` |
 | `/pods/{pod_id}/datastore/query` | Restricted ad-hoc datastore query under the RLS subject role |
 | `/pods/{pod_id}/outcome/standing`, `/history` | What the pod owns, its measure read now, and its last weeks |
 | `/pods/{pod_id}/datastore/files` | Upload, folders, metadata/content update, Markdown attachment, tree, search, preview/download |
@@ -275,6 +277,40 @@ why. `measure_digest` names the measure that answered, so the history read
 (`OutcomeStandingService.history`) shows only the weeks of the pod's current
 measure. `datastore.outcome_week` reads in a short unit of work and keeps the
 reading in its fenced completion.
+
+## Hooks
+
+A hook is an address a form tool, Zapier or Make posts JSON to:
+`POST /webhooks/hook?hook={id}&key={secret}`. Most of those services cannot sign
+a request, so the address is the credential, and it is shown only when the hook
+is made or rotated. The delivery goes through the `hook` plugin in the webhook
+source registry (`connectors/infrastructure/webhook_sources/hook.py`), which
+finds the hook and compares the secret's hash in constant time; then, in order,
+a switched-off hook (403), the per-hook rate limit (429, or 503 while Redis is
+away), a body that is not JSON (415 for another content type, 400 unparseable,
+422 not an object) and one over `DATASTORE_HOOK_BODY_MAX_BYTES` (413) are each
+refused with a reason the sender is told and the hook keeps as `last_error`.
+A wrong secret is 403 with nothing said, and is not kept.
+
+The row is written through `public_rows.insert_from_outside`, as the member
+who made the hook, so a hook is never more than they could do and stops when
+they can no longer change the table. With no `fields`, the whole body goes into
+the table's `payload` JSON column; with `fields`, each column takes the value at
+a dotted path into the body (`$` is the whole body). `received_at` and `hook`
+are filled when the table has them and no field maps them. A hook never writes
+a USER, FILE_PATH or VECTOR column, or one the table fills itself, and a table
+where each member sees only their own rows takes no hook.
+
+The row is an **outside row**: its insert event names `hook:{name}`, so a
+DATASTORE schedule fires on it only when it sets `include_outside_rows`, and its
+run is told the row is untrusted. A WEBHOOK schedule cannot name the `hook`
+source, since nothing would match it. A duplicate on a unique column is
+answered 200 with `duplicate: true`: that is what a provider's redelivery looks
+like, and a unique column (a response id) is how a table makes hook deliveries
+idempotent.
+
+Making, changing, rotating or deleting a hook takes changing its table; seeing
+one takes reading it. A pod keeps at most 50 hooks.
 
 ## Authorization
 

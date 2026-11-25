@@ -42,6 +42,7 @@ from app.modules.datastore.domain.public_rows import (
     OpenTable,
     PublicAudience,
     PublicColumn,
+    PublicRowDuplicate,
     PublicRowRefused,
     PublicRowsClosed,
     attachment_name,
@@ -339,7 +340,7 @@ async def add_visitor_row(
         stored: list[CreateFilePlan] = []
         committed = False
         try:
-            await _insert_as(
+            await insert_from_outside(
                 uow, found[1].opened_by, opened, row, outside_actor, files, stored
             )
             await uow.commit()
@@ -351,7 +352,7 @@ async def add_visitor_row(
                 await _discard(uow, stored)
 
 
-async def _insert_as(
+async def insert_from_outside(
     uow,
     user_id: UUID,
     opened: OpenTable,
@@ -361,6 +362,9 @@ async def _insert_as(
     stored: list[CreateFilePlan] | None = None,
 ) -> None:
     """Add ``row`` as ``user_id``, storing ``files`` first as them.
+
+    Its insert event names ``outside_actor``, not the member: this is how every
+    row from outside the pod is written -- a form's, a hook's.
 
     Each file's plan is appended to ``stored`` once its bytes have been sent to
     storage, so a caller whose transaction then fails knows what to remove.
@@ -401,9 +405,13 @@ async def _insert_as(
         await build_record_service(uow).create_record(table_ctx, row, user_id)
     except DatastoreAccessDeniedError as exc:
         raise PublicRowsClosed(opened.name) from exc
-    except (DatastoreValidationError, DatastoreConflictError) as exc:
-        # Past ``_check``, only the database refuses: a duplicate, a missing
-        # reference. Saying which would tell a stranger what the table holds.
+    # Past ``_check``, only the database refuses: a duplicate (a conflict), a
+    # missing reference (a validation error). Saying which would tell a
+    # stranger what the table holds; only a caller that trusts its sender --
+    # a hook -- reads the subclass.
+    except DatastoreConflictError as exc:
+        raise PublicRowDuplicate(UNSAVED) from exc
+    except DatastoreValidationError as exc:
         raise PublicRowRefused(UNSAVED) from exc
     except DatastoreInfrastructureError:
         # Storage would not take an attached file: the form is open, and

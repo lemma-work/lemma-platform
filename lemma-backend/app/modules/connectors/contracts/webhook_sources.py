@@ -12,6 +12,11 @@ webhook secret, and both secrets belong to a connector account. `schedule` owns
 the endpoint, the registry type and the routing; `connectors` owns what a
 provider's delivery is and how it proves itself.
 
+The hook source is the one made of something else: a pod's own address, whose
+secret and table are `datastore`'s. It sits here anyway, beside the others,
+because `datastore` cannot import `schedule` (which already imports it), and
+one registry built in one place is what keeps the allow-list whole.
+
 The plugin classes stay unpublished. The caller names `WebhookSourceRegistry`,
 which is `schedule`'s own type, and cannot reach past it to an SDK client.
 """
@@ -35,12 +40,20 @@ def default_webhook_sources() -> WebhookSourceRegistry:
     from app.modules.connectors.infrastructure.webhook_sources.github import (
         GitHubWebhookSource,
     )
+    from app.modules.connectors.infrastructure.webhook_sources.hook import (
+        HookWebhookSource,
+    )
     from app.modules.connectors.infrastructure.webhook_sources.mcp import (
         McpWebhookSource,
     )
 
     return WebhookSourceRegistry(
-        [ComposioWebhookSource(), GitHubWebhookSource(), McpWebhookSource()]
+        [
+            ComposioWebhookSource(),
+            GitHubWebhookSource(),
+            HookWebhookSource(),
+            McpWebhookSource(),
+        ]
     )
 
 

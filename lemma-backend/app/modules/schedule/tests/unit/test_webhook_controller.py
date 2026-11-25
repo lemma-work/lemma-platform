@@ -17,6 +17,7 @@ from app.modules.schedule.api.dependencies import (
 from app.modules.schedule.contracts.webhook_source import (
     VerifiedDelivery,
     WebhookDelivery,
+    WebhookRefused,
     WebhookSourceRegistry,
 )
 from app.modules.test_support.body_ceiling import (
@@ -304,3 +305,69 @@ async def test_a_refused_delivery_is_logged_with_its_source_and_what_arrived(
         (warning["source"], warning["size"])
         for warning in _oversized_deliveries(caplog)
     ] == [("github", received)]
+
+
+class _KeepingSource:
+    """A hook, as far as the route can tell: verified deliveries are kept, and
+    either step may refuse with a reason the sender is told."""
+
+    source = "hook"
+
+    def __init__(
+        self,
+        *,
+        refuse_verify: WebhookRefused | None = None,
+        refuse_keep: WebhookRefused | None = None,
+    ) -> None:
+        self.refuse_verify = refuse_verify
+        self.refuse_keep = refuse_keep
+        self.kept: list[object] = []
+
+    async def verify(self, delivery: WebhookDelivery) -> VerifiedDelivery:
+        if self.refuse_verify is not None:
+            raise self.refuse_verify
+        return VerifiedDelivery(delivery=delivery, payload={"n": 1})
+
+    async def observe(self, verified: VerifiedDelivery) -> None:
+        return None
+
+    def normalize(self, verified: VerifiedDelivery) -> None:
+        raise AssertionError("a kept delivery is never matched to schedules")
+
+    async def keep(self, verified: VerifiedDelivery) -> dict[str, object]:
+        if self.refuse_keep is not None:
+            raise self.refuse_keep
+        self.kept.append(verified.payload)
+        return {"received": True}
+
+
+def _keeping_app(source: _KeepingSource):
+    return app_with(
+        router,
+        {
+            get_webhook_source_registry: lambda: WebhookSourceRegistry([source]),
+            get_webhook_handler: lambda: None,
+        },
+    )
+
+
+async def test_a_kept_delivery_is_answered_with_what_keep_returns():
+    source = _KeepingSource()
+
+    answered = await deliver(_keeping_app(source), "/webhooks/hook", [b"{}"])
+
+    assert answered.status == 200
+    assert answered.json() == {"received": True}
+    assert source.kept == [{"n": 1}]
+
+
+@pytest.mark.parametrize("step", ["verify", "keep"])
+async def test_a_refusal_after_verification_is_told_to_the_sender(step):
+    refusal = WebhookRefused(415, "A hook takes JSON")
+    source = _KeepingSource(**{f"refuse_{step}": refusal})
+
+    refused = await deliver(_keeping_app(source), "/webhooks/hook", [b"a=1"])
+
+    assert refused.status == 415
+    assert "A hook takes JSON" in refused.body.decode()
+    assert source.kept == []

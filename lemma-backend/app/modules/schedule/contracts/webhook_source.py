@@ -142,6 +142,23 @@ class WebhookNotVerified(Exception):
     """
 
 
+class WebhookRefused(Exception):
+    """A delivery that proved its source, refused for a reason its sender is told.
+
+    The opposite of `WebhookNotVerified`, and only raised after verification
+    has passed: a sender holding the secret gains nothing from hearing that its
+    body was not JSON or that it is sending too fast, and a form tool shows the
+    reason to the person who set it up, which is the only way they find out.
+    `status_code` is what the sender should act on -- a 429 is retried later,
+    a 415 is fixed in its settings.
+    """
+
+    def __init__(self, status_code: int, reason: str) -> None:
+        super().__init__(reason)
+        self.status_code = status_code
+        self.reason = reason
+
+
 @runtime_checkable
 class WebhookSourcePlugin(Protocol):
     """One provider's half of the inbound path."""
@@ -183,6 +200,24 @@ class WebhookSourcePlugin(Protocol):
         """
 
 
+@runtime_checkable
+class KeepingWebhookSource(Protocol):
+    """A source whose deliveries are kept rather than matched to schedules.
+
+    A hook's delivery becomes a row in a table the pod chose, and the row is
+    what starts work: a DATASTORE schedule watching the table fires on it like
+    on any other insert. So for these sources `normalize` returns None and no
+    WEBHOOK schedule may name them -- one could never fire.
+    """
+
+    async def keep(self, verified: VerifiedDelivery) -> WebhookPayload:
+        """Store the delivery and return the body to answer with.
+
+        Raises `WebhookRefused` when what was sent cannot be kept; the sender
+        is told why.
+        """
+
+
 class WebhookSourceRegistry:
     """The sources this deployment accepts. Absence is a refusal."""
 
@@ -200,3 +235,15 @@ class WebhookSourceRegistry:
     @property
     def sources(self) -> tuple[str, ...]:
         return tuple(sorted(self._plugins))
+
+    @property
+    def schedulable_sources(self) -> tuple[str, ...]:
+        """The sources a WEBHOOK schedule can listen to: all but those whose
+        deliveries are kept as rows."""
+        return tuple(
+            sorted(
+                key
+                for key, plugin in self._plugins.items()
+                if not isinstance(plugin, KeepingWebhookSource)
+            )
+        )

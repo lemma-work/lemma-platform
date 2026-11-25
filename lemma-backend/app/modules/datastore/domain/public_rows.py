@@ -180,6 +180,12 @@ class PublicRowRefused(ValueError):
         self.column = column
 
 
+class PublicRowDuplicate(PublicRowRefused):
+    """A row a unique column already holds. Said to the person exactly as any
+    other refusal the database makes; a caller that knows the sender is
+    redelivering -- a hook -- can tell it apart and answer success."""
+
+
 @dataclass(frozen=True, slots=True)
 class Attachment:
     """A file a person outside attached to an answer, staged on local disk.

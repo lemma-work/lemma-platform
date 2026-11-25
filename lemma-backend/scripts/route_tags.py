@@ -62,6 +62,7 @@ TAG_MODULES = {
     "icons": "icon",
     "notifications": "agent_surfaces",
     "query": "datastore",
+    "hooks": "datastore",
     "records": "datastore",
     "tables": "datastore",
     "workflows": "workflow",

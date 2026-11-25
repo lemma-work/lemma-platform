@@ -1372,6 +1372,7 @@ authoritative answer for anything this document does not name.
 | Connectors | `lemma-backend/app/modules/connectors/config.py` |
 | Contacts: phone region, daily lines to a contact | `lemma-backend/app/modules/contacts/config.py` |
 | Datastore and document processing | `lemma-backend/app/modules/datastore/config.py` |
+| Hooks: body cap and delivery rates per hook | `lemma-backend/app/modules/datastore/config_hooks.py` |
 | Pod bundles | `lemma-backend/app/modules/pod_bundle/config.py` |
 | Apps, icons, schedules | `app/modules/{apps,icon,schedule}/config.py` |
 | Outside MCP clients | `lemma-backend/app/modules/mcp_access/config.py` |
