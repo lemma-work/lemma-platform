@@ -16546,6 +16546,19 @@
       },
       "OpenTableRequest": {
         "properties": {
+          "answers_per_day": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How many answers a day it takes, up to `answers_per_day_max`. Omitted, the deployment's default. Opening again replaces it.",
+            "title": "Answers Per Day"
+          },
           "audience": {
             "$ref": "#/components/schemas/PublicAudience"
           },
@@ -22231,6 +22244,19 @@
       },
       "RowRequest": {
         "properties": {
+          "altcha": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A solved `row` challenge. Every answer from somebody the pod has not confirmed needs its own; a confirmed contact sends none.",
+            "title": "Altcha"
+          },
           "table": {
             "maxLength": 255,
             "title": "Table",
@@ -26262,6 +26288,23 @@
       },
       "TableOpeningResponse": {
         "properties": {
+          "answers_per_day": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How many answers a day it takes, when the member set it; null is the deployment's default.",
+            "title": "Answers Per Day"
+          },
+          "answers_per_day_max": {
+            "description": "The most answers a day a form may be set to take here.",
+            "title": "Answers Per Day Max",
+            "type": "integer"
+          },
           "audience": {
             "anyOf": [
               {
@@ -26310,7 +26353,9 @@
           "contact_owned",
           "offered",
           "audience",
-          "columns"
+          "columns",
+          "answers_per_day",
+          "answers_per_day_max"
         ],
         "title": "TableOpeningResponse",
         "type": "object"
@@ -59185,7 +59230,7 @@
     },
     "/public/web/{public_key}/challenge": {
       "get": {
-        "description": "A proof-of-work to solve before starting a session or asking for a code.\n\n``{\"enabled\": false}`` when the deployment has bot protection off.",
+        "description": "A proof-of-work to solve before starting a session, asking for a code,\nor sending an answer from somebody the pod has not confirmed (``row``).\n\n``{\"enabled\": false}`` when the deployment has bot protection off.",
         "operationId": "public.web.challenge.read",
         "parameters": [
           {
@@ -59203,7 +59248,11 @@
             "required": false,
             "schema": {
               "default": "session",
-              "pattern": "^(session|code)$",
+              "enum": [
+                "session",
+                "code",
+                "row"
+              ],
               "title": "Purpose",
               "type": "string"
             }

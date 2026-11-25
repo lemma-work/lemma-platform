@@ -53,6 +53,15 @@ class PublicWebSettings(BaseSettings):
             "are signed with a key derived from the platform's signing key."
         ),
     )
+    public_web_answers_per_form_per_day_max: int = Field(
+        default=5000,
+        gt=0,
+        description=(
+            "The most answers a day a member may let one form -- a table "
+            "opened to people outside -- take. Each form takes the surfaces' "
+            "default unless the member who opened it set its own, up to this."
+        ),
+    )
     public_pages_url: str | None = Field(
         default=None,
         description=(
@@ -97,6 +106,11 @@ def public_web_enabled() -> bool:
 
 def public_web_altcha_enabled() -> bool:
     return public_web_settings.public_web_altcha_enabled
+
+
+def public_web_answers_per_form_per_day_max() -> int:
+    """The most answers a day a member may let one open table take."""
+    return public_web_settings.public_web_answers_per_form_per_day_max
 
 
 def public_web_test_visitor_code() -> str | None:

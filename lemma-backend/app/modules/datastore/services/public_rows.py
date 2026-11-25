@@ -29,6 +29,7 @@ from app.core.authorization.factory import create_authorization_data_service
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.core.public_web import public_web_answers_per_form_per_day_max
 from app.modules.datastore.domain.datastore_entities import ColumnSchema
 from app.modules.datastore.domain.errors import (
     DatastoreAccessDeniedError,
@@ -100,6 +101,9 @@ class TableOpening:
     offered: tuple[PublicColumn, ...]
     audience: PublicAudience | None
     columns: tuple[str, ...]
+    #: The answers a day it takes, when the member set it; ``None`` is the
+    #: deployment's default.
+    answers_per_day: int | None = None
 
 
 def _schemas(row: DatastoreTable) -> list[ColumnSchema]:
@@ -131,6 +135,7 @@ async def table_opening(
         ),
         audience=PublicAudience(grant.audience) if grant else None,
         columns=tuple(grant.columns) if grant else (),
+        answers_per_day=grant.answers_per_day if grant else None,
     )
 
 
@@ -142,8 +147,14 @@ async def open_table(
     audience: PublicAudience,
     columns: list[str],
     ctx: Context,
+    answers_per_day: int | None = None,
 ) -> TableOpening:
-    """Let people outside add rows to a table, as the member asking."""
+    """Let people outside add rows to a table, as the member asking.
+
+    ``answers_per_day`` is how many answers a day it takes, up to the
+    deployment's ceiling; ``None`` leaves it at the deployment's default.
+    Opening again replaces the whole setting, this included.
+    """
     tables = build_table_service(uow)
     table = await tables.get_table(pod_id, table_name, ctx)
     await tables.authz.require_table_update(
@@ -168,6 +179,11 @@ async def open_table(
     )
     if problem:
         raise OpeningRefused(problem)
+    ceiling = public_web_answers_per_form_per_day_max()
+    if answers_per_day is not None and not 1 <= answers_per_day <= ceiling:
+        raise OpeningRefused(
+            f"A form can take between 1 and {ceiling} answers a day here"
+        )
     grant = await _grant(uow, table.id)
     if grant is None:
         uow.session.add(
@@ -177,12 +193,14 @@ async def open_table(
                 audience=audience.value,
                 columns=list(columns),
                 opened_by=ctx.user_id,
+                answers_per_day=answers_per_day,
             )
         )
     else:
         grant.audience = audience.value
         grant.columns = list(columns)
         grant.opened_by = ctx.user_id
+        grant.answers_per_day = answers_per_day
     await uow.session.flush()
     logger.info(
         "datastore.public_rows.opened",
@@ -288,6 +306,7 @@ def _visitor_view(
             if name in by_name
             and is_fillable(by_name[name], table.primary_key_column, attachments=True)
         ),
+        answers_per_day=grant.answers_per_day,
     )
 
 

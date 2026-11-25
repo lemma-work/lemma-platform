@@ -286,7 +286,13 @@ class SurfaceSettings(BaseSettings):
     )
     surface_web_submissions_per_widget_per_day: int = Field(
         default=500,
-        description="How many times one web form may be submitted in a day.",
+        description=(
+            "How many answers one web form -- a table opened to people "
+            "outside -- takes in a day, whichever widget's page they come "
+            "through, unless the member who opened it set its own (up to "
+            "PUBLIC_WEB_ANSWERS_PER_FORM_PER_DAY_MAX). The name is older than "
+            "counting per form."
+        ),
     )
     surface_web_attachment_max_bytes: int = Field(
         default=10 * 1024 * 1024,

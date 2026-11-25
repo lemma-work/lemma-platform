@@ -45,8 +45,10 @@ class _Chat:
     def __init__(self, *, admit_error=None) -> None:
         self.admit_error = admit_error
         self.saved: list[dict[str, object]] = []
+        self.proofs: list[str | None] = []
 
-    async def admit_row(self, widget, visitor, *, table, address):
+    async def admit_row(self, widget, visitor, *, table, address, altcha=None):
+        self.proofs.append(altcha)
         if self.admit_error is not None:
             raise self.admit_error
         assert table == "applications"
@@ -91,6 +93,26 @@ def test_typed_answers_and_files_reach_the_row_together():
     assert chat.saved == [
         {"answers": {"full_name": "Ana"}, "files": {"cv": ("cv.pdf", b"%PDF-1.7")}}
     ]
+
+
+def test_the_proof_rides_in_the_query_and_is_asked_before_the_body():
+    """An unconfirmed visitor's proof is in the query, so admitting the row --
+    which checks it -- needs nothing from the body; refused there, no file is
+    taken."""
+    chat = _Chat(
+        admit_error=refused(
+            "The security check didn't pass. Try again.", 400, "altcha_failed"
+        )
+    )
+    response = _client(chat).post(
+        f"{URL}&altcha=solved",
+        data=_values(full_name="Ana"),
+        files={"cv": ("cv.pdf", b"%PDF-1.7", "application/pdf")},
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "altcha_failed"
+    assert chat.proofs == ["solved"]
+    assert chat.saved == []
 
 
 def test_an_empty_file_input_is_no_attachment():

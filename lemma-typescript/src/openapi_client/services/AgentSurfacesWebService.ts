@@ -18,7 +18,8 @@ import { request as __request } from '../core/request.js';
 export class AgentSurfacesWebService {
     /**
      * Web Challenge
-     * A proof-of-work to solve before starting a session or asking for a code.
+     * A proof-of-work to solve before starting a session, asking for a code,
+     * or sending an answer from somebody the pod has not confirmed (``row``).
      *
      * ``{"enabled": false}`` when the deployment has bot protection off.
      * @param publicKey
@@ -28,7 +29,7 @@ export class AgentSurfacesWebService {
      */
     public static publicWebChallengeRead(
         publicKey: string,
-        purpose: string = 'session',
+        purpose: 'session' | 'code' | 'row' = 'session',
     ): CancelablePromise<Record<string, any>> {
         return __request(OpenAPI, {
             method: 'GET',

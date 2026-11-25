@@ -1171,7 +1171,9 @@
 
   // A value that is a File is attached: the row then goes as multipart, the
   // typed answers as JSON beside the files. A file for a column the table did
-  // not open is left out, as a typed answer for one is ignored.
+  // not open is left out, as a typed answer for one is ignored. Somebody not
+  // yet confirmed solves a proof for each answer; with files it rides in the
+  // query, so the server checks it before it takes a byte of them.
   function addRow(table, values) {
     var typed = {};
     var files = [];
@@ -1180,14 +1182,22 @@
       else typed[name] = values[name];
     });
     return withSession(function () {
-      if (!files.length) return call("/rows", { body: { table: table, values: typed } });
-      return columnsOf(table).then(function (open) {
-        var form = new FormData();
-        form.append("values", JSON.stringify(typed));
-        files.forEach(function (file) {
-          if (open.indexOf(file[0]) >= 0) form.append(file[0], file[1], file[1].name || file[0]);
+      return (state.isContact ? Promise.resolve(null) : proof("row")).then(function (altcha) {
+        if (!files.length) {
+          var body = { table: table, values: typed };
+          if (altcha) body.altcha = altcha;
+          return call("/rows", { body: body });
+        }
+        return columnsOf(table).then(function (open) {
+          var form = new FormData();
+          form.append("values", JSON.stringify(typed));
+          files.forEach(function (file) {
+            if (open.indexOf(file[0]) >= 0) form.append(file[0], file[1], file[1].name || file[0]);
+          });
+          var path = "/rows/with-files?table=" + encodeURIComponent(table);
+          if (altcha) path += "&altcha=" + encodeURIComponent(altcha);
+          return call(path, { form: form });
         });
-        return call("/rows/with-files?table=" + encodeURIComponent(table), { form: form });
       });
     });
   }

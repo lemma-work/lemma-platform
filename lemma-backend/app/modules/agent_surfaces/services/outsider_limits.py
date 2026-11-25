@@ -188,7 +188,12 @@ class WebWidgetLimiter:
             (f"web:verify:email:{email}", _HOUR, _VERIFIES_PER_EMAIL_PER_HOUR),
         )
 
-    async def allow_submission(self, *, widget_id: UUID, address: str) -> bool:
+    async def allow_submission(
+        self, *, pod_id: UUID, table: str, address: str, per_day: int | None
+    ) -> bool:
+        """One answer to one form: counted per address, and per form -- the
+        open table, whichever widget's page it came through -- at the form's
+        own ``per_day``, else the deployment's default."""
         return await self._within(
             (
                 f"web:submissions:addr:{address}",
@@ -196,9 +201,9 @@ class WebWidgetLimiter:
                 _SESSIONS_PER_ADDRESS_PER_10_MINUTES,
             ),
             (
-                f"web:submissions:{widget_id}",
+                f"web:submissions:{pod_id}:{table}",
                 _DAY,
-                surface_settings.surface_web_submissions_per_widget_per_day,
+                per_day or surface_settings.surface_web_submissions_per_widget_per_day,
             ),
         )
 

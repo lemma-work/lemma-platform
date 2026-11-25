@@ -22,7 +22,7 @@ from __future__ import annotations
 import hmac
 import re
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
@@ -30,7 +30,6 @@ from uuid import UUID
 import jwt
 
 from app.core.public_web import (
-    public_web_altcha_enabled,
     public_web_test_visitor_code,
 )
 from app.core.crypto.factory import get_secret_signer
@@ -48,6 +47,11 @@ from app.modules.agent_surfaces.domain.web_widgets import (
     refused,
 )
 from app.modules.agent_surfaces.services.outsider_limits import WebWidgetLimiter
+from app.modules.agent_surfaces.services.visitor_proofs import (
+    CODE_PROOF,
+    SESSION_PROOF,
+    prove_human,
+)
 from app.modules.agent_surfaces.services.visitor_access import (
     ACCESS_TOKEN_SECONDS,
     Visitor,
@@ -78,11 +82,6 @@ from app.modules.contacts.contracts.visitor_sessions import (
     visitor_session,
     visitor_session_by_secret,
 )
-from app.modules.identity.contracts.altcha import (
-    AltchaRejected,
-    issue_challenge,
-    verify_proof,
-)
 from app.modules.pod.contracts.members import pod_name, pod_organization_id
 
 logger = get_logger(__name__)
@@ -97,10 +96,6 @@ MAX_HOST_SUBJECT = 200
 
 CODE_TTL = timedelta(minutes=10)
 MAX_CODE_ATTEMPTS = 5
-
-#: What a proof-of-work is for, so a proof solved for one cannot open the other.
-SESSION_PROOF = "web-session"
-CODE_PROOF = "web-code"
 
 _EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,255}\.[^@\s]{2,63}$")
 #: What a sender name may contain: a widget's name is a member's free text,
@@ -189,34 +184,6 @@ class WebVisitors:
         self.uow_factory = uow_factory
         self.limiter = limiter or WebWidgetLimiter()
         self.email_sender = email_sender
-
-    # -- proof-of-work ------------------------------------------------------
-
-    async def visitor_challenge(self, *, for_code: bool) -> Mapping[str, object]:
-        """What a page solves before it starts an anonymous session, or before
-        it asks for a code: ``{"enabled": false}`` when protection is off."""
-        try:
-            return await issue_challenge(
-                CODE_PROOF if for_code else SESSION_PROOF,
-                enabled=public_web_altcha_enabled(),
-            )
-        except RuntimeError as exc:
-            raise refused(
-                "The security check is unavailable. Try again shortly.",
-                503,
-                "altcha_unavailable",
-            ) from exc
-
-    @staticmethod
-    async def _prove_human(payload: str | None, *, purpose: str) -> None:
-        try:
-            await verify_proof(
-                payload, purpose=purpose, enabled=public_web_altcha_enabled()
-            )
-        except AltchaRejected as exc:
-            raise refused(
-                "The security check didn't pass. Try again.", 400, "altcha_failed"
-            ) from exc
 
     # -- sessions -----------------------------------------------------------
 
@@ -319,7 +286,7 @@ class WebVisitors:
         address: str,
     ) -> StartedSession:
         if claims is None:
-            await self._prove_human(altcha, purpose=SESSION_PROOF)
+            await prove_human(altcha, purpose=SESSION_PROOF)
         if not await self.limiter.allow_session(widget_id=widget.id, address=address):
             raise refused("Too many chats. Try again later.", 429, "rate_limited")
         async with self.uow_factory() as uow:
@@ -467,7 +434,7 @@ class WebVisitors:
         if not _EMAIL.match(email):
             raise refused("That doesn't look like an email address", 400, "bad_email")
         self._one_identity(visitor)
-        await self._prove_human(altcha, purpose=CODE_PROOF)
+        await prove_human(altcha, purpose=CODE_PROOF)
         if not await self.limiter.allow_code(
             widget_id=widget.id, email=email, address=address
         ):
