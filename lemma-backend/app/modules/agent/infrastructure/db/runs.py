@@ -374,13 +374,15 @@ class Runs(UnitOfWorkRepository):
     async def ledger_totals(
         self, conversation_id: UUID, *, user_id: UUID
     ) -> tuple[LedgerTotals, int]:
-        """What every run of the conversation cost ``user_id``, summed in the
-        database, and how many of those runs have anything recorded."""
+        """What the conversation cost ``user_id`` -- every run, its title and
+        the memory kept after its runs -- summed in the database, and how many
+        of its runs have anything recorded."""
         return await ledger_totals(
             self.session,
             select(AgentRunModel.id).where(
                 AgentRunModel.conversation_id == conversation_id
             ),
+            conversation_id=conversation_id,
             user_id=user_id,
         )
 

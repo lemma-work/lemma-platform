@@ -205,12 +205,37 @@ def _priced(
     return row
 
 
+def _after_the_run(
+    seeded: Seeded,
+    *,
+    cost: float,
+    input_tokens: int,
+    output_tokens: int,
+    source: str,
+    source_id: str | None,
+) -> UsageRecord:
+    """A row written after a run, the way the title and memory passes write
+    one: the conversation is set, the run is not."""
+    row = _priced(
+        seeded,
+        uuid4(),
+        cost=cost,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        source=source,
+    )
+    row.agent_run_id = None
+    row.source_id = source_id
+    return row
+
+
 async def test_a_conversation_reads_back_what_its_runs_cost(scenario):
     seeded = await seeded_conversation(scenario)
     answered = await running_run(seeded)
     await _finish(answered)
     silent = await running_run(seeded)  # a harness that reports no usage
-    elsewhere = await running_run(await seeded_conversation(scenario))
+    other = await seeded_conversation(scenario)
+    elsewhere = await running_run(other)
     async with async_session_maker() as session:
         session.add_all(
             [
@@ -218,21 +243,31 @@ async def test_a_conversation_reads_back_what_its_runs_cost(scenario):
                     seeded, answered, cost=0.25, input_tokens=100, output_tokens=20
                 ),
                 _priced(seeded, answered, cost=0.5, input_tokens=300, output_tokens=40),
-                # The title, written after the run: part of what it cost.
-                _priced(
+                # The title and the memory kept after the run, recorded as
+                # those passes record them: against the conversation, with no
+                # run of their own.
+                _after_the_run(
                     seeded,
-                    answered,
                     cost=0.01,
                     input_tokens=50,
                     output_tokens=5,
                     source="conversation_title",
+                    source_id=None,
+                ),
+                _after_the_run(
+                    seeded,
+                    cost=0.03,
+                    input_tokens=60,
+                    output_tokens=6,
+                    source="agent_memory",
+                    source_id=str(answered),
                 ),
                 # Machine time: cost, but no tokens and no model call.
                 _priced(seeded, answered, cost=0.2, input_tokens=7, kind="compute"),
                 # Recorded against somebody else: never read here.
                 _priced(seeded, answered, cost=9.0, user_id=uuid4()),
                 # Another conversation's run.
-                _priced(seeded, elsewhere, cost=4.0, input_tokens=999),
+                _priced(other, elsewhere, cost=4.0, input_tokens=999),
             ]
         )
         await session.commit()
@@ -243,16 +278,18 @@ async def test_a_conversation_reads_back_what_its_runs_cost(scenario):
     assert response.status_code == status.HTTP_200_OK, response.text
     body = response.json()
     assert body["conversation_id"] == str(seeded.conversation_id)
-    assert body["totals"]["cost_usd"] == pytest.approx(0.96)
-    assert body["totals"]["input_tokens"] == 450
-    assert body["totals"]["output_tokens"] == 65
-    assert body["totals"]["model_calls"] == 3
+    assert body["totals"]["cost_usd"] == pytest.approx(0.99)
+    assert body["totals"]["input_tokens"] == 510
+    assert body["totals"]["output_tokens"] == 71
+    assert body["totals"]["model_calls"] == 4
     assert body["run_count"] == 2
     assert body["unreported_run_count"] == 1
     assert body["has_more_runs"] is False
     runs = {run["agent_run_id"]: run for run in body["runs"]}
     assert set(runs) == {str(answered), str(silent)}
-    assert runs[str(answered)]["usage"]["cost_usd"] == pytest.approx(0.96)
+    # A run's own usage is its own calls: the title and the memory are the
+    # conversation's, so they are in `totals` and in no run.
+    assert runs[str(answered)]["usage"]["cost_usd"] == pytest.approx(0.95)
     assert runs[str(answered)]["status"] == "COMPLETED"
     assert runs[str(silent)]["usage"] is None
     assert body["runs"][0]["agent_run_id"] == str(silent), "newest first"

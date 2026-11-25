@@ -135,6 +135,7 @@ class TitleGenerator(Protocol):
         user_text: str,
         reply_text: str | None,
         audience: Audience = ...,
+        conversation_id: UUID | None = ...,
     ) -> str | None: ...
 
 
@@ -178,8 +179,10 @@ class ConversationTitleGenerator:
         user_text: str,
         reply_text: str | None,
         audience: Audience = Audience(),
+        conversation_id: UUID | None = None,
     ) -> str | None:
-        """A title for the conversation, metered as ``audience``'s spend.
+        """A title for the conversation, metered as ``audience``'s spend and
+        recorded against ``conversation_id``, the only thing it belongs to.
 
         A title for a conversation answering somebody outside the pod costs
         what their run costs: the contacts cap, never the allowance of the
@@ -201,6 +204,7 @@ class ConversationTitleGenerator:
                 user_id=user_id,
                 organization_id=organization_id,
                 pod_id=pod_id,
+                conversation_id=conversation_id,
                 source_type="conversation_title",
                 outside_audience=outside_source_for(audience),
             ),
@@ -314,6 +318,7 @@ class ConversationTitleService:
                         user_text=user_text,
                         reply_text=opening.assistant_text,
                         audience=Audience.of(conversation),
+                        conversation_id=conversation.id,
                     )
                 except Exception:
                     # Not a retry point — one shot per conversation, and the

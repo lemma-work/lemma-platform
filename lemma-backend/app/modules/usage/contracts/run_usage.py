@@ -11,8 +11,8 @@ ends. A run still working reads what it has spent so far.
 
 ``ledger_totals_by_run`` and ``ledger_totals`` answer the same question with
 cost, for a conversation's owner reading their own spend: the rows are held to
-the reader's ``user_id``, so they are a subset of what ``/usage/me/events``
-already shows that person.
+the reader's ``user_id``, so they are rows that person's own usage report reads
+too, with no date window and no organization left out.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
-from sqlalchemy import ColumnElement, Select, func, select
+from sqlalchemy import ColumnElement, Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.usage.infrastructure.cost_expressions import recorded_cost
@@ -219,17 +219,26 @@ async def ledger_totals(
     session: AsyncSession,
     agent_run_ids: Select[tuple[UUID]],
     *,
+    conversation_id: UUID,
     user_id: UUID,
 ) -> tuple[LedgerTotals, int]:
-    """The summed cost and tokens of the runs ``agent_run_ids`` selects, as
-    recorded against ``user_id``, and how many of those runs have any row."""
+    """The summed cost and tokens of a conversation, as recorded against
+    ``user_id``, and how many of its runs have any row.
+
+    The runs ``agent_run_ids`` selects, and the rows the conversation holds
+    with no run: its title and the memory kept after a run are written after
+    the run, against the conversation alone.
+    """
     row = (
         await session.execute(
             select(
                 *_totals_columns(),
                 func.count(func.distinct(UsageRecord.agent_run_id)),
             ).where(
-                UsageRecord.agent_run_id.in_(agent_run_ids),
+                or_(
+                    UsageRecord.agent_run_id.in_(agent_run_ids),
+                    UsageRecord.conversation_id == conversation_id,
+                ),
                 UsageRecord.user_id == user_id,
             )
         )

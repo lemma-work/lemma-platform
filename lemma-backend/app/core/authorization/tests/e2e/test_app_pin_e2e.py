@@ -17,7 +17,8 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from uuid import uuid4
+from datetime import datetime, timezone
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -28,8 +29,10 @@ from websockets.exceptions import ConnectionClosed
 from app.core.api.actor_policy import APP_ROUTE_NOT_ALLOWED, APP_ROUTES
 from app.core.app_pin import APP_HOST_UNKNOWN, ORIGIN_NULL_NOT_ALLOWED
 from app.core.config import settings
+from app.core.infrastructure.db.session import async_session_maker
 from app.core.live.protocol import CLOSE_FORBIDDEN
 from app.modules.test_support.e2e.live_socket import ws_url
+from app.modules.usage.infrastructure.models import UsageRecord
 from app.modules.test_support.e2e.runtime import backend_server as _backend_server
 from app.modules.test_support.e2e_authz import (
     add_pod_member,
@@ -329,6 +332,29 @@ async def test_H20_an_app_reads_writes_and_chats_in_its_pod_as_its_viewer(
     assert chat.json()["id"] in {item["id"] for item in listed.json()["items"]}
 
 
+def _spent(world, conversation_id: UUID, *, cost: float) -> UsageRecord:
+    """What the viewer spent on a conversation outside any run, as its title
+    is recorded."""
+    return UsageRecord(
+        organization_id=UUID(world["org_id"]),
+        pod_id=UUID(world["pod_id"]),
+        user_id=UUID(world["owner"]["id"]),
+        conversation_id=conversation_id,
+        source_type="conversation_title",
+        profile_id="system:lemma",
+        profile_scope="SYSTEM",
+        model_name="model-a",
+        usage_kind="llm",
+        input_tokens=10,
+        output_tokens=2,
+        units=0.0,
+        cost_usd=cost,
+        status="COMPLETED",
+        record_metadata={},
+        occurred_at=datetime.now(timezone.utc),
+    )
+
+
 async def test_an_app_reads_what_its_viewers_conversation_cost_but_not_all_their_usage(
     browser: AsyncClient, world
 ):
@@ -341,6 +367,11 @@ async def test_an_app_reads_what_its_viewers_conversation_cost_but_not_all_their
         json={"agent_runtime": {"profile_id": "system:lemma"}},
     )
     assert chat.status_code == status.HTTP_201_CREATED, chat.text
+    # Spent by the viewer on this conversation: an app that resolved anybody
+    # else would read nothing here, and zero is no proof it reached the viewer.
+    async with async_session_maker() as session:
+        session.add(_spent(world, UUID(chat.json()["id"]), cost=0.25))
+        await session.commit()
 
     usage = await browser.get(
         f"/pods/{world['pod_id']}/conversations/{chat.json()['id']}/usage",
@@ -349,7 +380,7 @@ async def test_an_app_reads_what_its_viewers_conversation_cost_but_not_all_their
     everywhere = await browser.get("/usage/me/events", headers=headers)
 
     assert usage.status_code == status.HTTP_200_OK, usage.text
-    assert usage.json()["totals"]["cost_usd"] == 0
+    assert usage.json()["totals"]["cost_usd"] == pytest.approx(0.25)
     assert usage.json()["run_count"] == 0
     assert everywhere.status_code == status.HTTP_403_FORBIDDEN, everywhere.text
     assert _code(everywhere) == APP_ROUTE_NOT_ALLOWED
