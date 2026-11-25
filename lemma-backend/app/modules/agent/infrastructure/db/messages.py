@@ -153,6 +153,15 @@ class Messages(UnitOfWorkRepository):
             model.message_metadata = {**(model.message_metadata or {}), **updates}
             await self.session.flush()
 
+    async def message_in(
+        self, *, conversation_id: UUID, message_id: UUID
+    ) -> MessageEntity | None:
+        """One message of this conversation, or ``None`` when it is not one."""
+        model = await self.session.get(MessageModel, message_id)
+        if model is None or model.conversation_id != conversation_id:
+            return None
+        return model.to_entity()
+
     async def list_messages(
         self,
         *,

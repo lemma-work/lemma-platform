@@ -61,7 +61,8 @@ export interface Channel {
     /** Whether the reader is in it. An admin is listed a bot's private
      *  groups they are not in, to join on request. */
     joined: boolean;
-    lastLine: { sender: PersonRef; text: string; createdAt: string } | null;
+    /** `blocked`: written by somebody the reader blocked; no text. */
+    lastLine: { sender: PersonRef; text: string; createdAt: string; blocked?: boolean } | null;
     lastMessageAt: string | null;
     /** The newest line's place in the channel; lines are numbered from 1. */
     lastSeq: number;
@@ -142,6 +143,9 @@ export interface Line {
      *  wrote it -- somebody who may change the channel. */
     removedBy: PersonRef | null;
     withheld: boolean;
+    /** Written by somebody the reader blocked: no text, no parts, until they
+     *  unblock them. Nobody else's view of it changes. */
+    blocked?: boolean;
     /** `asker_only`: an agent's answer made with one member's own access,
      *  which only that member reads in full. */
     visibility: "asker_only" | "channel";
@@ -274,6 +278,7 @@ export function readChannel(raw: unknown): Channel | null {
             sender: readPerson(last.sender) ?? SOMEBODY,
             text: typeof last.text === "string" ? last.text : "",
             createdAt: String(last.created_at ?? ""),
+            ...(last.blocked === true ? { blocked: true } : {}),
         } : null,
         lastMessageAt: words(row.last_line_at),
         lastSeq: count(row.last_seq),
@@ -354,18 +359,21 @@ export function readLine(raw: unknown): Line | null {
     if (!id) return null;
     const deleted = row.deleted === true;
     const withheld = row.withheld === true;
+    const blocked = row.blocked === true;
+    const hidden = deleted || withheld || blocked;
     return {
         id,
         seq: count(row.seq),
         sender: readPerson(row.sender) ?? SOMEBODY,
         onBehalfOf: readPerson(row.on_behalf_of),
-        /* A withheld or deleted line keeps no text even if some arrived. */
-        text: deleted || withheld ? null : typeof row.text === "string" ? row.text : null,
+        /* A withheld, blocked or deleted line keeps no text even if some arrived. */
+        text: hidden ? null : typeof row.text === "string" ? row.text : null,
         createdAt: String(row.created_at ?? ""),
         editedAt: words(row.edited_at),
         deleted,
         removedBy: deleted ? readPerson(row.removed_by) : null,
         withheld,
+        ...(blocked ? { blocked } : {}),
         visibility: row.visibility === "asker_only" ? "asker_only" : "channel",
         canShare: row.can_share === true && !deleted,
         membersOnly: row.members_only === true,
@@ -375,7 +383,7 @@ export function readLine(raw: unknown): Line | null {
         replyCount: count(row.reply_count),
         lastReplyAt: words(row.last_reply_at),
         interaction: readQuestion(row.question),
-        parts: deleted || withheld ? [] : readParts(row.parts),
+        parts: hidden ? [] : readParts(row.parts),
         clientMessageId: words(row.client_message_id),
         delivered: deleted ? null : readDelivered(row.delivered),
     };
@@ -535,6 +543,7 @@ export function platformsOf(channel: Pick<Channel, "sources">): string[] {
 export function previewOf(channel: Pick<Channel, "lastLine" | "topic">, me: string | null): string {
     const last = channel.lastLine;
     if (!last) return channel.topic ?? "Nothing said yet.";
+    if (last.blocked) return personName(last.sender, me) + ": a message you blocked";
     const text = last.text.replace(/\s+/g, " ").trim();
     return personName(last.sender, me) + ": " + (text || "…");
 }

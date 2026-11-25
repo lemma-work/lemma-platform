@@ -86,6 +86,8 @@ class ContactRef(BaseModel):
     is_anonymous: bool = False
     #: Whether an agent has answered them yet: what the contact limit counts.
     answered: bool = False
+    #: The pod's agents do not answer them, or write to them.
+    blocked: bool = False
 
 
 def _ref(contact: Contact | None) -> ContactRef | None:
@@ -102,6 +104,7 @@ def _as_ref(contact: Contact) -> ContactRef:
         label=contact.label,
         is_anonymous=contact.is_anonymous,
         answered=contact.answered_at is not None,
+        blocked=contact.blocked_at is not None,
     )
 
 

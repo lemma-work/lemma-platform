@@ -79,3 +79,23 @@ def test_an_answer_made_with_one_members_access_is_withheld_from_the_rest() -> N
     assert his["withheld"] and his["text"] is None and his["parts"] == []
     # Encoded once per kind of reader, not once per reader.
     assert view.events_for(uuid4()) == view.events_for(TOM)
+
+
+def test_a_line_from_somebody_the_reader_blocked_says_only_that_it_is_there() -> None:
+    sam = uuid4()
+    rude = _line(Sender.contact(sam), seq=9, text="something rude")
+    view = LinesView(
+        CHANNEL,
+        [rude],
+        names={},
+        agents={},
+        since_seq=8,
+        blocks={PRIYA: frozenset({Principal.contact(sam)})},
+    )
+    (hers,) = [json.loads(event)["message"] for event in view.events_for(PRIYA)]
+    (his,) = [json.loads(event)["message"] for event in view.events_for(TOM)]
+    assert hers["blocked"] and hers["text"] is None and hers["parts"] == []
+    # Blocked, not withheld: the reader chose not to read it.
+    assert not hers["withheld"]
+    # Nobody else's view changes.
+    assert his["text"] == "something rude" and not his["blocked"]
