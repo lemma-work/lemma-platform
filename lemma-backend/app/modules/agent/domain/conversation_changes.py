@@ -159,7 +159,12 @@ def changes_command(*, directory: str, ref: str | None, patch_bytes: int | None)
         'ahead=0; [ -z "$base" ] || ahead=$(g rev-list --count "$base..HEAD")',
         "empty=$(g hash-object -t tree /dev/null)",
         "from=${base:-${head:-$empty}}",
-        'dirty=0; [ -z "$head" ] || g diff --quiet --no-ext-diff HEAD -- || dirty=1',
+        # Index against HEAD and worktree against index, apart: a change
+        # staged then undone in the worktree nets to nothing against HEAD.
+        (
+            'dirty=0; [ -z "$head" ] || { g diff --quiet --no-ext-diff --cached HEAD -- '
+            "&& g diff --quiet --no-ext-diff --; } || dirty=1"
+        ),
         (
             f'g {_DIFF} --numstat -z -M "$from" -- | head -c {LIST_BYTES + 1} '
             '> "$t/numstat"'

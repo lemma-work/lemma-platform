@@ -383,6 +383,23 @@ def test_a_checkout_with_nothing_changed_is_ready_and_empty(git: LocalGit) -> No
     assert changes.base_ref == "origin/main"
 
 
+def test_a_change_staged_then_undone_in_the_worktree_is_still_uncommitted(
+    git: LocalGit,
+) -> None:
+    """Against HEAD the worktree nets to nothing; the index still holds work."""
+    _seed_origin(git)
+    code, worktree = git.step("abc12345")
+    assert code == 0
+    (worktree / "keep.txt").write_text("staged\n")
+    git.run("-C", str(worktree), "add", "keep.txt")
+    (worktree / "keep.txt").write_text("a\nb\nc\n")
+
+    done = _read(git, worktree)
+
+    assert done.returncode == 0, done.stderr
+    assert parse_changes(done.stdout, patch_bytes=None).uncommitted is True
+
+
 def test_a_conversation_on_a_ref_compares_against_that_ref(git: LocalGit) -> None:
     code, worktree = git.step("abc12345", ref="release")
     assert code == 0

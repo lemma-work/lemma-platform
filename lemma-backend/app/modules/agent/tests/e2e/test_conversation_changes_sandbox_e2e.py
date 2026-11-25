@@ -44,7 +44,7 @@ set -e
 export GIT_AUTHOR_NAME=Ada GIT_AUTHOR_EMAIL=ada@example.test
 export GIT_COMMITTER_NAME=Ada GIT_COMMITTER_EMAIL=ada@example.test
 root={WORKSPACE_ROOT}
-rm -rf "$root/origin-chg" "{_REPO.clone_dir}" "{_REPO.worktree_dir(_SLUG)}"
+rm -rf "$root/origin-src" "$root/origin-chg" "{_REPO.clone_dir}" "{_REPO.worktree_dir(_SLUG)}"
 git init -q -b main "$root/origin-src"
 printf 'one\\ntwo\\n' > "$root/origin-src/app.txt"
 git -C "$root/origin-src" add . && git -C "$root/origin-src" commit -qm seed
