@@ -41,6 +41,50 @@ export const CAST = {
 
 export type CharacterName = keyof typeof CAST;
 
+/** The face the product shows: each character's rig, standing at rest
+ *  (`scripts/faces.mjs` draws these from the web's own rig). The web animates
+ *  that rig wherever a face is 30px or more and keeps the walking portrait
+ *  above for anything smaller (`ANIMATED_MIN` in `shell/mark.tsx`). */
+const RIG: Record<CharacterName, number> = {
+    arch: require("../../assets/rig/arch.webp"),
+    bean: require("../../assets/rig/bean.webp"),
+    bloom: require("../../assets/rig/bloom.webp"),
+    bolt: require("../../assets/rig/bolt.webp"),
+    cloud: require("../../assets/rig/cloud.webp"),
+    coil: require("../../assets/rig/coil.webp"),
+    cube: require("../../assets/rig/cube.webp"),
+    frame: require("../../assets/rig/frame.webp"),
+    gem: require("../../assets/rig/gem.webp"),
+    grid: require("../../assets/rig/grid.webp"),
+    kite: require("../../assets/rig/kite.webp"),
+    knot: require("../../assets/rig/knot.webp"),
+    loop: require("../../assets/rig/loop.webp"),
+    moon: require("../../assets/rig/moon.webp"),
+    peak: require("../../assets/rig/peak.webp"),
+    pleat: require("../../assets/rig/pleat.webp"),
+    prism: require("../../assets/rig/prism.webp"),
+    ring: require("../../assets/rig/ring.webp"),
+    spark: require("../../assets/rig/spark.webp"),
+    spool: require("../../assets/rig/spool.webp"),
+    sprout: require("../../assets/rig/sprout.webp"),
+    stack: require("../../assets/rig/stack.webp"),
+    wave: require("../../assets/rig/wave.webp"),
+    wedge: require("../../assets/rig/wedge.webp"),
+};
+
+/** Below this the web draws the portrait, at or above it the rig. */
+const RIG_FROM = 30;
+
+/** Whether a face drawn at `size` points is the rig rather than the portrait. */
+export function isRigAt(size: number): boolean {
+    return size >= RIG_FROM;
+}
+
+/** A character's face at `size` points, as the product draws it there. */
+export function castImage(name: CharacterName, size: number): number {
+    return isRigAt(size) ? RIG[name] : CAST[name];
+}
+
 /** In the web's order (`CHARACTERS` in `shell/cast.ts`): the hash indexes it. */
 const CHARACTERS: readonly CharacterName[] = [
     "arch", "bean", "bloom", "bolt", "cloud", "coil", "cube", "frame", "gem", "grid", "kite", "knot",
@@ -115,7 +159,9 @@ export function drawnFor(id: string, icon: string | null | undefined): Drawn {
 export function LemmaFace({ id, icon, size, bare = false }: { id: string; icon?: string | null; size: number; bare?: boolean }) {
     const drawn = drawnFor(id, icon);
     const tile = !bare || drawn.kind === "image";
-    const inner = tile && drawn.kind === "cast" ? Math.round(size * 0.94) : size;
+    /* The rig carries its own margins and fills its box on the web; the
+       portrait sits a little in from the tile's edge. */
+    const inner = tile && drawn.kind === "cast" && !isRigAt(size) ? Math.round(size * 0.94) : size;
     return (
         <View
             accessibilityElementsHidden
@@ -128,7 +174,7 @@ export function LemmaFace({ id, icon, size, bare = false }: { id: string; icon?:
                 ...(tile ? { borderRadius: Math.round(size * 0.3), overflow: "hidden" as const, backgroundColor: tintOf(id) } : {}),
             }}
         >
-            {drawn.kind === "cast" && <Image source={CAST[drawn.name]} style={{ width: inner, height: inner }} contentFit="contain" />}
+            {drawn.kind === "cast" && <Image source={castImage(drawn.name, size)} style={{ width: inner, height: inner }} contentFit="contain" />}
             {drawn.kind === "image" && <Image source={{ uri: drawn.url }} style={{ width: size, height: size }} contentFit="cover" />}
             {drawn.kind === "glyph" && <Text size={Math.round(size * 0.56)}>{drawn.glyph}</Text>}
         </View>

@@ -7620,6 +7620,19 @@
             ],
             "title": "Parent Id"
           },
+          "ref": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where in `repository` the worktree starts: a branch, a tag, a commit, or a pull request's head as 'pull/<number>/head'. The conversation still works on a branch of its own (lemma/<slug>), made from this point; without it, from the default branch. Only with `repository`.",
+            "title": "Ref"
+          },
           "repository": {
             "anyOf": [
               {

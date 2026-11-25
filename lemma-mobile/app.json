@@ -12,6 +12,7 @@
       "supportsTablet": false,
       "bundleIdentifier": "work.lemma.mobile",
       "buildNumber": "1",
+      "usesAppleSignIn": true,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSAppTransportSecurity": {
@@ -141,12 +142,17 @@
         }
       ],
       "expo-web-browser",
+      "expo-apple-authentication",
       [
         "expo-splash-screen",
         {
           "backgroundColor": "#ffffff",
           "image": "./assets/splash-icon.png",
-          "imageWidth": 96
+          "imageWidth": 96,
+          "dark": {
+            "backgroundColor": "#212121",
+            "image": "./assets/splash-icon.png"
+          }
         }
       ],
       "./plugins/local-cleartext.js",
