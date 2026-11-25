@@ -127,10 +127,11 @@ def _require_named_checkout(metadata: dict[str, object] | None) -> None:
     The run's start drops a ``repo`` it cannot parse, and a ref it cannot take
     becomes the default branch: right for a webhook's payload, which says
     whatever GitHub sent, and wrong for an author's step, where a reviewer
-    quietly reading ``main`` instead of the pull request is the failure. Only
-    the shape is checked here: whether git can fetch the ref is found out in
-    the sandbox at the agent's first command, and reaches the agent as a
-    workspace notice rather than the step as an error.
+    quietly reading ``main`` instead of the pull request is the failure. This
+    is the shape, before the run; whether git can fetch the ref is found out
+    in the sandbox at the agent's first command, and a checkout that did not
+    land fails the step when its conversation settles
+    (``application/automation/outcome``).
     """
     raw = (metadata or {}).get("repo")
     if raw is None:

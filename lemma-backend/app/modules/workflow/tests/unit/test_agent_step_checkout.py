@@ -139,8 +139,8 @@ async def test_a_name_github_would_not_have_fails_rather_than_runs_without_it() 
 async def test_a_ref_of_a_shape_no_checkout_takes_fails_rather_than_reading_main() -> (
     None
 ):
-    """Only the shape: a ref shaped right that git cannot fetch is found out in
-    the sandbox, after the step has started its run (see `_checkout`)."""
+    """Refused before the run. A ref shaped right that git cannot fetch is
+    found out in the sandbox, and fails the step when the run settles."""
     step, created = _step({"repository": "acme/web", "ref": "--upload-pack=x"})
 
     with pytest.raises(ConversationValidationError, match="ref"):

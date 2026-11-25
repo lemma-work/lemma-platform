@@ -28,19 +28,28 @@ def _ctx(workload: Workload | None) -> Context:
     return cast(Context, SimpleNamespace(workload=workload))
 
 
-def _workload(kind: WorkloadKind) -> Workload:
-    return Workload(kind=kind, workload_id=uuid4(), for_user_id=uuid4())
+def _workload(principal_type: str) -> Workload:
+    return Workload(
+        kind=WorkloadKind.of(principal_type),
+        workload_id=uuid4(),
+        for_user_id=uuid4(),
+        principal_type=principal_type,
+    )
 
 
 async def test_a_function_run_may_ask() -> None:
-    require_function_run(_ctx(_workload(WorkloadKind.FUNCTION)))
+    require_function_run(_ctx(_workload("function")))
 
 
 @pytest.mark.parametrize(
     "who",
     [
         pytest.param(None, id="a person, an app's page or the CLI"),
-        pytest.param(_workload(WorkloadKind.AGENT), id="an agent's token"),
+        pytest.param(_workload("agent"), id="an agent's token"),
+        # Folded into FUNCTION by `WorkloadKind.of`, which counts anything
+        # that is not an agent as a function: the widest identity there is
+        # must not go to the next kind of workload by that default.
+        pytest.param(_workload("workflow"), id="a workflow's token"),
     ],
 )
 async def test_anyone_else_is_refused(who: Workload | None) -> None:

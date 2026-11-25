@@ -64,6 +64,10 @@ from app.core.log.log import get_logger
 from app.modules.agent.domain.project_repo import ProjectRepo, worktree_branch
 from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.workspace_cli.checkout_failures import (
+    forget_checkout_failure,
+    remember_checkout_failure,
+)
 from app.modules.agent.infrastructure.tools.workspace_cli.github_credential_bridge import (
     ensure_github_credentials,
 )
@@ -267,6 +271,15 @@ async def ensure_project_checkout(
     notice = await _settle(
         result, redis=redis, marker_key=marker_key, repo=repo, here=here
     )
+    if ctx.conversation_id is not None:
+        # Whoever waits on the conversation -- a workflow step that named the
+        # repository -- reads this rather than the agent's prompt.
+        if result.get("exit_code") in (0, _FETCH_FAILED_EXIT):
+            await forget_checkout_failure(redis, ctx.conversation_id)
+        else:
+            await remember_checkout_failure(
+                redis, ctx.conversation_id, notice or "the checkout failed"
+            )
     if run_dir is not None:
         # A shared machine clears its own run directories (`machine_lifecycle`).
         return notice

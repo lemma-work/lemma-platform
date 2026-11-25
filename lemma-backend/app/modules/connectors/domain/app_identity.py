@@ -51,9 +51,18 @@ class AppIdentityUnavailableError(ConnectorDomainError):
 
 
 def require_function_run(ctx: Context) -> None:
-    """Refuse ``act_as="app"`` from anyone but a function run."""
+    """Refuse ``act_as="app"`` from anyone but a function run.
+
+    The token's own principal type, not ``kind``: ``WorkloadKind.of`` counts
+    anything that is not an agent as a function, and the next kind of workload
+    to carry a token must not present as the app by that default.
+    """
     workload = ctx.workload
-    if workload is None or workload.kind is not WorkloadKind.FUNCTION:
+    if (
+        workload is None
+        or workload.kind is not WorkloadKind.FUNCTION
+        or workload.principal_type != "function"
+    ):
         raise AppIdentityRefusedError()
 
 

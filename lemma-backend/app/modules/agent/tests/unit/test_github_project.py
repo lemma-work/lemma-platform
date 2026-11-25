@@ -12,6 +12,7 @@ import pytest
 from app.modules.agent.domain.workspace_location import ProjectRepo
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.infrastructure.tools.workspace_cli import (
+    checkout_failures,
     github_project,
     workspace_cli,
 )
@@ -33,6 +34,12 @@ class _FakeRedis:
     async def set(self, key: str, value: str, *, ex: int):
         del ex
         self.values[key] = value
+
+    async def get(self, key: str) -> str | None:
+        return self.values.get(key)
+
+    async def delete(self, key: str) -> int:
+        return 1 if self.values.pop(key, None) is not None else 0
 
 
 class _FakeSession:
@@ -539,8 +546,11 @@ def test_a_commit_is_checked_out_even_on_no_branch(git: LocalGit) -> None:
     """A reviewer pinned to the commit it was asked about: a fork's head is on
     no branch a clone fetches, and `git clone --branch` refuses a sha, so the
     first checkout fetches the commit by name. GitHub serves any reachable
-    commit that way; a local origin has to be told to."""
+    commit that way; a local origin has to be told to. Over `file://`, so the
+    commit is in the clone only if the checkout fetched it by its sha: a path
+    clone hardlinks every object and would pass without that fetch."""
     git.run("-C", str(git.origin), "config", "uploadpack.allowAnySHA1InWant", "true")
+    git.url = f"file://{git.origin}"
     head = git.open_pull_request(7)
 
     code, worktree = git.step("one", ref=head)
@@ -607,3 +617,35 @@ def test_a_conversation_on_a_tag_starts_there_on_a_first_clone(git: LocalGit) ->
 
     assert code == 0
     assert git.run("-C", str(worktree), "rev-parse", "HEAD") == tagged
+
+
+@pytest.mark.asyncio
+async def test_a_failed_checkout_is_remembered_against_its_conversation() -> None:
+    """A workflow step that named the repository waits on this conversation:
+    the empty directory must reach it, not only the agent's prompt."""
+    redis = _FakeRedis()
+    ctx = _context(_REPO)
+    failing = _FakeSession(exit_code=128, stderr="fatal: Remote branch gone not found")
+
+    await _ensure(ctx, failing, redis=redis)
+
+    failure = await checkout_failures.checkout_failure(ctx.conversation_id, redis=redis)
+    assert failure is not None
+    assert "Remote branch gone not found" in failure
+
+
+@pytest.mark.asyncio
+async def test_a_checkout_that_lands_later_clears_the_failure() -> None:
+    redis = _FakeRedis()
+    ctx = _context(_REPO)
+    await _ensure(
+        ctx, _FakeSession(exit_code=128, stderr="fatal: offline"), redis=redis
+    )
+    redis.values.pop(_MARKER_KEY)  # the failed marker's few minutes are up
+
+    await _ensure(ctx, _FakeSession(), redis=redis)
+
+    assert (
+        await checkout_failures.checkout_failure(ctx.conversation_id, redis=redis)
+        is None
+    )

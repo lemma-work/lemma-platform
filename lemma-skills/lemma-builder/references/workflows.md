@@ -197,12 +197,11 @@ connector as the run's owner, so the agent needs `connector:github:use`.
 ```
 
 A name or ref of the wrong shape -- or one that resolves to nothing -- fails
-the step rather than starting the agent on the default branch. Only the shape
-is checked before the run: a ref shaped right that git then cannot fetch (a
-branch deleted since the event, a fork's commit the host will not serve)
-leaves the agent in an empty folder with a notice saying the checkout failed,
-and the step ends with whatever the agent made of that. Tell the agent in the
-step's instruction to stop and say so if its directory is empty.
+the step rather than starting the agent on the default branch. A ref shaped
+right that git then cannot fetch (a branch deleted since the event, a fork's
+commit the host will not serve) is found out when the agent runs its first
+command: the agent is told its folder is empty, and the step fails with git's
+reason when the agent finishes, whatever the agent wrote.
 
 ### FUNCTION — the deterministic step
 
