@@ -138,6 +138,10 @@ class VaultKeyring:
         key_id = self._active.get(ENCRYPT)
         if key_id is None:
             raise VaultUnavailable("no active vault encryption key")
+        if self._stale():
+            # Even the load just made read its keys too long ago to trust that
+            # this one is still active; nothing guards a sealed value later.
+            raise VaultUnavailable("vault keys could not be loaded recently enough")
         return key_id, self._keys[key_id].material
 
     async def encryption_key(self, key_id: UUID) -> bytes:

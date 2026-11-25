@@ -10,6 +10,11 @@ stored -- in one self-contained string instead of a row.
 
 ``bindings`` are the context the value belongs to (a cache key, a run id). A
 sealed value moved to another key or run does not open.
+
+Retiring a KEK does not look for values sealed under it -- they live in Redis,
+queues and cookies, out of the database's reach. Such a value then opens as
+:class:`SealedValueInvalid`, the same as absent, so only short-lived copies are
+sealed; anything long-lived is a row in ``vault_secrets``, which rewrap moves.
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ from uuid import UUID
 from app.core.crypto.aad import encode_aad
 from app.core.crypto.aead import InvalidTag, new_key, open_sealed, seal
 
+from app.modules.vault.domain.errors import VaultUnavailable
 from app.modules.vault.domain.types import (
     JsonObject,
     Revealed,
@@ -91,7 +97,12 @@ async def open_value(
         raise SealedValueInvalid("sealed value is truncated")
     kek_id = UUID(bytes=raw[:16])
     kind = _KINDS[raw[header : header + 1]]
-    kek = await (keyring or get_vault_keyring()).encryption_key(kek_id)
+    try:
+        kek = await (keyring or get_vault_keyring()).encryption_key(kek_id)
+    except VaultUnavailable as exc:
+        # Sealed under a key since retired: nothing can open it any more, and
+        # it was only ever a short-lived copy, so it counts as absent.
+        raise SealedValueInvalid("sealed under a key that is no longer kept") from exc
     try:
         dek = open_sealed(
             kek, raw[16:header], encode_aad("lemma-vault/sealed-dek/v1", str(kek_id))
