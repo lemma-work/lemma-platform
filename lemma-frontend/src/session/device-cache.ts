@@ -6,9 +6,12 @@ import { key } from "./storage";
  * reader saw last rather than on a spinner, and the network catches up
  * behind it: the lists the frame is drawn from -- organizations, Lemmas,
  * their chats and shared chats, what waits on the reader, the names of
- * apps, tables, automations and files. Never what is inside a file, a table
- * or a chat, a Lemma's plan included, and never a change still on its way
- * to the API.
+ * apps, tables and files. Names and titles only: a chat's title but not its
+ * last line, a need's one-line title but not the question in full, what a
+ * contact wrote or the answers offered (`withoutWords`). Never what is
+ * inside a file, a table or a chat, a Lemma's plan included, never a
+ * schedule's instruction or a form's fields, and never a change still on
+ * its way to the API.
  *
  * One record in IndexedDB, written at most once a second while the cache
  * changes. It is the signed-in person's: read back only for them, on the same API and the
@@ -40,18 +43,24 @@ export interface KeptRecord {
 }
 
 /** The first words of the keys worth keeping: lists, each small, each read
- *  before anything can be drawn. */
+ *  before anything can be drawn.
+ *
+ *  Not kept, though the frame reads them early: the workflow forms waiting
+ *  on the reader (`workflow-waiting`), whose rows carry each form's schema
+ *  with values resolved from its run, and a Lemma's schedules
+ *  (`outcome-schedules`), whose rows carry each instruction and the whole
+ *  row as it arrived. Their words are what they are for, so they cannot be
+ *  kept without them, and a screen that opened on a blanked copy could save
+ *  the blank back. */
 const LISTS: ReadonlySet<string> = new Set([
     "orgs",
     "current-user",
     "pods",
     "pod-detail",
-    "workflow-waiting",
     "conversation-asks",
     "org-recents",
     "outcome-apps",
     "outcome-tables",
-    "outcome-schedules",
     "outcome-files",
     "outcome-surfaces",
 ]);
@@ -94,6 +103,7 @@ export function keptState(client: QueryClient): DehydratedState {
             ...query,
             state: {
                 ...query.state,
+                data: withoutWords(query.queryKey, query.state.data),
                 status: "success" as const,
                 fetchStatus: "idle" as const,
                 error: null,
@@ -103,6 +113,52 @@ export function keptState(client: QueryClient): DehydratedState {
             },
         })),
     };
+}
+
+type Row = Record<string, unknown>;
+const rows = (data: unknown): Row[] | null =>
+    Array.isArray(data) ? data.filter((one): one is Row => Boolean(one) && typeof one === "object") : null;
+
+/** A chat as it goes to disk: its last line keeps who said it and when, not
+ *  what; its attention keeps since when, not why. */
+function chatWithoutWords(channel: Row): Row {
+    const lastLine = channel.lastLine && typeof channel.lastLine === "object" ? { ...(channel.lastLine as Row), text: "" } : null;
+    const attention = channel.attention && typeof channel.attention === "object" ? { ...(channel.attention as Row), reason: null } : null;
+    return { ...channel, lastLine, attention };
+}
+
+/** A kept answer as it goes to disk: its names and titles, without the words
+ *  people and Lemmas said. Of the kept lists two carry such words:
+ *
+ *  - what waits on the reader across the organization
+ *    (`conversation-asks`/`organization`): a need's `detail` is the question
+ *    as asked, up to 4,000 characters, or why a contact asked for a person,
+ *    and its `choices` are the answers a question offered in its chat;
+ *  - a Lemma's shared chats (`channel`/`list`): each chat's `lastLine` says
+ *    what was last said in it, and its `attention.reason` why a contact is
+ *    waiting.
+ *
+ *  Those are left out; the rest of each item stays, so the frame draws the
+ *  same, and the read that follows on arrival brings the words back. A
+ *  chat's title, a need's one-line title and a pause's one-line summary are
+ *  kept: they are what the lists show. */
+export function withoutWords(queryKey: readonly unknown[], data: unknown): unknown {
+    const [head, scope, kind] = queryKey;
+    if (head === "conversation-asks" && scope === "organization") {
+        return rows(data)?.map((need) => ({ ...need, detail: null, choices: [] })) ?? data;
+    }
+    if (head === "channel" && kind === "list" && data && typeof data === "object") {
+        const infinite = data as { pages?: unknown };
+        if (!Array.isArray(infinite.pages)) return data;
+        return {
+            ...infinite,
+            pages: infinite.pages.map((page) => {
+                const items = page && typeof page === "object" ? rows((page as Row).items) : null;
+                return items ? { ...(page as Row), items: items.map(chatWithoutWords) } : page;
+            }),
+        };
+    }
+    return data;
 }
 
 /** Whether a kept record may be read back now, for this person. `api` is the
