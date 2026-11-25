@@ -123,6 +123,10 @@ fire, on the caller's transaction. A call naming no pods is refused. The
 routing key is `{source: slack, event, team_id, channel_id}` (`thread_ts` too
 for a thread reply), written by `_slack_binding` from the trigger and the
 author's config, which must name those ids; nothing is subscribed. The
+channel must be one the pod's bot hears -- routed on one of its Slack surfaces
+in that workspace (`agent_surfaces/contracts/slack_channels`) -- or the
+schedule is refused at create, since it would otherwise be stored and never
+fire with nothing to say why. The
 `source_event_id` is a digest of the message's workspace, channel and `ts`, so
 a Slack retry and a second bot hearing the same message are one fire, and a
 message an app posted never arrives (`bot_id` is dropped as the request is

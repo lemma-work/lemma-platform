@@ -56,8 +56,13 @@ def _adapter(
     *,
     resolve_connector=None,
     bound: list[dict] | None = None,
+    channels_heard: frozenset[tuple[str, str]] | None = None,
 ):
-    """An adapter whose connector operations are stood up, not patched."""
+    """An adapter whose connector operations are stood up, not patched.
+
+    ``channels_heard``: the (pod, Slack channel) pairs whose channel is
+    connected to the pod's bot; every one, when not given.
+    """
 
     async def _resolve(_uow, **kwargs) -> TriggerBinding:
         if bound is not None:
@@ -80,7 +85,16 @@ def _adapter(
         subscribe=_subscribe,
         unsubscribe=_unsubscribe,
         resolve_connector=resolve_connector or _resolve_connector,
+        pod_hears_channel=_hears(channels_heard),
     )
+
+
+def _hears(channels_heard: frozenset[tuple[str, str]] | None):
+    async def _pod_hears_channel(_uow, *, pod_id, team_id, channel_id) -> bool:
+        del team_id
+        return channels_heard is None or (str(pod_id), channel_id) in channels_heard
+
+    return _pod_hears_channel
 
 
 @pytest.mark.asyncio
@@ -182,6 +196,36 @@ async def test_a_slack_trigger_with_no_channel_is_refused_rather_than_stored():
 
     with pytest.raises(ScheduleValidationError):
         await adapter.create_provider_trigger(_schedule(config={"team_id": "T0INC"}))
+
+
+@pytest.mark.asyncio
+async def test_a_slack_trigger_on_a_channel_the_pods_bot_is_not_in_is_refused():
+    """Only a channel connected to the pod's bot is heard, so a schedule on
+    any other would be stored and never fire, with nothing to say why."""
+    schedule = _schedule(config={"team_id": "T0INC", "channel_id": "C0ELSEWHERE"})
+    adapter = _adapter(
+        TriggerBinding(connector_id="slack", event_type="message", subscribable=False),
+        [],
+        channels_heard=frozenset({(str(schedule.pod_id), "C0INC42")}),
+    )
+
+    with pytest.raises(ScheduleValidationError, match="C0ELSEWHERE"):
+        await adapter.create_provider_trigger(schedule)
+
+
+@pytest.mark.asyncio
+async def test_a_slack_trigger_on_a_channel_the_pods_bot_hears_is_routed():
+    schedule = _schedule(config={"team_id": "T0INC", "channel_id": "C0INC42"})
+    adapter = _adapter(
+        TriggerBinding(connector_id="slack", event_type="message", subscribable=False),
+        [],
+        channels_heard=frozenset({(str(schedule.pod_id), "C0INC42")}),
+    )
+
+    provisioned = await adapter.create_provider_trigger(schedule)
+
+    assert provisioned.bound_config is not None
+    assert provisioned.bound_config["channel_id"] == "C0INC42"
 
 
 @pytest.mark.asyncio

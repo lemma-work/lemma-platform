@@ -169,3 +169,41 @@ async def test_a_pod_that_never_connected_the_channel_does_not_hear_it(
 
     assert len(await _runs_for(db_session, ours["id"])) == 1
     assert await _runs_for(db_session, str(theirs)) == []
+
+
+async def test_a_schedule_on_a_channel_the_pods_bot_is_not_in_is_refused(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+):
+    """It would be stored and never fire, with nothing to tell its author:
+    they are told at create instead."""
+    pod_id = test_pod["id"]
+    agent, surface = await _slack_surface(
+        authenticated_client,
+        db_session,
+        pod_id=pod_id,
+        user_id=fixed_test_user["id"],
+        fake_slack=fake_slack,
+    )
+    await _seed_connector_trigger(
+        db_session, connector_id="slack", trigger_id=TRIGGER_ID, event_type="message"
+    )
+
+    response = await authenticated_client.post(
+        f"/pods/{pod_id}/schedules",
+        json={
+            "schedule_type": "WEBHOOK",
+            "agent_name": agent["name"],
+            "instruction": "Add the message to the incident timeline.",
+            "pod_connector": surface["pod_connector"],
+            "connector_trigger_id": TRIGGER_ID,
+            "config": {"team_id": slack_payloads.TEAM_ID, "channel_id": "C0NOTHERE"},
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "SCHEDULE_VALIDATION_ERROR"
+    assert "C0NOTHERE" in response.json()["message"]

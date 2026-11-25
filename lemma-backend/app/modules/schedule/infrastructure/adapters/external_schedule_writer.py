@@ -22,6 +22,7 @@ is somewhere the caller did not ask about.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from typing import Protocol
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -65,6 +66,31 @@ PodOrganization = Callable[[UUID], Awaitable[UUID | None]]
 ConnectorResolver = Callable[
     [SqlAlchemyUnitOfWork, ScheduleEntity], Awaitable[PodConnectorAccount]
 ]
+
+
+class PodHearsChannel(Protocol):
+    """Whether a pod's bot hears a Slack channel: somebody connected it."""
+
+    async def __call__(
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        *,
+        pod_id: UUID,
+        team_id: str,
+        channel_id: str,
+    ) -> bool: ...
+
+
+async def _pod_hears_slack_channel(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, team_id: str, channel_id: str
+) -> bool:
+    from app.modules.agent_surfaces.contracts.slack_channels import (
+        pod_hears_slack_channel,
+    )
+
+    return await pod_hears_slack_channel(
+        uow.session, pod_id=pod_id, team_id=team_id, channel_id=channel_id
+    )
 
 
 async def _pod_organization(pod_id: UUID) -> UUID | None:
@@ -195,8 +221,10 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
         stop_listening_to_mcp: TriggerUnsubscriber = unsubscribe_from_mcp_event,
         pod_organization: PodOrganization = _pod_organization,
         resolve_connector: ConnectorResolver = resolve_as_owner,
+        pod_hears_channel: PodHearsChannel = _pod_hears_slack_channel,
     ) -> None:
         self.uow = uow
+        self._pod_hears_channel = pod_hears_channel
         self._resolve_connector = resolve_connector
         self._resolve_binding = resolve_binding
         self._subscribe = subscribe
@@ -235,9 +263,9 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
         if binding is None:
             return ProvisionedTrigger()
         if not binding.subscribable:
-            return ProvisionedTrigger(
-                bound_config=_local_routing_key(binding, schedule)
-            )
+            bound_config = _local_routing_key(binding, schedule)
+            await self._require_a_heard_channel(schedule, bound_config)
+            return ProvisionedTrigger(bound_config=bound_config)
         if not binding.connection_id:
             raise ScheduleValidationError("Connector account is not active")
         try:
@@ -249,6 +277,29 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
         except ConnectorInfrastructureError as exc:
             raise ScheduleInfrastructureError(str(exc)) from exc
         return ProvisionedTrigger(provider_trigger_id=provider_id)
+
+    async def _require_a_heard_channel(
+        self, schedule: ScheduleEntity, bound_config: ScheduleConfig
+    ) -> None:
+        """A Slack trigger fires only on a channel the pod's bot hears
+        (`agent_surfaces.services.channel_triggers`). On any other it would be
+        stored and never fire, with no run, no skip and no log to tell its
+        author, so it is refused here, where they are still asking."""
+        if bound_config.get("source") != "slack" or schedule.pod_id is None:
+            return
+        channel_id = str(bound_config.get("channel_id") or "")
+        if await self._pod_hears_channel(
+            self.uow,
+            pod_id=schedule.pod_id,
+            team_id=str(bound_config.get("team_id") or ""),
+            channel_id=channel_id,
+        ):
+            return
+        raise ScheduleValidationError(
+            f"This pod's Slack bot is not in channel {channel_id}, so nothing "
+            "said there reaches it and the schedule would never fire. Connect "
+            "the channel to the pod's bot first, then create the schedule."
+        )
 
     async def delete_provider_trigger(self, schedule: ScheduleEntity) -> None:
         if schedule.schedule_type is not ScheduleType.WEBHOOK:
