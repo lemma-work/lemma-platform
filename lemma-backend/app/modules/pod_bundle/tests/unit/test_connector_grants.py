@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.authorization.context import ResourceType
+from app.modules.connectors.contracts.bundles import WaitingConnectorGrant
 from app.modules.pod_bundle.domain.connector_plan import ConnectorChoice
 from app.modules.pod_bundle.domain.errors import BundleInvalidError
 from app.modules.pod_bundle.domain.state import StepKind
@@ -264,8 +265,10 @@ async def test_a_left_out_grant_waits_only_while_the_org_has_nothing_to_map_it_t
         {"connector": "google_calendar", "mode": "PER_MEMBER", "required": False},
     )
 
-    async def resolve() -> tuple[list[GrantInput], list, list[str]]:
-        waiting: list = []
+    async def resolve() -> tuple[
+        list[GrantInput], list[WaitingConnectorGrant], list[str]
+    ]:
+        waiting: list[WaitingConnectorGrant] = []
         warnings: list[str] = []
         kept = await resolve_connector_grants(
             object(),

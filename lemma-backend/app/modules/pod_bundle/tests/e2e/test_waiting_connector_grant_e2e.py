@@ -15,6 +15,7 @@ Connectors page would have left them.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from uuid import uuid4
 
@@ -34,7 +35,7 @@ from app.modules.pod_bundle.tests.e2e.test_connector_bundle_e2e import (
 pytestmark = [pytest.mark.e2e, pytest.mark.worker]
 
 
-def _write(path: Path, payload: dict) -> None:
+def _write(path: Path, payload: Mapping[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -65,7 +66,7 @@ def _bundle(tmp_path: Path, connector_id: str) -> bytes:
     return pack_bundle(root)
 
 
-async def _connector_grants(client, pod_id: str) -> list[dict]:
+async def _connector_grants(client, pod_id: str) -> list[dict[str, object]]:
     got = await client.get(f"/pods/{pod_id}/agents/briefer/permissions")
     assert got.status_code == status.HTTP_200_OK, got.text
     return [g for g in got.json()["grants"] if g["resource_type"] == "connector"]
