@@ -17,15 +17,18 @@ reloads the winner's.
 
 from __future__ import annotations
 
+import asyncio
 import threading
+import weakref
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
 from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.core.crypto.aad import encode_aad
 from app.core.crypto.aead import new_key
@@ -34,6 +37,7 @@ from app.core.crypto.roots.ports import RootKeyProvider
 from app.core.crypto.signing_keys import local_signing_keyring
 from app.core.log.log import get_logger
 
+from app.modules.vault.config import vault_settings
 from app.modules.vault.domain.errors import KeyRetirementRefused, VaultUnavailable
 from app.modules.vault.infrastructure.models import VaultKey, VaultSecret
 
@@ -79,9 +83,13 @@ class VaultKeyring:
         self._active: dict[str, UUID] = {}
         self._signing: Keyring | None = None
         self._loaded = False
-        # Loads overlap (start, refresh, a rotation, a cache miss). Each takes a
-        # number before it reads; only a newer one than the last published may
-        # publish, so a slow load cannot put back keys read before a rotation.
+        # Loads overlap (start, refresh, a rotation, a cache miss). They run one
+        # at a time per event loop, from the read to the publish, so a load
+        # never publishes keys read before ones already published. The number
+        # guards a load on another loop (a script, a test) the same way.
+        self._load_locks: weakref.WeakKeyDictionary[
+            asyncio.AbstractEventLoop, asyncio.Lock
+        ] = weakref.WeakKeyDictionary()
         self._load_started = 0
         self._load_published = 0
 
@@ -130,6 +138,18 @@ class VaultKeyring:
     # ---------------------------------------------------------------- loading
     async def load(self) -> None:
         """(Re)read every usable key; create missing active ones; rewrap stale."""
+        async with self._load_lock():
+            await self._load()
+
+    def _load_lock(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        with self._lock:
+            lock = self._load_locks.get(loop)
+            if lock is None:
+                lock = self._load_locks[loop] = asyncio.Lock()
+            return lock
+
+    async def _load(self) -> None:
         with self._lock:
             self._load_started += 1
             generation = self._load_started
@@ -291,6 +311,24 @@ class VaultKeyring:
             if held:
                 raise KeyRetirementRefused(
                     f"vault key {key_id} still wraps {held} secrets; rewrap first"
+                )
+            # A process that has not refreshed since the rotation still writes
+            # under this key; retiring it now would fail those writes.
+            this, newer = aliased(VaultKey), aliased(VaultKey)
+            settled = (
+                await session.execute(
+                    select(func.min(newer.created_at)).where(
+                        newer.purpose == this.purpose,
+                        newer.created_at > this.created_at,
+                        this.id == key_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            wait = timedelta(seconds=2 * vault_settings.vault_kek_refresh_seconds)
+            if settled is not None and datetime.now(timezone.utc) - settled < wait:
+                raise KeyRetirementRefused(
+                    f"vault key {key_id} was rotated out less than {wait} ago; "
+                    "processes may still be writing under it -- retry later"
                 )
             await session.execute(
                 update(VaultKey)

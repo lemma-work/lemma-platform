@@ -187,10 +187,12 @@ async def test_a_corrupted_kms_response_is_an_error_not_a_key():
 
 async def test_kms_permission_error_names_the_role_to_grant():
     api = _FakeKmsApi()
-    api.fail = PermissionDenied("no")
+    api.fail = PermissionDenied("raw provider diagnostics")
     root = GcpKmsRoot(KEY, client=lambda: _kms(api))
-    with pytest.raises(RootKeyError, match="cryptoKeyEncrypterDecrypter"):
+    with pytest.raises(RootKeyError, match="cryptoKeyEncrypterDecrypter") as raised:
         await root.wrap(b"k" * 32, aad=b"x")
+    # The SDK's own exception stays out of the chain a traceback would print.
+    assert raised.value.__cause__ is None and raised.value.__suppress_context__
 
 
 async def test_pinned_version_wraps_with_it_and_other_versions_need_rewrap():

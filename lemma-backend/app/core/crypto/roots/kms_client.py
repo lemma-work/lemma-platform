@@ -92,7 +92,9 @@ class CloudKms:
                 request=request, retry=self._retry, timeout=self._timeout
             )
         except self._error_types as exc:
-            raise _explain(exc, "encrypt", name) from exc
+            # The classified message says what failed and how to fix it; the SDK's
+            # own diagnostics stay out of logs and tracebacks.
+            raise _explain(exc, "encrypt", name) from None
         if not response.verified_plaintext_crc32c or (
             aad and not response.verified_additional_authenticated_data_crc32c
         ):
@@ -118,7 +120,7 @@ class CloudKms:
                 request=request, retry=self._retry, timeout=self._timeout
             )
         except self._error_types as exc:
-            raise _explain(exc, "decrypt", key_name) from exc
+            raise _explain(exc, "decrypt", key_name) from None
         if crc32c(response.plaintext) != int(response.plaintext_crc32c):
             raise RootKeyError("Cloud KMS decrypt response failed its checksum")
         return response.plaintext

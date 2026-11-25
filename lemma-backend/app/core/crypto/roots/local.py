@@ -113,6 +113,8 @@ def load_keychain_keyring(
 def load_secret_manager_keyring(secret_name: str) -> Keyring:
     """The keyset stored as a Google Secret Manager secret (ADC credentials)."""
     try:
+        from google.api_core import exceptions as gexc
+        from google.auth import exceptions as auth_exc
         from google.cloud import secretmanager
     except ImportError as exc:
         raise RootKeyError(
@@ -122,6 +124,14 @@ def load_secret_manager_keyring(secret_name: str) -> Keyring:
     name = (
         secret_name if "/versions/" in secret_name else f"{secret_name}/versions/latest"
     )
-    client = secretmanager.SecretManagerServiceClient()
-    response = client.access_secret_version(request={"name": name})
+    try:
+        client = secretmanager.SecretManagerServiceClient()
+        response = client.access_secret_version(request={"name": name})
+    except (gexc.GoogleAPICallError, auth_exc.GoogleAuthError) as exc:
+        # Classified here, without the SDK's own diagnostics in the chain.
+        raise RootKeyError(
+            f"Secret Manager refused {name} ({type(exc).__name__}). Check that "
+            "the secret exists and that this process's service account has "
+            "roles/secretmanager.secretAccessor on it."
+        ) from None
     return parse_keyset(response.payload.data.decode("utf-8"))

@@ -196,7 +196,11 @@ class SqlVault:
         row = await self._row(secret_id, expect, purpose, for_update=True)
         if expected_version is not None and row.version != expected_version:
             raise SecretVersionConflict(secret_id, expected_version, row.version)
-        if lease is not None and row.lease_holder != lease.holder:
+        if lease is not None and (
+            lease.secret_id != secret_id
+            or row.lease_holder != lease.holder
+            or row.version != lease.version
+        ):
             raise SecretVersionConflict(secret_id, lease.version, row.version)
         kind, payload = encode_value(value)
         old_kek = self.keyring.cached_encryption_key(row.kek_id)
@@ -204,6 +208,7 @@ class SqlVault:
         # the value is simply written.
         if skip_if_equal and kind.value == row.kind and old_kek is not None:
             if self._decrypt_row_with(row, expect, old_kek) == payload:
+                await self._keep_value(secret_id, lease=lease, expires_at=expires_at)
                 return SecretRef(secret_id, row.version)
         version = row.version + 1
         wrapped, sealed = seal_value(
@@ -241,6 +246,27 @@ class SqlVault:
             version=version,
         )
         return SecretRef(secret_id, version)
+
+    async def _keep_value(
+        self,
+        secret_id: UUID,
+        *,
+        lease: LeaseToken | None,
+        expires_at: datetime | None | KeepExpiry,
+    ) -> None:
+        """The value stays as it is; what was asked of the row besides it --
+        ending the lease, a new expiry -- still happens."""
+        unchanged: dict[str, object] = {}
+        if lease is not None:
+            unchanged |= {"lease_holder": None, "lease_until": None}
+        if not isinstance(expires_at, KeepExpiry):
+            unchanged["expires_at"] = expires_at
+        if unchanged:
+            await self._session.execute(
+                update(VaultSecret)
+                .where(VaultSecret.id == secret_id)
+                .values(**unchanged)
+            )
 
     async def delete(
         self,
@@ -339,6 +365,9 @@ class SqlVault:
         while it makes the outbound call.
         """
         now = func.now()
+        # Unique per acquisition, so a token from an earlier lease by the same
+        # caller can neither write nor release a later one.
+        fenced = f"{holder[:48]}#{uuid7().hex[-12:]}"
         result = await self._session.execute(
             update(VaultSecret)
             .where(
@@ -352,11 +381,11 @@ class SqlVault:
                 VaultSecret.version == if_version,
                 or_(VaultSecret.lease_until.is_(None), VaultSecret.lease_until < now),
             )
-            .values(lease_holder=holder, lease_until=now + ttl)
+            .values(lease_holder=fenced, lease_until=now + ttl)
             .returning(VaultSecret.version)
         )
         version = result.scalar_one_or_none()
-        return None if version is None else LeaseToken(secret_id, holder, version)
+        return None if version is None else LeaseToken(secret_id, fenced, version)
 
     async def release_lease(self, token: LeaseToken) -> None:
         await self._session.execute(
@@ -364,6 +393,7 @@ class SqlVault:
             .where(
                 VaultSecret.id == token.secret_id,
                 VaultSecret.lease_holder == token.holder,
+                VaultSecret.version == token.version,
             )
             .values(lease_holder=None, lease_until=None)
         )

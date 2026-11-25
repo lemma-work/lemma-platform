@@ -108,9 +108,17 @@ class FakeVault:
         secret = self._get(secret_id, expect, purpose)
         if expected_version is not None and secret.version != expected_version:
             raise SecretVersionConflict(secret_id, expected_version, secret.version)
-        if lease is not None and secret.lease_holder != lease.holder:
+        if lease is not None and (
+            lease.secret_id != secret_id
+            or secret.lease_holder != lease.holder
+            or secret.version != lease.version
+        ):
             raise SecretVersionConflict(secret_id, lease.version, secret.version)
         if skip_if_equal and secret.value == value:
+            if lease is not None:
+                secret.lease_holder = secret.lease_until = None
+            if not isinstance(expires_at, KeepExpiry):
+                secret.expires_at = expires_at
             return SecretRef(secret_id, secret.version)
         secret.value = copy.deepcopy(value)
         secret.version += 1
@@ -191,12 +199,17 @@ class FakeVault:
             return None
         if secret.lease_until is not None and secret.lease_until > now:
             return None
-        secret.lease_holder, secret.lease_until = holder, now + ttl
-        return LeaseToken(secret_id, holder, secret.version)
+        fenced = f"{holder[:48]}#{uuid7().hex[-12:]}"
+        secret.lease_holder, secret.lease_until = fenced, now + ttl
+        return LeaseToken(secret_id, fenced, secret.version)
 
     async def release_lease(self, token: LeaseToken) -> None:
         secret = self.secrets.get(token.secret_id)
-        if secret is not None and secret.lease_holder == token.holder:
+        if (
+            secret is not None
+            and secret.lease_holder == token.holder
+            and secret.version == token.version
+        ):
             secret.lease_holder = secret.lease_until = None
 
 
