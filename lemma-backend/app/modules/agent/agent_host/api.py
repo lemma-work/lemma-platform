@@ -38,6 +38,9 @@ if TYPE_CHECKING:
     from app.modules.agent.agent_host.control.ops import (
         AgentHostOpClient as AgentHostOpClient,
     )
+    from app.modules.agent.agent_host.control.run_records import (
+        ran_on_a_mac as ran_on_a_mac,
+    )
     from app.modules.agent.agent_host.control.recovery import (
         cancel_abandoned_host_runs as cancel_abandoned_host_runs,
         cleanup_retained_state as cleanup_retained_state,
@@ -98,6 +101,7 @@ _EXPORTS: dict[str, str] = {
     "cancel_abandoned_host_runs": "control.recovery",
     "cleanup_retained_state": "control.recovery",
     "reconcile_expired_leases": "control.recovery",
+    "ran_on_a_mac": "control.run_records",
     "AgentHostRepository": "control.repository",
     "routers": "controllers",
     "AgentHostHarnessResponse": "controllers.schemas",

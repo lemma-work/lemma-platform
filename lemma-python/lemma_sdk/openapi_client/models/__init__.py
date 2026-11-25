@@ -194,6 +194,11 @@ _NAME_TO_MODULE = {
     'ContactUpdateRequest': 'contact_update_request',
     'ContactsCapResponse': 'contacts_cap_response',
     'ContactsCapUpdate': 'contacts_cap_update',
+    'ConversationChangedFile': 'conversation_changed_file',
+    'ConversationChangedFileStatus': 'conversation_changed_file_status',
+    'ConversationChangesResponse': 'conversation_changes_response',
+    'ConversationChangesResponseState': 'conversation_changes_response_state',
+    'ConversationChangesTotals': 'conversation_changes_totals',
     'ConversationListResponse': 'conversation_list_response',
     'ConversationReportRequest': 'conversation_report_request',
     'ConversationReportResponse': 'conversation_report_response',
@@ -484,8 +489,6 @@ _NAME_TO_MODULE = {
     'OperationDiscoverResponse': 'operation_discover_response',
     'OperationDiscoverySchema': 'operation_discovery_schema',
     'OperationDiscoveryStatus': 'operation_discovery_status',
-    'OperationExecutionRequest': 'operation_execution_request',
-    'OperationExecutionRequestPayload': 'operation_execution_request_payload',
     'OperationExecutionResponse': 'operation_execution_response',
     'OperationSummary': 'operation_summary',
     'OrganizationAppListResponse': 'organization_app_list_response',
@@ -568,6 +571,9 @@ _NAME_TO_MODULE = {
     'PodMemberListResponse': 'pod_member_list_response',
     'PodMemberResponse': 'pod_member_response',
     'PodMemberUpdateRoleRequest': 'pod_member_update_role_request',
+    'PodOperationExecutionRequest': 'pod_operation_execution_request',
+    'PodOperationExecutionRequestActAs': 'pod_operation_execution_request_act_as',
+    'PodOperationExecutionRequestPayload': 'pod_operation_execution_request_payload',
     'PodOutcome': 'pod_outcome',
     'PodPermissionCatalogResponse': 'pod_permission_catalog_response',
     'PodPermissionResponse': 'pod_permission_response',
@@ -1074,6 +1080,11 @@ if TYPE_CHECKING:
     from .contact_update_request import ContactUpdateRequest
     from .contacts_cap_response import ContactsCapResponse
     from .contacts_cap_update import ContactsCapUpdate
+    from .conversation_changed_file import ConversationChangedFile
+    from .conversation_changed_file_status import ConversationChangedFileStatus
+    from .conversation_changes_response import ConversationChangesResponse
+    from .conversation_changes_response_state import ConversationChangesResponseState
+    from .conversation_changes_totals import ConversationChangesTotals
     from .conversation_list_response import ConversationListResponse
     from .conversation_report_request import ConversationReportRequest
     from .conversation_report_response import ConversationReportResponse
@@ -1364,8 +1375,6 @@ if TYPE_CHECKING:
     from .operation_discover_response import OperationDiscoverResponse
     from .operation_discovery_schema import OperationDiscoverySchema
     from .operation_discovery_status import OperationDiscoveryStatus
-    from .operation_execution_request import OperationExecutionRequest
-    from .operation_execution_request_payload import OperationExecutionRequestPayload
     from .operation_execution_response import OperationExecutionResponse
     from .operation_summary import OperationSummary
     from .organization_app_list_response import OrganizationAppListResponse
@@ -1448,6 +1457,9 @@ if TYPE_CHECKING:
     from .pod_member_list_response import PodMemberListResponse
     from .pod_member_response import PodMemberResponse
     from .pod_member_update_role_request import PodMemberUpdateRoleRequest
+    from .pod_operation_execution_request import PodOperationExecutionRequest
+    from .pod_operation_execution_request_act_as import PodOperationExecutionRequestActAs
+    from .pod_operation_execution_request_payload import PodOperationExecutionRequestPayload
     from .pod_outcome import PodOutcome
     from .pod_permission_catalog_response import PodPermissionCatalogResponse
     from .pod_permission_response import PodPermissionResponse
@@ -1967,6 +1979,11 @@ __all__ = [
     'ContactUpdateRequest',
     'ContactsCapResponse',
     'ContactsCapUpdate',
+    'ConversationChangedFile',
+    'ConversationChangedFileStatus',
+    'ConversationChangesResponse',
+    'ConversationChangesResponseState',
+    'ConversationChangesTotals',
     'ConversationListResponse',
     'ConversationReportRequest',
     'ConversationReportResponse',
@@ -2257,8 +2274,6 @@ __all__ = [
     'OperationDiscoverResponse',
     'OperationDiscoverySchema',
     'OperationDiscoveryStatus',
-    'OperationExecutionRequest',
-    'OperationExecutionRequestPayload',
     'OperationExecutionResponse',
     'OperationSummary',
     'OrganizationAppListResponse',
@@ -2341,6 +2356,9 @@ __all__ = [
     'PodMemberListResponse',
     'PodMemberResponse',
     'PodMemberUpdateRoleRequest',
+    'PodOperationExecutionRequest',
+    'PodOperationExecutionRequestActAs',
+    'PodOperationExecutionRequestPayload',
     'PodOutcome',
     'PodPermissionCatalogResponse',
     'PodPermissionResponse',

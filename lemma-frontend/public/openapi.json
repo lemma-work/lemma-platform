@@ -1255,6 +1255,58 @@
             "description": "Another model from the agent's runtime profile, for this step only. Unset runs on the agent's model.",
             "title": "Model Name"
           },
+          "ref": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "expression": "#/components/schemas/ExpressionInputBinding",
+                    "literal": "#/components/schemas/LiteralInputBinding"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ExpressionInputBinding"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LiteralInputBinding"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where that worktree starts: a branch, a tag, a commit sha, or a pull request's head as `pull/<n>/head`. Unset is the repository's default branch. Needs `repository`.",
+            "title": "Ref"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "expression": "#/components/schemas/ExpressionInputBinding",
+                    "literal": "#/components/schemas/LiteralInputBinding"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ExpressionInputBinding"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LiteralInputBinding"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The GitHub repository the agent works in, as `owner/name`. The run starts in a worktree of it, cloned through the pod's `github` connector as the run's person, as a webhook-started run does. Usually an expression, e.g. `start.payload.repository.full_name`.",
+            "title": "Repository"
+          },
           "timeout_seconds": {
             "anyOf": [
               {
@@ -6690,6 +6742,190 @@
         "title": "ContactsCapUpdate",
         "type": "object"
       },
+      "ConversationChangedFile": {
+        "properties": {
+          "additions": {
+            "title": "Additions",
+            "type": "integer"
+          },
+          "binary": {
+            "description": "Git found no lines to count; additions and deletions are 0.",
+            "title": "Binary",
+            "type": "boolean"
+          },
+          "deletions": {
+            "title": "Deletions",
+            "type": "integer"
+          },
+          "old_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where a renamed file was, before it moved.",
+            "title": "Old Path"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "added",
+              "modified",
+              "deleted",
+              "renamed",
+              "untracked"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "status",
+          "additions",
+          "deletions",
+          "binary"
+        ],
+        "title": "ConversationChangedFile",
+        "type": "object"
+      },
+      "ConversationChangesResponse": {
+        "description": "What the conversation's checkout holds that its start point does not.",
+        "properties": {
+          "ahead": {
+            "default": 0,
+            "description": "Commits on the checkout since `base_sha`.",
+            "title": "Ahead",
+            "type": "integer"
+          },
+          "base_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The start point compared against: `origin/<ref>`, the ref itself for a tag or a commit, or the branch `origin/HEAD` names (as `origin/main`). Null when it could not be found in the checkout; the files are then its uncommitted work only.",
+            "title": "Base Ref"
+          },
+          "base_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The merge base of the checkout's HEAD with `base_ref`.",
+            "title": "Base Sha"
+          },
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The checkout's branch; null when detached.",
+            "title": "Branch"
+          },
+          "files": {
+            "description": "Every file that differs from `base_sha` in the working tree -- committed, staged or not -- then the untracked files.",
+            "items": {
+              "$ref": "#/components/schemas/ConversationChangedFile"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "head_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Sha"
+          },
+          "patch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The unified diff, when asked for with `patch=true`.",
+            "title": "Patch"
+          },
+          "state": {
+            "description": "`ready`: read now, and everything below is filled in. `no_repository`: the conversation was not opened in a repository. `not_checked_out`: it was, and its machine answered, but the conversation's directory holds no checkout -- cleared, or never made on this machine. `machine_unavailable`: the machine it works on is not running -- it is not started to answer, so a conversation with no run yet answers this -- or a run of the conversation may not use it now. `elsewhere`: its last run worked on its person's own Mac (a coding agent through Agent Host, or host execution), where the checkout is.",
+            "enum": [
+              "ready",
+              "no_repository",
+              "not_checked_out",
+              "machine_unavailable",
+              "elsewhere"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/ConversationChangesTotals"
+          },
+          "truncated": {
+            "default": false,
+            "description": "Something was cut to fit: the patch at `max_patch_bytes`, or the file list in a very large change.",
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "uncommitted": {
+            "default": false,
+            "description": "Edits not yet committed, or untracked files, are present.",
+            "title": "Uncommitted",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "ConversationChangesResponse",
+        "type": "object"
+      },
+      "ConversationChangesTotals": {
+        "properties": {
+          "additions": {
+            "default": 0,
+            "title": "Additions",
+            "type": "integer"
+          },
+          "deletions": {
+            "default": 0,
+            "title": "Deletions",
+            "type": "integer"
+          },
+          "files": {
+            "default": 0,
+            "title": "Files",
+            "type": "integer"
+          }
+        },
+        "title": "ConversationChangesTotals",
+        "type": "object"
+      },
       "ConversationListResponse": {
         "properties": {
           "items": {
@@ -8168,7 +8404,7 @@
           },
           "config": {
             "additionalProperties": true,
-            "description": "Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`. DATASTORE `rows: OWNER_READABLE` hands the trigger only rows its owner can read (their own on a per-person table, every row on a shared one), each run as the owner; making it needs only to read the table's rows, where the default `rows: ALL` needs `datastore.table.update`.",
+            "description": "Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. A TIME schedule may set `repository` to a GitHub repository as `owner/name`: its agent runs then start in a checkout of it on the default branch, as a webhook-triggered run does. It is cloned with the account the pod's `github` connector resolves to for the person the run is for: their own, or an account shared with the pod whose owner allows its use inside workspaces, in which case GitHub checks that owner's access, not the person's. A clone that fails (that account cannot reach the repository, say) does not stop the run: it starts in an empty directory and the agent is told why. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`. DATASTORE `rows: OWNER_READABLE` hands the trigger only rows its owner can read (their own on a per-person table, every row on a shared one), each run as the owner; making it needs only to read the table's rows, where the default `rows: ALL` needs `datastore.table.update`.",
             "title": "Config",
             "type": "object"
           },
@@ -16561,21 +16797,6 @@
         "title": "OperationDiscoveryStatus",
         "type": "string"
       },
-      "OperationExecutionRequest": {
-        "properties": {
-          "payload": {
-            "additionalProperties": true,
-            "description": "The operation's arguments. A file argument takes a reference -- `{\"pod_path\": \"/me/report.pdf\"}`, `{\"file_id\": \"...\"}`, `{\"url\": \"https://...\"}` or `{\"base64\": \"...\", \"filename\": \"...\"}` -- read with the caller's own access before the call is made. `output_path` chooses where a file result lands in the pod.",
-            "title": "Payload",
-            "type": "object"
-          }
-        },
-        "required": [
-          "payload"
-        ],
-        "title": "OperationExecutionRequest",
-        "type": "object"
-      },
       "OperationExecutionResponse": {
         "properties": {
           "result": {
@@ -19969,6 +20190,32 @@
           "roles"
         ],
         "title": "PodMemberUpdateRoleRequest",
+        "type": "object"
+      },
+      "PodOperationExecutionRequest": {
+        "description": "A pod connector call's body: its arguments, and who it presents as.",
+        "properties": {
+          "act_as": {
+            "default": "user",
+            "description": "Who the call presents as. `user` (the default) is the account's own person. `app` is the connector's app -- for GitHub, the Lemma App's bot -- and only a function run may ask for it: anyone else is refused with `APP_IDENTITY_FUNCTIONS_ONLY`. It is the app or nothing: an operation only a person may call, an account with no App installation, or a connector with no app is refused with `APP_IDENTITY_UNAVAILABLE` before anything is sent.",
+            "enum": [
+              "user",
+              "app"
+            ],
+            "title": "Act As",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "description": "The operation's arguments. A file argument takes a reference -- `{\"pod_path\": \"/me/report.pdf\"}`, `{\"file_id\": \"...\"}`, `{\"url\": \"https://...\"}` or `{\"base64\": \"...\", \"filename\": \"...\"}` -- read with the caller's own access before the call is made. `output_path` chooses where a file result lands in the pod.",
+            "title": "Payload",
+            "type": "object"
+          }
+        },
+        "required": [
+          "payload"
+        ],
+        "title": "PodOperationExecutionRequest",
         "type": "object"
       },
       "PodOutcome": {
@@ -27613,7 +27860,7 @@
                 "type": "null"
               }
             ],
-            "description": "Replaces the whole config. Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`. DATASTORE `rows: OWNER_READABLE` hands the trigger only rows its owner can read (their own on a per-person table, every row on a shared one), each run as the owner; making it needs only to read the table's rows, where the default `rows: ALL` needs `datastore.table.update`.",
+            "description": "Replaces the whole config. Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. A TIME schedule may set `repository` to a GitHub repository as `owner/name`: its agent runs then start in a checkout of it on the default branch, as a webhook-triggered run does. It is cloned with the account the pod's `github` connector resolves to for the person the run is for: their own, or an account shared with the pod whose owner allows its use inside workspaces, in which case GitHub checks that owner's access, not the person's. A clone that fails (that account cannot reach the repository, say) does not stop the run: it starts in an empty directory and the agent is told why. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`. DATASTORE `rows: OWNER_READABLE` hands the trigger only rows its owner can read (their own on a per-person table, every row on a shared one), each run as the owner; making it needs only to read the table's rows, where the default `rows: ALL` needs `datastore.table.update`.",
             "title": "Config"
           },
           "filter_instruction": {
@@ -45924,7 +46171,7 @@
     },
     "/pods/{pod_id}/connectors/{slug}/operations/{operation_name}/execute": {
       "post": {
-        "description": "Run an operation through a pod connector. The account it runs as is decided by the connector: the caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals: `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`.",
+        "description": "Run an operation through a pod connector. The account it runs as is decided by the connector: the caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals: `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`; with `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and `APP_IDENTITY_UNAVAILABLE`.",
         "operationId": "pod.connector.operation.execute",
         "parameters": [
           {
@@ -45960,7 +46207,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OperationExecutionRequest"
+                "$ref": "#/components/schemas/PodOperationExecutionRequest"
               }
             }
           },
@@ -47136,6 +47383,93 @@
           "resource": "agent.conversation.approval",
           "result": "entity",
           "verb": "resolve"
+        }
+      }
+    },
+    "/pods/{pod_id}/conversations/{conversation_id}/changes": {
+      "get": {
+        "description": "What a conversation opened in a repository has changed in its checkout, live: every file that differs from where its branch left the start point (`origin/<ref>`, else `origin/HEAD`) -- commits not yet pushed, staged and unstaged edits -- and its untracked files, with line counts, and the patch with `patch=true`. Read-only: nothing is fetched and the repository is not written. A machine that is not running is not started (`machine_unavailable`); a conversation whose last run worked on its person's Mac answers `elsewhere`. A read that runs past its ceiling is a 504, `CONVERSATION_CHANGES_TIMED_OUT`. Only the conversation's owner may read it.",
+        "operationId": "agent.conversation.changes.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Include the unified diff.",
+            "in": "query",
+            "name": "patch",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Include the unified diff.",
+              "title": "Patch",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Cut the patch at this many bytes; `truncated` says so.",
+            "in": "query",
+            "name": "max_patch_bytes",
+            "required": false,
+            "schema": {
+              "default": 262144,
+              "description": "Cut the patch at this many bytes; `truncated` says so.",
+              "maximum": 1048576,
+              "minimum": 1024,
+              "title": "Max Patch Bytes",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationChangesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Conversation Changes",
+        "tags": [
+          "agent_conversations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.conversation.changes",
+          "result": "entity",
+          "verb": "get"
         }
       }
     },

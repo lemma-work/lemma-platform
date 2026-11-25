@@ -94,6 +94,15 @@ allows it (GitHub's own metadata says which do; `/user/...` routes never can), a
 the account knows its installation — anything else falls back to the person's token.
 Nothing about this is a setting to maintain.
 
+A **function** acts as the person unless it asks:
+`ctx.pod.connectors.execute("github", "checks_create", payload, act_as="app")`.
+Use it for work that is the Lemma's rather than the person's — a check run (GitHub
+takes those only from an App), a review or an approval a team wants from its bot.
+Only a function run may ask (a page or the CLI gets `APP_IDENTITY_FUNCTIONS_ONLY`),
+and it is the app or nothing: an operation only a person may call, an account with
+no App installation, or a connector with no app is refused with
+`APP_IDENTITY_UNAVAILABLE` before anything is sent, never quietly made as the person.
+
 ## Do it in one call — `connectors run`
 
 `run` resolves the operation on one of the selected pod's connectors and
@@ -355,6 +364,9 @@ three ways:
   connector operations present as the App where GitHub permits it, so a schedule
   outlives the person who set it up, while pod publish/import and the machine's
   `git`/`gh` stay the person so their name is on the commits.
+- **A function's calls act as the person, or as the App when it asks** with
+  `act_as="app"` — the way to post a check run or a bot review from code. See
+  *Delegated identity* above.
 - **A machine's `git`/`gh` get a token only from your own account** — or from a
   SHARED `github` connector's account whose **owner** ticked "allow use inside
   sandboxes" (`PATCH /pods/{pod}/connector-accounts/{id}` with

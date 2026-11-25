@@ -112,6 +112,27 @@ same key a Composio trigger uses, and a digest of its `eventId` makes the
 delivery (`NormalizedWebhook.account_id`), and only that account's schedules
 fire.
 
+**Events another module heard.** Slack's three triggers (`slack_channel_message`,
+`slack_thread_reply`, `slack_app_mention`) have no source here: a Slack app has
+one event URL, and it is the agent surfaces' endpoint, where the pod's bot
+hears its channels. Once a message there is verified and logged as a line of
+its channel, agent surfaces hands it to `contracts/heard_events.fire_heard_event`
+as a `NormalizedWebhook` that names the pods it is for (`pod_ids`) -- those
+that connected the channel to a bot that heard it -- and only their schedules
+fire, on the caller's transaction. A call naming no pods is refused. The
+routing key is `{source: slack, event, team_id, channel_id}` (`thread_ts` too
+for a thread reply), written by `_slack_binding` from the trigger and the
+author's config, which must name those ids; nothing is subscribed. The
+channel must be one the pod's bot hears -- routed on one of its Slack surfaces
+in that workspace (`agent_surfaces/contracts/slack_channels`) -- or the
+schedule is refused at create, since it would otherwise be stored and never
+fire with nothing to say why. The
+`source_event_id` is a digest of the message's workspace, channel and `ts`, so
+a Slack retry and a second bot hearing the same message are one fire, and a
+message an app posted never arrives (`bot_id` is dropped as the request is
+classified), so a schedule that posts to the channel it watches does not start
+itself.
+
 **Routing keys only provisioning writes.** `provider_trigger_id` and
 `installation_id` (`PROVISIONED_CONFIG_KEYS`) are dropped from whatever config
 an author sends, on create and on update, and a match on either keeps only

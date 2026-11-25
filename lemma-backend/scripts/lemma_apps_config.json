@@ -11173,7 +11173,7 @@
             "actions": {
               "type": "array",
               "title": "Actions",
-              "description": "Which check run actions to fire on. Every job sends one delivery when it is created and another when it completes, so this defaults to completed runs only. GitHub sends rerequested and requested_action only to an App with write access to checks, and the Lemma App asks for read access only.",
+              "description": "Which check run actions to fire on. Every job sends one delivery when it is created and another when it completes, so this defaults to completed runs only. rerequested and requested_action arrive when someone asks for a run again or presses a button an App put on it.",
               "items": {
                 "type": "string",
                 "enum": [
@@ -11225,6 +11225,49 @@
               },
               "default": [
                 "published"
+              ]
+            }
+          }
+        },
+        "payload_schema": {
+          "type": "object",
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "description": "GitHub's own webhook payload for this event, delivered unchanged."
+        }
+      },
+      {
+        "name": "github_dependabot_alert",
+        "event_type": "dependabot_alert",
+        "description": "Triggered when Dependabot raises, reintroduces, dismisses or closes a security alert on a repository: a vulnerable version of a dependency found in one of its manifests. Needs the Dependabot alerts permission, which an organization that installed the App before it asked for it has to accept in GitHub first.",
+        "config_schema": {
+          "type": "object",
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "properties": {
+            "repository_id": {
+              "type": "integer",
+              "title": "Repository",
+              "description": "Limit to one repository, by its numeric id. Left empty, the schedule fires for every repository the App is installed on. The id rather than the name because a repository can be renamed or transferred, and a schedule that stops firing when someone renames a repo is a bug nobody connects to the rename."
+            },
+            "actions": {
+              "type": "array",
+              "title": "Actions",
+              "description": "Which alert actions to fire on. Defaults to the two that mean a repository is newly exposed -- an alert raised, and one fixed before that has come back -- so an agent wakes to fix something rather than to hear it was dismissed or fixed.",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "created",
+                  "reintroduced",
+                  "reopened",
+                  "auto_reopened",
+                  "dismissed",
+                  "auto_dismissed",
+                  "fixed",
+                  "assignees_changed"
+                ]
+              },
+              "default": [
+                "created",
+                "reintroduced"
               ]
             }
           }

@@ -47,6 +47,22 @@ describe("ConversationsNamespace.repositories", () => {
   });
 });
 
+describe("ConversationsNamespace.changes", () => {
+  it("reads one conversation's checkout, asking for the patch only when told to", async () => {
+    const { conversations, request } = setup();
+
+    await conversations.changes("conv-1");
+    await conversations.changes("conv-1", { patch: true, max_patch_bytes: 4096, pod_id: "pod-2" });
+
+    expect(request).toHaveBeenNthCalledWith(1, "GET", "/pods/pod-1/conversations/conv-1/changes", {
+      params: { patch: undefined, max_patch_bytes: undefined },
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "GET", "/pods/pod-2/conversations/conv-1/changes", {
+      params: { patch: true, max_patch_bytes: 4096 },
+    });
+  });
+});
+
 describe("ConversationsNamespace.usage", () => {
   it("reads what one conversation cost, in the pod named or the client's own", async () => {
     const { conversations, request } = setup();

@@ -56,8 +56,13 @@ def _adapter(
     *,
     resolve_connector=None,
     bound: list[dict] | None = None,
+    channels_heard: frozenset[tuple[str, str]] | None = None,
 ):
-    """An adapter whose connector operations are stood up, not patched."""
+    """An adapter whose connector operations are stood up, not patched.
+
+    ``channels_heard``: the (pod, Slack channel) pairs whose channel is
+    connected to the pod's bot; every one, when not given.
+    """
 
     async def _resolve(_uow, **kwargs) -> TriggerBinding:
         if bound is not None:
@@ -80,7 +85,16 @@ def _adapter(
         subscribe=_subscribe,
         unsubscribe=_unsubscribe,
         resolve_connector=resolve_connector or _resolve_connector,
+        pod_hears_channel=_hears(channels_heard),
     )
+
+
+def _hears(channels_heard: frozenset[tuple[str, str]] | None):
+    async def _pod_hears_channel(_uow, *, pod_id, team_id, channel_id) -> bool:
+        del team_id
+        return channels_heard is None or (str(pod_id), channel_id) in channels_heard
+
+    return _pod_hears_channel
 
 
 @pytest.mark.asyncio
@@ -138,8 +152,8 @@ async def test_a_connector_with_neither_a_subscription_nor_a_binder_is_refused()
     """
     adapter = _adapter(
         TriggerBinding(
-            connector_id="slack",
-            event_type="message_posted",
+            connector_id="notion",
+            event_type="page_updated",
             subscribable=False,
         ),
         [],
@@ -147,6 +161,71 @@ async def test_a_connector_with_neither_a_subscription_nor_a_binder_is_refused()
 
     with pytest.raises(ScheduleValidationError):
         await adapter.create_provider_trigger(_schedule())
+
+
+@pytest.mark.asyncio
+async def test_a_slack_trigger_is_routed_on_its_channel_with_nothing_subscribed():
+    """Slack's events reach the pod's bot, so there is no subscription to make:
+    the schedule stores the routing key the heard message will carry."""
+    subscribed: list[dict] = []
+    adapter = _adapter(
+        TriggerBinding(connector_id="slack", event_type="message", subscribable=False),
+        subscribed,
+    )
+
+    provisioned = await adapter.create_provider_trigger(
+        _schedule(config={"team_id": "T0INC", "channel_id": "C0INC42"})
+    )
+
+    assert subscribed == []
+    assert provisioned.provider_trigger_id is None
+    assert provisioned.bound_config == {
+        "source": "slack",
+        "event": "message",
+        "team_id": "T0INC",
+        "channel_id": "C0INC42",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_slack_trigger_with_no_channel_is_refused_rather_than_stored():
+    adapter = _adapter(
+        TriggerBinding(connector_id="slack", event_type="message", subscribable=False),
+        [],
+    )
+
+    with pytest.raises(ScheduleValidationError):
+        await adapter.create_provider_trigger(_schedule(config={"team_id": "T0INC"}))
+
+
+@pytest.mark.asyncio
+async def test_a_slack_trigger_on_a_channel_the_pods_bot_is_not_in_is_refused():
+    """Only a channel connected to the pod's bot is heard, so a schedule on
+    any other would be stored and never fire, with nothing to say why."""
+    schedule = _schedule(config={"team_id": "T0INC", "channel_id": "C0ELSEWHERE"})
+    adapter = _adapter(
+        TriggerBinding(connector_id="slack", event_type="message", subscribable=False),
+        [],
+        channels_heard=frozenset({(str(schedule.pod_id), "C0INC42")}),
+    )
+
+    with pytest.raises(ScheduleValidationError, match="C0ELSEWHERE"):
+        await adapter.create_provider_trigger(schedule)
+
+
+@pytest.mark.asyncio
+async def test_a_slack_trigger_on_a_channel_the_pods_bot_hears_is_routed():
+    schedule = _schedule(config={"team_id": "T0INC", "channel_id": "C0INC42"})
+    adapter = _adapter(
+        TriggerBinding(connector_id="slack", event_type="message", subscribable=False),
+        [],
+        channels_heard=frozenset({(str(schedule.pod_id), "C0INC42")}),
+    )
+
+    provisioned = await adapter.create_provider_trigger(schedule)
+
+    assert provisioned.bound_config is not None
+    assert provisioned.bound_config["channel_id"] == "C0INC42"
 
 
 @pytest.mark.asyncio

@@ -604,7 +604,12 @@ class AuthorizationDataService:
                 normalized_principal_type, principal_id, pod_id
             )
         return Context(
-            actor=Workload(kind, principal_id, principal_refs=cached.principal_refs),
+            actor=Workload(
+                kind,
+                principal_id,
+                principal_refs=cached.principal_refs,
+                principal_type=principal_type.lower(),
+            ),
             actor_id=str(principal_id),
             organization_id=cached.organization_id,
             pod_id=cached.pod_id,
@@ -705,6 +710,7 @@ class AuthorizationDataService:
                 for_user_id=user_id,
                 principal_refs=workload_ctx.principal_refs,
                 delegation=delegation,
+                principal_type=principal_type.lower(),
             ),
             actor_id=f"{principal_type.lower()}:{principal_id}",
             user_id=user_id,

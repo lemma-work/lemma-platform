@@ -68,3 +68,28 @@ def test_it_can_ask_whether_a_claimant_administers_an_organization():
     admin of the GitHub organization it is on (audit H4), and a user token
     reads `GET /user/memberships/orgs/{org}` only with `members: read`."""
     assert _manifest()["default_permissions"].get("members") == "read"
+
+
+def test_it_can_push_a_change_to_a_workflow_file():
+    """GitHub refuses a push that touches `.github/workflows/` from an App's
+    token -- installation or user -- unless the App holds `workflows: write`,
+    whatever `contents` says. Without it an agent can bump every dependency in
+    a repository except its CI's own actions, and finds out only when the push
+    is refused."""
+    assert _manifest()["default_permissions"].get("workflows") == "write"
+
+
+def test_it_can_read_the_dependabot_alerts_it_offers_operations_for():
+    """`dependabot_list_alerts_for_repo` and `dependabot_get_alert` are in the
+    catalog and run on the installation token, which answers 403 without the
+    Dependabot alerts permission (`vulnerability_alerts`). The same permission
+    is what GitHub requires before it delivers `dependabot_alert` at all."""
+    manifest = _manifest()
+    assert manifest["default_permissions"].get("vulnerability_alerts") == "read"
+    assert "dependabot_alert" in manifest["default_events"]
+
+
+def test_it_can_write_the_check_runs_it_offers_an_operation_for():
+    """`checks_create` and `checks_update` are in the catalog; with
+    `checks: read` both could only ever fail."""
+    assert _manifest()["default_permissions"].get("checks") == "write"

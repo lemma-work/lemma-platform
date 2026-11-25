@@ -20,6 +20,9 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
 )
 from app.modules.agent_surfaces.services.channel_places import ChannelSeats
+from app.modules.agent_surfaces.services.channel_triggers import (
+    fire_channel_triggers,
+)
 from app.modules.agent_surfaces.services.created_groups import (
     created_group_surfaces,
     named_in_group,
@@ -60,8 +63,14 @@ async def logged_and_addressed(
     )
     # Before anything decides whether this is for the bot: most of a group is
     # not, and all of it is what the log is for. Committed at once so no write
-    # is held open across the platform calls that follow.
-    if await GroupLog(uow, seats=seats).note_inbound(list(surfaces), parsed):
+    # is held open across the platform calls that follow. The schedules
+    # watching the channel fire here too, whether or not anybody asked the bot,
+    # and their runs commit with the line.
+    logged = await GroupLog(uow, seats=seats).note_inbound(list(surfaces), parsed)
+    fired = await fire_channel_triggers(
+        uow, seats=seats, surfaces=surfaces, parsed=parsed
+    )
+    if logged or fired:
         await commit_now(uow)
     if surfaces and adapter.mention_is_provisional(parsed):
         parsed = await _settled_mention(

@@ -14,6 +14,8 @@ from app.modules.agent.application.automation import start as automation_start
 from app.modules.agent.application.automation.outcome import AutomatedRunOutcome
 from app.modules.agent.contracts.automation import build_agent_control_adapter
 from app.modules.agent.domain.automation_prompts import step_output
+from app.modules.agent.domain.project_repo import ProjectRepo
+from app.modules.agent.domain.state_kinds import ConversationOrigin
 from app.modules.agent.domain.value_objects import ConversationStatus
 from app.modules.agent.tests.unit.work_recording import RecordingWorkSession
 
@@ -369,3 +371,51 @@ def test_a_run_of_the_lemmas_own_assistant_is_titled_by_its_name_not_its_id():
         f"Workflow run: {DEFAULT_RESPONDER_NAME}"
     )
     assert conversation_title("triage", {}, True) == "Scheduled run: triage"
+
+
+def _step_conversation(*, repo=True, origin=ConversationOrigin.WORKFLOW_STEP):
+    return SimpleNamespace(
+        status=ConversationStatus.COMPLETED,
+        output="Reviewed: looks good.",
+        origin=origin,
+        repo=ProjectRepo(owner="acme", repo="web", ref="0" * 40) if repo else None,
+    )
+
+
+@pytest.mark.anyio
+async def test_a_step_whose_named_checkout_failed_fails_with_gits_reason():
+    """The step named the repository so the agent would read it: an answer
+    written in an empty folder is not the step done, whatever it says."""
+    outcome = _outcome(_step_conversation())
+    outcome.checkout_failure = AsyncMock(
+        return_value="fatal: remote did not send the commit"
+    )
+
+    status = await outcome.status(uuid4())
+
+    assert status["status"] == "FAILED"
+    assert "acme/web" in status["error"]
+    assert "fatal: remote did not send the commit" in status["error"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "conversation",
+    [
+        _step_conversation(repo=False),
+        _step_conversation(origin=ConversationOrigin.CHAT),
+    ],
+)
+async def test_only_a_step_that_named_a_checkout_is_held_to_it(conversation):
+    outcome = _outcome(conversation)
+    outcome.checkout_failure = AsyncMock(return_value="fatal: offline")
+
+    assert (await outcome.status(uuid4()))["status"] == "COMPLETED"
+
+
+@pytest.mark.anyio
+async def test_a_step_whose_checkout_landed_completes():
+    outcome = _outcome(_step_conversation())
+    outcome.checkout_failure = AsyncMock(return_value=None)
+
+    assert (await outcome.status(uuid4()))["status"] == "COMPLETED"

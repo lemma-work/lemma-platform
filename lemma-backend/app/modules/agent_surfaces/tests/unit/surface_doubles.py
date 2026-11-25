@@ -355,6 +355,11 @@ class SurfaceDoubles(SimpleNamespace):
     adapter: AsyncMock
 
 
+@asynccontextmanager
+async def _savepoint():
+    yield
+
+
 def answer_at(
     seats: InMemoryChannelSeats,
     answered: AnsweredAt,
@@ -434,6 +439,9 @@ def build_doubles(
             # double looked when the dedup claims were still holding one.
             commit=AsyncMock(),
             info={},
+            # The channel's schedules fire in a savepoint of their own
+            # (`channel_triggers`); against an empty database it holds nothing.
+            begin_nested=_savepoint,
         ),
         # Egress releases the pooled connection before every platform call, so
         # the double needs the method the real unit of work has. Given rather
