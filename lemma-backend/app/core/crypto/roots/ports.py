@@ -47,7 +47,12 @@ class RootKeyProvider(ABC):
         """Open a key sealed by :meth:`wrap` with the root named by ``root_ref``."""
 
     def needs_rewrap(self, root_ref: str) -> bool:
-        """True when ``root_ref`` is no longer the root new wraps would use."""
+        """True when ``root_ref`` is no longer the root new wraps would use.
+
+        Synchronous and without I/O: call it only after this root has wrapped
+        or unwrapped once in the process (the vault calls it right after
+        unwrapping each KEK), so anything it needs is already loaded.
+        """
         return False
 
     async def probe(self) -> str:

@@ -70,8 +70,11 @@ async def test_a_new_primary_asks_for_a_rewrap_and_the_old_entry_still_opens():
     rotated = Keyring(primary_kid="b", keys=keys.keys)
     root = LocalKeyringRoot("static", lambda: rotated)
 
-    assert root.needs_rewrap(old.root_ref) is True
+    # Never loads the keyset itself: that can block, and this is called on the loop.
+    with pytest.raises(RootKeyError, match="before the root keyset was loaded"):
+        root.needs_rewrap(old.root_ref)
     assert await root.unwrap(old.root_ref, old.blob, aad=b"x") == b"k" * 32
+    assert root.needs_rewrap(old.root_ref) is True
     assert root.needs_rewrap((await root.wrap(b"k" * 32, aad=b"x")).root_ref) is False
 
 
