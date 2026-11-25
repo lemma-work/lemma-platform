@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
+import select
 import sys
+from dataclasses import dataclass, replace
 from typing import Any
 
 import typer
@@ -60,27 +63,89 @@ def _select_with_arrows(
     import termios
     import tty
 
-    selected = _initial_index(items, current_id)
+    state = _MenuState(selected=_initial_index(items, current_id))
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
     try:
         tty.setcbreak(fd)
         while True:
-            _render_arrow_selector(items, label=label, selected=selected)
-            key = sys.stdin.read(1)
-            if key == "\x1b":
-                key += sys.stdin.read(2)
-            if key in {"\r", "\n"}:
+            visible = filter_items(items, state.filter_text)
+            _render_arrow_selector(
+                visible,
+                label=label,
+                selected=state.selected,
+                filter_text=state.filter_text,
+            )
+            state, done = _apply_key(_read_key(fd), state, len(visible))
+            if done == "pick":
                 console.print()
-                return items[selected]
-            if key in {"\x03", "\x04"}:
+                return visible[state.selected]
+            if done == "cancel":
                 raise typer.Exit(code=1)
-            if key == "\x1b[A":
-                selected = (selected - 1) % len(items)
-            elif key == "\x1b[B":
-                selected = (selected + 1) % len(items)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
+@dataclass(frozen=True)
+class _MenuState:
+    filter_text: str = ""
+    selected: int = 0
+
+
+def filter_items(items: list[dict[str, Any]], text: str) -> list[dict[str, Any]]:
+    """Items whose displayed label contains ``text``, ignoring case."""
+    needle = text.casefold()
+    return [item for item in items if needle in item_label(item).casefold()]
+
+
+#: How long to wait after Esc for the rest of an arrow-key sequence. A lone
+#: Esc press sends one byte; an arrow sends three at once, so the follow-up
+#: bytes are already waiting and this is only ever spent on a real Esc.
+_ESC_WAIT_SECONDS = 0.05
+
+
+def _read_key(fd: int) -> str:
+    """One key press. Reads the fd directly: sys.stdin buffers, and select()
+    cannot see bytes that are already inside that buffer."""
+    first = os.read(fd, 1)
+    if first == b"\x1b":
+        if not select.select([fd], [], [], _ESC_WAIT_SECONDS)[0]:
+            return "\x1b"
+        return (first + os.read(fd, 2)).decode(errors="ignore")
+    return (first + os.read(fd, _utf8_tail_length(first[0]))).decode(errors="ignore")
+
+
+def _utf8_tail_length(lead_byte: int) -> int:
+    """Continuation bytes still to read after a UTF-8 lead byte."""
+    if lead_byte >= 0xF0:
+        return 3
+    if lead_byte >= 0xE0:
+        return 2
+    if lead_byte >= 0xC0:
+        return 1
+    return 0
+
+
+def _apply_key(
+    key: str, state: _MenuState, visible_count: int
+) -> tuple[_MenuState, str | None]:
+    """The next state and, if the menu is finished, how: pick or cancel.
+
+    ``visible_count`` is the number of items the current filter leaves.
+    Letters go into the filter, so only Esc, Ctrl+C and Ctrl+D cancel.
+    """
+    if key in {"\r", "\n"}:
+        return state, "pick" if visible_count else None
+    if key in {"\x03", "\x04", "\x1b"}:
+        return state, "cancel"
+    if key in {"\x1b[A", "\x1b[B"} and visible_count:
+        step = -1 if key == "\x1b[A" else 1
+        return replace(state, selected=(state.selected + step) % visible_count), None
+    if key in {"\x7f", "\x08"}:
+        return replace(state, filter_text=state.filter_text[:-1], selected=0), None
+    if len(key) == 1 and key.isprintable():
+        return replace(state, filter_text=state.filter_text + key, selected=0), None
+    return state, None
 
 
 def _initial_index(items: list[dict[str, Any]], current_id: str | None) -> int:
@@ -92,11 +157,19 @@ def _initial_index(items: list[dict[str, Any]], current_id: str | None) -> int:
 
 
 def _render_arrow_selector(
-    items: list[dict[str, Any]], *, label: str, selected: int
+    items: list[dict[str, Any]],
+    *,
+    label: str,
+    selected: int,
+    filter_text: str = "",
 ) -> None:
     output = sys.stdout
     output.write("\033[2J\033[H")
-    output.write(f"Select {label} (up/down, enter)\n")
+    output.write(f"Select {label} (type to filter, up/down, enter, esc to cancel)\n")
+    if filter_text:
+        output.write(f"Filter: {filter_text}\n")
+    if not items:
+        output.write("  No matches\n")
     for index, item in enumerate(items):
         prefix = ">" if index == selected else " "
         line = f"{prefix} {item_label(item, str(index + 1))}"
