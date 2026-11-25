@@ -35,6 +35,7 @@ from app.modules.agent.agent_host.domain.host import (
     AgentHostEventType,
     AgentHostHarnessHealth,
     AgentHostRejectionCode,
+    AgentHostRunRepository,
     AgentHostRunSpec,
     AgentHostRunState,
     AgentHostStatus,
@@ -232,6 +233,13 @@ def test_the_run_spec_declares_the_fields_the_contract_names() -> None:
             f"{field} is added when the command is delivered; declaring it here "
             f"would let the plaintext be persisted with the command"
         )
+
+
+def test_the_run_repository_declares_the_fields_the_contract_names() -> None:
+    """``repository``'s own shape, which the host reads field by field."""
+    declared = set(_contract()["run_spec"]["repository"]["fields"])
+
+    assert set(AgentHostRunRepository.model_fields) == declared
 
 
 _ENUMS = {

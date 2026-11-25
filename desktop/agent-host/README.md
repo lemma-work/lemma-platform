@@ -387,6 +387,10 @@ preserving files and provider session indexes. Older backends that omit
 `workspace_cwd` retain that compatibility layout. A path outside `/home/user/lemma/`,
 traversal, symlink components, unclaimed existing files, or a directory already
 claimed by another paired workspace fails with an actionable run error.
+A conversation opened against a GitHub repository (the run spec's
+`repository`) has its empty folder made a git worktree of that repository with
+the person's own `git` before the agent starts; see
+[A repository conversation's folder](../../docs/architecture/agent-host.md#a-repository-conversations-folder).
 The ownership registry under `~/lemma/.lemma` prevents accidental directory
 collisions; it is not an OS sandbox or a project trust grant. For isolated QA,
 set `LEMMA_AGENT_HOST_WORKSPACE_ROOT` to an absolute temporary directory before

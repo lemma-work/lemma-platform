@@ -250,6 +250,7 @@ fn start_command(harness_id: Uuid, expires_at: chrono::DateTime<Utc>) -> Command
         prompt: vec![serde_json::json!({"type": "text", "text": "hi"})],
         resume_session_id: None,
         workspace_cwd: None,
+        repository: None,
         context: JsonMap::new(),
         mcp: serde_json::json!({}),
         run_deadline: Utc::now() + chrono::Duration::minutes(5),
@@ -495,5 +496,29 @@ fn a_run_gets_only_the_time_left_when_its_agent_starts() {
     assert!(
         chosen < measured && measured < started,
         "the time left is measured after the CLI is chosen and before the agent starts"
+    );
+}
+
+/// A repository checkout gets what is left of the run, at most its own limit,
+/// and nothing at all once the deadline has gone by: a run with no time left
+/// starts no git, rather than one that times out at once and is remembered as
+/// a failed checkout for the turns after it.
+#[test]
+fn a_checkout_gets_the_time_left_and_none_once_the_deadline_has_passed() {
+    use crate::repository_checkout::CHECKOUT_TIMEOUT;
+    use crate::runtime::run::checkout_budget;
+    let now = Utc::now();
+    assert_eq!(
+        checkout_budget(now + chrono::Duration::seconds(30), now),
+        Some(Duration::from_secs(30))
+    );
+    assert_eq!(
+        checkout_budget(now + chrono::Duration::hours(1), now),
+        Some(CHECKOUT_TIMEOUT)
+    );
+    assert_eq!(checkout_budget(now, now), None);
+    assert_eq!(
+        checkout_budget(now - chrono::Duration::seconds(1), now),
+        None
     );
 }

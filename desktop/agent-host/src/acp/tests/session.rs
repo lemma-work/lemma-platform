@@ -279,6 +279,7 @@ pub(super) fn spec_resuming(resume_session_id: Option<&str>) -> RunSpec {
         prompt: vec![serde_json::json!({"type": "text", "text": "Hello"})],
         resume_session_id: resume_session_id.map(str::to_owned),
         workspace_cwd: None,
+        repository: None,
         context: JsonMap::new(),
         mcp: serde_json::Value::Null,
         run_deadline: chrono::Utc::now(),

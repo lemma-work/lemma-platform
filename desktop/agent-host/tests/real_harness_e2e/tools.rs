@@ -44,6 +44,7 @@ async fn codex_native_image_generation_creates_a_publishable_artifact() {
                 })],
                 resume_session_id: None,
                 workspace_cwd: None,
+                repository: None,
                 context: JsonMap::new(),
                 mcp: Value::Null,
                 run_deadline: Utc::now() + chrono::Duration::minutes(10),
