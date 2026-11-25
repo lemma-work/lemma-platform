@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { APP_LINK_PATHS, appleAppSiteAssociation } from "@web/site/app-links";
+import { APP_LINK_PATHS, appleAppSiteAssociation, assetLinks } from "@web/site/app-links";
 import { LINK_HOSTS, LINK_WAIT_MS, appPathOf, isLinkPath, linkArrived, rememberLink, takeWaitingLink } from "../src/areas/more/links";
 
 /** Links from outside (PARITY.md, G): the web's addresses open the phone's
@@ -71,6 +71,16 @@ describe("where a link opens", () => {
         expect(new Set(APP_LINK_PATHS.map(bare))).toEqual(new Set(android));
         const claimed = appleAppSiteAssociation().applinks.details[0].components.map((one) => one["/"]);
         for (const path of android) expect(claimed.some((one) => one === path || one.startsWith(path + "/"))).toBe(true);
+    });
+
+    it("names the app to Android in the shape Google's verifier reads, once Play has signed it", () => {
+        expect(assetLinks([])).toEqual([]);
+        expect(assetLinks(["AA:BB"])).toEqual([
+            {
+                relation: ["delegate_permission/common.handle_all_urls"],
+                target: { namespace: "android_app", package_name: "work.lemma.mobile", sha256_cert_fingerprints: ["AA:BB"] },
+            },
+        ]);
     });
 });
 

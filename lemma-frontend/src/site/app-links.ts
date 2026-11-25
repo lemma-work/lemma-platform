@@ -52,16 +52,16 @@ export function appleAppSiteAssociation() {
     };
 }
 
-/** Google's file. */
-export function assetLinks() {
-    if (ANDROID_CERT_SHA256.length === 0) return [];
+/** Google's file. Empty while no fingerprint is listed. */
+export function assetLinks(fingerprints: readonly string[] = ANDROID_CERT_SHA256) {
+    if (fingerprints.length === 0) return [];
     return [
         {
             relation: ['delegate_permission/common.handle_all_urls'],
             target: {
                 namespace: 'android_app',
                 package_name: ANDROID_PACKAGE,
-                sha256_cert_fingerprints: [...ANDROID_CERT_SHA256],
+                sha256_cert_fingerprints: [...fingerprints],
             },
         },
     ];
