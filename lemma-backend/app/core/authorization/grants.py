@@ -213,6 +213,7 @@ async def replace_grantee_resource_grants(
         grantee_id=grantee_id,
         action=action,
     )
+    await forget_grantee_pending_grants(session, pod_id, grantee_type, grantee_id)
     await session.execute(
         delete(ResourcePermissionGrantModel).where(
             ResourcePermissionGrantModel.pod_id == pod_id,
@@ -220,7 +221,6 @@ async def replace_grantee_resource_grants(
             ResourcePermissionGrantModel.grantee_id == grantee_id,
         )
     )
-    await forget_grantee_pending_grants(session, pod_id, grantee_type, grantee_id)
     grant_rows = {
         (grant.resource_type, grant.resource_id, permission_id)
         for grant in grants
@@ -378,6 +378,7 @@ async def delete_grantee_grants(
 ) -> None:
     """Delete every grant held by a grantee, and every one it waits for
     (`pending_grants.py`). Use when the grantee is deleted."""
+    await forget_grantee_pending_grants(session, pod_id, grantee_type, grantee_id)
     await session.execute(
         delete(ResourcePermissionGrantModel).where(
             ResourcePermissionGrantModel.pod_id == pod_id,
@@ -385,7 +386,6 @@ async def delete_grantee_grants(
             ResourcePermissionGrantModel.grantee_id == grantee_id,
         )
     )
-    await forget_grantee_pending_grants(session, pod_id, grantee_type, grantee_id)
     await session.flush()
     await _bump_if_agent(session, grantee_type, grantee_id)
     bump_after_commit(session, pod_id)

@@ -7,11 +7,12 @@ one resource, with each grantee's whole set, and nothing may be left waiting.
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 
 from app.core.authorization import pending_grants
 from app.core.authorization.context import ResourceType
@@ -190,3 +191,95 @@ async def test_a_replace_keeps_what_another_resource_type_waits_for(
         )
     )
     assert left.scalars().all() == [ResourceType.DATASTORE_TABLE.value]
+
+
+async def test_a_save_locks_what_the_grantee_waits_for_before_deleting(scenario):
+    """A declaration's settlement already holds the agent's waiting key when an
+    editor saves the agent's permissions. The save must take that key before
+    deleting anything: it waits, and its delete then removes the grant the
+    settlement wrote. Deleting first would miss it, and the agent would keep a
+    grant the editor had just removed."""
+    from app.core.authorization.grants import replace_grantee_resource_grants
+    from app.core.authorization.pending_grants import lock_pending_key
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.modules.test_support.e2e.waiters import eventually
+
+    await scenario.create_org_with_pod(name_prefix="Saved")
+    pod_id = UUID(scenario.pod_id)
+    grantee, resource_id = uuid4(), uuid4()
+    async with async_session_maker() as session:
+        await _hold(session, pod_id, grantee, "connector.use")
+        await session.commit()
+
+    async with async_session_maker() as declaring, async_session_maker() as saving:
+        await lock_pending_key(
+            declaring,
+            pod_id=pod_id,
+            resource_type=ResourceType.CONNECTOR,
+            resource_key=_KEY,
+        )
+        holder = await declaring.scalar(text("SELECT pg_backend_pid()"))
+        waiter = await saving.scalar(text("SELECT pg_backend_pid()"))
+        save = asyncio.create_task(
+            replace_grantee_resource_grants(
+                saving,
+                ctx=SimpleNamespace(  # type: ignore[arg-type]
+                    is_superuser=True,
+                    is_named_workload=False,
+                    permission_ids=frozenset(),
+                ),
+                pod_id=pod_id,
+                grantee_type="AGENT",
+                grantee_id=grantee,
+                grants=[],
+                created_by_user_id=None,
+            )
+        )
+
+        async def blocked() -> bool:
+            async with async_session_maker() as probe:
+                return bool(
+                    await probe.scalar(
+                        text("SELECT :holder = ANY(pg_blocking_pids(:waiter))"),
+                        {"holder": holder, "waiter": waiter},
+                    )
+                )
+
+        settled = False
+        try:
+            await eventually(
+                label="the save waits for the settlement's key",
+                probe=blocked,
+                done=bool,
+                timeout_seconds=10,
+                fail_fast=lambda _b: "the save never waited" if save.done() else None,
+            )
+            await settle_pending_grants(
+                declaring,
+                pod_id=pod_id,
+                resource_type=ResourceType.CONNECTOR,
+                resource_key=_KEY,
+                resource_id=resource_id,
+            )
+            settled = True
+        finally:
+            await declaring.commit()
+            if not settled:
+                save.cancel()
+            await asyncio.gather(save, return_exceptions=True)
+            await saving.commit()
+
+    assert await _grants_held_by(pod_id, grantee) == 0
+
+
+async def _grants_held_by(pod_id: UUID, grantee: UUID) -> int:
+    from app.core.infrastructure.db.session import async_session_maker
+
+    async with async_session_maker() as session:
+        count = await session.scalar(
+            select(func.count()).where(
+                ResourcePermissionGrantModel.pod_id == pod_id,
+                ResourcePermissionGrantModel.grantee_id == grantee,
+            )
+        )
+    return int(count or 0)
