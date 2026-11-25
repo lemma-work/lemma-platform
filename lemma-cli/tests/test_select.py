@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import os
 import sys
-import threading
-import time
 
 import pytest
 
@@ -155,63 +153,42 @@ def test_read_key_reads_a_whole_utf8_character():
         os.close(r)
 
 
-def _feed(
-    chunks: list[bytes], *, then_wait: bool = False
-) -> tuple[int, int, threading.Thread]:
-    """A pipe that delivers ``chunks`` one at a time, with a pause between."""
-    r, w = os.pipe()
-
-    def writer() -> None:
-        for chunk in chunks:
-            os.write(w, chunk)
-            time.sleep(0.01)
-        if not then_wait:
-            os.close(w)
-
-    thread = threading.Thread(target=writer)
-    thread.start()
-    return r, w, thread
-
-
 @needs_posix
 @pytest.mark.parametrize(
-    ("chunks", "expected"),
+    ("data", "expected"),
     [
-        ([b"\x1b", b"[", b"A"], "\x1b[A"),  # arrow split across reads
-        ([b"\x1b[", b"B"], "\x1b[B"),
-        ([b"\x1b[3~"], "\x1b[3~"),  # Delete is one key, tail included
-        ([b"\x1b[1;5C"], "\x1b[1;5C"),  # Ctrl+Right
-        ([b"\x1bOA"], "\x1bOA"),
+        (b"\x1b[A", "\x1b[A"),
+        (b"\x1b[3~", "\x1b[3~"),  # Delete is one key, tail included
+        (b"\x1b[1;5C", "\x1b[1;5C"),  # Ctrl+Right
+        (b"\x1bOA", "\x1bOA"),
     ],
 )
-def test_read_key_returns_the_whole_escape_sequence(chunks, expected):
-    r, _w, thread = _feed(chunks)
+def test_read_key_returns_the_whole_escape_sequence(data, expected):
+    r = _pipe_with(data)
     try:
         assert sel._read_key(r) == expected
     finally:
-        thread.join()
         os.close(r)
 
 
 @needs_posix
 def test_escape_sequence_tail_never_reaches_the_filter():
-    r, _w, thread = _feed([b"\x1b[3~", b"x"])
+    r = _pipe_with(b"\x1b[3~x")
     try:
         assert sel._read_key(r) == "\x1b[3~"
         assert sel._read_key(r) == "x"
     finally:
-        thread.join()
         os.close(r)
 
 
-@needs_posix
-def test_read_key_gathers_a_utf8_character_split_across_reads():
-    r, _w, thread = _feed([b"\xe2", b"\x82", b"\xac"])  # the euro sign
-    try:
-        assert sel._read_key(r) == "€"
-    finally:
-        thread.join()
-        os.close(r)
+def test_read_exactly_gathers_bytes_delivered_one_at_a_time():
+    deliveries = iter([b"\x82", b"\xac"])  # the rest of a euro sign, in pieces
+    gathered = sel._read_exactly(0, b"\xe2", 2, read=lambda _fd, _n: next(deliveries))
+    assert gathered.decode() == "€"
+
+
+def test_read_exactly_stops_at_end_of_input():
+    assert sel._read_exactly(0, b"\xe2", 2, read=lambda _fd, _n: b"") == b"\xe2"
 
 
 @needs_posix

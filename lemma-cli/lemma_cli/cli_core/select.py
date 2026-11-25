@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import select
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -123,10 +124,15 @@ def _read_key(fd: int) -> str:
     return _read_exactly(fd, first, _utf8_tail_length(first[0])).decode(errors="ignore")
 
 
-def _read_exactly(fd: int, data: bytes, extra: int) -> bytes:
-    """``data`` plus ``extra`` more bytes, stopping early only at end of input."""
+def _read_exactly(
+    fd: int, data: bytes, extra: int, read: Callable[[int, int], bytes] = os.read
+) -> bytes:
+    """``data`` plus ``extra`` more bytes, stopping early only at end of input.
+
+    ``read`` is a seam so a test can hand the bytes over in short reads.
+    """
     while extra > 0:
-        chunk = os.read(fd, extra)
+        chunk = read(fd, extra)
         if not chunk:
             break
         data += chunk
