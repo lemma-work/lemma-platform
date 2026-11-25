@@ -423,16 +423,6 @@ class BundleApplier:
             bundle_root=self._root,
             waiting=waiting,
         )
-        if waiting:
-            await hold_grants_until_declared(
-                self._uow,
-                self._ctx,
-                pod_id=self._pod_id,
-                grantee_type=grantee_type,
-                grantee_id=grantee_id,
-                grants=waiting,
-                created_by_user_id=self._user_id,
-            )
         await apply_grants(
             self._uow.session,
             ctx=self._ctx,
@@ -440,6 +430,18 @@ class BundleApplier:
             grantee_type=grantee_type,
             grantee_id=grantee_id,
             grants=grants,
+            created_by_user_id=self._user_id,
+        )
+        # After the replace, which would wipe a grant the hold settles onto a
+        # connector declared since resolving; and even with nothing waiting,
+        # so a replayed step clears what its first attempt held.
+        await hold_grants_until_declared(
+            self._uow,
+            self._ctx,
+            pod_id=self._pod_id,
+            grantee_type=grantee_type,
+            grantee_id=grantee_id,
+            grants=waiting,
             created_by_user_id=self._user_id,
         )
 

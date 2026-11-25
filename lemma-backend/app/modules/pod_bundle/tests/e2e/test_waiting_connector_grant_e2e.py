@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import status
@@ -145,3 +145,94 @@ async def test_a_left_out_connector_the_org_has_installed_still_drops_its_grant(
     )
     assert declared.status_code == status.HTTP_201_CREATED, declared.text
     assert await _connector_grants(client, pod_id) == []
+
+
+async def test_a_connector_declared_while_the_grant_step_runs_keeps_its_grant(
+    scenario, db_session, monkeypatch, tmp_path
+):
+    """The grant step resolves (no installation, so the grant waits), and a
+    connector of that kind is declared before it holds. Holding sees the
+    connector and grants on it -- after the step's own replacement of the
+    agent's grants, which would otherwise wipe it."""
+    from app.core.authorization.service import AuthorizationDataService
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.connectors.contracts.pod_connectors import (
+        ensure_pod_connector_for_installation,
+    )
+    from app.modules.pod_bundle.domain.connector_plan import ConnectorChoice
+    from app.modules.pod_bundle.domain.state import PlanStep, StepAction, StepKind
+    from app.modules.pod_bundle.infrastructure import applier as applier_module
+    from app.modules.pod_bundle.infrastructure.kept_parts import CreatedParts
+
+    connector_id = await _catalog_connector(db_session)
+    await scenario.create_org_with_pod(name_prefix="Raced")
+    client, pod_id = scenario.owner_client, UUID(scenario.pod_id)
+    created = await client.post(
+        f"/pods/{pod_id}/agents",
+        json={"name": "briefer", "instruction": "Brief me on my next meeting."},
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    install_id = UUID(await _install(db_session, scenario.org_id, connector_id))
+    root = tmp_path / "raced"
+    _write(
+        root / "connectors" / "calendar" / "calendar.json",
+        {"connector": connector_id, "mode": "PER_MEMBER", "required": False},
+    )
+    _write(
+        root / "agents" / "briefer" / "briefer.json",
+        {
+            "name": "briefer",
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "connector",
+                        "resource_name": "calendar",
+                        "permission_ids": ["connector.use"],
+                    }
+                ]
+            },
+        },
+    )
+
+    uow = SqlAlchemyUnitOfWork(db_session)
+    user_id = UUID(scenario.owner_user["id"])
+    ctx = await AuthorizationDataService(db_session).build_user_context(
+        user_id=user_id, pod_id=pod_id
+    )
+
+    async def declared_meanwhile(_uow, *, organization_id, name):
+        # The grant step asks whether the organization has an installation:
+        # it has none yet -- and a connector of that kind is declared before
+        # the step holds the grant.
+        await ensure_pod_connector_for_installation(
+            uow, ctx, pod_id=pod_id, auth_config_id=install_id
+        )
+        return
+
+    monkeypatch.setattr(
+        "app.modules.connectors.contracts.provisioning.installation_for_bundle_name",
+        declared_meanwhile,
+    )
+    made = CreatedParts()
+    made.add(StepKind.AGENT, "briefer")
+    applier = applier_module.BundleApplier(
+        uow=uow,
+        ctx=ctx,
+        pod_id=pod_id,
+        user_id=user_id,
+        bundle_root=root,
+        connector_choices={"calendar": ConnectorChoice(skip=True)},
+        created=made,
+    )
+    await applier.apply_step(
+        PlanStep(
+            index=0,
+            kind=StepKind.AGENT_GRANTS,
+            name="briefer",
+            action=StepAction.CREATE,
+        )
+    )
+    await db_session.commit()
+
+    grants = await _connector_grants(client, str(pod_id))
+    assert [g["permission_ids"] for g in grants] == [["connector.use"]], grants

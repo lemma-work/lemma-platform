@@ -458,6 +458,13 @@ def _patch_grant_layer(monkeypatch) -> dict:
     applier) and record the calls. Returns the recorder dict."""
     calls: dict = {}
 
+    async def _hold(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "app.modules.connectors.contracts.bundles.hold_grants_until_declared", _hold
+    )
+
     def _validate(grants):
         calls["validated"] = list(grants)
 
