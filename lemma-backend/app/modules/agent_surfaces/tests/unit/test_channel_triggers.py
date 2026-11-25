@@ -14,6 +14,9 @@ from collections.abc import Collection
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy.exc import OperationalError
+
+from app.core.domain.errors import DomainError
 
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -114,10 +117,35 @@ def _place(surface: AgentSurfaceEntity) -> Source:
     )
 
 
-async def _fire(seats, surfaces, parsed) -> tuple[bool, _Fired]:
-    fired = _Fired()
+class _Savepoints:
+    """A session's savepoints: how many were opened, and which were rolled back."""
+
+    def __init__(self) -> None:
+        self.opened = 0
+        self.rolled_back: list[BaseException] = []
+
+    def begin_nested(self) -> _Savepoints:
+        self.opened += 1
+        return self
+
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, kind, error, trace) -> bool:
+        if error is not None:
+            self.rolled_back.append(error)
+        return False
+
+
+class _Uow:
+    def __init__(self) -> None:
+        self.session = _Savepoints()
+
+
+async def _fire(seats, surfaces, parsed, *, fire=None) -> tuple[bool, _Fired]:
+    fired = fire or _Fired()
     result = await fire_channel_triggers(
-        None, seats=seats, surfaces=surfaces, parsed=parsed, fire=fired
+        _Uow(), seats=seats, surfaces=surfaces, parsed=parsed, fire=fired
     )
     return result, fired
 
@@ -220,3 +248,40 @@ def test_an_apps_own_message_never_reaches_the_triggers():
 
     assert classify_slack(payload).drop_reason == "bot_echo"
     assert SlackMessageParser().parse(payload) is None
+
+
+class _Refused:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def __call__(self, uow, event: NormalizedWebhook) -> list[UUID]:
+        del uow, event
+        raise self.error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        DomainError("a matched schedule names no agent"),
+        OperationalError("insert", {}, Exception("deadlock detected")),
+    ],
+)
+async def test_a_schedule_that_cannot_fire_never_costs_the_message(error):
+    """The line the message wrote and the answer to it are the surface's: a
+    schedule watching the channel that cannot be matched or fired is rolled
+    back on its own, and the message carries on."""
+    surface = _surface()
+    uow = _Uow()
+
+    fired_any = await fire_channel_triggers(
+        uow,
+        seats=_Places(_place(surface)),
+        surfaces=[surface],
+        parsed=_said(),
+        fire=_Refused(error),
+    )
+
+    assert fired_any is False
+    assert uow.session.opened == 1
+    assert uow.session.rolled_back == [error]

@@ -25,7 +25,11 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Sequence
 from uuid import UUID
 
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
@@ -37,6 +41,8 @@ from app.modules.schedule.contracts.heard_events import (
     NormalizedWebhook,
     fire_heard_event,
 )
+
+logger = get_logger(__name__)
 
 #: `fire_heard_event`'s shape, as the seam a test stands in for.
 FireHeardEvent = Callable[
@@ -55,7 +61,10 @@ async def fire_channel_triggers(
     """Fire the trigger schedules this group message matches. True if any fired.
 
     Writes on ``uow`` and does no I/O beyond it, so the caller commits the
-    runs with whatever it wrote beside them.
+    runs with whatever it wrote beside them. In a savepoint of their own: the
+    line the message wrote and the answer to it are the surface's, and a
+    schedule that cannot be matched or fired is rolled back alone and logged
+    rather than failing the message's ingest.
     """
     if parsed.platform is not SurfacePlatform.SLACK or parsed.is_dm:
         return False
@@ -63,8 +72,17 @@ async def fire_channel_triggers(
     if not pod_ids:
         return False
     fired = False
-    for event in slack_trigger_events(parsed, pod_ids=pod_ids):
-        fired = bool(await fire(uow, event)) or fired
+    try:
+        async with uow.session.begin_nested():
+            for event in slack_trigger_events(parsed, pod_ids=pod_ids):
+                fired = bool(await fire(uow, event)) or fired
+    except DomainError, SQLAlchemyError:
+        logger.warning(
+            "agent_surfaces.channel_triggers.fire_failed.degraded",
+            platform=parsed.platform.value,
+            exc_info=True,
+        )
+        return False
     return fired
 
 

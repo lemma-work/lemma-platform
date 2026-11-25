@@ -301,6 +301,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.channel_deliveries.send_resumed.observed': EventSpec('info', frozenset({'attempts', 'delivery_id'})),
     'agent_surfaces.channel_deliveries.send_timed_out.degraded': EventSpec('warning', frozenset({'delivery_id', 'timeout_seconds'})),
     'agent_surfaces.channel_exposure.resource_withheld': EventSpec('info', frozenset({'conversation_id', 'platform'})),
+    'agent_surfaces.channel_triggers.fire_failed.degraded': EventSpec('warning', frozenset({'platform'})),
     'agent_surfaces.chat_onboarding.answer_rejected.observed': EventSpec('info', frozenset({'platform', 'reason', 'step'})),
     'agent_surfaces.chat_onboarding.email_unavailable.observed': EventSpec('info', frozenset({'platform', 'step'})),
     'agent_surfaces.chat_onboarding.signup_refused.failed': EventSpec('error', frozenset({'platform', 'reason', 'step'})),
