@@ -282,7 +282,10 @@ Import declares them **first**, then everything that names their slug. For each:
 - **PER_MEMBER + required**: members who have no account are asked to connect.
 - **Optional (`required: false`) with no installation, and only grants name
   it** (no schedule or surface runs through it): it is **left out** rather than
-  stopping the import, and grants on it are dropped with a warning. Pass
+  stopping the import. This CLI's import drops grants on it, with a warning.
+  An import made in the app keeps them waiting instead, and they are granted
+  once the pod has a connector of that kind the whole pod can use, in the
+  bundle's mode. Pass
   `--create-installations` (or choose an installation) to bring it in. A
   schedule or surface running through it makes it needed after all.
 - A slug the pod already declares for the same connector in the same mode is
