@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.log.log import get_logger
 
-from app.modules.vault.domain.errors import VaultUnavailable
+from app.modules.vault.domain.errors import KeyNotKept, VaultUnavailable
 from app.modules.vault.domain.types import ActorKind, AuditActor
 from app.modules.vault.infrastructure.models import VaultSecret
 from app.modules.vault.services.audit import SecretAction, record_event
@@ -52,7 +52,7 @@ async def rewrap_batch(
     for secret_id, kek_id, wrapped in rows:
         old = keyring.cached_encryption_key(kek_id)
         if old is None:
-            raise VaultUnavailable(f"vault key {kek_id} is retired or missing")
+            raise KeyNotKept(kek_id)
         await session.execute(
             update(VaultSecret)
             .where(VaultSecret.id == secret_id)

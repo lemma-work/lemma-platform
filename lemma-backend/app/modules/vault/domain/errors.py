@@ -72,3 +72,12 @@ class KeyRetirementRefused(VaultError):
 
     def __init__(self, message: str) -> None:
         super().__init__(message, code="VAULT_KEY_RETIREMENT_REFUSED", status_code=409)
+
+
+class KeyNotKept(VaultUnavailable):
+    """The key a value names is retired or was never here -- confirmed after a
+    reload, not a failure to load. A sealed value under it is simply gone."""
+
+    def __init__(self, key_id: UUID) -> None:
+        super().__init__(f"vault key {key_id} is retired or missing")
+        self.key_id = key_id
