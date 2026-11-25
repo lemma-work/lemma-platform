@@ -190,6 +190,9 @@ class PodConnectorRepository:
             )
             .order_by(PodConnector.created_at, PodConnector.id)
             .limit(1)
+            # Held until commit, so a change to RESTRICTED waits for the
+            # grant rather than landing between this read and it.
+            .with_for_update(read=True, of=PodConnector)
         )
         row = (await self.session.execute(stmt)).scalars().first()
         return row.to_entity() if row else None

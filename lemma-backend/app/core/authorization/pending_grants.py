@@ -136,14 +136,28 @@ async def replace_grantee_pending_grants(
     if not await _table_ready(session):
         logger.warning("authorization.pending_grants.not_migrated.degraded")
         return False
-    for resource_type, resource_key in sorted(
-        {(g.resource_type, g.resource_key) for g in grants},
-        key=lambda k: (k[0].value, k[1]),
-    ):
+    # Every key the replace touches: the ones it holds and the ones it stops
+    # holding, so a settlement of a dropped key cannot read a row this deletes.
+    held_before = await session.execute(
+        select(
+            PendingResourceGrantModel.resource_type,
+            PendingResourceGrantModel.resource_key,
+        )
+        .where(
+            PendingResourceGrantModel.pod_id == pod_id,
+            PendingResourceGrantModel.grantee_type == grantee_type,
+            PendingResourceGrantModel.grantee_id == grantee_id,
+        )
+        .distinct()
+        .limit(_SETTLE_BATCH)
+    )
+    keys = {(g.resource_type.value, g.resource_key) for g in grants}
+    keys.update((str(t), str(k)) for t, k in held_before.all())
+    for resource_type_value, resource_key in sorted(keys):
         await lock_pending_key(
             session,
             pod_id=pod_id,
-            resource_type=resource_type,
+            resource_type=ResourceType(resource_type_value),
             resource_key=resource_key,
         )
     await delete_grantee_pending_grants(
