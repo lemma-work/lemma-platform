@@ -4,6 +4,7 @@ import type { AgentRuntimeConfig } from "../openapi_client/models/AgentRuntimeCo
 import type { AgentRuntimeProfileListResponse } from "../openapi_client/models/AgentRuntimeProfileListResponse.js";
 import type { AgentRuntimeProfileResponse } from "../openapi_client/models/AgentRuntimeProfileResponse.js";
 import type { AgentRunStartResponse } from "../openapi_client/models/AgentRunStartResponse.js";
+import type { ConversationChangesResponse } from "../openapi_client/models/ConversationChangesResponse.js";
 import type { ConversationListResponse } from "../openapi_client/models/ConversationListResponse.js";
 import type { ConversationRepositoryListResponse } from "../openapi_client/models/ConversationRepositoryListResponse.js";
 import type { ConversationStatus } from "../openapi_client/models/ConversationStatus.js";
@@ -316,6 +317,35 @@ export class ConversationsNamespace {
     const podId = this.requirePodId(options.pod_id);
     return this.http.request<Conversation>("GET", `/pods/${podId}/conversations/${conversationId}`)
       .then(normalizeConversation);
+  }
+
+  /** What a conversation opened with `repository` has changed in its checkout:
+   *  every file that differs from where its branch left the start point --
+   *  commits not yet pushed, edits not yet committed -- and its untracked
+   *  files, with line counts. `patch: true` adds the unified diff, cut at
+   *  `max_patch_bytes` (`truncated` says so).
+   *
+   *  `state` is `ready` when it was read. Otherwise it says why not:
+   *  `no_repository`, `not_checked_out` (the machine answered and holds no
+   *  checkout), `machine_unavailable` (the machine is not running and is not
+   *  started to answer -- so too before the conversation's first run) or
+   *  `elsewhere` (its last run worked on the person's own Mac). A read that
+   *  outlives its ceiling is a 504. Only the conversation's owner may read it. */
+  changes(
+    conversationId: string,
+    options: { patch?: boolean; max_patch_bytes?: number | null; pod_id?: string | null } = {},
+  ): Promise<ConversationChangesResponse> {
+    const podId = this.requirePodId(options.pod_id);
+    return this.http.request<ConversationChangesResponse>(
+      "GET",
+      `/pods/${podId}/conversations/${conversationId}/changes`,
+      {
+        params: {
+          patch: options.patch ? true : undefined,
+          max_patch_bytes: options.max_patch_bytes ?? undefined,
+        },
+      },
+    );
   }
 
   /** What a conversation has cost its owner so far, in US dollars and model
