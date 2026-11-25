@@ -19,10 +19,13 @@ listed beside them. Nothing is fetched first: ``origin/*`` is whatever the
 checkout's last fetch left, and fetching is a write.
 
 **Read only.** The command never writes to the repository: no fetch, no index
-refresh (``GIT_OPTIONAL_LOCKS=0`` and ``--no-optional-locks``), and nothing
-from the repository's own configuration that would run a program -- external
-diff drivers, text conversion filters, an fsmonitor hook -- since a checkout
-an agent works in can configure any of them. Its scratch output goes to a
+refresh (``GIT_OPTIONAL_LOCKS=0`` and ``--no-optional-locks``). External diff
+drivers, text conversion filters and an fsmonitor hook are switched off, since
+a checkout an agent works in can configure any of them. A clean filter that
+``.gitattributes`` names (``filter.<driver>.clean``, git-lfs's among them) is
+not: git runs it to compare a working-tree file, exactly as it does for the
+agent's own ``git diff``, so anything that can write the clone's config can
+run a program when the changes are read. Its scratch output goes to a
 temporary directory outside the checkout, removed on exit.
 
 **Framing.** Each part of the output is one line, a name and the part

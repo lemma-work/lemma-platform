@@ -197,9 +197,11 @@ class PodConversations(BoundResource):
         commits not yet pushed, edits not yet committed -- and its untracked
         files, with line counts; ``patch=True`` adds the unified diff, cut at
         ``max_patch_bytes``. ``state`` is ``ready`` when it was read, else
-        ``no_repository``, ``not_checked_out``, ``machine_unavailable`` (the
-        machine is asleep, and is not woken to answer) or ``elsewhere`` (its
-        last run worked on your own Mac). Only the conversation's owner may
+        ``no_repository``, ``not_checked_out`` (the machine answered and holds
+        no checkout), ``machine_unavailable`` (the machine is not running and
+        is not started to answer -- so too before the conversation's first
+        run) or ``elsewhere`` (its last run worked on your own Mac). A read
+        that outlives its ceiling is a 504. Only the conversation's owner may
         read it.
         """
         return self._call(

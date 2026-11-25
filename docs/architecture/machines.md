@@ -59,7 +59,9 @@ conversation's checkout on the machine a run of it would use, decided by
 `resolve_agent_machine`. It does not start a sleeping machine
 (`agent_machines.read_if_awake` checks first; one that stops in the instant
 between that check and the read is started again) and accepts no command from
-the caller. An
+the caller. The command switches off external diff drivers, text conversion
+and fsmonitor, but a clean filter named in the checkout's `.gitattributes`
+(git-lfs's, for one) still runs, as it does for the agent's own `git diff`. An
 app's script can therefore read its viewer's diff; it could already read most
 of it in the conversation's `edit_file` calls.
 

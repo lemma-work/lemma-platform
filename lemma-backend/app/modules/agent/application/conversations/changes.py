@@ -55,6 +55,7 @@ logger = get_logger(__name__)
 READ_TIMEOUT_SECONDS = 30
 
 CHANGES_UNREADABLE = "CONVERSATION_CHANGES_UNREADABLE"
+CHANGES_TIMED_OUT = "CONVERSATION_CHANGES_TIMED_OUT"
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,8 +223,22 @@ class ConversationChangesReader:
             )
 
         output = await self._reach(target, command_for)
-        if output is None or output.exit_code is None:
+        if output is None:
             return ConversationChanges(state="machine_unavailable")
+        if output.exit_code is None:
+            # The machine answered; the read is what ran out of time, and may
+            # still be running there. Not "asleep", which invites a retry.
+            logger.warning(
+                "agent.conversation_changes.read_timed_out.degraded",
+                timeout_seconds=READ_TIMEOUT_SECONDS,
+            )
+            raise DomainError(
+                "Reading the checkout's changes took longer than "
+                f"{READ_TIMEOUT_SECONDS} seconds, and may still be running on "
+                "the machine.",
+                code=CHANGES_TIMED_OUT,
+                status_code=504,
+            )
         if output.exit_code == NOT_CHECKED_OUT_EXIT:
             return ConversationChanges(state="not_checked_out")
         if output.exit_code != 0:

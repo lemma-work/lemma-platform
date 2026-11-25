@@ -259,7 +259,7 @@ export class AgentConversationsService {
     }
     /**
      * Get Conversation Changes
-     * What a conversation opened in a repository has changed in its checkout, live: every file that differs from where its branch left the start point (`origin/<ref>`, else `origin/HEAD`) -- commits not yet pushed, staged and unstaged edits -- and its untracked files, with line counts, and the patch with `patch=true`. Read-only: nothing is fetched and the repository is not written. A machine that is asleep is not woken (`machine_unavailable`); a conversation whose last run worked on its person's Mac answers `elsewhere`. Only the conversation's owner may read it.
+     * What a conversation opened in a repository has changed in its checkout, live: every file that differs from where its branch left the start point (`origin/<ref>`, else `origin/HEAD`) -- commits not yet pushed, staged and unstaged edits -- and its untracked files, with line counts, and the patch with `patch=true`. Read-only: nothing is fetched and the repository is not written. A machine that is not running is not started (`machine_unavailable`); a conversation whose last run worked on its person's Mac answers `elsewhere`. A read that runs past its ceiling is a 504, `CONVERSATION_CHANGES_TIMED_OUT`. Only the conversation's owner may read it.
      * @param podId
      * @param conversationId
      * @param patch Include the unified diff.

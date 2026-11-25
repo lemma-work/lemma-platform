@@ -44,9 +44,10 @@ router = APIRouter(
         "yet pushed, staged and unstaged edits -- and its untracked files, "
         "with line counts, and the patch with `patch=true`. Read-only: "
         "nothing is fetched and the repository is not written. A machine that "
-        "is asleep is not woken (`machine_unavailable`); a conversation whose "
-        "last run worked on its person's Mac answers `elsewhere`. Only the "
-        "conversation's owner may read it."
+        "is not running is not started (`machine_unavailable`); a conversation "
+        "whose last run worked on its person's Mac answers `elsewhere`. A read "
+        "that runs past its ceiling is a 504, `CONVERSATION_CHANGES_TIMED_OUT`. "
+        "Only the conversation's owner may read it."
     ),
 )
 async def get_conversation_changes(

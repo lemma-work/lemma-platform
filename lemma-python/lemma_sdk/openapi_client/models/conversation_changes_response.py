@@ -25,10 +25,11 @@ class ConversationChangesResponse:
 
     Attributes:
         state (ConversationChangesResponseState): `ready`: read now, and everything below is filled in. `no_repository`:
-            the conversation was not opened in a repository. `not_checked_out`: it was, but nothing has made its checkout
-            yet (no command has run), or the checkout was cleared. `machine_unavailable`: the machine it works on is asleep
-            -- it is never woken to answer -- or a run of the conversation may not use it now. `elsewhere`: its last run
-            worked on its person's own Mac (a coding agent through Agent Host, or host execution), where the checkout is.
+            the conversation was not opened in a repository. `not_checked_out`: it was, and its machine answered, but the
+            conversation's directory holds no checkout -- cleared, or never made on this machine. `machine_unavailable`: the
+            machine it works on is not running -- it is not started to answer, so a conversation with no run yet answers
+            this -- or a run of the conversation may not use it now. `elsewhere`: its last run worked on its person's own
+            Mac (a coding agent through Agent Host, or host execution), where the checkout is.
         ahead (int | Unset): Commits on the checkout since `base_sha`. Default: 0.
         base_ref (None | str | Unset): The start point compared against: `origin/<ref>`, the ref itself for a tag or a
             commit, or the branch `origin/HEAD` names (as `origin/main`). Null when it could not be found in the checkout;

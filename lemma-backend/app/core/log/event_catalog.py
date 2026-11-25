@@ -77,6 +77,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.context_budget.invalid_model_window.degraded': EventSpec('warning', frozenset({'configured_value', 'model_name'})),
     'agent.conversation_approvals.approved_tool_never_confirmed.failed': EventSpec('error', frozenset({'approval_id', 'claimed', 'conversation_id'})),
     'agent.conversation_changes.machine_unreachable.degraded': EventSpec('warning', frozenset({'error_type'})),
+    'agent.conversation_changes.read_timed_out.degraded': EventSpec('warning', frozenset({'timeout_seconds'})),
     'agent.conversation_controller.agent_realtime_subscription.failed': EventSpec('error', frozenset({'agent_run_id', 'conversation_id'})),
     'agent.conversation_mcp.runtime_resolve_failed.degraded': EventSpec('warning', frozenset()),
     'agent.conversation_mcp_service.pod_membership_missing.denied': EventSpec('warning', frozenset({'conversation_id'})),

@@ -84,8 +84,9 @@ def sync_detailed(
     differs from where its branch left the start point (`origin/<ref>`, else `origin/HEAD`) -- commits
     not yet pushed, staged and unstaged edits -- and its untracked files, with line counts, and the
     patch with `patch=true`. Read-only: nothing is fetched and the repository is not written. A machine
-    that is asleep is not woken (`machine_unavailable`); a conversation whose last run worked on its
-    person's Mac answers `elsewhere`. Only the conversation's owner may read it.
+    that is not running is not started (`machine_unavailable`); a conversation whose last run worked on
+    its person's Mac answers `elsewhere`. A read that runs past its ceiling is a 504,
+    `CONVERSATION_CHANGES_TIMED_OUT`. Only the conversation's owner may read it.
 
     Args:
         pod_id (UUID):
@@ -130,8 +131,9 @@ def sync(
     differs from where its branch left the start point (`origin/<ref>`, else `origin/HEAD`) -- commits
     not yet pushed, staged and unstaged edits -- and its untracked files, with line counts, and the
     patch with `patch=true`. Read-only: nothing is fetched and the repository is not written. A machine
-    that is asleep is not woken (`machine_unavailable`); a conversation whose last run worked on its
-    person's Mac answers `elsewhere`. Only the conversation's owner may read it.
+    that is not running is not started (`machine_unavailable`); a conversation whose last run worked on
+    its person's Mac answers `elsewhere`. A read that runs past its ceiling is a 504,
+    `CONVERSATION_CHANGES_TIMED_OUT`. Only the conversation's owner may read it.
 
     Args:
         pod_id (UUID):
@@ -171,8 +173,9 @@ async def asyncio_detailed(
     differs from where its branch left the start point (`origin/<ref>`, else `origin/HEAD`) -- commits
     not yet pushed, staged and unstaged edits -- and its untracked files, with line counts, and the
     patch with `patch=true`. Read-only: nothing is fetched and the repository is not written. A machine
-    that is asleep is not woken (`machine_unavailable`); a conversation whose last run worked on its
-    person's Mac answers `elsewhere`. Only the conversation's owner may read it.
+    that is not running is not started (`machine_unavailable`); a conversation whose last run worked on
+    its person's Mac answers `elsewhere`. A read that runs past its ceiling is a 504,
+    `CONVERSATION_CHANGES_TIMED_OUT`. Only the conversation's owner may read it.
 
     Args:
         pod_id (UUID):
@@ -215,8 +218,9 @@ async def asyncio(
     differs from where its branch left the start point (`origin/<ref>`, else `origin/HEAD`) -- commits
     not yet pushed, staged and unstaged edits -- and its untracked files, with line counts, and the
     patch with `patch=true`. Read-only: nothing is fetched and the repository is not written. A machine
-    that is asleep is not woken (`machine_unavailable`); a conversation whose last run worked on its
-    person's Mac answers `elsewhere`. Only the conversation's owner may read it.
+    that is not running is not started (`machine_unavailable`); a conversation whose last run worked on
+    its person's Mac answers `elsewhere`. A read that runs past its ceiling is a 504,
+    `CONVERSATION_CHANGES_TIMED_OUT`. Only the conversation's owner may read it.
 
     Args:
         pod_id (UUID):

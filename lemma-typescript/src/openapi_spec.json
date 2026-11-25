@@ -6820,7 +6820,7 @@
             "title": "Patch"
           },
           "state": {
-            "description": "`ready`: read now, and everything below is filled in. `no_repository`: the conversation was not opened in a repository. `not_checked_out`: it was, but nothing has made its checkout yet (no command has run), or the checkout was cleared. `machine_unavailable`: the machine it works on is asleep -- it is never woken to answer -- or a run of the conversation may not use it now. `elsewhere`: its last run worked on its person's own Mac (a coding agent through Agent Host, or host execution), where the checkout is.",
+            "description": "`ready`: read now, and everything below is filled in. `no_repository`: the conversation was not opened in a repository. `not_checked_out`: it was, and its machine answered, but the conversation's directory holds no checkout -- cleared, or never made on this machine. `machine_unavailable`: the machine it works on is not running -- it is not started to answer, so a conversation with no run yet answers this -- or a run of the conversation may not use it now. `elsewhere`: its last run worked on its person's own Mac (a coding agent through Agent Host, or host execution), where the checkout is.",
             "enum": [
               "ready",
               "no_repository",
@@ -47325,7 +47325,7 @@
     },
     "/pods/{pod_id}/conversations/{conversation_id}/changes": {
       "get": {
-        "description": "What a conversation opened in a repository has changed in its checkout, live: every file that differs from where its branch left the start point (`origin/<ref>`, else `origin/HEAD`) -- commits not yet pushed, staged and unstaged edits -- and its untracked files, with line counts, and the patch with `patch=true`. Read-only: nothing is fetched and the repository is not written. A machine that is asleep is not woken (`machine_unavailable`); a conversation whose last run worked on its person's Mac answers `elsewhere`. Only the conversation's owner may read it.",
+        "description": "What a conversation opened in a repository has changed in its checkout, live: every file that differs from where its branch left the start point (`origin/<ref>`, else `origin/HEAD`) -- commits not yet pushed, staged and unstaged edits -- and its untracked files, with line counts, and the patch with `patch=true`. Read-only: nothing is fetched and the repository is not written. A machine that is not running is not started (`machine_unavailable`); a conversation whose last run worked on its person's Mac answers `elsewhere`. A read that runs past its ceiling is a 504, `CONVERSATION_CHANGES_TIMED_OUT`. Only the conversation's owner may read it.",
         "operationId": "agent.conversation.changes.get",
         "parameters": [
           {

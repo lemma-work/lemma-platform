@@ -15,6 +15,7 @@ import pytest
 
 from app.core.domain.errors import DomainError
 from app.modules.agent.application.conversations.changes import (
+    CHANGES_TIMED_OUT,
     CHANGES_UNREADABLE,
     ChangesTarget,
     CommandFor,
@@ -125,12 +126,20 @@ async def test_a_machine_that_is_not_there_to_ask_is_unavailable() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_command_still_running_at_its_deadline_is_unavailable() -> None:
+async def test_a_command_still_running_at_its_deadline_is_a_504_not_an_asleep_machine() -> (
+    None
+):
+    """The machine answered and the read outlived its ceiling: saying the
+    machine is asleep would send the person to retry a read still running."""
     reader = ConversationChangesReader(
         _rows(_target()), reach=_Machine(output=_Output(exit_code=None))
     )
 
-    assert (await _read(reader)).state == "machine_unavailable"
+    with pytest.raises(DomainError) as refused:
+        await _read(reader)
+
+    assert refused.value.status_code == 504
+    assert refused.value.code == CHANGES_TIMED_OUT
 
 
 @pytest.mark.asyncio
