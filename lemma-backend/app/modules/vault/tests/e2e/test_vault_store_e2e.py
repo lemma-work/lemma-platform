@@ -33,7 +33,12 @@ from app.modules.vault.infrastructure.models import (
     owner_trigger_sql,
 )
 from app.modules.vault.config import vault_settings
-from app.modules.vault.domain.errors import KeyRetirementRefused
+from app.modules.vault.domain.errors import KeyRetirementRefused, VaultUnavailable
+from app.modules.vault.services.sealer import (
+    SealedValueInvalid,
+    open_text,
+    seal_value,
+)
 from app.modules.vault.services.keyring import ENCRYPT
 from app.modules.vault.services.rewrap import rewrap_all, secrets_per_key
 from app.modules.vault.services.runtime import get_vault_keyring
@@ -461,3 +466,51 @@ async def test_freshness_counts_from_reading_the_keys_not_from_publishing_them(
         keyring._root = root
     # Published only after the slow unwraps, but dated from the read before them.
     assert before <= keyring._loaded_at < before + 0.3
+
+
+async def test_a_value_sealed_under_a_retired_key_opens_as_absent(
+    db_session, db_manager
+):
+    keyring = get_vault_keyring()
+    old_kek, _ = await keyring.active_encryption_key()
+    sealed = await seal_value("cached", purpose=PURPOSE, bindings=["cache-key"])
+
+    await keyring.rotate(ENCRYPT)
+    await rewrap_all(db_manager.session_factory, keyring, batch_size=50)
+    await db_session.execute(
+        text(
+            "UPDATE vault_keys SET created_at = created_at - interval '1 day' "
+            "WHERE purpose = 'encrypt'"
+        )
+    )
+    await db_session.commit()
+    await keyring.retire(old_kek)
+
+    # Rewrap cannot reach a sealed copy outside the database; once its key is
+    # gone it reads as a miss, never as an outage.
+    with pytest.raises(SealedValueInvalid):
+        await open_text(sealed, purpose=PURPOSE, bindings=["cache-key"])
+
+
+async def test_keys_too_old_even_after_a_reload_are_not_handed_out(monkeypatch):
+    keyring = get_vault_keyring()
+    root = keyring._root
+
+    class _SlowRoot:
+        name = root.name
+
+        async def unwrap(self, *args, **kwargs):
+            await asyncio.sleep(0.3)
+            return await root.unwrap(*args, **kwargs)
+
+        def __getattr__(self, attribute):
+            return getattr(root, attribute)
+
+    monkeypatch.setattr(vault_settings, "vault_kek_refresh_seconds", 0.1)
+    keyring._root = _SlowRoot()
+    keyring._loaded_at = 0.0
+    try:
+        with pytest.raises(VaultUnavailable, match="recently enough"):
+            await keyring.active_encryption_key()
+    finally:
+        keyring._root = root
