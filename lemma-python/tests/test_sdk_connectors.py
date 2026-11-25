@@ -209,6 +209,23 @@ def test_acting_as_the_app_is_never_sent_down_the_deprecated_route() -> None:
         )
 
 
+def test_acting_as_the_app_with_no_pod_bound_is_refused_not_dropped() -> None:
+    """Without a pod the only route is the deprecated one, which presents a
+    person: asking for the app there must fail, not silently go out as one."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"result": {}})
+
+    connectors = _connectors_over(handler)
+
+    with pytest.raises(ValueError, match="act_as='app'"):
+        connectors.execute("github", "checks_create", {}, act_as="app")
+
+    assert seen == []
+
+
 def test_a_refusal_to_act_as_the_app_is_not_retried_as_an_installation() -> None:
     """A 404 for a slug falls back to the installation route as the person;
     a call that asked for the app must not end up as the person."""
