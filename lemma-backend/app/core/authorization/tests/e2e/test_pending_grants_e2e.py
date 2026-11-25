@@ -266,8 +266,9 @@ async def test_a_save_locks_what_the_grantee_waits_for_before_deleting(scenario)
             await declaring.commit()
             if not settled:
                 save.cancel()
-            await asyncio.gather(save, return_exceptions=True)
-            await saving.commit()
+                await asyncio.gather(save, return_exceptions=True)
+        await save
+        await saving.commit()
 
     assert await _grants_held_by(pod_id, grantee) == 0
 
