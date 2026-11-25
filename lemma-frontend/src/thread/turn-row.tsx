@@ -4,6 +4,8 @@ import { TRANSCRIPT_ROW_ATTRIBUTE } from "./use-transcript-scroll";
 import { Prose, StreamingProse } from "./markdown";
 import { ClampedProse } from "./clamped-prose";
 import { CopyButton } from "./copy-button";
+import { ReportButton } from "@/reports/report-button";
+import { isServerId } from "@/reports/model";
 import { Mark } from "@/shell/mark";
 import { writeAddress } from "@/shell/address";
 import { PlaceLink } from "@/shell/place-link";
@@ -181,17 +183,24 @@ function Human({
     message,
     bot,
     outsiders,
+    podId,
+    conversationId,
     onRetry,
     onEdit,
 }: {
     message: HumanMessage;
     bot: string;
     outsiders?: string;
+    podId: string;
+    conversationId?: string | null;
     onRetry?: (id: string) => void;
     onEdit?: (id: string) => void;
 }) {
     const teammate = relayedBy(message);
     const guest = Boolean(outsiders && message.from) || Boolean(teammate);
+    /* Somebody outside wrote it, through a platform: theirs to report. Not
+       the reader's own words, nor another Lemma's relayed answer. */
+    const reportable = Boolean(outsiders && message.from) && !teammate && !message.pending && Boolean(conversationId) && isServerId(message.id);
     const at = message.pending === "sending" ? "Sending…" : message.pending === "failed" ? "Not sent" : message.at;
     return (
         <div className={"msg msg--you" + (guest ? " msg--guest" : "")} data-pending={message.pending}>
@@ -218,6 +227,14 @@ function Human({
                 <Prose text={message.text} />
                 <div className="message-actions">
                     <CopyButton text={message.text} label="Copy message" />
+                    {reportable && conversationId && (
+                        <ReportButton
+                            podId={podId}
+                            target={{ kind: "reply", conversationId, messageId: message.id }}
+                            author={message.from ?? null}
+                            label="Report this message"
+                        />
+                    )}
                 </div>
             </div>
             {message.pending === "failed" && (onRetry || onEdit) && (
@@ -327,7 +344,7 @@ export const TurnRow = memo(function TurnRow({
                 "cool cool" two lines tall and left the two
                 speakers built differently for no reason. */}
             {turn.human && (
-                <Human message={turn.human} bot={teammate.name} outsiders={outsiders} onRetry={onRetrySend} onEdit={onEditSend} />
+                <Human message={turn.human} bot={teammate.name} outsiders={outsiders} podId={podId} conversationId={conversationId} onRetry={onRetrySend} onEdit={onEditSend} />
             )}
 
             {(turn.notes.length > 0 || turn.items.length > 0 || merging || Boolean(turn.runtimeNotes?.length)) && (
@@ -362,6 +379,14 @@ export const TurnRow = memo(function TurnRow({
                                     <div className="said"><Prose text={item.text} /></div>
                                     <div className="message-actions">
                                         <CopyButton text={item.text} label="Copy message" />
+                                        {conversationId && isServerId(item.id) && (
+                                            <ReportButton
+                                                podId={podId}
+                                                target={{ kind: "reply", conversationId, messageId: item.id }}
+                                                author={teammate.name}
+                                                label="Report this reply"
+                                            />
+                                        )}
                                     </div>
                                 </div>
                             );

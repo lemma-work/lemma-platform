@@ -15,7 +15,7 @@ import { CloseIcon, MenuIcon, SearchIcon } from "@/ui/icons";
 import { usePanelFocus } from "@/ui/focus-trap";
 import type { DocsNavGroup } from "./docs-content";
 import type { DocsHit } from "./docs-search";
-import { DocsNav, type DocsDoor } from "./docs-nav";
+import { DocsNav } from "./docs-nav";
 import { DocsSearchDialog } from "./docs-search-dialog";
 
 /* What every docs page sits in: the site's header, the guide list at the
@@ -32,19 +32,16 @@ const DocsShellContext = createContext<DocsShellApi>({
 export function DocsShell({
     header,
     nav,
-    topics,
     index,
     children,
 }: {
     header: ReactNode;
     nav: DocsNavGroup[];
-    topics: readonly string[];
     index: DocsHit[];
     children: ReactNode;
 }) {
     const [search, setSearch] = useState(false);
     const [guides, setGuides] = useState(false);
-    const [door, setDoor] = useState<DocsDoor>("build");
     const pathname = usePathname() ?? "/docs";
     const current = pathname.replace(/^\/docs\/?/, "").replace(/\/$/, "");
     const list = useRef<HTMLElement>(null);
@@ -74,7 +71,7 @@ export function DocsShell({
         const top = link.offsetTop;
         if (top < box.scrollTop || top > box.scrollTop + box.clientHeight - 48)
             box.scrollTop = Math.max(0, top - box.clientHeight / 3);
-    }, [current, door]);
+    }, [current]);
 
     const api = useMemo<DocsShellApi>(
         () => ({
@@ -91,14 +88,8 @@ export function DocsShell({
         <DocsShellContext.Provider value={api}>
             {header}
             <div className="docs-grid">
-                <aside ref={list} className="docs-guides" aria-label="Guides">
-                    <DocsNav
-                        nav={nav}
-                        topics={topics}
-                        door={door}
-                        onDoor={setDoor}
-                        current={current}
-                    />
+                <aside ref={list} className="docs-guides" aria-label="All pages">
+                    <DocsNav nav={nav} current={current} />
                 </aside>
                 {children}
             </div>
@@ -106,9 +97,6 @@ export function DocsShell({
                 <GuidesDrawer onClose={() => setGuides(false)}>
                     <DocsNav
                         nav={nav}
-                        topics={topics}
-                        door={door}
-                        onDoor={setDoor}
                         current={current}
                         onNavigate={() => setGuides(false)}
                     />
@@ -145,15 +133,15 @@ function GuidesDrawer({
                 className="docs-drawer"
                 role="dialog"
                 aria-modal="true"
-                aria-label="Guides"
+                aria-label="All pages"
                 onKeyDown={keys}
             >
                 <div className="docs-drawer__head">
-                    <span>Guides</span>
+                    <span>All pages</span>
                     <button
                         type="button"
                         className="b b--s b--quiet b--icon"
-                        aria-label="Close the guides"
+                        aria-label="Close the list of pages"
                         onClick={onClose}
                     >
                         <CloseIcon aria-hidden="true" />
@@ -226,7 +214,7 @@ export function DocsPhoneBar() {
                 aria-haspopup="dialog"
             >
                 <MenuIcon aria-hidden="true" />
-                Guides
+                Pages
             </button>
             <button
                 type="button"

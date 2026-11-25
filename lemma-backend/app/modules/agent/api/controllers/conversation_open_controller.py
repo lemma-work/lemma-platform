@@ -21,10 +21,12 @@ from app.modules.agent.api.dependencies import (
     ProjectRepositoriesDep,
     StartConversationDep,
 )
+from app.modules.agent.api.conversation_create_schemas import (
+    CreateConversationRequest,
+)
 from app.modules.agent.api.schemas import (
     ConversationRepositoryListResponse,
     ConversationResponse,
-    CreateConversationRequest,
 )
 from app.modules.agent.services.runtime_availability import (
     check_conversation_runtime_for_pod,

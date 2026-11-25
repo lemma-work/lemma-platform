@@ -8,7 +8,7 @@ reader sees that it was given, and for whom, not what it said.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
@@ -92,7 +92,17 @@ class ChannelMessageResponse(BaseModel):
     )
     text: str | None = Field(
         default=None,
-        description="Absent where the line is withheld from the reader, or deleted.",
+        description=(
+            "Absent where the line is withheld from the reader, written by "
+            "somebody they blocked, or deleted."
+        ),
+    )
+    blocked: bool = Field(
+        default=False,
+        description=(
+            "Written by somebody the reader blocked (`/pods/{pod}/blocks`): "
+            "shown only that it is there, until they unblock them."
+        ),
     )
     withheld: bool = Field(
         default=False,
@@ -462,13 +472,17 @@ def message_response(
     names: Names | None = None,
     agents: AgentNames | None = None,
     deliveries: Sequence[Delivery] | None = None,
+    blocked: Collection[Principal] = (),
 ) -> ChannelMessageResponse:
     """One line as the member ``reader_id`` reads it. ``deliveries``: the
     line's, when it was read with them -- where it went outside Lemma is shown
-    to everybody who may read it; a push to a member is that member's."""
+    to everybody who may read it; a push to a member is that member's.
+    ``blocked``: who the reader blocked, whose lines say only that they are
+    there."""
     names = names or {}
     behalf = message.sender.on_behalf_of
-    hidden = hidden_from(message, channel, reader_id)
+    by_blocked = message.sender.principal in blocked
+    hidden = hidden_from(message, channel, reader_id) or by_blocked
     in_a_direct = channel.kind is ChannelKind.DIRECT
     return ChannelMessageResponse(
         id=message.id,
@@ -477,7 +491,8 @@ def message_response(
         sender=_sender(message, names, agents or {}),
         on_behalf_of=ref(behalf, names) if behalf else None,
         text=None if hidden or message.is_deleted else message.text,
-        withheld=hidden,
+        withheld=hidden and not by_blocked,
+        blocked=by_blocked,
         visibility=(
             "asker_only" if asker_only(message, in_a_direct=in_a_direct) else "channel"
         ),
@@ -500,23 +515,26 @@ def message_response(
             else None
         ),
         question=None if hidden else _question(message, names),
-        delivered=(
-            [
-                LineDelivery(
-                    id=delivery.id,
-                    source_id=delivery.source_id,
-                    platform=delivery.platform,
-                    status=delivery.status,
-                    reason=delivery.reason,
-                )
-                for delivery in deliveries
-                if delivery.source_id is not None
-            ]
-            if deliveries is not None and not hidden
-            else None
-        ),
+        delivered=None if hidden else _delivered(deliveries),
         created_at=message.created_at,
     )
+
+
+def _delivered(deliveries: Sequence[Delivery] | None) -> list[LineDelivery] | None:
+    """Where a line went outside Lemma, when it was read with its sends."""
+    if deliveries is None:
+        return None
+    return [
+        LineDelivery(
+            id=delivery.id,
+            source_id=delivery.source_id,
+            platform=delivery.platform,
+            status=delivery.status,
+            reason=delivery.reason,
+        )
+        for delivery in deliveries
+        if delivery.source_id is not None
+    ]
 
 
 def wrote(message: ChannelMessage, reader_id: UUID) -> bool:

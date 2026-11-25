@@ -39,6 +39,7 @@ from app.modules.channels.domain.entities import (
     Delivery,
     Principal,
 )
+from app.modules.channels.infrastructure.blocks import BlockRepository
 from app.modules.channels.infrastructure.deliveries import DeliveryRepository
 from app.modules.channels.infrastructure.inbox import InboxReads
 from app.modules.channels.infrastructure.lines import LineRepository
@@ -69,9 +70,10 @@ def _preview(
     reader_id: UUID,
     names: NameMap,
     agents: AgentNames,
+    blocked: Collection[Principal] = (),
 ) -> LinePreview:
     shown = message_response(
-        line, channel, reader_id=reader_id, names=names, agents=agents
+        line, channel, reader_id=reader_id, names=names, agents=agents, blocked=blocked
     )
     hidden = hidden_from(line, channel, reader_id)
     return LinePreview(
@@ -80,8 +82,17 @@ def _preview(
         sender=shown.sender,
         text=(shown.text or "")[:PREVIEW_CHARS],
         withheld=hidden,
+        blocked=shown.blocked,
         deleted=line.is_deleted,
         created_at=line.created_at,
+    )
+
+
+async def _blocked_by(
+    uow: SqlAlchemyUnitOfWork, caller: Caller
+) -> frozenset[Principal]:
+    return await BlockRepository(uow.session).of_reader(
+        pod_id=caller.pod_id, user_id=caller.user_id
     )
 
 
@@ -117,6 +128,7 @@ async def channel_rows(
         ],
         agents=[agent for line in latest.values() for agent in message_agents(line)],
     )
+    blocked = await _blocked_by(uow, caller) if latest else frozenset()
     rows: list[ChannelResponse] = []
     for channel in channels:
         line = latest.get(channel.last_line_id) if channel.last_line_id else None
@@ -133,6 +145,7 @@ async def channel_rows(
                         reader_id=caller.user_id,
                         names=names,
                         agents=agents,
+                        blocked=blocked,
                     )
                     if line is not None
                     else None
@@ -197,6 +210,7 @@ async def lines_response(
         agents=[agent for line in lines for agent in message_agents(line)],
     )
     sent = await deliveries_of(uow, [line.id for line in lines])
+    blocked = await _blocked_by(uow, caller) if lines else frozenset()
     return [
         message_response(
             line,
@@ -205,6 +219,7 @@ async def lines_response(
             names=names,
             agents=agents,
             deliveries=sent.get(line.id, ()),
+            blocked=blocked,
         )
         for line in lines
     ]
@@ -238,6 +253,7 @@ async def lines_across(
         ],
         agents=[agent for _, line in found for agent in message_agents(line)],
     )
+    blocked = await _blocked_by(uow, caller) if found else frozenset()
     shown: list[tuple[ChannelRef, ChannelMessageResponse]] = []
     for channel, line in found:
         person = (
@@ -256,7 +272,12 @@ async def lines_across(
                     person=ref(person, names) if person else None,
                 ),
                 message_response(
-                    line, channel, reader_id=caller.user_id, names=names, agents=agents
+                    line,
+                    channel,
+                    reader_id=caller.user_id,
+                    names=names,
+                    agents=agents,
+                    blocked=blocked,
                 ),
             )
         )

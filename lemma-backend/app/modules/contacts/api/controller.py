@@ -2,14 +2,15 @@
 
 Reading a pod's contacts takes what reading its conversations takes: a contact
 is a person the pod talks to, and their handles are as private as what was
-said. Renaming a contact takes what editing the pod takes. Exporting or
+said. Renaming a contact, or stopping the pod's agents answering one, takes
+what editing the pod takes. Exporting or
 deleting one -- a request to see or to forget a person -- takes a pod admin.
 """
 
 from __future__ import annotations
 
 import base64
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
 from uuid import UUID
 
@@ -91,6 +92,14 @@ class ContactResponse(BaseModel):
             "absent until they first write."
         ),
     )
+    blocked_at: datetime | None = Field(
+        default=None,
+        description=(
+            "When the pod's agents were stopped from answering them: what they "
+            "write still reaches the pod's chats, and no agent answers it or "
+            "writes to them. Members still can."
+        ),
+    )
 
 
 class ContactListResponse(BaseModel):
@@ -119,6 +128,13 @@ class ContactExportResponse(BaseModel):
 
 class ContactUpdateRequest(BaseModel):
     display_name: str | None = Field(default=None, max_length=255)
+    blocked: bool | None = Field(
+        default=None,
+        description=(
+            "True stops the pod's agents answering them, or writing to them; "
+            "false lets them again. Absent leaves it as it is."
+        ),
+    )
 
 
 async def _response(uow: SqlAlchemyUnitOfWork, contact: Contact) -> ContactResponse:
@@ -167,6 +183,7 @@ def _shown(
         is_anonymous=contact.is_anonymous,
         answered_at=contact.answered_at,
         channel_id=channel_id,
+        blocked_at=contact.blocked_at,
     )
 
 
@@ -180,6 +197,27 @@ async def _found(uow: UoWDep, *, pod_id: UUID, contact_id: UUID) -> Contact:
     if contact is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Contact not found")
     return contact
+
+
+async def _on_current(
+    uow: UoWDep,
+    *,
+    pod_id: UUID,
+    contact: Contact,
+    write: Callable[[UUID], Awaitable[bool]],
+) -> None:
+    """Write to the contact as they are now. The writes refuse a contact
+    merged into another, so one merged since it was read is followed once,
+    to the person they became; a write that still finds nobody is a 409,
+    never a silent miss. One gone altogether is a 404 (``_found``)."""
+    if await write(contact.id):
+        return
+    now = await _found(uow, pod_id=pod_id, contact_id=contact.id)
+    if now.id == contact.id or not await write(now.id):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="That contact changed while it was being saved. Try again.",
+        )
 
 
 def _encode_cursor(contact: Contact) -> str:
@@ -254,16 +292,41 @@ async def get_contact(pod_id: UUID, contact_id: UUID, uow: UoWDep) -> ContactRes
     dependencies=[require_action(Permissions.POD_UPDATE)],
 )
 async def update_contact(
-    pod_id: UUID, contact_id: UUID, request: ContactUpdateRequest, uow: UoWDep
+    pod_id: UUID,
+    contact_id: UUID,
+    request: ContactUpdateRequest,
+    user: CurrentUser,
+    uow: UoWDep,
 ) -> ContactResponse:
-    # The person a merged contact's id now leads to is the one renamed: the
+    """Rename a contact, or stop the pod's agents answering them (`blocked`)."""
+    # The person a merged contact's id now leads to is the one changed: the
     # absorbed row is never shown again.
     contact = await _found(uow, pod_id=pod_id, contact_id=contact_id)
     repository = ContactRepository(uow.session)
-    if not await repository.rename(
-        pod_id=pod_id, contact_id=contact.id, display_name=request.display_name
-    ):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Contact not found")
+    given = request.model_fields_set
+    # A request without `blocked` is a rename, as it always was: even `{}`
+    # clears the name.
+    if "display_name" in given or "blocked" not in given:
+        await _on_current(
+            uow,
+            pod_id=pod_id,
+            contact=contact,
+            write=lambda current: repository.rename(
+                pod_id=pod_id, contact_id=current, display_name=request.display_name
+            ),
+        )
+    # Written whatever the contact read above said: a merge since then may
+    # have made them somebody whose block stands otherwise.
+    if request.blocked is not None:
+        by = user.id if request.blocked else None
+        await _on_current(
+            uow,
+            pod_id=pod_id,
+            contact=contact,
+            write=lambda current: repository.set_blocked(
+                pod_id=pod_id, contact_id=current, by=by
+            ),
+        )
     await uow.commit()
     return await _response(uow, await _found(uow, pod_id=pod_id, contact_id=contact.id))
 

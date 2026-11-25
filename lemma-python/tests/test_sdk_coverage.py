@@ -59,6 +59,13 @@ KNOWN_UNEXPOSED_PREFIXES = (
     # deletion page, after reading what it does, never by software acting for
     # them -- workload tokens are refused on the route anyway.
     "user.current.delete",
+    # A person reporting what they read to the team that runs Lemma, and
+    # blocking somebody in a Lemma's chats: what they themselves saw, judged
+    # in the app's own report and block dialogs, never by software acting
+    # for them.
+    "agent.conversation.message.report",
+    "channel.message.report",
+    "channel.block.",
     # Membership/governance surface not yet exposed in CLI/SDK facades
     "org.invitation.",
     "org.member.",

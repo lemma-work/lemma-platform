@@ -217,6 +217,13 @@ branch `lemma/{slug}` (`domain/workspace_location`, `domain/project_repo`). A
 sub-agent inherits its parent's worktree; a run a webhook started, which is not
 stamped at creation, gets one keyed by its conversation id.
 
+Create also takes `ref`, where that branch starts: a branch, a tag, a commit or
+`pull/<n>/head` -- the same ref a webhook run gets from its event, so "fix this
+pull request" and "build on that branch" open from a person's request as well.
+It is held to `project_repo.is_checkout_ref` (no leading `-`, no `..`) and
+refused without a `repository`; left out, the worktree starts from the default
+branch.
+
 Before the agent's first shell or Python call, the sandbox clones the
 repository once per person, at `~/lemma/repos/{owner}/{repo}`, with the
 person's token -- or fetches it if it is already there -- and then adds this

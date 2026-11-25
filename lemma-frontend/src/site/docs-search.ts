@@ -73,6 +73,7 @@ export function searchDocs(
 }
 
 const SUGGESTED = [
+    "/docs/use/lemmas",
     "/docs/getting-started",
     "/docs/overview",
     "/docs/sdk/installation",

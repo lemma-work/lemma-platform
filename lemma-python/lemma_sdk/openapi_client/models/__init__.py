@@ -118,6 +118,8 @@ _NAME_TO_MODULE = {
     'AvailableSurfaceChannelResponse': 'available_surface_channel_response',
     'AvailableSurfaceChannelsResponse': 'available_surface_channels_response',
     'AvailableSurfacesResponse': 'available_surfaces_response',
+    'BlockResponse': 'block_response',
+    'BlocksResponse': 'blocks_response',
     'BrowserAccessRequest': 'browser_access_request',
     'BrowserAccessResponse': 'browser_access_response',
     'BrowserCommandRequest': 'browser_command_request',
@@ -149,6 +151,8 @@ _NAME_TO_MODULE = {
     'ChannelMessagesResponse': 'channel_messages_response',
     'ChannelPostRequest': 'channel_post_request',
     'ChannelRef': 'channel_ref',
+    'ChannelReportRequest': 'channel_report_request',
+    'ChannelReportResponse': 'channel_report_response',
     'ChannelResponse': 'channel_response',
     'ChannelSourceResponse': 'channel_source_response',
     'ChannelUpdateRequest': 'channel_update_request',
@@ -196,6 +200,8 @@ _NAME_TO_MODULE = {
     'ConversationChangesResponseState': 'conversation_changes_response_state',
     'ConversationChangesTotals': 'conversation_changes_totals',
     'ConversationListResponse': 'conversation_list_response',
+    'ConversationReportRequest': 'conversation_report_request',
+    'ConversationReportResponse': 'conversation_report_response',
     'ConversationRepositoryListResponse': 'conversation_repository_list_response',
     'ConversationRepositoryResponse': 'conversation_repository_response',
     'ConversationResponse': 'conversation_response',
@@ -618,6 +624,7 @@ _NAME_TO_MODULE = {
     'RecordUpdateResponseRecordUpdate': 'record_update_response_record_update',
     'ReportFeedbackRequest': 'report_feedback_request',
     'ReportFeedbackResponse': 'report_feedback_response',
+    'ReportReason': 'report_reason',
     'ResetRequest': 'reset_request',
     'ResetRequestScopesItem': 'reset_request_scopes_item',
     'ResetResponse': 'reset_response',
@@ -993,6 +1000,8 @@ if TYPE_CHECKING:
     from .available_surface_channel_response import AvailableSurfaceChannelResponse
     from .available_surface_channels_response import AvailableSurfaceChannelsResponse
     from .available_surfaces_response import AvailableSurfacesResponse
+    from .block_response import BlockResponse
+    from .blocks_response import BlocksResponse
     from .browser_access_request import BrowserAccessRequest
     from .browser_access_response import BrowserAccessResponse
     from .browser_command_request import BrowserCommandRequest
@@ -1024,6 +1033,8 @@ if TYPE_CHECKING:
     from .channel_messages_response import ChannelMessagesResponse
     from .channel_post_request import ChannelPostRequest
     from .channel_ref import ChannelRef
+    from .channel_report_request import ChannelReportRequest
+    from .channel_report_response import ChannelReportResponse
     from .channel_response import ChannelResponse
     from .channel_source_response import ChannelSourceResponse
     from .channel_update_request import ChannelUpdateRequest
@@ -1071,6 +1082,8 @@ if TYPE_CHECKING:
     from .conversation_changes_response_state import ConversationChangesResponseState
     from .conversation_changes_totals import ConversationChangesTotals
     from .conversation_list_response import ConversationListResponse
+    from .conversation_report_request import ConversationReportRequest
+    from .conversation_report_response import ConversationReportResponse
     from .conversation_repository_list_response import ConversationRepositoryListResponse
     from .conversation_repository_response import ConversationRepositoryResponse
     from .conversation_response import ConversationResponse
@@ -1493,6 +1506,7 @@ if TYPE_CHECKING:
     from .record_update_response_record_update import RecordUpdateResponseRecordUpdate
     from .report_feedback_request import ReportFeedbackRequest
     from .report_feedback_response import ReportFeedbackResponse
+    from .report_reason import ReportReason
     from .reset_request import ResetRequest
     from .reset_request_scopes_item import ResetRequestScopesItem
     from .reset_response import ResetResponse
@@ -1881,6 +1895,8 @@ __all__ = [
     'AvailableSurfaceChannelResponse',
     'AvailableSurfaceChannelsResponse',
     'AvailableSurfacesResponse',
+    'BlockResponse',
+    'BlocksResponse',
     'BrowserAccessRequest',
     'BrowserAccessResponse',
     'BrowserCommandRequest',
@@ -1912,6 +1928,8 @@ __all__ = [
     'ChannelMessagesResponse',
     'ChannelPostRequest',
     'ChannelRef',
+    'ChannelReportRequest',
+    'ChannelReportResponse',
     'ChannelResponse',
     'ChannelSourceResponse',
     'ChannelUpdateRequest',
@@ -1959,6 +1977,8 @@ __all__ = [
     'ConversationChangesResponseState',
     'ConversationChangesTotals',
     'ConversationListResponse',
+    'ConversationReportRequest',
+    'ConversationReportResponse',
     'ConversationRepositoryListResponse',
     'ConversationRepositoryResponse',
     'ConversationResponse',
@@ -2381,6 +2401,7 @@ __all__ = [
     'RecordUpdateResponseRecordUpdate',
     'ReportFeedbackRequest',
     'ReportFeedbackResponse',
+    'ReportReason',
     'ResetRequest',
     'ResetRequestScopesItem',
     'ResetResponse',

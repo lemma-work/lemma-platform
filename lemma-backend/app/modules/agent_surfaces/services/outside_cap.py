@@ -132,8 +132,10 @@ async def held_for_a_person(
     ``organization_capped`` answered), and when the contact would be one more
     than the organization's bots may answer. A turn that may run marks its
     contact answered, in the same transaction, so the count it was let in under
-    holds.
+    holds. A contact the pod blocked never runs, and takes no place in the count.
     """
+    if await contact_blocked(uow, pod_id=pod_id, conversation_id=conversation_id):
+        return True
     if capped or await held_by_a_member(uow, conversation_id) is not None:
         return True
     organization_id = await pod_organization_id(uow, pod_id)
@@ -151,6 +153,19 @@ async def held_for_a_person(
         )
         return True
     return False
+
+
+async def contact_blocked(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, conversation_id: UUID
+) -> bool:
+    """Whether the contact this conversation answers is one the pod stopped
+    its agents answering (``contacts``)."""
+    conversation = await agent_conversations.surface_conversation(uow, conversation_id)
+    contact_id = conversation.audience.contact_id if conversation else None
+    if contact_id is None:
+        return False
+    contact = await contact_by_id(uow, pod_id=pod_id, contact_id=contact_id)
+    return contact is not None and contact.blocked
 
 
 async def _admitted(
@@ -215,7 +230,13 @@ async def hand_to_a_person(
     ``owner_id``, the member who looks after the conversation; the note is
     theirs. ``tell`` is ``first_word_today``'s answer: whether this is the turn
     that tells the person, and the member, today.
+
+    A contact the pod blocked is kept and nothing more: no member is told, and
+    they are not told a person will reply. Their message is already on the
+    channel's timeline, where the members read it.
     """
+    if await contact_blocked(uow, pod_id=pod_id, conversation_id=conversation_id):
+        return HeldTurn(reply=None)
     member_hold = await held_by_a_member(uow, conversation_id)
     if member_hold is not None:
         await _keep_for_a_member(
