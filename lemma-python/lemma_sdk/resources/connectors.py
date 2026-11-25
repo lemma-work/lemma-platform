@@ -459,9 +459,12 @@ class BoundConnectors(BoundResource):
         and warns: when ``account_id`` or ``pod_id`` is given, when there is no
         pod, or when ``connector`` is not one of the pod's connectors.
         """
-        if act_as == "app" and (account_id is not None or pod_id is not None):
+        if act_as == "app" and (
+            account_id is not None or pod_id is not None or self.pod_id is None
+        ):
             raise ValueError(
-                "act_as='app' runs through a pod connector: drop account_id and pod_id."
+                "act_as='app' runs through a pod connector: bind a pod "
+                "(ctx.pod.connectors) and drop account_id and pod_id."
             )
         if account_id is not None or pod_id is not None or self.pod_id is None:
             warnings.warn(
