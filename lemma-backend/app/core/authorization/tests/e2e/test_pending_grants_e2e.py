@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.core.authorization import pending_grants
 from app.core.authorization.context import ResourceType
@@ -97,3 +97,45 @@ async def test_every_batch_settles_onto_the_one_resource(
         )
     )
     assert left is None
+
+
+async def test_replacing_locks_every_key_the_grantee_waits_for(
+    scenario, db_session, monkeypatch
+):
+    """Five keys read two at a time: the lock taken before a replacement must
+    cover all five, not the first page, or a settlement of a key past it could
+    grant from a row the replacement deletes."""
+    await scenario.create_org_with_pod(name_prefix="Keys")
+    pod_id = UUID(scenario.pod_id)
+    monkeypatch.setattr(pending_grants, "_SETTLE_BATCH", 2)
+    grantee = uuid4()
+    await replace_grantee_pending_grants(
+        db_session,
+        ctx=SimpleNamespace(  # type: ignore[arg-type]
+            is_superuser=True, is_named_workload=False, permission_ids=frozenset()
+        ),
+        pod_id=pod_id,
+        grantee_type="AGENT",
+        grantee_id=grantee,
+        grants=[
+            PendingGrant(
+                ResourceType.CONNECTOR, f"key-{n}:PER_MEMBER", ("connector.use",)
+            )
+            for n in range(5)
+        ],
+        created_by_user_id=None,
+    )
+    await db_session.commit()
+
+    await pending_grants.lock_grantee_pending_keys(
+        db_session, pod_id=pod_id, grantee_type="AGENT", grantee_id=grantee
+    )
+    held = await db_session.scalar(
+        text(
+            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' "
+            "AND pid = pg_backend_pid() AND granted"
+        )
+    )
+    await db_session.rollback()
+
+    assert held == 5

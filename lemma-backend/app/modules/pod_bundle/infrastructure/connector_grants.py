@@ -25,7 +25,7 @@ was left out by choice, and its grant is dropped as the importer was told.
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
@@ -55,6 +55,22 @@ if TYPE_CHECKING:
 #: The grant holders whose grants name connectors, as ``(directory, label)``.
 _HOLDERS = (("agents", "agent"), ("functions", "function"))
 _CONNECTOR = "connector"
+
+
+class HoldGrants(Protocol):
+    """`connectors.contracts.bundles.hold_grants_until_declared`'s shape."""
+
+    async def __call__(
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        ctx: Context,
+        *,
+        pod_id: UUID,
+        grantee_type: str,
+        grantee_id: UUID,
+        grants: Sequence[WaitingConnectorGrant],
+        created_by_user_id: UUID | None,
+    ) -> bool: ...
 
 
 class ConnectorDirectory(Protocol):
@@ -218,7 +234,7 @@ async def resolve_connector_grants(
                     "connector."
                 )
             else:
-                note = f"A grant on connector '{name}' was dropped: it was left out."
+                note = _dropped_note(name)
             if warnings is not None and note not in warnings:
                 warnings.append(note)
             continue
@@ -251,6 +267,7 @@ async def _waiting_grant(
         connector=bundled.connector,
         mode=bundled.mode,
         permission_ids=tuple(grant.permission_ids),
+        slug=grant.resource_name,
     )
 
 
@@ -260,3 +277,59 @@ def _bundled_connector(bundle_root: Path | None, slug: str) -> BundleConnector |
     return next(
         (c for c in load_bundle_connectors(bundle_root) if c.slug == slug), None
     )
+
+
+def _dropped_note(slug: str) -> str:
+    return f"A grant on connector '{slug}' was dropped: it was left out."
+
+
+async def lock_waiting_grants(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, grantee_type: str, grantee_id: UUID
+) -> None:
+    """Before a grantee's grants are replaced: lock what it waits for, so a
+    connector declared meanwhile settles it only after the step commits."""
+    from app.core.authorization.pending_grants import lock_grantee_pending_keys
+
+    await lock_grantee_pending_keys(
+        uow.session, pod_id=pod_id, grantee_type=grantee_type, grantee_id=grantee_id
+    )
+
+
+async def hold_waiting_grants(
+    uow: SqlAlchemyUnitOfWork,
+    ctx: Context,
+    *,
+    pod_id: UUID,
+    grantee_type: str,
+    grantee_id: UUID,
+    waiting: list[WaitingConnectorGrant],
+    created_by_user_id: UUID | None,
+    warnings: list[str],
+    hold: HoldGrants | None = None,
+) -> None:
+    """After a grantee's grants are replaced -- the replace would wipe a grant
+    this settles onto a connector declared since resolving: what it now waits
+    for, which replaces what it waited for before -- an empty set included, so a step
+    run again clears what its first attempt held. Where nothing can be held
+    (before migration 0077) the importer is told the grant was dropped."""
+    if hold is None:
+        from app.modules.connectors.contracts.bundles import (
+            hold_grants_until_declared as hold,
+        )
+
+    held = await hold(
+        uow,
+        ctx,
+        pod_id=pod_id,
+        grantee_type=grantee_type,
+        grantee_id=grantee_id,
+        grants=waiting,
+        created_by_user_id=created_by_user_id,
+    )
+    if held:
+        return
+    for grant in waiting:
+        promise = f"A grant on connector '{grant.slug}' waits for it"
+        warnings[:] = [w for w in warnings if not w.startswith(promise)]
+        if (dropped := _dropped_note(grant.slug)) not in warnings:
+            warnings.append(dropped)

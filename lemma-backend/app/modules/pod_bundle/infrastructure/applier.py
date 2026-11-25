@@ -30,6 +30,8 @@ from app.modules.pod_bundle.domain.errors import (
     StepNotApplicableError,
 )
 from app.modules.pod_bundle.infrastructure.connector_grants import (
+    hold_waiting_grants,
+    lock_waiting_grants,
     resolve_connector_grants,
 )
 from app.modules.pod_bundle.domain.connector_plan import ConnectorChoice
@@ -408,11 +410,13 @@ class BundleApplier:
         """Replace the grantee's resource grants on the step's short UoW session,
         declaring first any connector they name that the pod does not, and
         holding those on one the import left out (see connector_grants.py)."""
-        from app.modules.connectors.contracts.bundles import (
-            hold_grants_until_declared,
-        )
-
         waiting: list[WaitingConnectorGrant] = []
+        await lock_waiting_grants(
+            self._uow,
+            pod_id=self._pod_id,
+            grantee_type=grantee_type,
+            grantee_id=grantee_id,
+        )
         grants = await resolve_connector_grants(
             self._uow,
             self._ctx,
@@ -432,17 +436,15 @@ class BundleApplier:
             grants=grants,
             created_by_user_id=self._user_id,
         )
-        # After the replace, which would wipe a grant the hold settles onto a
-        # connector declared since resolving; and even with nothing waiting,
-        # so a replayed step clears what its first attempt held.
-        await hold_grants_until_declared(
+        await hold_waiting_grants(
             self._uow,
             self._ctx,
             pod_id=self._pod_id,
             grantee_type=grantee_type,
             grantee_id=grantee_id,
-            grants=waiting,
+            waiting=waiting,
             created_by_user_id=self._user_id,
+            warnings=self._warnings,
         )
 
     # --- schedules -------------------------------------------------------

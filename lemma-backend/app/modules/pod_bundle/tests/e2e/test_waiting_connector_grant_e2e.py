@@ -236,3 +236,45 @@ async def test_a_connector_declared_while_the_grant_step_runs_keeps_its_grant(
 
     grants = await _connector_grants(client, str(pod_id))
     assert [g["permission_ids"] for g in grants] == [["connector.use"]], grants
+
+
+async def test_a_restricted_connector_made_pod_wide_gets_the_waiting_grant(
+    scenario, db_session, worker, tmp_path
+):
+    """A held grant is bounded by what its importer could use, which a
+    RESTRICTED connector is not: declared restricted it waits on, and made
+    pod-wide later it lands."""
+    connector_id = await _catalog_connector(db_session)
+    await scenario.create_org_with_pod(name_prefix="Restricted")
+    client, pod_id = scenario.owner_client, scenario.pod_id
+    import_id = await start_and_plan_import(
+        client, pod_id, _bundle(tmp_path, connector_id)
+    )
+    applied = await client.post(
+        f"/pods/{pod_id}/bundle/imports/{import_id}/apply", json={}
+    )
+    assert applied.status_code == status.HTTP_202_ACCEPTED, applied.text
+    final = await wait_import(client, pod_id, import_id, until={"COMPLETED", "FAILED"})
+    assert final["status"] == "COMPLETED", final
+
+    install_id = await _install(db_session, scenario.org_id, connector_id)
+    declared = await client.post(
+        f"/pods/{pod_id}/connectors",
+        json={
+            "auth_config_id": install_id,
+            "slug": "my-cal",
+            "mode": "PER_MEMBER",
+            "visibility": "RESTRICTED",
+        },
+    )
+    assert declared.status_code == status.HTTP_201_CREATED, declared.text
+    assert await _connector_grants(client, pod_id) == []
+
+    widened = await client.patch(
+        f"/pods/{pod_id}/connectors/my-cal", json={"visibility": "POD"}
+    )
+    assert widened.status_code == status.HTTP_200_OK, widened.text
+    grants = await _connector_grants(client, pod_id)
+    assert [(g["resource_name"], g["permission_ids"]) for g in grants] == [
+        ("my-cal", ["connector.use"])
+    ]

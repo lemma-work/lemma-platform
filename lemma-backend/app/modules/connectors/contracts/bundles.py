@@ -460,6 +460,8 @@ class WaitingConnectorGrant:
     connector: str
     mode: str
     permission_ids: tuple[str, ...]
+    #: What the bundle called the connector, for what the importer is told.
+    slug: str = ""
 
 
 async def hold_grants_until_declared(
@@ -471,8 +473,9 @@ async def hold_grants_until_declared(
     grantee_id: UUID,
     grants: Sequence[WaitingConnectorGrant],
     created_by_user_id: UUID | None,
-) -> None:
-    """Keep ``grantee_id``'s grants on connectors the pod lacks until it has one.
+) -> bool:
+    """Keep ``grantee_id``'s grants on connectors the pod lacks until it has
+    one; whether they are kept (not before migration 0077, when they are not).
 
     The pod connector's repository grants them when a POD-wide connector of
     that catalog connector and mode is declared here -- on somebody's first
@@ -512,7 +515,7 @@ async def hold_grants_until_declared(
         action="let an imported workload wait for a connector you could not use",
     )
     if not held:
-        return
+        return False
     connectors = PodConnectorRepository(uow)
     for grant in grants:
         declared = await connectors.first_settleable(
@@ -520,6 +523,7 @@ async def hold_grants_until_declared(
         )
         if declared is not None:
             await connectors.settle_waiting_grants(declared, grant.connector)
+    return True
 
 
 __all__ = [

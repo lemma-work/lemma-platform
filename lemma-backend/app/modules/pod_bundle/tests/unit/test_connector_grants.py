@@ -297,3 +297,44 @@ async def test_a_left_out_grant_waits_only_while_the_org_has_nothing_to_map_it_t
     kept, waiting, warnings = await resolve()
     assert (kept, waiting) == ([], [])
     assert warnings == ["A grant on connector 'calendar' was dropped: it was left out."]
+
+
+async def test_the_importer_is_told_a_grant_was_dropped_when_none_can_wait():
+    """Before migration 0077 nothing can be held: the warning resolving wrote
+    ("waits for it") is replaced by the one that is true ("was dropped")."""
+    from app.modules.pod_bundle.infrastructure.connector_grants import (
+        hold_waiting_grants,
+    )
+
+    async def nothing_held(*_args: object, **_kwargs: object) -> bool:
+        return False
+
+    promised = (
+        "A grant on connector 'calendar' waits for it: it was left out, and is "
+        "granted once this pod has a google_calendar connector."
+    )
+    warnings = [promised, "Something else."]
+
+    await hold_waiting_grants(
+        SimpleNamespace(session=None),  # type: ignore[arg-type]
+        SimpleNamespace(),  # type: ignore[arg-type]
+        pod_id=_POD,
+        grantee_type="FUNCTION",
+        grantee_id=uuid4(),
+        waiting=[
+            WaitingConnectorGrant(
+                connector="google_calendar",
+                mode="PER_MEMBER",
+                permission_ids=("connector.use",),
+                slug="calendar",
+            )
+        ],
+        created_by_user_id=None,
+        warnings=warnings,
+        hold=nothing_held,
+    )
+
+    assert warnings == [
+        "Something else.",
+        "A grant on connector 'calendar' was dropped: it was left out.",
+    ]

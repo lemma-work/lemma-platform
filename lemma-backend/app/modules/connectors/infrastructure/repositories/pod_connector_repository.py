@@ -144,9 +144,9 @@ class PodConnectorRepository:
         return created
 
     async def _settle_waiting_grants(self, connector: PodConnectorEntity) -> None:
-        """Grant on a new connector what was waiting for one like it.
+        """Grant on a new or changed connector what was waiting for one like it.
 
-        Here, where every declaration ends, so a connector declared on first
+        Here, where every declaration and change ends, so a connector declared on first
         use, by hand or by an import settles them alike -- in the transaction
         that declares it, so a first use refused after it takes both back.
         Only onto one the whole pod may use: a held grant was bounded by what
@@ -208,7 +208,10 @@ class PodConnectorRepository:
         row.purpose = entity.purpose
         row.visibility = entity.visibility.value
         await self.session.flush()
-        return row.to_entity()
+        updated = row.to_entity()
+        # Made pod-wide, or switched mode: it may now be what a grant waits for.
+        await self._settle_waiting_grants(updated)
+        return updated
 
     async def delete(self, pod_connector_id: UUID) -> None:
         await self.session.execute(

@@ -35,7 +35,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, literal, select, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.conferral import CONFERRAL_EXCEEDS_HOLDER, assert_can_confer
@@ -51,6 +51,7 @@ logger = get_logger(__name__)
 __all__ = [
     "PendingGrant",
     "delete_grantee_pending_grants",
+    "lock_grantee_pending_keys",
     "lock_pending_key",
     "replace_grantee_pending_grants",
     "settle_pending_grants",
@@ -107,6 +108,62 @@ async def lock_pending_key(
     )
 
 
+async def lock_grantee_pending_keys(
+    session: AsyncSession,
+    *,
+    pod_id: UUID,
+    grantee_type: str,
+    grantee_id: UUID,
+    also: Iterable[tuple[ResourceType, str]] = (),
+) -> None:
+    """Lock every key ``grantee_id`` waits for, and ``also``, in one order.
+
+    Taken before a grantee's grants are replaced, so a settlement of any of
+    them waits for the replacement to commit and then finds the rows it
+    removed gone, rather than granting from rows read before.
+    """
+    if not await _table_ready(session):
+        return
+    keys = {(resource_type.value, key) for resource_type, key in also}
+    after = ("", "")
+    while True:
+        page = (
+            await session.execute(
+                select(
+                    PendingResourceGrantModel.resource_type,
+                    PendingResourceGrantModel.resource_key,
+                )
+                .where(
+                    PendingResourceGrantModel.pod_id == pod_id,
+                    PendingResourceGrantModel.grantee_type == grantee_type,
+                    PendingResourceGrantModel.grantee_id == grantee_id,
+                    tuple_(
+                        PendingResourceGrantModel.resource_type,
+                        PendingResourceGrantModel.resource_key,
+                    )
+                    > tuple_(literal(after[0]), literal(after[1])),
+                )
+                .distinct()
+                .order_by(
+                    PendingResourceGrantModel.resource_type,
+                    PendingResourceGrantModel.resource_key,
+                )
+                .limit(_SETTLE_BATCH)
+            )
+        ).all()
+        keys.update((str(t), str(k)) for t, k in page)
+        if len(page) < _SETTLE_BATCH:
+            break
+        after = (str(page[-1][0]), str(page[-1][1]))
+    for resource_type_value, resource_key in sorted(keys):
+        await lock_pending_key(
+            session,
+            pod_id=pod_id,
+            resource_type=ResourceType(resource_type_value),
+            resource_key=resource_key,
+        )
+
+
 async def replace_grantee_pending_grants(
     session: AsyncSession,
     *,
@@ -134,32 +191,22 @@ async def replace_grantee_pending_grants(
         )
     assert_can_confer(ctx, requested, action=action)
     if not await _table_ready(session):
-        logger.warning("authorization.pending_grants.not_migrated.degraded")
+        logger.warning(
+            "authorization.pending_grants.not_migrated.degraded",
+            pod_id=str(pod_id),
+            grantee_type=grantee_type,
+        )
         return False
-    # Every key the replace touches: the ones it holds and the ones it stops
-    # holding, so a settlement of a dropped key cannot read a row this deletes.
-    held_before = await session.execute(
-        select(
-            PendingResourceGrantModel.resource_type,
-            PendingResourceGrantModel.resource_key,
-        )
-        .where(
-            PendingResourceGrantModel.pod_id == pod_id,
-            PendingResourceGrantModel.grantee_type == grantee_type,
-            PendingResourceGrantModel.grantee_id == grantee_id,
-        )
-        .distinct()
-        .limit(_SETTLE_BATCH)
+    # Every key the replace touches -- the ones it holds and the ones it
+    # stops holding -- so a settlement of a dropped key cannot read a row
+    # this deletes.
+    await lock_grantee_pending_keys(
+        session,
+        pod_id=pod_id,
+        grantee_type=grantee_type,
+        grantee_id=grantee_id,
+        also=[(g.resource_type, g.resource_key) for g in grants],
     )
-    keys = {(g.resource_type.value, g.resource_key) for g in grants}
-    keys.update((str(t), str(k)) for t, k in held_before.all())
-    for resource_type_value, resource_key in sorted(keys):
-        await lock_pending_key(
-            session,
-            pod_id=pod_id,
-            resource_type=ResourceType(resource_type_value),
-            resource_key=resource_key,
-        )
     await delete_grantee_pending_grants(
         session, pod_id=pod_id, grantee_type=grantee_type, grantee_id=grantee_id
     )
