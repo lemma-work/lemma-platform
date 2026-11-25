@@ -340,3 +340,81 @@ async def test_a_grant_held_after_its_connector_was_declared_is_granted_at_once(
         for g in grants.json()["grants"]
         if g["resource_type"] == "connector"
     ] == [(declared.slug, ["connector.use"])]
+
+
+async def test_an_update_holds_the_connector_until_its_settlement_commits(
+    own_installation,
+):
+    """An update of a pod-wide connector that changes nothing emits no
+    UPDATE, so nothing would hold the row between the check that it may
+    settle and the settlement -- a change to RESTRICTED could land between.
+    The check reads the row FOR UPDATE: a concurrent restriction waits for
+    the update's transaction."""
+    import asyncio
+
+    from sqlalchemy import text
+
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.connectors.domain.pod_connector import (
+        PodConnectorEntity,
+        PodConnectorMode,
+        PodConnectorVisibility,
+    )
+    from app.modules.connectors.infrastructure.repositories.pod_connector_repository import (
+        PodConnectorRepository,
+    )
+    from app.modules.test_support.e2e.waiters import eventually
+
+    install, _org, _user, pod_id = own_installation
+    async with async_session_maker() as first, async_session_maker() as second:
+        updating = PodConnectorRepository(SqlAlchemyUnitOfWork(first))
+        connector = await updating.create(
+            PodConnectorEntity(
+                pod_id=pod_id,
+                slug=f"locked-{uuid4().hex[:6]}",
+                auth_config_id=install.id,
+                mode=PodConnectorMode.PER_MEMBER,
+            )
+        )
+        await first.commit()
+        await updating.update(connector)  # changes nothing; left open
+        holder = await first.scalar(text("SELECT pg_backend_pid()"))
+        waiter = await second.scalar(text("SELECT pg_backend_pid()"))
+        restricting = asyncio.create_task(
+            PodConnectorRepository(SqlAlchemyUnitOfWork(second)).update(
+                connector.model_copy(
+                    update={"visibility": PodConnectorVisibility.RESTRICTED}
+                )
+            )
+        )
+
+        async def blocked_by_holder() -> bool:
+            async with async_session_maker() as probe:
+                return bool(
+                    await probe.scalar(
+                        text("SELECT :holder = ANY(pg_blocking_pids(:waiter))"),
+                        {"holder": holder, "waiter": waiter},
+                    )
+                )
+
+        settled = False
+        try:
+            await eventually(
+                label="the restriction waits for the update",
+                probe=blocked_by_holder,
+                done=bool,
+                timeout_seconds=10,
+                fail_fast=lambda _blocked: (
+                    "the restriction landed while the update held nothing"
+                    if restricting.done()
+                    else None
+                ),
+            )
+            settled = True
+        finally:
+            await first.commit()
+            if not settled:
+                restricting.cancel()
+            await asyncio.gather(restricting, return_exceptions=True)
+            await second.commit()
