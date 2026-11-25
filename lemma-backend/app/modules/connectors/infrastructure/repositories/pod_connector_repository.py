@@ -16,6 +16,7 @@ from app.modules.connectors.domain.pod_connector import (
     PodAccountEntity,
     PodAccountVisibility,
     PodConnectorEntity,
+    PodConnectorMode,
     PodConnectorVisibility,
     pending_grant_key,
 )
@@ -160,6 +161,11 @@ class PodConnectorRepository:
         )
         if catalog_id is None:
             return
+        await self.settle_waiting_grants(connector, catalog_id)
+
+    async def settle_waiting_grants(
+        self, connector: PodConnectorEntity, catalog_id: str
+    ) -> None:
         await settle_pending_grants(
             self.session,
             pod_id=connector.pod_id,
@@ -167,6 +173,26 @@ class PodConnectorRepository:
             resource_key=pending_grant_key(catalog_id, connector.mode),
             resource_id=connector.id,
         )
+
+    async def first_settleable(
+        self, pod_id: UUID, catalog_id: str, mode: PodConnectorMode
+    ) -> PodConnectorEntity | None:
+        """The pod's oldest POD-wide connector of a catalog connector and
+        mode: the one a grant held after its declaration settles onto."""
+        stmt = (
+            select(PodConnector)
+            .join(AuthConfig, AuthConfig.id == PodConnector.auth_config_id)
+            .where(
+                PodConnector.pod_id == pod_id,
+                PodConnector.mode == mode.value,
+                PodConnector.visibility == PodConnectorVisibility.POD.value,
+                AuthConfig.connector_id == catalog_id,
+            )
+            .order_by(PodConnector.created_at, PodConnector.id)
+            .limit(1)
+        )
+        row = (await self.session.execute(stmt)).scalars().first()
+        return row.to_entity() if row else None
 
     async def update(self, entity: PodConnectorEntity) -> PodConnectorEntity:
         row = await self.session.get(PodConnector, entity.id)

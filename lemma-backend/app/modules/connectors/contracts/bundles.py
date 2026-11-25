@@ -478,6 +478,9 @@ async def hold_grants_until_declared(
     that catalog connector and mode is declared here -- on somebody's first
     use, by hand, or by a later import -- whatever its slug. Replaces what
     the grantee was waiting for before; bounded by what ``ctx`` holds.
+
+    Held under each key's lock, so a connector declared while this import ran
+    is seen once the lock is held, and granted now rather than waited for.
     """
     from app.core.authorization.context import ResourceType
     from app.core.authorization.pending_grants import (
@@ -485,8 +488,11 @@ async def hold_grants_until_declared(
         replace_grantee_pending_grants,
     )
     from app.modules.connectors.domain.pod_connector import pending_grant_key
+    from app.modules.connectors.infrastructure.repositories.pod_connector_repository import (
+        PodConnectorRepository,
+    )
 
-    await replace_grantee_pending_grants(
+    held = await replace_grantee_pending_grants(
         uow.session,
         ctx=ctx,
         pod_id=pod_id,
@@ -505,6 +511,15 @@ async def hold_grants_until_declared(
         created_by_user_id=created_by_user_id,
         action="let an imported workload wait for a connector you could not use",
     )
+    if not held:
+        return
+    connectors = PodConnectorRepository(uow)
+    for grant in grants:
+        declared = await connectors.first_settleable(
+            pod_id, grant.connector, PodConnectorMode(grant.mode)
+        )
+        if declared is not None:
+            await connectors.settle_waiting_grants(declared, grant.connector)
 
 
 __all__ = [

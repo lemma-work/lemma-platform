@@ -15,17 +15,27 @@ resource does not exist yet, so the bound is on the permission rather than on
 the resource; the module that settles a key decides which resources it may
 settle onto.
 
+Holding and settling one key take the same transaction lock
+(:func:`lock_pending_key`), so neither reads past the other: two declarations
+of a resource at once settle a grant onto one of them, and a hold racing a
+declaration either lands before it and is settled by it, or after it and sees
+it (the resource's module then settles at once).
+
 A deleted grantee's pending grants go with its grants
-(`grants.delete_grantee_grants`), and a deleted pod's with the pod.
+(:func:`delete_grantee_pending_grants`), and a deleted pod's with the pod.
+
+Every access first asks whether the table exists (:func:`_table_ready`): code
+shipped with migration 0077 also runs against the schema before it, where a
+hold does nothing and there is nothing to settle or delete.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.conferral import CONFERRAL_EXCEEDS_HOLDER, assert_can_confer
@@ -34,17 +44,38 @@ from app.core.authorization.grants import replace_resource_grantee_grant
 from app.core.authorization.models import PendingResourceGrantModel
 from app.core.authorization.permission_rows import ensure_permission_rows
 from app.core.domain.errors import DomainError
+from app.core.log.log import get_logger
+
+logger = get_logger(__name__)
 
 __all__ = [
     "PendingGrant",
+    "delete_grantee_pending_grants",
+    "lock_pending_key",
     "replace_grantee_pending_grants",
     "settle_pending_grants",
 ]
 
+#: Rows settled per read. A key waits for a few workloads' handful of
+#: permissions; the bound is per query, and settling reads until none are left.
+_SETTLE_BATCH = 500
 
-#: A key waits for a few workloads' handful of permissions. Past this many
-#: rows the rest stay waiting, for the next resource of that key.
-_MAX_SETTLED_ROWS = 1000
+_TABLE = PendingResourceGrantModel.__tablename__
+
+
+class _Schema:
+    """Whether this process has seen the table: once it has, it stays."""
+
+    ready = False
+
+
+async def _table_ready(session: AsyncSession) -> bool:
+    if _Schema.ready:
+        return True
+    _Schema.ready = bool(
+        await session.scalar(text("SELECT to_regclass(:t) IS NOT NULL"), {"t": _TABLE})
+    )
+    return _Schema.ready
 
 
 @dataclass(frozen=True)
@@ -54,6 +85,26 @@ class PendingGrant:
     resource_type: ResourceType
     resource_key: str
     permission_ids: tuple[str, ...]
+
+
+async def lock_pending_key(
+    session: AsyncSession,
+    *,
+    pod_id: UUID,
+    resource_type: ResourceType,
+    resource_key: str,
+) -> None:
+    """Hold this transaction's lock on one key until it commits.
+
+    The session is not marked as holding it (`transaction_locks`): each
+    read-then-write under this lock finishes inside the function that took
+    it, so a later early commit only releases a lock nobody needs any more.
+    Marking it changed when a first use's declaration commits.
+    """
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"pending_grant:{pod_id}:{resource_type.value}:{resource_key}"},
+    )
 
 
 async def replace_grantee_pending_grants(
@@ -66,11 +117,13 @@ async def replace_grantee_pending_grants(
     grants: Sequence[PendingGrant],
     created_by_user_id: UUID | None,
     action: str = "grant access you could not use yourself",
-) -> None:
-    """Replace everything ``grantee_id`` is waiting for in the pod with ``grants``.
+) -> bool:
+    """Replace everything ``grantee_id`` is waiting for in the pod with
+    ``grants``; whether they are held (not before migration 0077).
 
     Replace, like ``replace_grantee_resource_grants``: what the writer lists
     is the whole set, so a grant the grantee no longer needs stops waiting.
+    Each key's lock is taken, and kept to commit, before anything is written.
     """
     requested = {p for grant in grants for p in grant.permission_ids}
     if requested and ctx.is_named_workload:
@@ -80,12 +133,21 @@ async def replace_grantee_pending_grants(
             status_code=403,
         )
     assert_can_confer(ctx, requested, action=action)
-    await session.execute(
-        delete(PendingResourceGrantModel).where(
-            PendingResourceGrantModel.pod_id == pod_id,
-            PendingResourceGrantModel.grantee_type == grantee_type,
-            PendingResourceGrantModel.grantee_id == grantee_id,
+    if not await _table_ready(session):
+        logger.warning("authorization.pending_grants.not_migrated.degraded")
+        return False
+    for resource_type, resource_key in sorted(
+        {(g.resource_type, g.resource_key) for g in grants},
+        key=lambda k: (k[0].value, k[1]),
+    ):
+        await lock_pending_key(
+            session,
+            pod_id=pod_id,
+            resource_type=resource_type,
+            resource_key=resource_key,
         )
+    await delete_grantee_pending_grants(
+        session, pod_id=pod_id, grantee_type=grantee_type, grantee_id=grantee_id
     )
     rows = {
         (grant.resource_type.value, grant.resource_key, permission_id)
@@ -93,11 +155,11 @@ async def replace_grantee_pending_grants(
         for permission_id in grant.permission_ids
     }
     await ensure_permission_rows(session, {row[2] for row in rows})
-    for resource_type, resource_key, permission_id in sorted(rows):
+    for resource_type_value, resource_key, permission_id in sorted(rows):
         session.add(
             PendingResourceGrantModel(
                 pod_id=pod_id,
-                resource_type=resource_type,
+                resource_type=resource_type_value,
                 resource_key=resource_key,
                 grantee_type=grantee_type,
                 grantee_id=grantee_id,
@@ -106,6 +168,22 @@ async def replace_grantee_pending_grants(
             )
         )
     await session.flush()
+    return True
+
+
+async def delete_grantee_pending_grants(
+    session: AsyncSession, *, pod_id: UUID, grantee_type: str, grantee_id: UUID
+) -> None:
+    """Forget everything ``grantee_id`` was waiting for in the pod."""
+    if not await _table_ready(session):
+        return
+    await session.execute(
+        delete(PendingResourceGrantModel).where(
+            PendingResourceGrantModel.pod_id == pod_id,
+            PendingResourceGrantModel.grantee_type == grantee_type,
+            PendingResourceGrantModel.grantee_id == grantee_id,
+        )
+    )
 
 
 async def settle_pending_grants(
@@ -124,6 +202,40 @@ async def settle_pending_grants(
     grants were bounded when they were held; nothing is asked of whoever
     happens to create the resource, who may be a workload on its first use.
     """
+    if not await _table_ready(session):
+        return 0
+    await lock_pending_key(
+        session, pod_id=pod_id, resource_type=resource_type, resource_key=resource_key
+    )
+    permissions: dict[tuple[str, UUID], set[str]] = {}
+    granted_by: dict[tuple[str, UUID], UUID | None] = {}
+    while batch := await _next_batch(session, pod_id, resource_type, resource_key):
+        for _row_id, grantee_type, grantee_id, permission_id, created_by in batch:
+            grantee = (grantee_type, grantee_id)
+            permissions.setdefault(grantee, set()).add(permission_id)
+            granted_by[grantee] = created_by
+        await _delete_rows(session, (row[0] for row in batch))
+        if len(batch) < _SETTLE_BATCH:
+            break
+    for grantee_type, grantee_id in sorted(
+        permissions, key=lambda g: (g[0], str(g[1]))
+    ):
+        await replace_resource_grantee_grant(
+            session,
+            pod_id=pod_id,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            grantee_type=grantee_type,
+            grantee_id=grantee_id,
+            permission_ids=sorted(permissions[(grantee_type, grantee_id)]),
+            created_by_user_id=granted_by[(grantee_type, grantee_id)],
+        )
+    return len(permissions)
+
+
+async def _next_batch(
+    session: AsyncSession, pod_id: UUID, resource_type: ResourceType, resource_key: str
+) -> list[tuple[UUID, str, UUID, str, UUID | None]]:
     found = await session.execute(
         select(
             PendingResourceGrantModel.id,
@@ -138,33 +250,15 @@ async def settle_pending_grants(
             PendingResourceGrantModel.resource_key == resource_key,
         )
         .order_by(PendingResourceGrantModel.id)
-        .limit(_MAX_SETTLED_ROWS)
+        .limit(_SETTLE_BATCH)
     )
-    settled: list[UUID] = []
-    permissions: dict[tuple[str, UUID], set[str]] = {}
-    granted_by: dict[tuple[str, UUID], UUID | None] = {}
-    for row_id, grantee_type, grantee_id, permission_id, created_by in found.all():
-        settled.append(row_id)
-        permissions.setdefault((grantee_type, grantee_id), set()).add(permission_id)
-        granted_by[(grantee_type, grantee_id)] = created_by
-    for grantee_type, grantee_id in sorted(
-        permissions, key=lambda g: (g[0], str(g[1]))
-    ):
-        await replace_resource_grantee_grant(
-            session,
-            pod_id=pod_id,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            grantee_type=grantee_type,
-            grantee_id=grantee_id,
-            permission_ids=sorted(permissions[(grantee_type, grantee_id)]),
-            created_by_user_id=granted_by[(grantee_type, grantee_id)],
+    return [(row[0], row[1], row[2], row[3], row[4]) for row in found.all()]
+
+
+async def _delete_rows(session: AsyncSession, row_ids: Iterable[UUID]) -> None:
+    await session.execute(
+        delete(PendingResourceGrantModel).where(
+            PendingResourceGrantModel.id.in_(list(row_ids))
         )
-    if settled:
-        await session.execute(
-            delete(PendingResourceGrantModel).where(
-                PendingResourceGrantModel.id.in_(settled)
-            )
-        )
-        await session.flush()
-    return len(permissions)
+    )
+    await session.flush()

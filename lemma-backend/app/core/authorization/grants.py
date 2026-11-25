@@ -18,10 +18,7 @@ from app.core.authorization.grant_generation import (
     bump_agent_grant_generations,
 )
 from app.core.domain.errors import BadRequestError
-from app.core.authorization.models import (
-    PendingResourceGrantModel,
-    ResourcePermissionGrantModel,
-)
+from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.permission_rows import ensure_permission_rows
 from app.core.authorization.assistant_grants import split_assistant_grant
 from app.core.authorization.permissions import PERMISSION_BY_ID
@@ -379,14 +376,19 @@ async def delete_grantee_grants(
 ) -> None:
     """Delete every grant held by a grantee, and every one it waits for
     (`pending_grants.py`). Use when the grantee is deleted."""
-    for model in (ResourcePermissionGrantModel, PendingResourceGrantModel):
-        await session.execute(
-            delete(model).where(
-                model.pod_id == pod_id,
-                model.grantee_type == grantee_type,
-                model.grantee_id == grantee_id,
-            )
+    # Imported here: pending_grants builds on this module.
+    from app.core.authorization.pending_grants import delete_grantee_pending_grants
+
+    await session.execute(
+        delete(ResourcePermissionGrantModel).where(
+            ResourcePermissionGrantModel.pod_id == pod_id,
+            ResourcePermissionGrantModel.grantee_type == grantee_type,
+            ResourcePermissionGrantModel.grantee_id == grantee_id,
         )
+    )
+    await delete_grantee_pending_grants(
+        session, pod_id=pod_id, grantee_type=grantee_type, grantee_id=grantee_id
+    )
     await session.flush()
     await _bump_if_agent(session, grantee_type, grantee_id)
     bump_after_commit(session, pod_id)
