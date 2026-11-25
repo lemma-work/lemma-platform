@@ -19,6 +19,7 @@ import pytest
 from app.modules.agent.domain.conversation_changes import (
     LIST_BYTES,
     MAX_PATCH_BYTES,
+    MAX_UNTRACKED,
     NOT_CHECKED_OUT_EXIT,
     ChangedFile,
     ChangesOutputError,
@@ -297,13 +298,21 @@ def _seed_origin(git: LocalGit) -> None:
 
 
 def _read(
-    git: LocalGit, directory: Path, *, ref: str | None = None, patch_bytes=None
+    git: LocalGit,
+    directory: Path,
+    *,
+    ref: str | None = None,
+    patch_bytes=None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = changes_command(
         directory=str(directory), ref=ref, patch_bytes=patch_bytes
     )
     return subprocess.run(
-        ["bash", "-c", command], env=git.env, capture_output=True, text=True
+        ["bash", "-c", command],
+        env={**git.env, **(env or {})},
+        capture_output=True,
+        text=True,
     )
 
 
@@ -475,3 +484,27 @@ def test_the_largest_patch_beside_full_file_lists_still_fits_the_output(
     changes = parse_changes(done.stdout, patch_bytes=MAX_PATCH_BYTES)
     assert changes.truncated is True
     assert changes.patch
+
+
+def test_what_git_says_on_stderr_never_pushes_the_answer_out(git: LocalGit) -> None:
+    """stdout and stderr share the runtime's buffer, which drops the oldest
+    output first: git's warnings on a large read -- a CRLF note per file, a
+    clean filter's chatter -- must not cost the header. GIT_TRACE stands in for
+    any git that talks on stderr."""
+    code, worktree = git.step("abc12345")
+    assert code == 0
+    line = "x" * 100 + "\n"
+    for n in range(3000):
+        (worktree / f"{n:05d}-{'long-name-' * 9}.txt").write_text(line * 3)
+    git.run("-C", str(worktree), "add", ".")
+    git.run("-C", str(worktree), "commit", "-q", "-m", "a very large change")
+    for n in range(MAX_UNTRACKED):
+        (worktree / f"new-{n:03d}.txt").write_text("hello\n")
+
+    done = _read(git, worktree, patch_bytes=MAX_PATCH_BYTES, env={"GIT_TRACE": "2"})
+
+    assert done.returncode == 0, done.stderr[-2000:]
+    assert len(done.stdout.encode()) + len(done.stderr.encode()) <= (
+        _SANDBOX_OUTPUT_BYTES
+    )
+    assert parse_changes(done.stdout, patch_bytes=MAX_PATCH_BYTES).truncated
