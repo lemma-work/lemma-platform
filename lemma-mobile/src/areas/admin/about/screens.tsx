@@ -5,7 +5,7 @@ import { useLemma } from "../../../data/hooks";
 import { pickSquarePhoto, type PickedFile } from "../../../data/io";
 import { routes } from "../../../data/routes";
 import { Loading } from "../../../ui/chrome";
-import { CAST, LemmaFace, characterForSeed, type CharacterName } from "../../../ui/face";
+import { CAST, LemmaFace, castImage, characterForSeed, type CharacterName } from "../../../ui/face";
 import { Button, Press } from "../../../ui/press";
 import { Sheet } from "../../../ui/sheet";
 import { Text } from "../../../ui/text";
@@ -111,7 +111,7 @@ function FaceSheet({ open, id, icon, onClose, onPick }: {
                                 onPress={() => onPick({ icon: value })}
                                 style={{ width: 64, height: 64, borderRadius: 18, borderWidth: held ? 2 : 1, borderColor: held ? color.ink : color.line2, alignItems: "center", justifyContent: "center" }}
                             >
-                                <Image source={CAST[name]} style={{ width: 52, height: 52 }} contentFit="contain" />
+                                <Image source={castImage(name, 52)} style={{ width: 52, height: 52 }} contentFit="contain" />
                             </Press>
                         );
                     })}

@@ -330,7 +330,9 @@ export function chatRows(podId: string, conversations: readonly ConversationRef[
             key: `g:${podId}:${channel.id}`,
             kind: line ? "line" : "shared",
             title: channelTitle(channel),
-            said: channel.lastLine?.text ?? channel.topic,
+            /* An empty last line is one kept on the phone without its words
+               (`device-cache.ts`) until the chats are read again. */
+            said: channel.lastLine?.text || channel.topic,
             at: timeOf(channel.lastMessageAt ?? channel.createdAt),
             href: routes.shared(podId, channel.id),
             needsYou: channel.unread.waiting > 0,
