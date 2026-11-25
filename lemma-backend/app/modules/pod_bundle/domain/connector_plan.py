@@ -54,6 +54,18 @@ class ConnectorPlanStatus(str, Enum):
     SKIPPED = "SKIPPED"
 
 
+def waiting_for(connector: str, mode: str) -> str:
+    """The connector a grant left out waits for, as the importer is told it:
+    pod-wide and in the bundle's mode, since only that one settles it (a
+    RESTRICTED one, or one in the other mode, leaves it waiting)."""
+    accounts = (
+        "running as one shared account"
+        if mode == "SHARED"
+        else "with each member using their own account"
+    )
+    return f"a {connector} connector the whole pod can use, {accounts}"
+
+
 class DeclaredConnector(BaseModel):
     """What the importing pod already declares under a slug."""
 
@@ -331,4 +343,5 @@ __all__ = [
     "declared_conflict",
     "resolve_connector_choices",
     "skipped_connectors",
+    "waiting_for",
 ]

@@ -35,7 +35,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import delete, literal, select, text, tuple_
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.conferral import CONFERRAL_EXCEEDS_HOLDER, assert_can_confer
@@ -112,11 +112,13 @@ async def lock_grantee_pending_keys(
     session: AsyncSession,
     *,
     pod_id: UUID,
+    resource_type: ResourceType,
     grantee_type: str,
     grantee_id: UUID,
-    also: Iterable[tuple[ResourceType, str]] = (),
+    also: Iterable[str] = (),
 ) -> None:
-    """Lock every key ``grantee_id`` waits for, and ``also``, in one order.
+    """Lock every key of ``resource_type`` ``grantee_id`` waits for, and
+    ``also``, in one order.
 
     Taken before a grantee's grants are replaced, so a settlement of any of
     them waits for the replacement to commit and then finds the rows it
@@ -124,42 +126,37 @@ async def lock_grantee_pending_keys(
     """
     if not await _table_ready(session):
         return
-    keys = {(resource_type.value, key) for resource_type, key in also}
-    after = ("", "")
+    keys = set(also)
+    after = ""
     while True:
         page = (
-            await session.execute(
-                select(
-                    PendingResourceGrantModel.resource_type,
-                    PendingResourceGrantModel.resource_key,
-                )
-                .where(
-                    PendingResourceGrantModel.pod_id == pod_id,
-                    PendingResourceGrantModel.grantee_type == grantee_type,
-                    PendingResourceGrantModel.grantee_id == grantee_id,
-                    tuple_(
-                        PendingResourceGrantModel.resource_type,
-                        PendingResourceGrantModel.resource_key,
+            (
+                await session.execute(
+                    select(PendingResourceGrantModel.resource_key)
+                    .where(
+                        PendingResourceGrantModel.pod_id == pod_id,
+                        PendingResourceGrantModel.resource_type == resource_type.value,
+                        PendingResourceGrantModel.grantee_type == grantee_type,
+                        PendingResourceGrantModel.grantee_id == grantee_id,
+                        PendingResourceGrantModel.resource_key > after,
                     )
-                    > tuple_(literal(after[0]), literal(after[1])),
+                    .distinct()
+                    .order_by(PendingResourceGrantModel.resource_key)
+                    .limit(_SETTLE_BATCH)
                 )
-                .distinct()
-                .order_by(
-                    PendingResourceGrantModel.resource_type,
-                    PendingResourceGrantModel.resource_key,
-                )
-                .limit(_SETTLE_BATCH)
             )
-        ).all()
-        keys.update((str(t), str(k)) for t, k in page)
+            .scalars()
+            .all()
+        )
+        keys.update(page)
         if len(page) < _SETTLE_BATCH:
             break
-        after = (str(page[-1][0]), str(page[-1][1]))
-    for resource_type_value, resource_key in sorted(keys):
+        after = page[-1]
+    for resource_key in sorted(keys):
         await lock_pending_key(
             session,
             pod_id=pod_id,
-            resource_type=ResourceType(resource_type_value),
+            resource_type=resource_type,
             resource_key=resource_key,
         )
 
@@ -171,17 +168,22 @@ async def replace_grantee_pending_grants(
     pod_id: UUID,
     grantee_type: str,
     grantee_id: UUID,
+    resource_type: ResourceType,
     grants: Sequence[PendingGrant],
     created_by_user_id: UUID | None,
     action: str = "grant access you could not use yourself",
 ) -> bool:
-    """Replace everything ``grantee_id`` is waiting for in the pod with
-    ``grants``; whether they are held (not before migration 0077).
+    """Replace everything ``grantee_id`` waits for on ``resource_type`` in the
+    pod with ``grants``; whether they are held (not before migration 0077).
 
     Replace, like ``replace_grantee_resource_grants``: what the writer lists
     is the whole set, so a grant the grantee no longer needs stops waiting.
-    Each key's lock is taken, and kept to commit, before anything is written.
+    Only of the writer's own resource type: what another module holds for
+    the same grantee is that module's. Each key's lock is taken, and kept
+    to commit, before anything is written.
     """
+    if any(grant.resource_type is not resource_type for grant in grants):
+        raise ValueError(f"every pending grant here must be on {resource_type.value}")
     requested = {p for grant in grants for p in grant.permission_ids}
     if requested and ctx.is_named_workload:
         raise DomainError(
@@ -203,12 +205,17 @@ async def replace_grantee_pending_grants(
     await lock_grantee_pending_keys(
         session,
         pod_id=pod_id,
+        resource_type=resource_type,
         grantee_type=grantee_type,
         grantee_id=grantee_id,
-        also=[(g.resource_type, g.resource_key) for g in grants],
+        also=[g.resource_key for g in grants],
     )
     await delete_grantee_pending_grants(
-        session, pod_id=pod_id, grantee_type=grantee_type, grantee_id=grantee_id
+        session,
+        pod_id=pod_id,
+        grantee_type=grantee_type,
+        grantee_id=grantee_id,
+        resource_type=resource_type,
     )
     rows = {
         (grant.resource_type.value, grant.resource_key, permission_id)
@@ -233,18 +240,25 @@ async def replace_grantee_pending_grants(
 
 
 async def delete_grantee_pending_grants(
-    session: AsyncSession, *, pod_id: UUID, grantee_type: str, grantee_id: UUID
+    session: AsyncSession,
+    *,
+    pod_id: UUID,
+    grantee_type: str,
+    grantee_id: UUID,
+    resource_type: ResourceType | None = None,
 ) -> None:
-    """Forget everything ``grantee_id`` was waiting for in the pod."""
+    """Forget what ``grantee_id`` was waiting for in the pod: on
+    ``resource_type``, or everything when the grantee itself is gone."""
     if not await _table_ready(session):
         return
-    await session.execute(
-        delete(PendingResourceGrantModel).where(
-            PendingResourceGrantModel.pod_id == pod_id,
-            PendingResourceGrantModel.grantee_type == grantee_type,
-            PendingResourceGrantModel.grantee_id == grantee_id,
-        )
-    )
+    scope = [
+        PendingResourceGrantModel.pod_id == pod_id,
+        PendingResourceGrantModel.grantee_type == grantee_type,
+        PendingResourceGrantModel.grantee_id == grantee_id,
+    ]
+    if resource_type is not None:
+        scope.append(PendingResourceGrantModel.resource_type == resource_type.value)
+    await session.execute(delete(PendingResourceGrantModel).where(*scope))
 
 
 async def settle_pending_grants(

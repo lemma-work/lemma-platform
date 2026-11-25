@@ -39,6 +39,7 @@ async def _hold(db_session, pod_id: UUID, grantee_id: UUID, *permissions: str) -
         pod_id=pod_id,
         grantee_type="AGENT",
         grantee_id=grantee_id,
+        resource_type=ResourceType.CONNECTOR,
         grants=[PendingGrant(ResourceType.CONNECTOR, _KEY, permissions)],
         created_by_user_id=None,
     )
@@ -117,6 +118,7 @@ async def test_replacing_locks_every_key_the_grantee_waits_for(
         pod_id=pod_id,
         grantee_type="AGENT",
         grantee_id=grantee,
+        resource_type=ResourceType.CONNECTOR,
         grants=[
             PendingGrant(
                 ResourceType.CONNECTOR, f"key-{n}:PER_MEMBER", ("connector.use",)
@@ -128,7 +130,11 @@ async def test_replacing_locks_every_key_the_grantee_waits_for(
     await db_session.commit()
 
     await pending_grants.lock_grantee_pending_keys(
-        db_session, pod_id=pod_id, grantee_type="AGENT", grantee_id=grantee
+        db_session,
+        pod_id=pod_id,
+        resource_type=ResourceType.CONNECTOR,
+        grantee_type="AGENT",
+        grantee_id=grantee,
     )
     held = await db_session.scalar(
         text(
@@ -139,3 +145,48 @@ async def test_replacing_locks_every_key_the_grantee_waits_for(
     await db_session.rollback()
 
     assert held == 5
+
+
+async def test_a_replace_keeps_what_another_resource_type_waits_for(
+    scenario, db_session
+):
+    """A module replaces only what it holds: clearing a grantee's connector
+    waits leaves one another module holds for a table."""
+    await scenario.create_org_with_pod(name_prefix="Scoped")
+    pod_id = UUID(scenario.pod_id)
+    grantee = uuid4()
+    importer = SimpleNamespace(  # type: ignore[arg-type]
+        is_superuser=True, is_named_workload=False, permission_ids=frozenset()
+    )
+    for resource_type, key in (
+        (ResourceType.DATASTORE_TABLE, "notes"),
+        (ResourceType.CONNECTOR, _KEY),
+    ):
+        await replace_grantee_pending_grants(
+            db_session,
+            ctx=importer,
+            pod_id=pod_id,
+            grantee_type="AGENT",
+            grantee_id=grantee,
+            resource_type=resource_type,
+            grants=[PendingGrant(resource_type, key, ("datastore.table.read",))],
+            created_by_user_id=None,
+        )
+    await replace_grantee_pending_grants(
+        db_session,
+        ctx=importer,
+        pod_id=pod_id,
+        grantee_type="AGENT",
+        grantee_id=grantee,
+        resource_type=ResourceType.CONNECTOR,
+        grants=[],
+        created_by_user_id=None,
+    )
+    await db_session.commit()
+
+    left = await db_session.execute(
+        select(PendingResourceGrantModel.resource_type).where(
+            PendingResourceGrantModel.pod_id == pod_id
+        )
+    )
+    assert left.scalars().all() == [ResourceType.DATASTORE_TABLE.value]

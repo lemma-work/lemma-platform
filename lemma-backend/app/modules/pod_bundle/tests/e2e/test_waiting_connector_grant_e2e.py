@@ -318,6 +318,7 @@ async def test_a_declaration_racing_the_grant_step_settles_only_after_it(
         pod_id=pod_id,
         grantee_type="FUNCTION",
         grantee_id=grantee,
+        resource_type=ResourceType.CONNECTOR,
         grants=[PendingGrant(ResourceType.CONNECTOR, key, ("connector.use",))],
         created_by_user_id=None,
     )

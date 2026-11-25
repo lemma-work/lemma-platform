@@ -41,6 +41,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.pod_bundle.domain.connector_plan import (
     ConnectorChoice,
     skipped_connectors,
+    waiting_for,
 )
 from app.modules.pod_bundle.domain.errors import BundleInvalidError
 from app.modules.pod_bundle.infrastructure.grants import (
@@ -230,8 +231,8 @@ async def resolve_connector_grants(
                 waiting.append(waits)
                 note = (
                     f"A grant on connector '{name}' waits for it: it was left "
-                    f"out, and is granted once this pod has a {waits.connector} "
-                    "connector."
+                    "out, and is granted once this pod has "
+                    f"{waiting_for(waits.connector, waits.mode)}."
                 )
             else:
                 note = _dropped_note(name)
@@ -292,6 +293,7 @@ async def lock_waiting_grants(
     The session is marked as holding the locks (`transaction_locks`): an
     authorization check between here and the hold must not commit early and
     let them go. The step's commit clears the mark."""
+    from app.core.authorization.context import ResourceType
     from app.core.authorization.pending_grants import lock_grantee_pending_keys
     from app.core.infrastructure.db.transaction_locks import (
         mark_transaction_scoped_lock,
@@ -299,7 +301,11 @@ async def lock_waiting_grants(
 
     mark_transaction_scoped_lock(uow.session)
     await lock_grantee_pending_keys(
-        uow.session, pod_id=pod_id, grantee_type=grantee_type, grantee_id=grantee_id
+        uow.session,
+        pod_id=pod_id,
+        resource_type=ResourceType.CONNECTOR,
+        grantee_type=grantee_type,
+        grantee_id=grantee_id,
     )
 
 

@@ -501,6 +501,7 @@ async def hold_grants_until_declared(
         pod_id=pod_id,
         grantee_type=grantee_type,
         grantee_id=grantee_id,
+        resource_type=ResourceType.CONNECTOR,
         grants=[
             PendingGrant(
                 resource_type=ResourceType.CONNECTOR,

@@ -289,7 +289,8 @@ async def test_a_left_out_grant_waits_only_while_the_org_has_nothing_to_map_it_t
     ]
     waits = (
         "A grant on connector 'calendar' waits for it: it was left out, and is "
-        "granted once this pod has a google_calendar connector."
+        "granted once this pod has a google_calendar connector the whole pod "
+        "can use, with each member using their own account."
     )
     assert warnings == [waits]
 
@@ -311,7 +312,8 @@ async def test_the_importer_is_told_a_grant_was_dropped_when_none_can_wait():
 
     promised = (
         "A grant on connector 'calendar' waits for it: it was left out, and is "
-        "granted once this pod has a google_calendar connector."
+        "granted once this pod has a google_calendar connector the whole pod "
+        "can use, with each member using their own account."
     )
     warnings = [promised, "Something else."]
 

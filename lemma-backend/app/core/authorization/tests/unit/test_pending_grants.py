@@ -49,6 +49,7 @@ async def _hold(ctx: SimpleNamespace) -> None:
         pod_id=uuid4(),
         grantee_type="FUNCTION",
         grantee_id=uuid4(),
+        resource_type=ResourceType.CONNECTOR,
         grants=[_GRANT],
         created_by_user_id=None,
     )
