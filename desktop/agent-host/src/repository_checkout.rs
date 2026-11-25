@@ -285,16 +285,21 @@ pub async fn ensure(request: &Request<'_>) -> Outcome {
     if let Some(outcome) = already_there(checkout) {
         return outcome;
     }
+    // The budget counts from here: a wait for another conversation's checkout
+    // below spends it, rather than handing the run a fresh one afterwards.
+    let deadline = tokio::time::Instant::now() + request.timeout;
     // One checkout of a clone at a time: two conversations in one repository
     // started together would otherwise both find no clone and both make one.
     let lock = clone_lock(checkout.clone_dir());
-    let _guard = lock.lock().await;
+    let Ok(_guard) = tokio::time::timeout_at(deadline, lock.lock()).await else {
+        return Outcome::Failed(NO_TIME_LEFT.to_owned());
+    };
     // Asked again under the lock: a sub-agent's run shares its parent's
     // folder, and the parent's run may have made the worktree meanwhile.
     if let Some(outcome) = already_there(checkout) {
         return outcome;
     }
-    let outcome = attempt(request).await;
+    let outcome = attempt(request, deadline).await;
     // Not started in a tree git never finished, as if it were the repository:
     // emptied now, and its record cleared on the next attempt.
     if matches!(outcome, Outcome::Failed(_)) {
@@ -313,7 +318,7 @@ pub async fn ensure(request: &Request<'_>) -> Outcome {
 /// What a run with no time left is told: no git was started.
 const NO_TIME_LEFT: &str = "there was no time left in this run to check it out.";
 
-async fn attempt(request: &Request<'_>) -> Outcome {
+async fn attempt(request: &Request<'_>, deadline: tokio::time::Instant) -> Outcome {
     let checkout = request.checkout;
     // Under the lock, so a run that waited on one that failed is told that
     // failure rather than making the same attempt straight after it.
@@ -324,13 +329,14 @@ async fn attempt(request: &Request<'_>) -> Outcome {
     // Every git started with no time would time out at once, and remembering
     // that would tell the turns after it, with time of their own, that git
     // "did not finish within 0 seconds". Nothing is started or remembered.
-    if request.timeout.is_zero() {
+    let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+    if left.is_zero() {
         return Outcome::Failed(NO_TIME_LEFT.to_owned());
     }
     let git = Git {
         program: request.git,
-        deadline: tokio::time::Instant::now() + request.timeout,
-        timeout: request.timeout,
+        deadline,
+        timeout: left,
     };
     match make_worktree(request, &git).await {
         Ok(stale) => Outcome::Ready { made: true, stale },

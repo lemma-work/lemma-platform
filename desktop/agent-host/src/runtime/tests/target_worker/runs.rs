@@ -521,11 +521,4 @@ fn a_checkout_gets_the_time_left_and_none_once_the_deadline_has_passed() {
         checkout_budget(now - chrono::Duration::seconds(1), now),
         None
     );
-
-    // And with none, the checkout is not started at all.
-    let source = include_str!("../../run.rs").replace("\r\n", "\n");
-    assert!(
-        !source.contains("Duration::ZERO"),
-        "an elapsed deadline is not turned into a zero budget"
-    );
 }

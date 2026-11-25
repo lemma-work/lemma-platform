@@ -404,8 +404,10 @@ ref?, slug}`, set only when `workspace_cwd` is that worktree
   `workspace_cwd` resolved to.
 - **Bounded, never blocking.** The whole checkout gets 300 seconds -- the cloud
   sandbox's clone timeout -- or what is left of the run's deadline, and is given
-  up when the person presses Stop. A run whose deadline has already passed
-  starts no checkout at all, and nothing about it is remembered. No git, no
+  up when the person presses Stop. Waiting for another conversation's checkout
+  of the same clone spends that budget too; a run whose time runs out waiting,
+  or whose deadline has already passed, starts no checkout at all, and nothing
+  about it is remembered. No git, no
   access, no network, a ref that is not there, or the timeout: the agent starts
   in the empty folder anyway. It is
   told, in a `<workspace-notice>` ahead of that turn's message (so it arrives
@@ -418,6 +420,18 @@ ref?, slug}`, set only when `workspace_cwd` is that worktree
   the same reason without running git again; the notice says it will be tried
   again in a few minutes. A fetch that failed is said the same way. A worktree
   that is there is described in **Native Working Directory**.
+- **Nothing is swept, yet.** Every repository conversation leaves its worktree,
+  and each repository its clone, on the person's own disk. The cloud sandbox
+  clears finished worktrees itself (`worktree_sweep`), because its disk is
+  disposable; on a person's computer a folder may hold work nobody pushed, so
+  the host deletes nothing it did not just fail to make. Clearing them is left
+  to a later change that lists them in the app with what each holds, for the
+  person to remove.
+- **One workspace per clone.** A clone belongs to the paired workspace that
+  made it. If one person pairs two Lemma workspaces on one computer, the second
+  workspace's conversations do not use the first's clone -- its credentials and
+  the commits its agents make are that workspace's -- and are told so. Sharing
+  a clone across workspaces is a decision for the person, not a default.
 
 `repository` is optional on both sides, so it needed no protocol bump: a host
 that predates it ignores the field and starts in the empty folder, as before,

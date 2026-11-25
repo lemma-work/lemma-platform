@@ -358,3 +358,45 @@ fn a_failure_notice_says_it_will_be_tried_again() {
             .contains("tried again in a few minutes")
     );
 }
+
+/// Two conversations in one repository started together: the second waits for
+/// the first's checkout under the clone's lock. Its budget counts from when it
+/// asked, not from when the lock let it go, so a wait that uses it all up
+/// starts no git -- and is not remembered as a failure, since nothing failed.
+#[tokio::test]
+async fn waiting_for_another_checkout_spends_the_same_budget() {
+    let root = tempfile::tempdir().unwrap();
+    let checkout = Checkout::plan(
+        root.path(),
+        &repository("octo-org", "lockwait", None, "lockwait"),
+    )
+    .expect("a valid repository");
+    let target = Uuid::new_v4();
+    let lock = clone_lock(checkout.clone_dir());
+    let held = lock.lock().await;
+    let request = Request {
+        root: root.path(),
+        target,
+        checkout: &checkout,
+        // Never started: a git that ran would fail to spawn and be remembered.
+        git: Path::new("git-that-is-not-there"),
+        remote: "https://example.invalid/octo-org/lockwait.git",
+        timeout: Duration::from_millis(200),
+    };
+
+    let waiting = ensure(&request);
+    let release = async {
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        drop(held);
+    };
+    let (outcome, ()) = tokio::join!(waiting, release);
+
+    let Outcome::Failed(reason) = outcome else {
+        panic!("a run whose time ran out waiting is not checked out: {outcome:?}");
+    };
+    assert!(reason.contains("no time left"), "{reason}");
+    assert_eq!(
+        failures().recent(&failure_key(target, &checkout), Instant::now()),
+        None
+    );
+}
