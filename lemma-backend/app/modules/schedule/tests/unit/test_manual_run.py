@@ -168,3 +168,14 @@ async def test_a_workflow_schedule_asks_whether_the_person_may_run_the_workflow(
 
     assert refused.value.status_code == 403
     assert ctx.asked == [Permissions.WORKFLOW_EXECUTE]
+
+
+def test_a_run_by_hand_starts_in_the_schedules_repository_as_the_timer_would():
+    from app.modules.schedule.work.kinds import time_event_metadata
+
+    schedule = _schedule(config={"cron": "0 6 * * 1", "repository": "octo/api"})
+
+    event = manual_trigger_event(schedule, person=PERSON)
+
+    assert event.metadata["repo"] == time_event_metadata(schedule.config)["repo"]
+    assert event.metadata["manual"] is True

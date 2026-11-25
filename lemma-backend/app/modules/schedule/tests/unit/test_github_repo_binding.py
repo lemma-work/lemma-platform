@@ -131,3 +131,35 @@ class TestTheTwoHalvesAgree:
         assert parsed.full_name == "octo/api"
         assert parsed.ref == "feature/commas"
         assert parsed.clone_dir.endswith("/repos/octo/api")
+
+
+class TestATimeScheduleNamesItsRepository:
+    """A clock says nothing about where to work, so the schedule says it: a
+    weekly run that bumps dependencies starts in the repository's checkout,
+    as a webhook-triggered run does, rather than cloning by hand."""
+
+    def test_its_runs_carry_the_repository_on_the_default_branch(self):
+        from app.modules.schedule.work.kinds import time_event_metadata
+
+        metadata = time_event_metadata({"cron": "0 6 * * 1", "repository": "octo/api"})
+        assert metadata == {"repo": {"owner": "octo", "repo": "api"}}
+        repo = parse_project_repo(metadata["repo"])
+        assert repo is not None and (repo.owner, repo.repo, repo.ref) == (
+            "octo",
+            "api",
+            None,
+        )
+
+    def test_a_schedule_naming_no_repository_carries_none(self):
+        from app.modules.schedule.work.kinds import time_event_metadata
+
+        for config in (None, {}, {"cron": "0 6 * * 1"}, {"repository": 7}):
+            assert time_event_metadata(config) == {}
+
+    def test_what_it_carries_reaches_the_started_conversation(self):
+        from app.modules.schedule.work.kinds import time_event_metadata
+
+        metadata = _conversation_metadata(
+            _schedule(), time_event_metadata({"repository": "octo/api"})
+        )
+        assert metadata["repo"] == {"owner": "octo", "repo": "api"}

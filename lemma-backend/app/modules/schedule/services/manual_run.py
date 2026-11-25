@@ -47,7 +47,7 @@ from app.modules.schedule.services.trigger_fire import (
     TriggerEvent,
     fire_trigger,
 )
-from app.modules.schedule.work.kinds import time_event_payload
+from app.modules.schedule.work.kinds import time_event_metadata, time_event_payload
 
 #: A run started by hand is keyed ``manual:<uuid>``: each request is its own
 #: event, never a repeat of an earlier one.
@@ -104,7 +104,11 @@ def manual_trigger_event(schedule: ScheduleEntity, *, person: UUID) -> TriggerEv
     return TriggerEvent(
         source_event_id=f"{MANUAL_SOURCE_PREFIX}{uuid7()}",
         payload=time_event_payload(schedule.config),
-        metadata={MANUAL: True, STARTED_BY_USER_ID: str(person)},
+        metadata={
+            **time_event_metadata(schedule.config),
+            MANUAL: True,
+            STARTED_BY_USER_ID: str(person),
+        },
         started_by_user_id=person,
     )
 

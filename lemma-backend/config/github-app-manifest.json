@@ -11,14 +11,16 @@
   "default_permissions": {
     "metadata": "read",
     "contents": "write",
+    "workflows": "write",
     "pull_requests": "write",
     "issues": "write",
     "actions": "write",
-    "checks": "read",
+    "checks": "write",
     "deployments": "write",
     "secrets": "read",
     "actions_variables": "read",
-    "members": "read"
+    "members": "read",
+    "vulnerability_alerts": "read"
   },
   "default_events": [
     "push",
@@ -30,6 +32,7 @@
     "workflow_run",
     "check_suite",
     "check_run",
-    "release"
+    "release",
+    "dependabot_alert"
   ]
 }
