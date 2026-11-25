@@ -30,6 +30,14 @@ export type AgentNodeConfig = {
      */
     model_name?: (string | null);
     /**
+     * Where that worktree starts: a branch, a tag, a commit sha, or a pull request's head as `pull/<n>/head`. Unset is the repository's default branch. Needs `repository`.
+     */
+    ref?: ((ExpressionInputBinding | LiteralInputBinding) | null);
+    /**
+     * The GitHub repository the agent works in, as `owner/name`. The run starts in a worktree of it, cloned through the pod's `github` connector as the run's person, as a webhook-started run does. Usually an expression, e.g. `start.payload.repository.full_name`.
+     */
+    repository?: ((ExpressionInputBinding | LiteralInputBinding) | null);
+    /**
      * How long the step may run before the workflow stops it, in place of the deployment's ceiling. Checked by a periodic sweep, so the step ends within minutes of it, not to the second. A step waiting on a person gets the usual multiple of it.
      */
     timeout_seconds?: (number | null);

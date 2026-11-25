@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, replace
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 from uuid import UUID
 
 import httpx
@@ -28,6 +28,7 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationExecutionResponse,
 )
+from app.modules.connectors.domain.app_identity import require_function_run
 from app.modules.connectors.domain.errors import (
     ConnectorDomainError,
     ConnectorReauthRequiredError,
@@ -106,6 +107,7 @@ class ConnectorOperationUseCases:
         payload: dict[str, Any],
         user_id: UUID,
         request: Request,
+        act_as: Literal["user", "app"] = "user",
     ) -> OperationExecutionResponse:
         # Phase 1 (short scope): build + bind the pod Context -- which pins a
         # workload's token to its own pod -- then authorize, pick the account
@@ -115,12 +117,15 @@ class ConnectorOperationUseCases:
         async with pod_context_scope(
             self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
         ) as scope:
+            if act_as == "app":
+                require_function_run(scope.ctx)
             resolved = await self._build(scope.uow).resolve_pod_connector_execution(
                 scope.ctx,
                 pod_id=pod_id,
                 slug=slug,
                 operation_name=operation_name,
                 payload=payload,
+                act_as="app_only" if act_as == "app" else "user",
             )
         return await self._run(
             resolved,

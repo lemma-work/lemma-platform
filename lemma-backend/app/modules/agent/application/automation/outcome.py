@@ -12,11 +12,15 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.automation_prompts import step_output
-from app.modules.agent.domain.state_kinds import PauseKind
+from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.state_kinds import ConversationOrigin, PauseKind
 from app.modules.agent.domain.value_objects import ConversationStatus
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.infrastructure.db.runs import Runs
+from app.modules.agent.infrastructure.tools.workspace_cli.checkout_failures import (
+    checkout_failure,
+)
 from app.modules.agent.services.run_stop import stop_run
 
 
@@ -28,10 +32,32 @@ class AutomatedRunOutcome:
         self.conversations = Conversations(uow)
         self.runs = Runs(uow)
         self.pauses = Pauses(uow)
+        self.checkout_failure = checkout_failure
 
     @classmethod
     def build(cls, uow: SqlAlchemyUnitOfWork) -> AutomatedRunOutcome:
         return cls(uow)
+
+    async def _named_checkout_failed(
+        self, conversation_id: UUID, conversation: Conversation
+    ) -> str | None:
+        """Why a step that named a repository did not get its checkout.
+
+        A step names one so the agent reads it; an answer written in the empty
+        folder a failed checkout leaves is not the step done. Only a workflow
+        step's conversation is held to it: a schedule's run and a person's chat
+        read the agent's own account of the notice.
+        """
+        repo = conversation.repo
+        if conversation.origin is not ConversationOrigin.WORKFLOW_STEP or repo is None:
+            return None
+        reason = await self.checkout_failure(conversation_id)
+        if reason is None:
+            return None
+        return (
+            f"The step's checkout of {repo.full_name} did not land, so the agent "
+            f"worked in an empty folder: {reason}"
+        )
 
     async def status(self, conversation_id: UUID) -> dict[str, object]:
         """``status`` -- ``COMPLETED``, ``WAITING``, ``FAILED``, ``RUNNING`` or
@@ -45,6 +71,9 @@ class AutomatedRunOutcome:
             return {"status": "NOT_FOUND"}
         output = step_output(conversation.output)
         if conversation.status is ConversationStatus.COMPLETED:
+            failed = await self._named_checkout_failed(conversation_id, conversation)
+            if failed is not None:
+                return {"status": "FAILED", "error": failed, "output_data": output}
             return {"status": "COMPLETED", "output_data": output}
         if conversation.status is ConversationStatus.WAITING:
             # The expiry policy needs to know *why*: an agent blocked on a

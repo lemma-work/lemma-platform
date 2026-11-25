@@ -489,8 +489,6 @@ _NAME_TO_MODULE = {
     'OperationDiscoverResponse': 'operation_discover_response',
     'OperationDiscoverySchema': 'operation_discovery_schema',
     'OperationDiscoveryStatus': 'operation_discovery_status',
-    'OperationExecutionRequest': 'operation_execution_request',
-    'OperationExecutionRequestPayload': 'operation_execution_request_payload',
     'OperationExecutionResponse': 'operation_execution_response',
     'OperationSummary': 'operation_summary',
     'OrganizationAppListResponse': 'organization_app_list_response',
@@ -573,6 +571,9 @@ _NAME_TO_MODULE = {
     'PodMemberListResponse': 'pod_member_list_response',
     'PodMemberResponse': 'pod_member_response',
     'PodMemberUpdateRoleRequest': 'pod_member_update_role_request',
+    'PodOperationExecutionRequest': 'pod_operation_execution_request',
+    'PodOperationExecutionRequestActAs': 'pod_operation_execution_request_act_as',
+    'PodOperationExecutionRequestPayload': 'pod_operation_execution_request_payload',
     'PodOutcome': 'pod_outcome',
     'PodPermissionCatalogResponse': 'pod_permission_catalog_response',
     'PodPermissionResponse': 'pod_permission_response',
@@ -1374,8 +1375,6 @@ if TYPE_CHECKING:
     from .operation_discover_response import OperationDiscoverResponse
     from .operation_discovery_schema import OperationDiscoverySchema
     from .operation_discovery_status import OperationDiscoveryStatus
-    from .operation_execution_request import OperationExecutionRequest
-    from .operation_execution_request_payload import OperationExecutionRequestPayload
     from .operation_execution_response import OperationExecutionResponse
     from .operation_summary import OperationSummary
     from .organization_app_list_response import OrganizationAppListResponse
@@ -1458,6 +1457,9 @@ if TYPE_CHECKING:
     from .pod_member_list_response import PodMemberListResponse
     from .pod_member_response import PodMemberResponse
     from .pod_member_update_role_request import PodMemberUpdateRoleRequest
+    from .pod_operation_execution_request import PodOperationExecutionRequest
+    from .pod_operation_execution_request_act_as import PodOperationExecutionRequestActAs
+    from .pod_operation_execution_request_payload import PodOperationExecutionRequestPayload
     from .pod_outcome import PodOutcome
     from .pod_permission_catalog_response import PodPermissionCatalogResponse
     from .pod_permission_response import PodPermissionResponse
@@ -2272,8 +2274,6 @@ __all__ = [
     'OperationDiscoverResponse',
     'OperationDiscoverySchema',
     'OperationDiscoveryStatus',
-    'OperationExecutionRequest',
-    'OperationExecutionRequestPayload',
     'OperationExecutionResponse',
     'OperationSummary',
     'OrganizationAppListResponse',
@@ -2356,6 +2356,9 @@ __all__ = [
     'PodMemberListResponse',
     'PodMemberResponse',
     'PodMemberUpdateRoleRequest',
+    'PodOperationExecutionRequest',
+    'PodOperationExecutionRequestActAs',
+    'PodOperationExecutionRequestPayload',
     'PodOutcome',
     'PodPermissionCatalogResponse',
     'PodPermissionResponse',
