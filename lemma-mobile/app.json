@@ -79,6 +79,11 @@
             {
               "scheme": "https",
               "host": "lemma.work",
+              "path": "/t"
+            },
+            {
+              "scheme": "https",
+              "host": "lemma.work",
               "pathPrefix": "/t/"
             },
             {
@@ -90,6 +95,11 @@
               "scheme": "https",
               "host": "lemma.work",
               "pathPrefix": "/join/"
+            },
+            {
+              "scheme": "https",
+              "host": "lemma.work",
+              "path": "/l"
             },
             {
               "scheme": "https",

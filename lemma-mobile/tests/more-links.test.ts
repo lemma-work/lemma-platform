@@ -49,24 +49,25 @@ describe("where a link opens", () => {
     });
 
     it("knows the hosts app.json hands the app", () => {
-        const app = JSON.parse(readFileSync(fileURLToPath(new URL("../app.json", import.meta.url)), "utf8")) as { expo: { android: { intentFilters: { data: { host: string; pathPrefix: string }[] }[] } } };
+        const app = JSON.parse(readFileSync(fileURLToPath(new URL("../app.json", import.meta.url)), "utf8")) as { expo: { android: { intentFilters: { data: { host: string; pathPrefix?: string; path?: string }[] }[] } } };
         const declared = new Set(app.expo.android.intentFilters.flatMap((filter) => filter.data.map((one) => one.host)));
         for (const host of declared) expect(LINK_HOSTS).toContain(host);
         for (const one of app.expo.android.intentFilters[0].data) {
             const example: Record<string, string> = {
                 "/invitations": "/inv_1/accept", "/import/github": "/acme/frontdesk", "/remix": "?source=x", "/templates": "", "/t/": "pod-1",
-                "/sign-in-to-site": "/conv/call", "/join/": "abc", "/l/": "pod-1/chats/c1", "/home": "", "/needs": "", "/apps": "", "/chats": "", "/people": "", "/connectors": "",
+                "/sign-in-to-site": "/conv/call", "/join/": "abc", "/t": "", "/l": "", "/l/": "pod-1/chats/c1", "/home": "", "/needs": "", "/apps": "", "/chats": "", "/people": "", "/connectors": "",
             };
-            expect(one.pathPrefix in example).toBe(true);
-            expect(appPathOf(`https://${one.host}${one.pathPrefix}${example[one.pathPrefix]}`)).not.toBeNull();
+            const claim = one.pathPrefix ?? one.path ?? "";
+            expect(claim in example).toBe(true);
+            expect(appPathOf(`https://${one.host}${claim}${example[claim]}`)).not.toBeNull();
         }
     });
 
     it("claims on iOS the paths it claims on Android, from the file the web serves", () => {
-        const app = JSON.parse(readFileSync(fileURLToPath(new URL("../app.json", import.meta.url)), "utf8")) as { expo: { ios: { associatedDomains: string[] }; android: { intentFilters: { data: { pathPrefix: string }[] }[] } } };
+        const app = JSON.parse(readFileSync(fileURLToPath(new URL("../app.json", import.meta.url)), "utf8")) as { expo: { ios: { associatedDomains: string[] }; android: { intentFilters: { data: { pathPrefix?: string; path?: string }[] }[] } } };
         expect(app.expo.ios.associatedDomains).toEqual(["applinks:lemma.work"]);
         const bare = (path: string) => path.replace(/\/$/, "");
-        const android = app.expo.android.intentFilters[0].data.map((one) => bare(one.pathPrefix));
+        const android = app.expo.android.intentFilters[0].data.map((one) => bare(one.pathPrefix ?? one.path ?? ""));
         expect(new Set(APP_LINK_PATHS.map(bare))).toEqual(new Set(android));
         const claimed = appleAppSiteAssociation().applinks.details[0].components.map((one) => one["/"]);
         for (const path of android) expect(claimed.some((one) => one === path || one.startsWith(path + "/"))).toBe(true);
