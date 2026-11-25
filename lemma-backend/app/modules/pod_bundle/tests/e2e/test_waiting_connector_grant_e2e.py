@@ -352,3 +352,136 @@ async def test_a_declaration_racing_the_grant_step_settles_only_after_it(
         await step.commit()
         assert await settling == 0
         await declaring.commit()
+
+
+async def test_a_replayed_grant_step_leaves_no_removed_grant_active(
+    scenario, db_session, monkeypatch, tmp_path
+):
+    """The replay race through the grant step itself. A first attempt held
+    the agent's calendar grant; the organization has since installed the
+    calendar, so the replay drops it. Meanwhile somebody declares the
+    connector in another transaction. That declaration must wait for the
+    step -- past its authorization checks -- and then find nothing to grant,
+    so the grant the replay removed never becomes active."""
+    import asyncio
+
+    from app.core.authorization.service import AuthorizationDataService
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.connectors.contracts.bundles import (
+        WaitingConnectorGrant,
+        hold_grants_until_declared,
+    )
+    from app.modules.connectors.contracts.pod_connectors import (
+        ensure_pod_connector_for_installation,
+    )
+    from app.modules.pod_bundle.domain.connector_plan import ConnectorChoice
+    from app.modules.pod_bundle.domain.state import PlanStep, StepAction, StepKind
+    from app.modules.pod_bundle.infrastructure.applier import BundleApplier
+    from app.modules.pod_bundle.infrastructure.kept_parts import CreatedParts
+
+    connector_id = await _catalog_connector(db_session)
+    await scenario.create_org_with_pod(name_prefix="Replayed")
+    client, pod_id = scenario.owner_client, UUID(scenario.pod_id)
+    user_id = UUID(scenario.owner_user["id"])
+    created = await client.post(
+        f"/pods/{pod_id}/agents",
+        json={"name": "briefer", "instruction": "Brief me on my next meeting."},
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    root = tmp_path / "replayed"
+    _write(
+        root / "connectors" / "calendar" / "calendar.json",
+        {"connector": connector_id, "mode": "PER_MEMBER", "required": False},
+    )
+    _write(
+        root / "agents" / "briefer" / "briefer.json",
+        {
+            "name": "briefer",
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "connector",
+                        "resource_name": "calendar",
+                        "permission_ids": ["connector.use"],
+                    }
+                ]
+            },
+        },
+    )
+    # What the first attempt held, before the calendar was installed.
+    importer = await AuthorizationDataService(db_session).build_user_context(
+        user_id=user_id, pod_id=pod_id
+    )
+    await hold_grants_until_declared(
+        SqlAlchemyUnitOfWork(db_session),
+        importer,
+        pod_id=pod_id,
+        grantee_type="AGENT",
+        grantee_id=UUID(created.json()["id"]),
+        grants=[
+            WaitingConnectorGrant(
+                connector=connector_id,
+                mode="PER_MEMBER",
+                permission_ids=("connector.use",),
+                slug="calendar",
+            )
+        ],
+        created_by_user_id=user_id,
+    )
+    await db_session.commit()
+    install_id = UUID(await _install(db_session, scenario.org_id, connector_id))
+
+    async def declare_elsewhere() -> None:
+        async with async_session_maker() as session:
+            ctx = await AuthorizationDataService(session).build_user_context(
+                user_id=user_id, pod_id=pod_id
+            )
+            await ensure_pod_connector_for_installation(
+                SqlAlchemyUnitOfWork(session),
+                ctx,
+                pod_id=pod_id,
+                auth_config_id=install_id,
+            )
+            await session.commit()
+
+    declaring: list[asyncio.Task[None]] = []
+
+    async def lookup_while_declaring(_uow, *, organization_id, name):
+        # Mid-step, after the step locked what the agent waits for: the
+        # organization has the calendar now, so the replay drops the grant.
+        declaring.append(asyncio.create_task(declare_elsewhere()))
+        await asyncio.sleep(0.5)
+        assert not declaring[0].done(), "the declaration read past the step"
+        return install_id
+
+    monkeypatch.setattr(
+        "app.modules.connectors.contracts.provisioning.installation_for_bundle_name",
+        lookup_while_declaring,
+    )
+    async with async_session_maker() as step:
+        ctx = await AuthorizationDataService(step).build_user_context(
+            user_id=user_id, pod_id=pod_id
+        )
+        made = CreatedParts()
+        made.add(StepKind.AGENT, "briefer")
+        await BundleApplier(
+            uow=SqlAlchemyUnitOfWork(step),
+            ctx=ctx,
+            pod_id=pod_id,
+            user_id=user_id,
+            bundle_root=root,
+            connector_choices={"calendar": ConnectorChoice(skip=True)},
+            created=made,
+        ).apply_step(
+            PlanStep(
+                index=0,
+                kind=StepKind.AGENT_GRANTS,
+                name="briefer",
+                action=StepAction.CREATE,
+            )
+        )
+        await step.commit()
+    await declaring[0]
+
+    assert await _connector_grants(client, str(pod_id)) == []
