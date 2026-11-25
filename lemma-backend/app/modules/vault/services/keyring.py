@@ -39,7 +39,11 @@ from app.core.crypto.signing_keys import local_signing_keyring
 from app.core.log.log import get_logger
 
 from app.modules.vault.config import vault_settings
-from app.modules.vault.domain.errors import KeyRetirementRefused, VaultUnavailable
+from app.modules.vault.domain.errors import (
+    KeyNotKept,
+    KeyRetirementRefused,
+    VaultUnavailable,
+)
 from app.modules.vault.infrastructure.models import VaultKey, VaultSecret
 
 logger = get_logger(__name__)
@@ -151,7 +155,7 @@ class VaultKeyring:
             await self.load()
             key = self._keys.get(key_id)
         if key is None:
-            raise VaultUnavailable(f"vault key {key_id} is retired or missing")
+            raise KeyNotKept(key_id)
         return key.material
 
     def signing_keyring(self) -> Keyring:

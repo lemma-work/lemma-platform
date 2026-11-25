@@ -25,6 +25,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 
 from app.modules.vault.domain.errors import (
+    KeyNotKept,
     VaultUnavailable,
     SecretIntegrityError,
     SecretNotFound,
@@ -432,7 +433,7 @@ class SqlVault:
             await self._load_keys()
             key = self.keyring.cached_encryption_key(kek_id)
         if key is None:
-            raise VaultUnavailable(f"vault key {kek_id} is retired or missing")
+            raise KeyNotKept(kek_id)
         return key
 
     async def _load_keys(self) -> None:

@@ -27,7 +27,7 @@ from uuid import UUID
 from app.core.crypto.aad import encode_aad
 from app.core.crypto.aead import InvalidTag, new_key, open_sealed, seal
 
-from app.modules.vault.domain.errors import VaultUnavailable
+from app.modules.vault.domain.errors import KeyNotKept
 from app.modules.vault.domain.types import (
     JsonObject,
     Revealed,
@@ -99,9 +99,10 @@ async def open_value(
     kind = _KINDS[raw[header : header + 1]]
     try:
         kek = await (keyring or get_vault_keyring()).encryption_key(kek_id)
-    except VaultUnavailable as exc:
+    except KeyNotKept as exc:
         # Sealed under a key since retired: nothing can open it any more, and
-        # it was only ever a short-lived copy, so it counts as absent.
+        # it was only ever a short-lived copy, so it counts as absent. Failing
+        # to load keys at all is an outage, and propagates as one.
         raise SealedValueInvalid("sealed under a key that is no longer kept") from exc
     try:
         dek = open_sealed(

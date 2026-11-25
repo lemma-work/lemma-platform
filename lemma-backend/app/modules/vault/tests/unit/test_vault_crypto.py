@@ -22,6 +22,7 @@ from app.modules.vault.contracts import (
 from app.modules.vault.domain.types import Revealed
 from app.modules.vault.services import keyring as keyring_module
 from app.modules.vault.services.envelope import open_value, seal_value as seal_secret
+from app.modules.vault.domain.errors import KeyNotKept, VaultUnavailable
 
 pytestmark = pytest.mark.unit
 
@@ -159,3 +160,34 @@ def test_without_a_local_key_the_vault_signing_key_is_primary():
     keyring = keyring_module._signing_keyring({sign_id: sign}, {"sign": sign_id}, None)
 
     assert keyring.primary_kid == keyring_module.signing_kid(sign_id)
+
+
+class _Keys:
+    """A keyring that seals, then fails the way it is told to on opening."""
+
+    def __init__(self) -> None:
+        self.key_id, self.key = uuid4(), new_key()
+        self.failure: Exception | None = None
+
+    async def active_encryption_key(self):
+        return self.key_id, self.key
+
+    async def encryption_key(self, key_id):
+        if self.failure is not None:
+            raise self.failure
+        return self.key
+
+
+async def test_a_seal_under_a_key_no_longer_kept_is_absent_but_an_outage_is_not():
+    keys = _Keys()
+    sealed = await seal_value("v", purpose="p", bindings=["b"], keyring=keys)
+
+    keys.failure = KeyNotKept(keys.key_id)
+    with pytest.raises(SealedValueInvalid):
+        await open_text(sealed, purpose="p", bindings=["b"], keyring=keys)
+
+    # Keys that could not be loaded say nothing about this one: not a miss.
+    keys.failure = VaultUnavailable("more than 1000 unretired vault keys")
+    with pytest.raises(VaultUnavailable) as raised:
+        await open_text(sealed, purpose="p", bindings=["b"], keyring=keys)
+    assert not isinstance(raised.value, KeyNotKept)
