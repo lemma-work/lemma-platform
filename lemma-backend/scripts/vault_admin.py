@@ -17,8 +17,9 @@ Usage::
     uv run python scripts/vault_admin.py rewrap
 
     # Once `status` shows the old KEK holds nothing, stop keeping it. Refused
-    # until two VAULT_KEK_REFRESH_SECONDS have passed since the rotation, so
-    # every process has stopped writing under it.
+    # until two VAULT_KEK_REFRESH_SECONDS have passed since the rotation. No
+    # confirmation of each process is needed: a process whose refreshes have
+    # failed for 1.5 intervals reloads keys before it writes, or fails the write.
     uv run python scripts/vault_admin.py retire-kek <kek-id>
 
     # Rotate the token-signing key (tokens signed before keep verifying)

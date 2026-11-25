@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import asyncio
+import time
 
 import pytest
 from sqlalchemy import select, text, update
@@ -31,6 +32,7 @@ from app.modules.vault.infrastructure.models import (
     VaultSecretEvent,
     owner_trigger_sql,
 )
+from app.modules.vault.config import vault_settings
 from app.modules.vault.domain.errors import KeyRetirementRefused
 from app.modules.vault.services.keyring import ENCRYPT
 from app.modules.vault.services.rewrap import rewrap_all, secrets_per_key
@@ -412,3 +414,21 @@ async def test_a_lease_token_ends_only_its_own_lease(db_session):
     assert kept.version == 1
     assert meta is not None and meta.lease_until is None
     assert meta.expires_at == expiry
+
+
+async def test_a_write_reloads_keys_its_refresh_has_not_kept_fresh(db_session):
+    keyring = get_vault_keyring()
+    await keyring.load()
+    assert keyring.cached_active_encryption_key() is not None
+
+    # As if every background refresh since had failed.
+    keyring._loaded_at = (
+        time.monotonic() - 10 * vault_settings.vault_kek_refresh_seconds
+    )
+    assert keyring.cached_active_encryption_key() is None
+
+    scope = _scope()
+    ref = await _put(db_session, scope, "after-a-stale-keyring")
+    assert keyring.cached_active_encryption_key() is not None
+    revealed = await vault_for(db_session).reveal(ref.id, expect=scope, purpose=PURPOSE)
+    assert revealed.text() == "after-a-stale-keyring"

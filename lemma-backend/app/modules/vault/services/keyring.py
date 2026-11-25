@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -49,6 +50,9 @@ ACTIVE = "active"
 DECRYPT_ONLY = "decrypt_only"
 RETIRED = "retired"
 _MAX_LIVE_KEYS = 1000
+#: A write reloads keys loaded longer ago than this many refresh intervals.
+#: Below the two intervals ``retire`` waits, so no write outlives a retirement.
+WRITE_KEY_MAX_AGE_REFRESHES = 1.5
 
 
 def kek_aad(key_id: UUID, purpose: str) -> bytes:
@@ -83,6 +87,7 @@ class VaultKeyring:
         self._active: dict[str, UUID] = {}
         self._signing: Keyring | None = None
         self._loaded = False
+        self._loaded_at = 0.0
         # Loads overlap (start, refresh, a rotation, a cache miss). They run one
         # at a time per event loop, from the read to the publish, so a load
         # never publishes keys read before ones already published. The number
@@ -103,9 +108,22 @@ class VaultKeyring:
 
     # ------------------------------------------------------------------ reads
     def cached_active_encryption_key(self) -> tuple[UUID, bytes] | None:
-        """The active KEK if loaded. No I/O: the path every secret write takes."""
+        """The active KEK if loaded recently enough. No I/O: every write's path.
+
+        ``None`` once the last successful load is older than
+        :data:`WRITE_KEY_MAX_AGE_REFRESHES` refresh intervals, so a process whose
+        background refreshes keep failing reloads before it writes -- or fails
+        the write -- instead of wrapping under a key that may since have been
+        retired (``retire`` waits two intervals after the rotation).
+        """
         key_id = self._active.get(ENCRYPT)
-        return None if key_id is None else (key_id, self._keys[key_id].material)
+        if key_id is None or self._stale():
+            return None
+        return key_id, self._keys[key_id].material
+
+    def _stale(self) -> bool:
+        max_age = WRITE_KEY_MAX_AGE_REFRESHES * vault_settings.vault_kek_refresh_seconds
+        return time.monotonic() - self._loaded_at > max_age
 
     def cached_encryption_key(self, key_id: UUID) -> bytes | None:
         """A KEK if loaded. No I/O: the path every secret read takes."""
@@ -113,7 +131,7 @@ class VaultKeyring:
         return None if key is None else key.material
 
     async def active_encryption_key(self) -> tuple[UUID, bytes]:
-        if ENCRYPT not in self._active:
+        if ENCRYPT not in self._active or self._stale():
             await self.load()
         key_id = self._active.get(ENCRYPT)
         if key_id is None:
@@ -182,6 +200,7 @@ class VaultKeyring:
             self._active = active
             self._signing = signing
             self._loaded = True
+            self._loaded_at = time.monotonic()
         if self._on_loaded is not None:
             self._on_loaded(self)
         logger.info(
