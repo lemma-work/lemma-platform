@@ -20,7 +20,7 @@ export function docsIndexMarkdown(): string {
 
     return `# Lemma Docs
 
-> Platform concepts, the TypeScript and Python SDKs, the CLI, and build guides for Lemma — the runtime for agent-built software.
+> How to use Lemma and where to run it, then platform concepts, the TypeScript and Python SDKs, the CLI, and build guides for Lemma — the runtime for agent-built software.
 
 ${groups}
 `;

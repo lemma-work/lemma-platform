@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from app.core.log.log import get_logger
+from app.modules.connectors.domain.app_identity import AppIdentityUnavailableError
 from app.modules.connectors.domain.kinds import ExecutionRequest
 
 logger = get_logger(__name__)
@@ -34,9 +35,17 @@ class CredentialPresenter(Protocol):
 
 
 class PassThroughPresenter:
-    """What every connector gets unless it says otherwise."""
+    """What every connector gets unless it says otherwise.
+
+    It has no app to be, so a function that asked for one by name is refused
+    rather than handed the person's credential in its place.
+    """
 
     async def present(self, request: ExecutionRequest) -> dict[str, object]:
+        if request.act_as == "app_only":
+            raise AppIdentityUnavailableError(
+                f"the {request.connector_id} connector has no app identity."
+            )
         return request.credentials
 
 

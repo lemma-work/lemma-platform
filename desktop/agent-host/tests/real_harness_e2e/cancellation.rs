@@ -92,6 +92,7 @@ async fn a_real_agent_stops_on_session_cancel_and_keeps_its_session() {
                     })],
                     resume_session_id: None,
                     workspace_cwd: None,
+                    repository: None,
                     context: BTreeMap::new(),
                     mcp: Value::Null,
                     run_deadline: Utc::now() + chrono::Duration::minutes(5),

@@ -199,3 +199,18 @@ async def test_the_cron_walk_does_not_hold_a_pooled_connection():
     # the validation still happens.
     with pytest.raises(ScheduleTooFrequentError):
         await validated_time_schedule_config({"cron": "* * * * *"})
+
+
+@pytest.mark.parametrize("repository", ["octo/api", "octo/api.git", "my-org/web.app"])
+def test_a_time_schedule_may_name_the_repository_its_runs_start_in(repository):
+    validate_time_schedule_config({"cron": "0 6 * * 1", "repository": repository})
+
+
+@pytest.mark.parametrize(
+    "repository", ["octo", "octo/api/extra", "octo/..", "-x/api", "", 7, ["octo/api"]]
+)
+def test_a_repository_that_is_not_owner_slash_name_is_refused_when_saved(repository):
+    """A typo saved into a weekly schedule would otherwise surface a week
+    later as a run in an empty directory."""
+    with pytest.raises(ScheduleValidationError, match="owner/name"):
+        validate_time_schedule_config({"cron": "0 6 * * 1", "repository": repository})

@@ -133,6 +133,7 @@ fn request(key: &str, mac: &Machine, log: &Path, lemma_cli_bin: Option<PathBuf>)
             prompt: vec![json!({"type": "text", "text": "hello"})],
             resume_session_id: None,
             workspace_cwd: None,
+            repository: None,
             context: JsonMap::new(),
             mcp: json!({ "environment": lemma }),
             run_deadline: chrono::Utc::now() + chrono::Duration::minutes(1),

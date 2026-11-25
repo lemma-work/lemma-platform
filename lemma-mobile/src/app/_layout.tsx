@@ -1,5 +1,5 @@
 import "../session/polyfills";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
@@ -9,6 +9,7 @@ import { SafeAreaProvider, initialWindowMetrics } from "react-native-safe-area-c
 import { SessionProvider, useSession } from "../session/session";
 import { WebSessionProvider } from "../session/web-cookie";
 import { WebSignOut } from "../session/web-session";
+import { Launch } from "../ui/launch";
 import { ThemeProvider, useTheme } from "../ui/theme";
 import { color } from "../ui/tokens";
 
@@ -18,9 +19,9 @@ function Routes() {
     const { mode } = useSession();
     const { scheme } = useTheme();
     const ready = mode !== "loading";
-    useEffect(() => {
-        if (ready) void SplashScreen.hideAsync().catch(() => undefined);
-    }, [ready]);
+    /* The native splash hands over to `Launch`, which looks the same and
+       then animates the bars, and goes once the session is read. */
+    const [launching, setLaunching] = useState(true);
     /* The navigator renders from the first frame, under the splash screen,
        which stays up until the session is read: a layout that rendered
        something else first left expo-router's linking updating a navigator
@@ -45,6 +46,7 @@ function Routes() {
                 </Stack.Protected>
             </Stack>
             <WebSignOut />
+            {launching ? <Launch ready={ready} onGone={() => setLaunching(false)} /> : null}
         </>
     );
 }

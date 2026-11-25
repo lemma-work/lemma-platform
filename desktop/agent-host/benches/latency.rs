@@ -318,6 +318,7 @@ fn start_command(state: &BenchState) -> Option<Command> {
                 prompt: vec![json!({"type": "text", "text": state.prompt})],
                 resume_session_id: None,
                 workspace_cwd: None,
+                repository: None,
                 context: std::collections::BTreeMap::new(),
                 mcp: state.mcp.clone(),
                 run_deadline: Utc::now() + chrono::Duration::minutes(5),

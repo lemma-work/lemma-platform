@@ -37,6 +37,7 @@ async def run_time_fire(ctx: FastContext, payload: TimeFire) -> None:
     from app.modules.schedule.services.paused_notice import stage_paused_notice
     from app.modules.schedule.services.trigger_fire import TriggerEvent, fire_trigger
     from app.modules.schedule.work.kinds import (
+        time_event_metadata,
         time_event_payload,
         time_source_event_id,
     )
@@ -92,6 +93,7 @@ async def run_time_fire(ctx: FastContext, payload: TimeFire) -> None:
         TriggerEvent(
             source_event_id=time_source_event_id(row.id, payload.fire_at),
             payload=time_event_payload(schedule.config),
+            metadata=time_event_metadata(schedule.config),
             source_occurred_at=payload.fire_at.astimezone(timezone.utc),
         ),
         work=ctx.work,

@@ -33,10 +33,8 @@ from app.modules.agent.domain.entities import (
 )
 from app.modules.agent.domain.pending_interactions import PendingInteractionKind
 from app.modules.agent.domain.project_repo import (
-    ProjectRepo,
     RepositoryChoice,
     RepositoryChoices,
-    parse_repository_name,
 )
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
@@ -387,39 +385,6 @@ class ApprovalDecisionResponse(BaseModel):
     approval_id: str
     decision: AgentRunApprovalDecision
     status: str = "resolved"
-
-
-class CreateConversationRequest(BaseModel):
-    agent_name: str | None = None
-    title: str | None = None
-    instructions: str | None = None
-    agent_runtime: AgentRuntimeConfig | None = None
-    parent_id: UUID | None = None
-    type: ConversationType = ConversationType.CHAT
-    metadata: JsonObject | None = None
-    repository: str | None = Field(
-        default=None,
-        max_length=140,
-        description=(
-            "A GitHub repository to work in, as 'owner/name': one the "
-            "organization's GitHub installation covers for you, as listed by "
-            "the conversation repositories endpoint. The conversation's "
-            "workspace_cwd is then a git worktree of it on a branch of its own "
-            "(lemma/<slug>), made before the agent's first command from one "
-            "clone of the repository, which is fetched first. Other "
-            "conversations in the repository get worktrees of their own."
-        ),
-    )
-
-    @field_validator("repository")
-    @classmethod
-    def _owner_slash_name(cls, value: str | None) -> str | None:
-        if value is not None and parse_repository_name(value) is None:
-            raise ValueError("repository must be 'owner/name'")
-        return value
-
-    def project_repo(self) -> ProjectRepo | None:
-        return parse_repository_name(self.repository) if self.repository else None
 
 
 class ConversationRepositoryResponse(BaseModel):

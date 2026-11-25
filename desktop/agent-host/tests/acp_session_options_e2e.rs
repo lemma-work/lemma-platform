@@ -126,6 +126,7 @@ fn request(
             prompt: vec![json!({"type": "text", "text": "hello"})],
             resume_session_id: None,
             workspace_cwd: None,
+            repository: None,
             context: JsonMap::new(),
             mcp,
             run_deadline: chrono::Utc::now() + chrono::Duration::minutes(1),

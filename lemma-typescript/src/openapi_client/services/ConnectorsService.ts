@@ -34,7 +34,6 @@ import type { OperationDetail } from '../models/OperationDetail.js';
 import type { OperationDetailsBatchRequest } from '../models/OperationDetailsBatchRequest.js';
 import type { OperationDetailsBatchResponse } from '../models/OperationDetailsBatchResponse.js';
 import type { OperationDiscoverResponse } from '../models/OperationDiscoverResponse.js';
-import type { OperationExecutionRequest } from '../models/OperationExecutionRequest.js';
 import type { OperationExecutionResponse } from '../models/OperationExecutionResponse.js';
 import type { PodAccountCreateRequest } from '../models/PodAccountCreateRequest.js';
 import type { PodAccountListResponse } from '../models/PodAccountListResponse.js';
@@ -46,6 +45,7 @@ import type { PodConnectorCreateRequest } from '../models/PodConnectorCreateRequ
 import type { PodConnectorListResponse } from '../models/PodConnectorListResponse.js';
 import type { PodConnectorResponse } from '../models/PodConnectorResponse.js';
 import type { PodConnectorUpdateRequest } from '../models/PodConnectorUpdateRequest.js';
+import type { PodOperationExecutionRequest } from '../models/PodOperationExecutionRequest.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
@@ -1157,7 +1157,7 @@ export class ConnectorsService {
     }
     /**
      * Execute Pod Connector Operation
-     * Run an operation through a pod connector. The account it runs as is decided by the connector: the caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals: `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`.
+     * Run an operation through a pod connector. The account it runs as is decided by the connector: the caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals: `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`; with `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and `APP_IDENTITY_UNAVAILABLE`.
      * @param podId
      * @param slug
      * @param operationName
@@ -1169,7 +1169,7 @@ export class ConnectorsService {
         podId: string,
         slug: string,
         operationName: string,
-        requestBody: OperationExecutionRequest,
+        requestBody: PodOperationExecutionRequest,
     ): CancelablePromise<OperationExecutionResponse> {
         return __request(OpenAPI, {
             method: 'POST',

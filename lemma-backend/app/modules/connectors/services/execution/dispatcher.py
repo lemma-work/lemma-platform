@@ -94,7 +94,7 @@ class KindDispatcher:
             config=config or {},
             deadline_seconds=self.timeout_for(kind),
             account_external_ref=account_external_ref,
-            act_as="app" if act_as == "app" else "user",
+            act_as=act_as if act_as in ("app", "app_only") else "user",
         )
 
     async def execute(self, request: ExecutionRequest) -> Any:

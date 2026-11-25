@@ -593,6 +593,16 @@ is answered *for the pod*, in a group the pod has opened to them.
   from the timeline as its prompt is built, so an edit or a forgotten contact
   reaches it. A platform's history read live keeps the lines the pod heard as
   references, by the platform's message id at that place.
+- **A message in a connected Slack channel fires the schedules watching it.**
+  The Slack connector's triggers -- a channel message (thread replies
+  included), a reply in one thread, the app mentioned -- are heard here, not
+  at `/webhooks/{source}`: right after the group log writes a line, the same
+  message is handed to schedule's `fire_heard_event` with the pods it is for,
+  and the runs commit with the line (`services/channel_triggers.py`,
+  `platforms/slack/triggers.py`). The pods are those with a place on the
+  channel among the delivery's verified receivers, in the workspace the
+  delivery names: a channel id in a schedule's config chooses which channel it
+  watches, never which pods hear one. An app's own message never gets this far.
 - **A message edited or deleted on the platform is edited or deleted here.**
   Slack's `message_changed` / `message_deleted`, Teams' `messageUpdate` /
   `messageDelete` and Telegram's `edited_message` are `surface.platform_update`

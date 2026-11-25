@@ -88,6 +88,52 @@ async def test_a_conversation_opened_in_a_repository_works_in_a_worktree_of_it(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("ref", ["release/2.4", "pull/123/head"])
+async def test_a_conversation_can_start_its_worktree_from_a_branch_or_a_pull_request(
+    authenticated_client, fixed_test_org, github, ref
+):
+    """Its own branch still, made from where the person pointed: a branch to
+    build on, or a pull request to fix."""
+    pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
+
+    created = await _open(authenticated_client, pod_id, repository="acme/web", ref=ref)
+
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["workspace_cwd"].startswith(_WORKTREES)
+    assert body["metadata"]["repo"] == {"owner": "acme", "repo": "web", "ref": ref}
+    assert await _stored_repo(body["id"]) == ProjectRepo(
+        owner="acme", repo="web", ref=ref
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "said"),
+    [
+        (
+            {"repository": "acme/web", "ref": "--upload-pack=touch /tmp/x"},
+            "ref must be",
+        ),
+        ({"repository": "acme/web", "ref": "main..evil"}, "ref must be"),
+        ({"ref": "main"}, "only for a conversation with a repository"),
+    ],
+)
+async def test_a_ref_that_is_not_a_checkout_point_is_refused_before_github_is_asked(
+    authenticated_client, fixed_test_org, github, body, said
+):
+    pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
+    before = await _conversation_count(authenticated_client, pod_id)
+
+    created = await _open(authenticated_client, pod_id, **body)
+
+    assert created.status_code == 422, created.text
+    assert said in created.text
+    assert github.asked == []
+    assert await _conversation_count(authenticated_client, pod_id) == before
+
+
+@pytest.mark.asyncio
 async def test_a_conversation_without_a_repository_gets_a_directory_of_its_own(
     authenticated_client, fixed_test_org, github
 ):

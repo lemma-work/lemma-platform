@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from typing import NotRequired, TypedDict
 
 import pytest
 
@@ -749,3 +750,129 @@ class TestSourceEventIdRejectsIncompletePayloads:
         self, event, payload
     ):
         assert source_event_id(event, "1", 2, payload) is None
+
+
+class _AlertPackage(TypedDict):
+    ecosystem: str
+    name: str
+
+
+class _AlertDependency(TypedDict):
+    package: _AlertPackage
+    manifest_path: str
+
+
+class _AlertAdvisory(TypedDict):
+    ghsa_id: str
+
+
+class _Alert(TypedDict):
+    # Not required: the missing-identity test takes each of these away.
+    number: NotRequired[int]
+    updated_at: NotRequired[str]
+    state: str
+    dependency: _AlertDependency
+    security_advisory: _AlertAdvisory
+
+
+class _Owner(TypedDict):
+    login: str
+
+
+class _Repository(TypedDict):
+    id: int
+    name: str
+    owner: _Owner
+    default_branch: str
+
+
+class _Installation(TypedDict):
+    id: int
+
+
+class DependabotAlertDelivery(TypedDict):
+    """The fields of GitHub's `dependabot_alert` payload these tests read."""
+
+    action: str
+    alert: _Alert
+    repository: _Repository
+    installation: _Installation
+
+
+def _dependabot_alert(
+    action: str = "created", *, updated_at: str = "2026-11-24T09:00:00Z"
+) -> DependabotAlertDelivery:
+    return {
+        "action": action,
+        "alert": {
+            "number": 7,
+            "state": "open",
+            "updated_at": updated_at,
+            "dependency": {
+                "package": {"ecosystem": "npm", "name": "left-pad"},
+                "manifest_path": "package-lock.json",
+            },
+            "security_advisory": {"ghsa_id": "GHSA-xxxx-xxxx-xxxx"},
+        },
+        "repository": {
+            "id": 1296269,
+            "name": "api",
+            "owner": {"login": "octo"},
+            "default_branch": "main",
+        },
+        "installation": {"id": 158040062},
+    }
+
+
+class TestDependabotAlerts:
+    """An alert is a repository becoming exposed; the agent that wakes on it
+    is there to bump the dependency in the repository's default branch."""
+
+    def _id(self, payload: DependabotAlertDelivery) -> str | None:
+        return source_event_id("dependabot_alert", "1", 2, dict(payload))
+
+    async def test_an_alert_routes_on_its_own_tenant_scoped_key(self):
+        normalized = await _normalize(dict(_dependabot_alert()), "dependabot_alert")
+        assert normalized is not None
+        assert normalized.match == {
+            "source": "github",
+            "installation_id": "158040062",
+            "event": "dependabot_alert",
+        }
+
+    async def test_the_agent_wakes_in_the_repository_on_its_default_branch(self):
+        """No `ref`: a clone lands on the default branch, which is where the
+        vulnerable manifest is and where a fix branches from."""
+        normalized = await _normalize(dict(_dependabot_alert()), "dependabot_alert")
+        assert normalized.context == {"repo": {"owner": "octo", "repo": "api"}}
+
+    async def test_only_the_declared_alert_actions_match(self):
+        normalized = await _normalize(
+            dict(_dependabot_alert("dismissed")), "dependabot_alert"
+        )
+        assert normalized.refine is not None
+        assert not normalized.refine({"actions": ["created", "reintroduced"]})
+        assert normalized.refine({"actions": ["dismissed"]})
+
+    def test_a_redelivery_is_the_same_event(self):
+        assert self._id(_dependabot_alert()) == self._id(_dependabot_alert())
+
+    def test_raising_and_dismissing_one_alert_are_two_events(self):
+        assert self._id(_dependabot_alert("created")) != self._id(
+            _dependabot_alert("dismissed")
+        )
+
+    def test_an_alert_dismissed_twice_is_two_events(self):
+        """Dismissed, reopened, dismissed again: the second dismissal names a
+        later instant, so it is not swallowed as a redelivery of the first."""
+        assert self._id(_dependabot_alert("dismissed")) != self._id(
+            _dependabot_alert("dismissed", updated_at="2026-11-25T09:00:00Z")
+        )
+
+    def test_an_alert_without_its_number_or_timestamp_has_no_stable_id(self):
+        no_number = _dependabot_alert()
+        no_number["alert"].pop("number")
+        no_time = _dependabot_alert()
+        no_time["alert"].pop("updated_at")
+        assert self._id(no_number) is None
+        assert self._id(no_time) is None

@@ -155,6 +155,21 @@ def test_an_app_may_not_run_or_drive_a_terminal_on_a_machine(
     assert workload_may_call(method, template), "agents keep their terminals"
 
 
+def test_an_app_reads_what_a_conversation_cost_but_not_its_viewers_whole_usage():
+    """The viewer's cost for one conversation in the app's pod, through a pod
+    route; never their usage across every pod, which ``/usage/me`` is."""
+    from app.core.api.actor_policy import app_may_call
+    from app.modules.agent.api.controllers.conversation_run_controller import (
+        router,
+    )
+
+    template = "/pods/{pod_id}/conversations/{conversation_id}/usage"
+    assert template in {getattr(route, "path", None) for route in router.routes}
+    assert app_may_call("GET", template)
+    assert not app_may_call("GET", "/usage/me/events")
+    assert not app_may_call("GET", "/usage/me/summary")
+
+
 def test_an_app_still_reads_a_pod_machine_and_its_files():
     from app.core.api.actor_policy import app_may_call
 

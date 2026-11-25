@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
 from uuid import uuid4
 
 import httpx
@@ -7,6 +9,7 @@ import httpx
 from ..openapi_client.api.agent_conversations import (
     agent_conversation_approval_list,
     agent_conversation_approval_resolve,
+    agent_conversation_changes_get,
     agent_conversation_create,
     agent_conversation_get,
     agent_conversation_list,
@@ -21,10 +24,14 @@ from ..openapi_client.api.agent_conversations import (
     agent_conversation_stream,
     agent_conversation_stop,
     agent_conversation_update,
+    agent_conversation_usage_get,
 )
 from ..openapi_client.models.approval_decision_response import ApprovalDecisionResponse
 from ..openapi_client.models.agent_run_response import AgentRunResponse
 from ..openapi_client.models.agent_run_start_response import AgentRunStartResponse
+from ..openapi_client.models.conversation_changes_response import (
+    ConversationChangesResponse,
+)
 from ..openapi_client.models.conversation_list_response import ConversationListResponse
 from ..openapi_client.models.conversation_repository_list_response import (
     ConversationRepositoryListResponse,
@@ -32,6 +39,9 @@ from ..openapi_client.models.conversation_repository_list_response import (
 from ..openapi_client.models.conversation_response import ConversationResponse
 from ..openapi_client.models.conversation_status import ConversationStatus
 from ..openapi_client.models.conversation_type import ConversationType
+from ..openapi_client.models.conversation_usage_response import (
+    ConversationUsageResponse,
+)
 from ..openapi_client.models.create_conversation_request import (
     CreateConversationRequest,
 )
@@ -131,6 +141,8 @@ class PodConversations(BoundResource):
         metadata: Metadata | None = None,
         parent_id: str | None = None,
         repository: str | None = None,
+        ref: str | None = None,
+        agent_runtime: Mapping[str, Any] | None = None,
     ) -> ConversationResponse:
         """Open a conversation, in a worktree of a GitHub repository if one is named.
 
@@ -138,6 +150,12 @@ class PodConversations(BoundResource):
         refuses a repository the organization's GitHub installation does not
         cover for you. The conversation works in a git worktree of its own, on a
         branch of its own, made from one shared clone of the repository.
+
+        ``ref`` is where that branch starts: a branch, a tag, a commit or a pull
+        request's head as ``pull/<number>/head`` (default: the repository's
+        default branch). ``agent_runtime`` picks what runs it, as
+        ``{"profile_id": ..., "model_name": ...}`` from the organization's
+        runtime profiles; left out, the agent's own.
         """
         return self._call(
             agent_conversation_create,
@@ -150,6 +168,8 @@ class PodConversations(BoundResource):
                     "metadata": metadata,
                     "parent_id": parent_id,
                     "repository": repository,
+                    "ref": ref,
+                    "agent_runtime": dict(agent_runtime) if agent_runtime else None,
                 }
             ),
             body_model=CreateConversationRequest,
@@ -164,6 +184,34 @@ class PodConversations(BoundResource):
             agent_conversation_get, self._pod_uuid(), as_uuid(conversation_id)
         )
 
+    def changes(
+        self,
+        conversation_id: str,
+        *,
+        patch: bool = False,
+        max_patch_bytes: int | None = None,
+    ) -> ConversationChangesResponse:
+        """What a conversation opened in a repository has changed in its checkout.
+
+        Every file that differs from where its branch left the start point --
+        commits not yet pushed, edits not yet committed -- and its untracked
+        files, with line counts; ``patch=True`` adds the unified diff, cut at
+        ``max_patch_bytes``. ``state`` is ``ready`` when it was read, else
+        ``no_repository``, ``not_checked_out`` (the machine answered and holds
+        no checkout), ``machine_unavailable`` (the machine is not running and
+        is not started to answer -- so too before the conversation's first
+        run) or ``elsewhere`` (its last run worked on your own Mac). A read
+        that outlives its ceiling is a 504. Only the conversation's owner may
+        read it.
+        """
+        return self._call(
+            agent_conversation_changes_get,
+            self._pod_uuid(),
+            as_uuid(conversation_id),
+            patch=patch,
+            max_patch_bytes=UNSET if max_patch_bytes is None else max_patch_bytes,
+        )
+
     def run(self, conversation_id: str, run_id: str) -> AgentRunResponse:
         """One run of a conversation: its status, output, and the tokens it
         used (``usage``), so a plugin can meter what an item cost."""
@@ -172,6 +220,18 @@ class PodConversations(BoundResource):
             self._pod_uuid(),
             as_uuid(conversation_id),
             as_uuid(run_id),
+        )
+
+    def usage(self, conversation_id: str) -> ConversationUsageResponse:
+        """What a conversation has cost you so far, in US dollars and tokens:
+        ``totals`` over every run, and ``runs`` (newest first) each with its
+        own ``usage``. A run whose ``usage`` is ``None`` reported nothing and
+        is counted in ``unreported_run_count``. Sub-agent conversations are
+        not included; read each one's own."""
+        return self._call(
+            agent_conversation_usage_get,
+            self._pod_uuid(),
+            as_uuid(conversation_id),
         )
 
     def update(

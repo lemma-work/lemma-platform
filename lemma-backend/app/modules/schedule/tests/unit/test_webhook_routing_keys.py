@@ -21,7 +21,10 @@ from app.modules.schedule.domain.schedule import (
     authored_config,
 )
 from app.modules.schedule.services.trigger_fire import FireOutcome
-from app.modules.schedule.services.webhook_handler import WebhookHandler
+from app.modules.schedule.services.webhook_handler import (
+    WebhookHandler,
+    fire_heard_event,
+)
 from app.modules.schedule.services.webhook_schedule_matcher import (
     WebhookScheduleMatcher,
 )
@@ -223,3 +226,79 @@ async def test_a_delivery_verified_by_an_account_never_fires_an_unbound_schedule
     )
 
     assert started == []
+
+
+def _in_pod(config: dict[str, Any], pod_id: UUID) -> ScheduleEntity:
+    return _webhook(config, bound=True).model_copy(update={"pod_id": pod_id})
+
+
+@pytest.mark.asyncio
+async def test_a_heard_event_fires_only_schedules_in_the_pods_it_names() -> None:
+    """A Slack channel id is anybody's to type. A pod that did not connect the
+    channel to its bot does not hear it, whatever its schedule says."""
+    ours, theirs = uuid4(), uuid4()
+    routing = {
+        "source": "slack",
+        "event": "message",
+        "team_id": "T1",
+        "channel_id": "C1",
+    }
+    own = _in_pod(dict(routing), ours)
+    foreign = _in_pod(dict(routing), theirs)
+    fired = _Fired()
+
+    started = await fire_heard_event(
+        None,
+        NormalizedWebhook(
+            payload={"event": {"text": "failover started"}},
+            source_event_id="slack-message-1",
+            match=routing,
+            pod_ids=frozenset({str(ours)}),
+        ),
+        matcher=WebhookScheduleMatcher(schedule_repository=_Schedules(own, foreign)),
+        fire=fired,
+        bound_account=_Resolves({own.id: uuid4(), foreign.id: uuid4()}),
+    )
+
+    assert started == [own.id]
+    assert fired.schedule_ids == [own.id]
+
+
+@pytest.mark.asyncio
+async def test_a_heard_event_that_names_no_pods_reaches_nobody() -> None:
+    """Without a tenancy scope, containment would search every tenant."""
+    with pytest.raises(ValueError):
+        await fire_heard_event(
+            None,
+            NormalizedWebhook(
+                payload={},
+                source_event_id="slack-message-1",
+                match={"source": "slack", "event": "message"},
+            ),
+            matcher=WebhookScheduleMatcher(schedule_repository=_Schedules()),
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_heard_event_still_needs_the_schedules_connector_to_resolve() -> None:
+    pod = uuid4()
+    routing = {"source": "slack", "event": "message", "channel_id": "C1"}
+    live = _in_pod(dict(routing), pod)
+    stopped = _in_pod(dict(routing), pod)
+    fired = _Fired()
+
+    started = await fire_heard_event(
+        None,
+        NormalizedWebhook(
+            payload={},
+            source_event_id="slack-message-1",
+            match=routing,
+            pod_ids=frozenset({str(pod)}),
+        ),
+        matcher=WebhookScheduleMatcher(schedule_repository=_Schedules(live, stopped)),
+        fire=fired,
+        bound_account=_Resolves({live.id: uuid4()}),
+    )
+
+    assert started == [live.id]
+    assert fired.schedule_ids == [live.id]

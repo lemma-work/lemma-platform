@@ -104,6 +104,90 @@ pub(crate) fn prepare_run_directory(
     )
 }
 
+/// Make a repository conversation's folder its worktree, and say what to tell
+/// the agent; `None` when there is nothing to do or say.
+///
+/// Only for the folder `prepare_run_directory` resolved from `workspace_cwd`:
+/// a folder the person bound is theirs and is never touched, and a legacy
+/// scratch folder is not where the worktree lives.
+pub(crate) async fn prepare_repository_checkout(
+    paths: &HostPaths,
+    target: Uuid,
+    spec: &RunSpec,
+    directory: &std::path::Path,
+    budget: std::time::Duration,
+) -> Option<crate::repository_checkout::Report> {
+    spec.repository.as_ref()?;
+    let root = crate::conversation_directory::workspace_root().ok()?;
+    repository_checkout_under(&root, paths, target, spec, directory, budget).await
+}
+
+pub(crate) async fn repository_checkout_under(
+    root: &std::path::Path,
+    paths: &HostPaths,
+    target: Uuid,
+    spec: &RunSpec,
+    directory: &std::path::Path,
+    budget: std::time::Duration,
+) -> Option<crate::repository_checkout::Report> {
+    use crate::repository_checkout::{Checkout, Outcome, Report, Request, ensure, find_git};
+
+    let repository = spec.repository.as_ref()?;
+    let bound = crate::conversation_folders::bound_folder(
+        &crate::conversation_folders::read_bindings(&paths.folders),
+        spec.conversation_id,
+    );
+    if bound.is_some() {
+        return None;
+    }
+    let checkout = match Checkout::plan(root, repository) {
+        Ok(checkout) => checkout,
+        Err(reason) => {
+            tracing::warn!(run_id = %spec.agent_run_id, reason, "not checking out the run's repository");
+            return None;
+        }
+    };
+    if checkout.worktree_dir() != directory {
+        return None;
+    }
+    let outcome = match find_git().await {
+        None => Outcome::Failed("git is not installed on this computer.".to_owned()),
+        Some(git) => {
+            let remote = checkout.github_remote();
+            ensure(&Request {
+                root,
+                target,
+                checkout: &checkout,
+                git: &git,
+                remote: &remote,
+                timeout: budget,
+            })
+            .await
+        }
+    };
+    match &outcome {
+        Outcome::Failed(reason) => tracing::warn!(
+            run_id = %spec.agent_run_id,
+            repository = %checkout.full_name(),
+            reason,
+            "could not check out the conversation's repository; starting in the empty folder"
+        ),
+        Outcome::Ready { made, stale } => tracing::info!(
+            run_id = %spec.agent_run_id,
+            repository = %checkout.full_name(),
+            made,
+            stale = stale.is_some(),
+            "the conversation's repository is checked out"
+        ),
+        Outcome::LeftAlone => tracing::info!(
+            run_id = %spec.agent_run_id,
+            repository = %checkout.full_name(),
+            "the conversation folder holds other files; leaving it as it is"
+        ),
+    }
+    Some(Report::of(&checkout, &outcome))
+}
+
 pub(crate) fn generated_image_payloads(
     scratch_directory: &std::path::Path,
 ) -> anyhow::Result<Vec<(String, JsonMap)>> {

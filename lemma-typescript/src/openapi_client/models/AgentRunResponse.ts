@@ -18,7 +18,7 @@ export type AgentRunResponse = {
     started_at: string;
     status: AgentRunStatus;
     /**
-     * Model tokens the run used, summed over its model calls; null when none were recorded against it. A run still working reads what it has used so far. Leaves out the conversation's title and the memory kept after the run, which land later. Tokens only: no cost.
+     * Model tokens the run used, summed over its model calls; null when none were recorded against it. A run still working reads what it has used so far. Leaves out the conversation's title and the memory kept after the run, which land later. Tokens only: no cost (the conversation's usage route has it).
      */
     usage?: (RunTokenUsage | null);
 };

@@ -426,6 +426,7 @@ fn owed_commands(state: &ControlState, offer_start: bool) -> Vec<Value> {
                     prompt: vec![json!({"type": "text", "text": state.prompt})],
                     resume_session_id: None,
                     workspace_cwd: state.workspace_cwd.lock().unwrap().clone(),
+                    repository: None,
                     context: BTreeMap::new(),
                     mcp: state.mcp.clone(),
                     run_deadline: Utc::now() + *state.run_budget.lock().unwrap(),
