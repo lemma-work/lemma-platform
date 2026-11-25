@@ -47,6 +47,7 @@ jobs:
       python_sdk: ${{ steps.filter.outputs.python_sdk }}
       typescript: ${{ steps.filter.outputs.typescript }}
       workspace: ${{ steps.filter.outputs.workspace }}
+      mobile: ${{ steps.filter.outputs.mobile }}
       codegen: ${{ steps.filter.outputs.codegen }}
       desktop: ${{ steps.filter.outputs.desktop }}
       desktop_packaging: ${{ steps.filter.outputs.desktop_packaging }}
@@ -124,6 +125,18 @@ jobs:
               - 'tests/scenarios/conftest.py'
               - 'tests/scenarios/pyproject.toml'
               - 'tests/scenarios/uv.lock'
+              - '.nvmrc'
+              - '.github/workflows/ci.yml'
+            # The phone app, and what it compiles: it imports the web's own
+            # modules from lemma-frontend/src (`@web/...`, resolved against the
+            # web app's installed packages) and installs the SDK from
+            # lemma-typescript.
+            mobile:
+              - 'lemma-mobile/**'
+              - 'lemma-frontend/src/**'
+              - 'lemma-frontend/package.json'
+              - 'lemma-frontend/package-lock.json'
+              - 'lemma-typescript/**'
               - '.nvmrc'
               - '.github/workflows/ci.yml'
             codegen:
@@ -692,6 +705,32 @@ jobs:
         run: |
           uv sync
           uv run pytest journeys/public_website -q
+
+  mobile:
+    name: Phone app checks
+    timeout-minutes: 20
+    needs: changes
+    if: needs.changes.outputs.mobile == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            lemma-typescript/package-lock.json
+            lemma-frontend/package-lock.json
+            lemma-mobile/package-lock.json
+      # The app installs `lemma-sdk` as a copy (`install-links=true`), so the
+      # SDK is built before the app's install, not after.
+      - run: npm ci && npm run build
+        working-directory: lemma-typescript
+      # The web modules the app imports resolve their packages here.
+      - run: npm ci
+        working-directory: lemma-frontend
+      - run: npm ci && npm run check
+        working-directory: lemma-mobile
 
   # The dev-workflow tests assert on the env `make dev` hands the backend. They
   # had drifted badly enough to reference deleted targets, because nothing ran
@@ -1830,6 +1869,7 @@ jobs:
       - app-template
       - codegen-drift
       - workspace
+      - mobile
       - dev-workflow
       - windows-cli
       - desktop

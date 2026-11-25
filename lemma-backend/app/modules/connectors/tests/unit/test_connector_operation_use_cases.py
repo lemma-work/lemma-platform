@@ -495,7 +495,10 @@ async def test_a_successful_call_clears_a_mark_resolution_let_through():
         resolved.account_id
     )
     assert account.status is AccountStatus.CONNECTED
-    connector_service.account_repository.update.assert_awaited_once_with(account)
+    connector_service.account_repository.set_status.assert_awaited_once_with(
+        resolved.account_id, AccountStatus.CONNECTED
+    )
+    connector_service.account_repository.update.assert_not_awaited()
     connector_service.uow.commit.assert_awaited()
 
 

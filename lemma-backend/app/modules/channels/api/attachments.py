@@ -4,11 +4,12 @@ A file part names a pod file. Whoever writes the line must be able to read it
 (the datastore's own rule, with their own access), and it is stored by the
 file's id and its own path -- ``/me/…`` means somebody else to every other
 reader. It is read back through the line it is on
-(``GET …/messages/{message_id}/files/{file_id}``): by whoever may see the line,
-as its writer reads the file. So a file shared in a private group, a member's
-own channel or a contact's is read by that channel's readers and nobody else,
-wherever it lives -- the app keeps each channel's uploads in the writer's own
-``/me/channels/{channel_id}/``, which no other member can open directly.
+(``GET …/messages/{message_id}/files/{file_id}``): by whoever may see the line
+and did not block its writer, as its writer reads the file. So a file shared
+in a private group, a member's own channel or a contact's is read by that
+channel's readers and nobody else, wherever it lives -- the app keeps each
+channel's uploads in the writer's own ``/me/channels/{channel_id}/``, which no
+other member can open directly.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from app.modules.channels.api.access import (
 from app.modules.channels.api.message_schemas import hidden_from
 from app.modules.channels.domain.entities import SenderKind
 from app.modules.channels.domain.parts import FilePart, Part
+from app.modules.channels.infrastructure.blocks import BlockRepository
 from app.modules.channels.infrastructure.lines import LineRepository
 from app.modules.datastore.contracts.pod_files import (
     read_pod_file_by_id,
@@ -123,6 +125,13 @@ async def line_file(
         or line.sender.kind is not SenderKind.MEMBER
         or line.sender.user_id is None
     ):
+        raise missing("File")
+    # The line reads empty to a reader who blocked its writer, so its file
+    # is not theirs either, though they kept the link from before.
+    blocked = await BlockRepository(uow.session).of_reader(
+        pod_id=pod_id, user_id=caller.user_id
+    )
+    if line.sender.principal in blocked:
         raise missing("File")
     if not any(
         isinstance(part, FilePart) and part.file_id == file_id for part in line.parts

@@ -533,3 +533,41 @@ def test_a_pull_request_is_checked_out_by_its_own_head(git: LocalGit) -> None:
     assert (code, run_code) == (0, 0)
     assert git.run("-C", str(worktree), "rev-parse", "HEAD") == head
     assert git.run("-C", str(run_dir), "rev-parse", "HEAD") == head
+
+
+@pytest.mark.parametrize("abbreviated", [False, True])
+def test_a_conversation_on_a_commit_starts_there_on_a_first_clone(
+    git: LocalGit, abbreviated: bool
+) -> None:
+    """The first conversation in a repository finds no clone. A commit must
+    start it there as it would on a clone that already exists, not leave an
+    empty directory because ``git clone --branch`` takes no sha."""
+    older = git.run("-C", str(git.origin), "rev-parse", "main")
+    git.push_commit("second")
+    ref = older[:7] if abbreviated else older
+
+    code, worktree = git.step("one", ref=ref)
+
+    assert code == 0
+    assert git.run("-C", str(worktree), "rev-parse", "HEAD") == older
+
+
+def test_a_run_on_a_commit_starts_there_on_a_first_clone(git: LocalGit) -> None:
+    older = git.run("-C", str(git.origin), "rev-parse", "main")
+    git.push_commit("second")
+
+    code, run_dir = git.run_step("one", ref=older)
+
+    assert code == 0
+    assert git.run("-C", str(run_dir), "rev-parse", "HEAD") == older
+
+
+def test_a_conversation_on_a_tag_starts_there_on_a_first_clone(git: LocalGit) -> None:
+    tagged = git.run("-C", str(git.origin), "rev-parse", "main")
+    git.run("-C", str(git.origin), "tag", "v1.2.0", tagged)
+    git.push_commit("second")
+
+    code, worktree = git.step("one", ref="v1.2.0")
+
+    assert code == 0
+    assert git.run("-C", str(worktree), "rev-parse", "HEAD") == tagged

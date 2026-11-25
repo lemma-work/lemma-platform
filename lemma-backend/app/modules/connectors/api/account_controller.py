@@ -292,8 +292,13 @@ async def bind_account_installation(
     await claim_for_account(
         session, account, data.installation_id, administered=administered
     )
-    account.external_ref = data.installation_id
-    await connector_service.account_repository.update(account)
+    # The routing key alone: `account` was read before `fresh_credentials`,
+    # which may have refreshed its token since, and a whole-row write would
+    # put the spent one back (`AccountRepository.set_external_ref`).
+    await connector_service.account_repository.set_external_ref(
+        account.id, data.installation_id
+    )
     await connector_service.uow.commit()
+    account.external_ref = data.installation_id
     await GithubInstallationReconciler(connector_service).invalidate(account.id)
     return await _account_response(connector_service, account)

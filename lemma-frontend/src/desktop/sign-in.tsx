@@ -14,6 +14,8 @@ import {
     dropPending,
     dropRequestId,
     handoffCode,
+    handoffWords,
+    heldHandoffApp,
     heldRequestId,
     startHandoff,
     type PendingHandoff,
@@ -167,6 +169,10 @@ export function DesktopReturn() {
     const [code, setCode] = useState<string | null>(null);
     const [email, setEmail] = useState<string | null>(null);
     const request = useRef<string | null>(null);
+    /* Read once: the request, and which app it came from, are dropped the
+       moment it is completed or declined, and the page must keep naming
+       the same app after that. */
+    const [words] = useState(() => handoffWords(heldHandoffApp()));
 
     useEffect(() => {
         const requestId = heldRequestId();
@@ -222,7 +228,7 @@ export function DesktopReturn() {
     if (state === "failed") {
         return (
             <Screen
-                title="We couldn’t reach Lemma Desktop"
+                title={"We couldn’t reach " + words.name}
                 lead="Go back to the Lemma app and start signing in again."
             />
         );
@@ -231,15 +237,15 @@ export function DesktopReturn() {
         return (
             <Screen
                 title="Nothing was signed in"
-                lead="Lemma Desktop was not given your account. If you did not start this, you can close this tab."
+                lead={words.Name + " was not given your account. If you did not start this, you can close this tab."}
             />
         );
     }
     if (state === "asking") {
         return (
             <Screen
-                title={email ? "Sign in to Lemma Desktop as " + email + "?" : "Sign in to Lemma Desktop with this account?"}
-                lead="Only continue if you started signing in from the Lemma app on this computer, and it shows this code."
+                title={email ? "Sign in to " + words.name + " as " + email + "?" : "Sign in to " + words.name + " with this account?"}
+                lead={"Only continue if you started signing in from the Lemma app " + words.where + ", and it shows this code."}
             >
                 <p className="auth__note">
                     Code: <strong className="auth__code">{code}</strong>
@@ -257,10 +263,10 @@ export function DesktopReturn() {
     }
     return (
         <Screen
-            title={state === "done" ? "You’re signed in" : "Signing in to Lemma Desktop…"}
-            lead="Lemma Desktop comes to the front and opens your workspace. You can close this tab."
+            title={state === "done" ? "You’re signed in" : "Signing in to " + words.name + "…"}
+            lead={words.back}
         >
-            {state !== "done" && <LoadingIndicator label={state === "reading" ? "Checking this sign-in" : "Handing your session to Lemma Desktop"} />}
+            {state !== "done" && <LoadingIndicator label={state === "reading" ? "Checking this sign-in" : "Handing your session to " + words.name} />}
         </Screen>
     );
 }

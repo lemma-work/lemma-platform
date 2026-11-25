@@ -43,6 +43,7 @@ import { DatastoreNamespace } from "./namespaces/datastore.js";
 export type { LemmaConfig };
 export type { LemmaAppConfig };
 export type { LemmaWebWidget };
+export type { TokenSource } from "./config.js";
 export { AuthManager };
 export type { AuthState, AuthListener };
 
@@ -112,7 +113,7 @@ export class LemmaClient {
 
     this.auth =
       internalOptions.authManager ??
-      new AuthManager(this._config.apiUrl, this._config.authUrl, this._config.token);
+      new AuthManager(this._config.apiUrl, this._config.authUrl, this._config.token, this._config.tokenSource);
     this._http = new HttpClient(this._config.apiUrl, this.auth, {
       timeoutMs: this._config.timeoutMs,
       maxRetries: this._config.maxRetries,

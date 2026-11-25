@@ -12,7 +12,9 @@ question waiting on them; a line in their own channel they did not write; a
 contact's line in a channel assigned to them (seated or not); and, set to ``ALL``, any line
 written in Lemma in a group they are in. Never an agent's line at a platform
 (seen there) or answering in a thread (seen in the app), nor a line withheld
-from them (they could not read it). ``MENTIONS`` -- a group seat's default --
+from them (they could not read it), nor a line from somebody they blocked --
+asked again as a push that waited goes (``_not_blocked_now``); nobody hears
+of a line from a contact the pod stopped answering. ``MENTIONS`` -- a group seat's default --
 keeps only the first two, and so does a note for members only; ``NONE`` and a
 mute stop them all. Somebody named or asked who is not in the channel is told
 too, when they may see it. The first two *call* them: due at once, never held
@@ -39,17 +41,25 @@ from app.modules.channels.domain.entities import (
     Delivery,
     Member,
     NotifyLevel,
+    Principal,
     SenderKind,
 )
 from app.modules.channels.domain.projection import withheld_from
+from app.modules.channels.infrastructure.blocks import BlockRepository
 from app.modules.channels.infrastructure.lines import LineRepository
 from app.modules.channels.infrastructure.members import MAX_MEMBERS, MemberRepository
 from app.modules.channels.infrastructure.models import ChannelMentionModel
-from app.modules.channels.infrastructure.push_windows import Fold, Folded, PushWindows
+from app.modules.channels.infrastructure.push_windows import (
+    Fold,
+    Folded,
+    PushWindows,
+    Window,
+)
 from app.modules.channels.infrastructure.questions import QuestionRepository
 from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.rows import now
 from app.modules.channels.services.viewers import member_sees
+from app.modules.contacts.contracts import contact_by_id
 
 #: The work kind that sends a window once it ends.
 CHANNELS_PUSH_WINDOW = "channels.push_window"
@@ -90,7 +100,7 @@ async def fan_out(
         told[user_id] = True
     for user_id in await _assignee_not_seated(uow, channel, line):
         told.setdefault(user_id, False)
-    await _fold(uow, channel, line, told)
+    await _fold(uow, channel, line, await _not_blocking(uow, channel, line, told))
 
 
 async def push_named(
@@ -116,7 +126,7 @@ async def push_named(
             continue
         if seat is not None or await member_sees(uow, channel, user_id):
             told[user_id] = True
-    await _fold(uow, channel, message, told)
+    await _fold(uow, channel, message, await _not_blocking(uow, channel, message, told))
 
 
 async def fold_back(
@@ -242,6 +252,54 @@ def _muted(member: Member, at: datetime) -> bool:
     return member.muted_until is not None and member.muted_until > at
 
 
+async def _not_blocking(
+    uow: SqlAlchemyUnitOfWork,
+    channel: Channel,
+    message: ChannelMessage,
+    told: dict[UUID, bool],
+) -> dict[UUID, bool]:
+    """Who is told, less whoever blocked the person who wrote it: they hear
+    nothing of that person's lines, whatever the lines say. A contact the pod
+    stopped answering (``contacts``) is told to nobody: their lines wait in
+    the chat, the way ``hand_to_a_person`` keeps them, with no hand-off."""
+    writer = message.sender.principal
+    if writer is None or not told:
+        return told
+    if writer.contact_id is None:
+        blockers = await BlockRepository(uow.session).blockers_among(
+            pod_id=channel.pod_id, people=[writer], user_ids=told.keys()
+        )
+    else:
+        found = await contact_blockers(uow, channel.pod_id, writer, told.keys())
+        if found is None:
+            return {}
+        blockers = found
+    return {
+        user_id: calls for user_id, calls in told.items() if user_id not in blockers
+    }
+
+
+async def contact_blockers(
+    uow: SqlAlchemyUnitOfWork,
+    pod_id: UUID,
+    writer: Principal,
+    readers: Collection[UUID],
+) -> set[UUID] | None:
+    """Which readers blocked this contact under any id they have had; None
+    when the pod stopped answering them.
+
+    Asked in one statement per batch of readers, so however many merges
+    and carries commit around the push, it sees them at one moment.
+    """
+    assert writer.contact_id is not None
+    contact = await contact_by_id(uow, pod_id=pod_id, contact_id=writer.contact_id)
+    if contact is not None and contact.blocked:
+        return None
+    return await BlockRepository(uow.session).blockers_of_contact(
+        pod_id=pod_id, contact_id=writer.contact_id, user_ids=readers
+    )
+
+
 def _withheld(channel: Channel, message: ChannelMessage, user_id: UUID) -> bool:
     """A line they are shown only as given: never pushed to them in full."""
     return withheld_from(
@@ -346,7 +404,9 @@ async def _send(
     windows = PushWindows(uow.session)
     taken = await windows.take(channel_id=channel.id, user_ids=user_ids)
     for delivery in await windows.plan_pushes(
-        channel_id=channel.id, pod_id=channel.pod_id, windows=taken
+        channel_id=channel.id,
+        pod_id=channel.pod_id,
+        windows=await _not_blocked_now(uow, channel, taken),
     ):
         await facts.emit(
             uow,
@@ -356,6 +416,28 @@ async def _send(
                 target=delivery.target_key,
             ),
         )
+
+
+async def _not_blocked_now(
+    uow: SqlAlchemyUnitOfWork, channel: Channel, windows: list[Window]
+) -> list[Window]:
+    """The windows whose push still goes, asked as it goes: a line waits in a
+    window -- for its end, or held while the member had the app open -- and
+    its writer may be blocked meanwhile. A push leads with one line, so one
+    led by somebody the member now blocks (``_not_blocking``) goes nowhere;
+    its window is emptied all the same, and its lines wait in the app."""
+    leads = await PushWindows(uow.session).leads(channel_id=channel.id, windows=windows)
+    kept: list[Window] = []
+    for seq in sorted(leads):
+        leading = {each.user_id: each for each in windows if each.lead_seq == seq}
+        told = await _not_blocking(
+            uow,
+            channel,
+            leads[seq],
+            {user_id: each.urgent for user_id, each in leading.items()},
+        )
+        kept.extend(leading[user_id] for user_id in sorted(told))
+    return kept
 
 
 __all__ = [

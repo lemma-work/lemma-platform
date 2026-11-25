@@ -92,6 +92,9 @@ class Contact(BaseModel):
     #: The member this contact proved to be, once they did.
     merged_into_user_id: UUID | None = None
     answered_at: datetime | None = None
+    #: When the pod's agents were stopped from answering them, and by whom.
+    blocked_at: datetime | None = None
+    blocked_by_user_id: UUID | None = None
 
     @property
     def is_anonymous(self) -> bool:

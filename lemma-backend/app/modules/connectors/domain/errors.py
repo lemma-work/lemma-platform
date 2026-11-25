@@ -324,8 +324,19 @@ class OAuthWorkflowError(ConnectorValidationError):
 #: What an OAuth token endpoint answers when the grant itself is gone -- revoked
 #: by the user, rotated out, or the app's credentials withdrawn (RFC 6749 5.2).
 #: None of these is an upstream outage, and retrying cannot help.
+#:
+#: ``bad_refresh_token`` is GitHub's word for the same thing: its token endpoint
+#: answers a refresh token that is expired, revoked or already used with that,
+#: not with ``invalid_grant``. Unread, it surfaced as a 502 on every call the
+#: account made, with nothing telling the person to reconnect it.
 REVOKED_GRANT_ERRORS: frozenset[str] = frozenset(
-    {"invalid_grant", "invalid_client", "unauthorized_client", "revoked"}
+    {
+        "invalid_grant",
+        "invalid_client",
+        "unauthorized_client",
+        "revoked",
+        "bad_refresh_token",
+    }
 )
 
 

@@ -725,6 +725,9 @@ APPLE_KEY_ID=
 # written as \n. A value that is not an EC private key leaves Apple
 # unregistered and logs identity.apple_sign_in.private_key_unusable.
 APPLE_PRIVATE_KEY=
+# The phone app's bundle id, for its native Sign in with Apple. Needs the four
+# above; unset, the phone does not offer Apple.
+APPLE_APP_BUNDLE_ID=work.lemma.mobile
 ```
 
 Google and Microsoft send the browser straight back to the sign-in page, so
@@ -738,6 +741,17 @@ sign-in with Apple has to start from the sign-in page on `AUTH_FRONTEND_URL`.
 In the Services ID, list the hosts of both URLs as its domains and the API's
 URL as its return URL. Apple shows the person's name to Lemma once, on the
 first sign-in, and Lemma keeps it then.
+
+The phone app signs in with Apple natively, not through that redirect, and
+Apple issues its sign-in to the app's bundle id rather than the Services ID.
+With `APPLE_APP_BUNDLE_ID` set, the provider registers a second client for the
+bundle id, signed with the same team, key id and key; the phone names it
+(`clientType: "ios"`) when it posts Apple's id token to `/st/auth/signinup`,
+and the web, which names no client, keeps its own. In the Apple Developer
+account, the App ID for that bundle id needs the *Sign in with Apple*
+capability, and the Services ID and the key must be grouped under the same
+primary App ID (simplest: the app's own App ID as the primary), so one key
+signs for both clients. No return URL is involved.
 
 When someone who signs in with Apple deletes their account, Lemma asks Apple
 to revoke that sign-in, as Apple asks of apps that offer it. Each Apple

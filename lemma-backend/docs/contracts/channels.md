@@ -10,6 +10,9 @@ The table below is generated from the committed OpenAPI specification by `script
 
 | Operation | Method | Path | Summary |
 | --- | --- | --- | --- |
+| `channel.block.add` | PUT | `/pods/{pod_id}/blocks/{kind}:{person_id}` | Block Person |
+| `channel.block.list` | GET | `/pods/{pod_id}/blocks` | List Blocks |
+| `channel.block.remove` | DELETE | `/pods/{pod_id}/blocks/{kind}:{person_id}` | Unblock Person |
 | `channel.create` | POST | `/pods/{pod_id}/channels` | Create Channel |
 | `channel.delete` | DELETE | `/pods/{pod_id}/channels/{channel_id}` | Delete Channel |
 | `channel.delivery.list` | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries` | List Deliveries |
@@ -29,6 +32,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `channel.message.file` | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/files/{file_id}` | Line File |
 | `channel.message.list` | GET | `/pods/{pod_id}/channels/{channel_id}/messages` | List Messages |
 | `channel.message.post` | POST | `/pods/{pod_id}/channels/{channel_id}/messages` | Post Message |
+| `channel.message.report` | POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/report` | Report Line |
 | `channel.message.share` | POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/share` | Share Message |
 | `channel.message.thread` | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/thread` | List Thread |
 | `channel.message.update` | PATCH | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | Edit Message |

@@ -5,7 +5,7 @@ import { allowanceOf, formatPercent, resetsIn } from "./allowance";
 import { offered, paying } from "@/billing/plan";
 import { useMyPlan, usePlans } from "@/billing/queries";
 import { UpgradeIcon } from "@/ui/icons";
-import { isLocalDeployment } from "@/site/config";
+import { sellsHere } from "@/site/config";
 
 type AllowanceNoteProps = {
     orgId?: string | null;
@@ -14,9 +14,10 @@ type AllowanceNoteProps = {
 };
 
 /* A local installation has no plans to open and no limits to near — its
-   settings do not have that section — so it asks for none of the three. */
+   settings do not have that section — so it asks for none of the three. The
+   phone app's WebViews have no Plan section either (`sellsHere`). */
 export function AllowanceNote(props: AllowanceNoteProps) {
-    return isLocalDeployment() ? null : <Allowance {...props} />;
+    return sellsHere() ? <Allowance {...props} /> : null;
 }
 
 function Allowance({

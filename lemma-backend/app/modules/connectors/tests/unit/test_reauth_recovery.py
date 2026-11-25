@@ -166,10 +166,15 @@ async def test_clearing_the_mark_only_ever_moves_a_reauth_account(before, after)
     await clear_reauth_mark(accounts, uow, account.id)
 
     assert account.status is after
+    # Never the whole row: that would write back the credentials it was read
+    # with, over a token refreshed since.
+    accounts.update.assert_not_awaited()
     if before is after:
-        accounts.update.assert_not_awaited()
+        accounts.set_status.assert_not_awaited()
     else:
-        accounts.update.assert_awaited_once_with(account)
+        accounts.set_status.assert_awaited_once_with(
+            account.id, AccountStatus.CONNECTED
+        )
         uow.commit.assert_awaited_once()
 
 
