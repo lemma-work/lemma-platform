@@ -178,8 +178,12 @@ async fn the_first_conversation_clones_and_gets_a_worktree_on_its_own_branch() {
         }
     );
     let worktree = checkout.worktree_dir();
+    // A Windows git checks text out with CRLF (`core.autocrlf`); the content is
+    // what is compared, not the line ending the platform chose.
     assert_eq!(
-        std::fs::read_to_string(worktree.join("README.md")).unwrap(),
+        std::fs::read_to_string(worktree.join("README.md"))
+            .unwrap()
+            .replace("\r\n", "\n"),
         "main\n"
     );
     assert_eq!(git(worktree, &["branch", "--show-current"]), "lemma/first0");
@@ -361,13 +365,18 @@ async fn a_worktree_whose_git_file_is_relative_is_still_this_clones() {
     .await;
     let dot_git = checkout.worktree_dir().join(".git");
     let absolute = std::fs::read_to_string(&dot_git).unwrap();
-    let record = Path::new(absolute.trim().strip_prefix("gitdir:").unwrap().trim());
+    // Both sides canonical: git writes `C:/...` on Windows, and canonicalize
+    // answers `\\?\C:\...`, so only two canonical paths share a prefix.
+    let record =
+        std::fs::canonicalize(absolute.trim().strip_prefix("gitdir:").unwrap().trim()).unwrap();
     let under_root = record
         .strip_prefix(std::fs::canonicalize(&fixture.root).unwrap())
         .expect("the clone's record of the worktree is under the root");
-    // worktrees/octo/widgets/relative0 -> back up to the root.
+    // worktrees/octo/widgets/relative0 -> back up to the root. Written with
+    // `/`, as git writes it on every platform.
     let relative = Path::new("../../../..").join(under_root);
-    std::fs::write(&dot_git, format!("gitdir: {}\n", relative.display())).unwrap();
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    std::fs::write(&dot_git, format!("gitdir: {relative}\n")).unwrap();
     assert_eq!(
         git(checkout.worktree_dir(), &["branch", "--show-current"]),
         "lemma/relative0"
