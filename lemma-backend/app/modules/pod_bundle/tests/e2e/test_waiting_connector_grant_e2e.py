@@ -365,6 +365,8 @@ async def test_a_replayed_grant_step_leaves_no_removed_grant_active(
     so the grant the replay removed never becomes active."""
     import asyncio
 
+    from app.core.authorization.context import ResourceRef
+    from app.core.authorization.permissions import Permissions
     from app.core.authorization.service import AuthorizationDataService
     from app.core.infrastructure.db.session import async_session_maker
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -447,9 +449,17 @@ async def test_a_replayed_grant_step_leaves_no_removed_grant_active(
 
     declaring: list[asyncio.Task[None]] = []
 
+    step_ctx: list = []
+
     async def lookup_while_declaring(_uow, *, organization_id, name):
-        # Mid-step, after the step locked what the agent waits for: the
-        # organization has the calendar now, so the replay drops the grant.
+        # Mid-step, after the step locked what the agent waits for: an
+        # uncached authorization check on the step's own session, which
+        # commits a clean session to give its connection back...
+        assert await step_ctx[0].can(
+            Permissions.POD_CONNECTOR_MANAGE, ResourceRef.pod(pod_id)
+        )
+        # ...then the organization has the calendar now, so the replay drops
+        # the grant, while somebody declares the connector elsewhere.
         declaring.append(asyncio.create_task(declare_elsewhere()))
         await asyncio.sleep(0.5)
         assert not declaring[0].done(), "the declaration read past the step"
@@ -463,6 +473,7 @@ async def test_a_replayed_grant_step_leaves_no_removed_grant_active(
         ctx = await AuthorizationDataService(step).build_user_context(
             user_id=user_id, pod_id=pod_id
         )
+        step_ctx.append(ctx)
         made = CreatedParts()
         made.add(StepKind.AGENT, "briefer")
         await BundleApplier(
