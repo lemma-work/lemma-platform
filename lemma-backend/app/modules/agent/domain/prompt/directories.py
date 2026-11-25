@@ -73,6 +73,29 @@ def _workspace_repo(ctx: ToolContext):
     return getattr(ctx, "workspace_repo", None)
 
 
+# A pull request's head, which the checkout fetches by name into `origin/`.
+_PULL_REQUEST_REF = re.compile(r"^pull/[0-9]+/head$")
+# A commit, whole or abbreviated, which no `origin/` name points at.
+_COMMIT_SHA = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def _start_point(ref: str | None) -> str:
+    """Where the checkout started the worktree, by a name git knows.
+
+    A pull request's head is fetched to `origin/pull/<n>/head`. Anything else
+    was tried as `origin/<ref>` and, failing that, as the ref itself: a branch
+    lives at the first, a tag or a commit only at the second, and an
+    `origin/<sha>` the agent was told about reads as a broken checkout.
+    """
+    if ref is None:
+        return "the default branch"
+    if _PULL_REQUEST_REF.match(ref):
+        return f"`origin/{ref}`"
+    if _COMMIT_SHA.match(ref):
+        return f"commit `{ref}`"
+    return f"`{ref}` (`origin/{ref}` if that is a branch, else the tag itself)"
+
+
 def _project_paragraph(repo: ProjectRepo, cwd: str) -> str:
     """What an agent needs to know when its cwd is a real checkout."""
     credentials = (
@@ -81,7 +104,7 @@ def _project_paragraph(repo: ProjectRepo, cwd: str) -> str:
     )
     slug = repo.worktree_slug(cwd)
     if slug is not None:
-        start = f"`origin/{repo.ref}`" if repo.ref else "the default branch"
+        start = _start_point(repo.ref)
         return (
             f"This directory is a git worktree of **{repo.full_name}** on branch "
             f"`{worktree_branch(slug)}`, made for this conversation from {start} "

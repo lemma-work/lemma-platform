@@ -43,6 +43,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/conversations/{conversation_id}/approvals/{approval_id}/decision` | `agent.conversation.approval.resolve` | Resolve User Approval |
 | POST | `/pods/{pod_id}/conversations/{conversation_id}/messages` | `agent.conversation.message.send` | Send Pod Conversation Message |
 | POST | `/pods/{pod_id}/conversations/{conversation_id}/messages/append` | `agent.conversation.message.append` | Append Pod Conversation Message |
+| POST | `/pods/{pod_id}/conversations/{conversation_id}/messages/{message_id}/report` | `agent.conversation.message.report` | Report Conversation Message |
 | POST | `/pods/{pod_id}/conversations/{conversation_id}/retry` | `agent.conversation.retry` | Retry Failed Pod Conversation Run |
 | POST | `/pods/{pod_id}/conversations/{conversation_id}/stop` | `agent.conversation.stop` | Stop Pod Conversation |
 | POST | `/pods/{pod_id}/widgets/{conversation_id}/{tool_call_id}/embed-token` | `widget.embed_token` | Mint Widget Embed URL |
@@ -146,11 +147,13 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
+| DELETE | `/pods/{pod_id}/blocks/{kind}:{person_id}` | `channel.block.remove` | Unblock Person |
 | DELETE | `/pods/{pod_id}/channels/{channel_id}` | `channel.delete` | Delete Channel |
 | DELETE | `/pods/{pod_id}/channels/{channel_id}/members/me` | `channel.member.leave` | Leave Channel |
 | DELETE | `/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}` | `channel.member.remove` | Remove Member |
 | DELETE | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | `channel.message.delete` | Delete Message |
 | DELETE | `/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}` | `channel.table_grant.remove` | Remove Table Grant |
+| GET | `/pods/{pod_id}/blocks` | `channel.block.list` | List Blocks |
 | GET | `/pods/{pod_id}/channels` | `channel.list` | List Channels |
 | GET | `/pods/{pod_id}/channels/{channel_id}` | `channel.get` | Get Channel |
 | GET | `/pods/{pod_id}/channels/{channel_id}/messages` | `channel.message.list` | List Messages |
@@ -171,8 +174,10 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/channels/{channel_id}/messages` | `channel.message.post` | Post Message |
 | POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/answer` | `channel.message.answer` | Answer Question |
 | POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries/{delivery_id}/retry` | `channel.delivery.retry` | Retry Delivery |
+| POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/report` | `channel.message.report` | Report Line |
 | POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/share` | `channel.message.share` | Share Message |
 | POST | `/pods/{pod_id}/channels/{channel_id}/read` | `channel.read` | Mark Read |
+| PUT | `/pods/{pod_id}/blocks/{kind}:{person_id}` | `channel.block.add` | Block Person |
 | PUT | `/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}` | `channel.table_grant.set` | Set Table Grant |
 
 ## connectors

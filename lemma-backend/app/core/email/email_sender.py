@@ -74,6 +74,7 @@ class EmailSender:
         subject: str,
         html_content: str,
         text_content: Optional[str],
+        reply_to: Optional[str] = None,
     ) -> None:
         """Write a local/test mail spool with owner-only filesystem access."""
         output_dir = Path(self.output_dir)
@@ -96,6 +97,7 @@ class EmailSender:
                     "to_email": to_email,
                     "from_email": self.from_email,
                     "from_name": self.from_name,
+                    "reply_to": reply_to,
                     "subject": subject,
                     "text_content": text_content,
                     "html_content": html_content,
@@ -192,6 +194,7 @@ class EmailSender:
         text_content: Optional[str] = None,
         *,
         raise_on_failure: bool = False,
+        reply_to: Optional[str] = None,
     ) -> bool:
         """
         Send an email asynchronously.
@@ -201,6 +204,7 @@ class EmailSender:
             subject: Email subject
             html_content: HTML email content
             text_content: Plain text email content (optional)
+            reply_to: Where a reply goes, when not back to the sender
 
         Returns:
             True if email was sent successfully, False otherwise
@@ -212,6 +216,7 @@ class EmailSender:
                     subject=subject,
                     html_content=html_content,
                     text_content=text_content,
+                    reply_to=reply_to,
                 )
                 return True
 
@@ -220,6 +225,8 @@ class EmailSender:
             msg["Subject"] = subject
             msg["From"] = f"{self.from_name} <{self.from_email}>"
             msg["To"] = to_email
+            if reply_to:
+                msg["Reply-To"] = reply_to
 
             # Add text part if provided
             if text_content:

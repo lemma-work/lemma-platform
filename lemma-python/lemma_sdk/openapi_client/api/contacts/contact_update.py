@@ -76,6 +76,8 @@ def sync_detailed(
 ) -> Response[ContactResponse | ErrorResponse]:
     """Update Contact
 
+     Rename a contact, or stop the pod's agents answering them (`blocked`).
+
     Args:
         pod_id (UUID):
         contact_id (UUID):
@@ -111,6 +113,8 @@ def sync(
 ) -> ContactResponse | ErrorResponse | None:
     """Update Contact
 
+     Rename a contact, or stop the pod's agents answering them (`blocked`).
+
     Args:
         pod_id (UUID):
         contact_id (UUID):
@@ -140,6 +144,8 @@ async def asyncio_detailed(
     body: ContactUpdateRequest,
 ) -> Response[ContactResponse | ErrorResponse]:
     """Update Contact
+
+     Rename a contact, or stop the pod's agents answering them (`blocked`).
 
     Args:
         pod_id (UUID):
@@ -173,6 +179,8 @@ async def asyncio(
     body: ContactUpdateRequest,
 ) -> ContactResponse | ErrorResponse | None:
     """Update Contact
+
+     Rename a contact, or stop the pod's agents answering them (`blocked`).
 
     Args:
         pod_id (UUID):

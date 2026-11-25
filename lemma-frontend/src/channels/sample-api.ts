@@ -5,6 +5,7 @@ import {
     SAMPLE_CHANNELS,
     SAMPLE_SOURCE_SETTINGS,
 } from "@/data/fixtures";
+import { blockedInSample } from "@/reports/sample-api";
 import type { ChannelApi } from "./api";
 import { readChannelDetail, readChannelPage, readLine, readLinePage, readThreadPage, writeParts, type Line } from "./model";
 import { readSearchPage } from "./search-model";
@@ -13,7 +14,8 @@ import { readSourceSettings } from "./sources";
 
 /** The sample's channels, answering the same calls the API does from the
  *  fixtures, and keeping what is written in them for as long as the tab is
- *  open: a line posted stays posted, a group started arrives. Anything the
+ *  open: a line posted stays posted, a group started arrives, a person
+ *  blocked (`reports/sample-api`) reads as blocked. Anything the
  *  sample cannot honestly do -- answer an agent, carry a line to WhatsApp --
  *  it does not pretend to. */
 
@@ -55,10 +57,17 @@ function withReplies(line: Wire): Wire {
     return replies ? { ...line, reply_count: replies.length, last_reply_at: replies.at(-1)?.created_at ?? null } : line;
 }
 
+/* A line from somebody the reader blocked comes as the API sends it: marked,
+   with nothing of what they said. */
+function asRead(line: Wire): Wire {
+    return blockedInSample(line.sender) ? { ...line, text: null, parts: [], blocked: true } : line;
+}
+
 function lastLineOf(channelId: string): Wire | null {
     const last = lines.get(channelId)?.at(-1);
     if (!last) return null;
-    return { id: last.id, seq: last.seq, sender: last.sender, text: typeof last.text === "string" ? last.text : "", created_at: last.created_at };
+    const { text, blocked } = asRead(last);
+    return { id: last.id, seq: last.seq, sender: last.sender, text: typeof text === "string" ? text : "", created_at: last.created_at, ...(blocked ? { blocked } : {}) };
 }
 
 /* The next line's place in a channel, as the API numbers them. */
@@ -114,11 +123,11 @@ export function sampleChannelApi(_podId: string): ChannelApi {
         async lines(channelId, beforeSeq) {
             await wait(140);
             channelOf(channelId);
-            return readLinePage({ items: beforeSeq ? [] : (lines.get(channelId) ?? []).map(withReplies), has_more: false, next_before_seq: null });
+            return readLinePage({ items: beforeSeq ? [] : (lines.get(channelId) ?? []).map(withReplies).map(asRead), has_more: false, next_before_seq: null });
         },
         async thread(_channelId, rootId) {
             await wait(120);
-            return readThreadPage({ items: threads.get(rootId) ?? [], has_more: false });
+            return readThreadPage({ items: (threads.get(rootId) ?? []).map(asRead), has_more: false });
         },
         async post(channelId, body) {
             await wait(250);
@@ -235,7 +244,7 @@ export function sampleChannelApi(_podId: string): ChannelApi {
                 const channel = channels.find((one) => one.id === channelId);
                 if (!channel) return [];
                 return list.filter((line) => typeof line.text === "string" && words.every((word) => (line.text as string).toLowerCase().includes(word)))
-                    .map((line) => ({ channel: { id: channelId, kind: channel.kind, title: channel.title, person: channel.person }, message: line }));
+                    .map((line) => ({ channel: { id: channelId, kind: channel.kind, title: channel.title, person: channel.person }, message: asRead(line) }));
             });
             return readSearchPage({ items: items.reverse(), next_cursor: null });
         },

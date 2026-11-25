@@ -28,6 +28,7 @@ from app.modules.connectors.module import module as connector_module
 from app.modules.contacts.module import module as contacts_module
 from app.modules.pod.module import module as pod_module
 from app.modules.pod_bundle.module import module as pod_bundle_module
+from app.modules.reports.module import module as reports_module
 from app.modules.schedule.module import module as schedule_module
 from app.modules.usage.module import module as usage_module
 from app.modules.workflow.module import module as workflow_module
@@ -51,6 +52,7 @@ OSS_MODULES: tuple[LemmaModule, ...] = (
     agent_surfaces_module,
     contacts_module,
     channels_module,
+    reports_module,
     icon_module,
     usage_module,
     workspace_module,
