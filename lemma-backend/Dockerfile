@@ -25,9 +25,11 @@ COPY lemma-pod-bundle /lemma-pod-bundle
 COPY lemma-skills ./lemma-skills
 
 # Install dependencies into /app/.venv. The local extra ships MarkItDown in the
-# backend image for the managed all-in-one composition.
+# backend image for the managed all-in-one composition. gcp-kms is the Cloud KMS
+# client: without it an image configured with SECRET_KEY_PROVIDER=gcp_kms cannot
+# start, and the extra was optional only so a pip install stays lean.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-install-project --extra local
+    uv sync --frozen --no-dev --no-install-project --extra local --extra gcp-kms
 
 # The vocabulary behind the token counter (`cl100k_base`, named in
 # `history_tokens` and `core/embeddings/token_counter`), fetched once here.
@@ -41,9 +43,10 @@ RUN .venv/bin/python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
 # Copy backend application code
 COPY lemma-backend/ ./
 
-# Sync the project itself
+# Sync the project itself, and fail the build if the KMS client did not land.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --extra local
+    uv sync --frozen --no-dev --extra local --extra gcp-kms && \
+    .venv/bin/python -c "import google.cloud.kms, google.api_core.retry"
 
 # The first-party Python this backend installs into its workspace sandboxes:
 # the CLI, the SDK, the skills and the browser relay, built from the same source

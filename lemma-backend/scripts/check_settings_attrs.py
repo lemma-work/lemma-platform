@@ -82,6 +82,7 @@ SETTINGS_SOURCES = {
     "app.core.infrastructure.work.config": ("work_settings",),
     "app.core.live.config": ("live_settings",),
     "app.core.exposure": ("exposure_settings",),
+    "app.core.crypto.config": ("crypto_settings",),
     "app.core.public_web": ("public_web_settings",),
     "app.modules.agent.config": ("agent_settings",),
     "app.modules.agent_surfaces.config": ("surface_settings",),
@@ -99,6 +100,7 @@ SETTINGS_SOURCES = {
     "app.modules.schedule.config": ("schedule_settings",),
     "app.modules.usage.config": ("usage_settings",),
     "app.modules.mcp_access.config": ("mcp_access_settings",),
+    "app.modules.vault.config": ("vault_settings",),
     "app.modules.workflow.config": ("workflow_settings",),
     "app.modules.workspace.config": ("workspace_settings",),
 }

@@ -16,6 +16,9 @@ from app.core.config import settings
 from app.core.infrastructure.db.base import Base
 from app.core.infrastructure.work import models as work_models  # noqa: F401
 
+# Vault (secrets). Before the owners, whose *_secret_id columns reference it.
+from app.modules.vault.infrastructure import models as vault_models  # noqa: F401
+
 # Import all models to ensure they are attached to Base.metadata
 # Datastore
 from app.modules.datastore.infrastructure import models as datastore_models  # noqa: F401
@@ -85,6 +88,7 @@ from app.modules.channels.infrastructure import block_models  # noqa: F401
 # "remove unused imports" would silently delete along with those tables.
 REGISTERED_MODEL_MODULES = (
     work_models,
+    vault_models,
     datastore_models,
     identity_models,
     pod_models,
