@@ -15,6 +15,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
         ...PRODUCT_PAGES.map((page) => ({ url: `${base}/product/${page.slug}`, changeFrequency: 'monthly' as const, priority: 0.8 })),
         { url: `${base}/download`, changeFrequency: 'weekly', priority: 0.9 },
         { url: `${base}/docs`, changeFrequency: 'weekly', priority: 0.8 },
+        { url: `${base}/guide`, changeFrequency: 'monthly', priority: 0.8 },
         { url: `${base}/about`, changeFrequency: 'monthly', priority: 0.5 },
         { url: `${base}/contact`, changeFrequency: 'monthly', priority: 0.5 },
         { url: `${base}/delete-account`, changeFrequency: 'yearly', priority: 0.2 },
