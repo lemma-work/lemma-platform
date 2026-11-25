@@ -278,3 +278,76 @@ async def test_a_restricted_connector_made_pod_wide_gets_the_waiting_grant(
     assert [(g["resource_name"], g["permission_ids"]) for g in grants] == [
         ("my-cal", ["connector.use"])
     ]
+
+
+async def test_a_declaration_racing_the_grant_step_settles_only_after_it(
+    scenario, db_session
+):
+    """The replay race, on two real transactions. The grant step locks what
+    the grantee waits for and then meets an authorization check, which
+    releases a clean session by committing it. Its locks must survive that:
+    a declaration settling the same key in another transaction waits for the
+    step, then finds the waiting grant the step removed gone, and grants
+    nothing."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.core.authorization.context import ResourceType
+    from app.core.authorization.pending_grants import (
+        PendingGrant,
+        delete_grantee_pending_grants,
+        replace_grantee_pending_grants,
+        settle_pending_grants,
+    )
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.transaction_locks import connection_released
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.pod_bundle.infrastructure.connector_grants import (
+        lock_waiting_grants,
+    )
+
+    await scenario.create_org_with_pod(name_prefix="Replay")
+    pod_id = UUID(scenario.pod_id)
+    grantee, connector_id = uuid4(), uuid4()
+    key = f"replayed-{uuid4().hex[:6]}:PER_MEMBER"
+    await replace_grantee_pending_grants(
+        db_session,
+        ctx=SimpleNamespace(  # type: ignore[arg-type]
+            is_superuser=True, is_named_workload=False, permission_ids=frozenset()
+        ),
+        pod_id=pod_id,
+        grantee_type="FUNCTION",
+        grantee_id=grantee,
+        grants=[PendingGrant(ResourceType.CONNECTOR, key, ("connector.use",))],
+        created_by_user_id=None,
+    )
+    await db_session.commit()
+
+    async with async_session_maker() as step, async_session_maker() as declaring:
+        await lock_waiting_grants(
+            SqlAlchemyUnitOfWork(step),
+            pod_id=pod_id,
+            grantee_type="FUNCTION",
+            grantee_id=grantee,
+        )
+        # What an uncached authorization check does to a clean session.
+        async with connection_released(step):
+            pass
+        settling = asyncio.create_task(
+            settle_pending_grants(
+                declaring,
+                pod_id=pod_id,
+                resource_type=ResourceType.CONNECTOR,
+                resource_key=key,
+                resource_id=connector_id,
+            )
+        )
+        await asyncio.sleep(0.5)
+        assert not settling.done(), "the declaration read past the step's lock"
+
+        await delete_grantee_pending_grants(
+            step, pod_id=pod_id, grantee_type="FUNCTION", grantee_id=grantee
+        )
+        await step.commit()
+        assert await settling == 0
+        await declaring.commit()
