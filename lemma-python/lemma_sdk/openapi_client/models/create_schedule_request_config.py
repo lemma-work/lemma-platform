@@ -15,8 +15,10 @@ class CreateScheduleRequestConfig:
     `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an
     offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The
     response's `next_fire_at` says when it will next fire. A TIME schedule may set `repository` to a GitHub repository
-    as `owner/name`: its agent runs then start in a checkout of it on the default branch, cloned as the person the run
-    is for, as a webhook-triggered run does. A clone that fails (the person cannot reach the repository, say) does not
+    as `owner/name`: its agent runs then start in a checkout of it on the default branch, as a webhook-triggered run
+    does. It is cloned with the account the pod's `github` connector resolves to for the person the run is for: their
+    own, or an account shared with the pod whose owner allows its use inside workspaces, in which case GitHub checks
+    that owner's access, not the person's. A clone that fails (that account cannot reach the repository, say) does not
     stop the run: it starts in an empty directory and the agent is told why. Any type may set `max_concurrent_runs`: at
     most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and
     recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`:
