@@ -358,11 +358,11 @@ def test_credentials_survive_persist_load_round_trip():
         update={"credentials": ApiKeyRuntimeCredentials(api_key="persist-key")}
     )
 
-    # Persist side: what the repository hands to encrypt_json.
+    # Persist side: what the repository stores in the vault.
     stored = reveal_credentials(profile.credentials)
     assert stored == {"api_key": "persist-key"}
 
-    # Load side: rebuild the entity from the decrypted plaintext dict.
+    # Load side: rebuild the entity from the revealed plaintext dict.
     data = profile.model_dump(mode="json", exclude={"credentials"})
     data["credentials"] = stored
     reloaded = AgentRuntimeProfile.model_validate(data)
@@ -1843,6 +1843,8 @@ async def test_one_unreadable_row_does_not_blank_the_whole_listing():
         def __init__(self, *, identifier, entity):
             self.id = identifier
             self.credentials = None
+            self.secrets_secret_id = None
+            self.config = {}
             self._entity = entity
 
         def to_entity(self):
@@ -1870,6 +1872,8 @@ async def test_one_unreadable_row_does_not_blank_the_whole_listing():
             )
 
         credentials = None
+        secrets_secret_id = None
+        config: dict = {}
 
     rows = [_Row(identifier=readable.id, entity=readable), _Broken()]
 
@@ -1881,13 +1885,13 @@ async def test_one_unreadable_row_does_not_blank_the_whole_listing():
         async def execute(self, _stmt):
             return _Result()
 
-    class _Encryption:
-        def decrypt_json(self, _value):
-            return None
+    class _Vault:
+        async def reveal_many(self, _expected, *, purpose):
+            return {}
 
     repository = AgentRuntimeProfileRepository.__new__(AgentRuntimeProfileRepository)
     repository.session = _Session()
-    repository.encryption = _Encryption()
+    repository._vault = _Vault()
 
     listed = await repository.get_visible(
         organization_id=organization_id, user_id=uuid4()

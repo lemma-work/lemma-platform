@@ -18,7 +18,6 @@ import pytest
 from starlette import status
 
 from app.core.authorization.service import AuthorizationDataService
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -100,9 +99,7 @@ async def _bridge_as(world: World, user: dict) -> tuple[_Sandbox, str | None]:
 async def _alices_shared_github(world: World, db_session) -> str:
     """Alice shares her account with the pod; `github` runs as it, SHARED."""
     install = await db_session.get(AuthConfig, UUID(world.auth_config_id))
-    account = await AccountRepository(
-        SqlAlchemyUnitOfWork(db_session), encryption=get_secret_cipher()
-    ).create(
+    account = await AccountRepository(SqlAlchemyUnitOfWork(db_session)).create(
         AccountEntity(
             user_id=UUID(world.alice["id"]),
             organization_id=install.organization_id,
@@ -309,9 +306,7 @@ class _RecordingSandbox(_Sandbox):
 
 async def _connect_github(world: World, db_session, user: dict, token: str) -> str:
     install = await db_session.get(AuthConfig, UUID(world.auth_config_id))
-    account = await AccountRepository(
-        SqlAlchemyUnitOfWork(db_session), encryption=get_secret_cipher()
-    ).create(
+    account = await AccountRepository(SqlAlchemyUnitOfWork(db_session)).create(
         AccountEntity(
             user_id=UUID(user["id"]),
             organization_id=install.organization_id,

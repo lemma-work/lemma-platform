@@ -17,6 +17,8 @@ In real-LLM mode it skips automatically when system:lemma credentials are absent
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.tests.e2e.helpers import seed_teams_tokens
+
 from app.modules.agent_surfaces.config import surface_settings
 import asyncio
 import base64
@@ -28,7 +30,10 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.crypto import get_secret_cipher
+from app.modules.agent_surfaces.infrastructure.surface_webhook_secrets import (
+    reveal_webhook_secret,
+)
+from app.modules.vault.contracts import vault_for
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.agent_surfaces.tests.e2e.background_reads import background_read
 from app.modules.agent_surfaces.tests.e2e.helpers import (
@@ -182,8 +187,11 @@ async def test_telegram_webhook_surface_registers_and_replies_with_real_agent(
     )
 
     surface_row = await db_session.get(AgentSurface, UUID(surface_id))
-    assert surface_row is not None and surface_row.webhook_secret
-    secret = get_secret_cipher().decrypt_str(surface_row.webhook_secret)
+    assert surface_row is not None and surface_row.webhook_secret_id
+    assert surface_row.webhook_secret is None
+    secret = await reveal_webhook_secret(
+        vault_for(db_session), surface_row, session=db_session
+    )
 
     payload = _telegram_payload(text="Hi there!", message_id=1, sender_id=sender_id)
     response = await authenticated_client.post(
@@ -251,8 +259,11 @@ async def test_telegram_webhook_multi_turn_reuses_conversation_with_real_agent(
         resolved_user_id=UUID(fixed_test_user["id"]),
     )
     surface_row = await db_session.get(AgentSurface, UUID(surface_id))
-    assert surface_row is not None and surface_row.webhook_secret
-    secret = get_secret_cipher().decrypt_str(surface_row.webhook_secret)
+    assert surface_row is not None and surface_row.webhook_secret_id
+    assert surface_row.webhook_secret is None
+    secret = await reveal_webhook_secret(
+        vault_for(db_session), surface_row, session=db_session
+    )
 
     async def _send(text: str, message_id: int) -> None:
         payload = _telegram_payload(
@@ -973,7 +984,6 @@ async def test_teams_authenticated_dm_replies_through_bot_framework_worker(
     monkeypatch,
 ):
     _ = worker
-    from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     monkeypatch.setattr(surface_settings, "microsoft_bot_app_id", "teams-app-id")
@@ -1011,16 +1021,12 @@ async def test_teams_authenticated_dm_replies_through_bot_framework_worker(
     # The production adapter checks its shared Redis OAuth cache before making
     # a network request. Seeding the Bot Framework token keeps this journey
     # deterministic while retaining the real adapter and HTTP delivery path.
-    token_cache = RedisJsonCache(
+    await seed_teams_tokens(
         e2e_settings.redis_url,
-        key_prefix="surface:teams-token",
-        ttl_seconds=3600,
+        {
+            "botframework.com:https://api.botframework.com/.default": "teams-bot-token",
+        },
     )
-    await token_cache.set_raw(
-        "botframework.com:https://api.botframework.com/.default",
-        "teams-bot-token",
-    )
-    await token_cache.close()
 
     payload = _load_teams_channel_mention_fixture(fake_teams)
     payload["id"] = "teams-dm-worker-001"
@@ -1086,7 +1092,6 @@ async def test_teams_channel_mention_ingests_attachment_and_channel_context(
     monkeypatch,
 ):
     _ = worker
-    from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 
     tenant_id = "1b5c589f-1718-42c8-8244-166fbe5dd8fc"
     channel_id = "19:3b0dc498aeeb42abba81a2f6dd46ec67@thread.tacv2"
@@ -1129,20 +1134,13 @@ async def test_teams_channel_mention_ingests_attachment_and_channel_context(
         resolved_user_id=UUID(fixed_test_user["id"]),
     )
 
-    token_cache = RedisJsonCache(
+    await seed_teams_tokens(
         e2e_settings.redis_url,
-        key_prefix="surface:teams-token",
-        ttl_seconds=3600,
+        {
+            "botframework.com:https://api.botframework.com/.default": "teams-bot-token",
+            f"{tenant_id}:https://graph.microsoft.com/.default": "teams-graph-token",
+        },
     )
-    await token_cache.set_raw(
-        "botframework.com:https://api.botframework.com/.default",
-        "teams-bot-token",
-    )
-    await token_cache.set_raw(
-        f"{tenant_id}:https://graph.microsoft.com/.default",
-        "teams-graph-token",
-    )
-    await token_cache.close()
 
     payload = _load_teams_channel_mention_fixture(fake_teams)
     payload["attachments"].append(
@@ -1353,8 +1351,11 @@ async def test_a_telegram_photo_is_saved_as_something_the_agent_can_open(
         resolved_user_id=UUID(fixed_test_user["id"]),
     )
     surface_row = await db_session.get(AgentSurface, UUID(surface_id))
-    assert surface_row is not None and surface_row.webhook_secret
-    secret = get_secret_cipher().decrypt_str(surface_row.webhook_secret)
+    assert surface_row is not None and surface_row.webhook_secret_id
+    assert surface_row.webhook_secret is None
+    secret = await reveal_webhook_secret(
+        vault_for(db_session), surface_row, session=db_session
+    )
 
     response = await authenticated_client.post(
         f"/surfaces/{surface_id}/webhook",

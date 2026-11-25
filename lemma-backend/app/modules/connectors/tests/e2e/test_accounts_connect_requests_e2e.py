@@ -16,6 +16,7 @@ from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 from app.modules.connectors.infrastructure.models.connect_request import ConnectRequest
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.services.auth.lemma_auth_provider import LemmaAuthProvider
+from app.modules.vault.infrastructure.models import VaultSecret
 from app.modules.connectors.tests.support.fake_auth_provider import (
     FakeAuthProvider,
 )
@@ -61,6 +62,25 @@ GMAIL_NATIVE_CAPABILITIES = [
     }
 ]
 GOOGLE_AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+
+
+async def _assert_in_vault(
+    db_session,
+    secret_id,
+    *,
+    purpose: str,
+    organization_id,
+    user_id,
+    plaintext: str,
+) -> None:
+    """The secret is a vault row bound to its owner's scope, and sealed."""
+    assert secret_id is not None
+    secret = await db_session.get(VaultSecret, secret_id)
+    assert secret is not None
+    assert secret.purpose == purpose
+    assert secret.organization_id == organization_id
+    assert secret.user_id == user_id
+    assert plaintext.encode() not in bytes(secret.ciphertext)
 
 
 async def _live_state(db_session, connect_request: dict) -> str:
@@ -260,15 +280,29 @@ async def test_connect_request_and_accounts_lifecycle(
         Account.__table__.select().where(Account.id == UUID(account_id))
     )
     stored_account = result.mappings().one()
-    assert stored_account["credentials"]["_encrypted"] == "lemma-secret-v2"
-    assert "access-token" not in str(stored_account["credentials"])
+    await _assert_in_vault(
+        db_session,
+        stored_account["credentials_secret_id"],
+        purpose="connectors.account.credentials",
+        organization_id=stored_account["organization_id"],
+        user_id=stored_account["user_id"],
+        plaintext="access-token",
+    )
+    assert stored_account["credentials"] is None
 
     result = await db_session.execute(
         AuthConfig.__table__.select().where(AuthConfig.id == UUID(auth_config["id"]))
     )
     stored_auth_config = result.mappings().one()
-    assert stored_auth_config["config"]["_encrypted"] == "lemma-secret-v2"
-    assert "client-secret" not in str(stored_auth_config["config"])
+    await _assert_in_vault(
+        db_session,
+        stored_auth_config["config_secret_id"],
+        purpose="connectors.auth_config.config",
+        organization_id=stored_auth_config["organization_id"],
+        user_id=None,
+        plaintext="client-secret",
+    )
+    assert stored_auth_config["config"] is None
 
     response = await authenticated_client.delete(
         f"/organizations/{org_id}/connectors/auth-configs/{connector_id}"
@@ -469,8 +503,15 @@ async def test_direct_credential_managed_account_create_encrypts_credentials(
         Account.__table__.select().where(Account.id == UUID(account_id))
     )
     stored_account = result.mappings().one()
-    assert stored_account["credentials"]["_encrypted"] == "lemma-secret-v2"
-    assert "telegram-secret-token" not in str(stored_account["credentials"])
+    await _assert_in_vault(
+        db_session,
+        stored_account["credentials_secret_id"],
+        purpose="connectors.account.credentials",
+        organization_id=stored_account["organization_id"],
+        user_id=stored_account["user_id"],
+        plaintext="telegram-secret-token",
+    )
+    assert stored_account["credentials"] is None
     # The first account connected for an auth config is the default.
     assert account["is_default"] is True
 

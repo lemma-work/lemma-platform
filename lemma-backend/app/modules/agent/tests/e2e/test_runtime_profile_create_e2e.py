@@ -15,7 +15,6 @@ import pytest
 from sqlalchemy import update
 from starlette import status
 
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.domain.runtime_profiles import (
@@ -101,7 +100,7 @@ async def test_a_stored_profile_keeps_the_id_it_was_built_with(fixed_test_org) -
     )
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repository = AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher())
+        repository = AgentRuntimeProfileRepository(uow)
         stored = await repository.create(built)
         await uow.commit()
         found = await repository.get_visible_by_id(

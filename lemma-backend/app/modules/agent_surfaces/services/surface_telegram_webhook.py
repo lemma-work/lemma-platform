@@ -91,7 +91,12 @@ def _telegram_transition(
         and (
             not was_enabled
             or binding_changed
-            or not reveal_secret(current.webhook_secret)
+            # Whether one is *stored*: a surface read back from the database
+            # carries no plaintext, and re-registering every enabled bot on
+            # every unrelated edit is what asking for it here would do.
+            or not (
+                current.webhook_secret_stored or reveal_secret(current.webhook_secret)
+            )
             or never_registered
         ),
         disable=was_enabled and (not is_enabled or binding_changed),

@@ -743,6 +743,11 @@ async def _ensure_e2e_runtime_profile(
         .limit(1)
     )
     if profile is None:
+        from app.modules.agent.infrastructure.repositories.runtime_profile_repository import (
+            put_profile_secrets,
+        )
+        from app.modules.vault.contracts import vault_for
+
         profile = AgentRuntimeProfileModel(
             organization_id=organization_id,
             user_id=None,
@@ -767,7 +772,11 @@ async def _ensure_e2e_runtime_profile(
                 "headers": {},
                 "model_settings": {},
             },
-            credentials={"api_key": "surface-e2e-key"},
+            secrets_secret_id=await put_profile_secrets(
+                vault_for(db_session),
+                organization_id=organization_id,
+                credentials={"api_key": "surface-e2e-key"},
+            ),
             status=RuntimeProfileStatus.ACTIVE.value,
             profile_metadata={"surface_e2e": True},
         )
@@ -1007,3 +1016,27 @@ def _telegram_photo_payload(
         {"file_id": file_id, "file_size": 5000, "width": 1280, "height": 720},
     ]
     return payload
+
+
+async def seed_teams_tokens(redis_url: str, tokens: dict[str, str]) -> None:
+    """Put Teams OAuth tokens where the adapter looks before fetching one.
+
+    Sealed to their keys, as the adapter keeps them: a plaintext entry is not
+    read. Keeps a journey deterministic with the real adapter and HTTP path.
+    """
+    from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+    from app.modules.agent_surfaces.caches import TEAMS_TOKENS
+    from app.modules.agent_surfaces.platforms.teams.client import TOKEN_CACHE_PURPOSE
+    from app.modules.vault.contracts import seal_value
+
+    cache = RedisJsonCache(
+        redis_url, key_prefix=TEAMS_TOKENS.key_prefix, ttl_seconds=3600
+    )
+    try:
+        for key, token in tokens.items():
+            sealed = await seal_value(
+                token, purpose=TOKEN_CACHE_PURPOSE, bindings=(key,)
+            )
+            await cache.set_raw(key, sealed)
+    finally:
+        await cache.close()

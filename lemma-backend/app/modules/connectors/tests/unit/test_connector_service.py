@@ -1045,8 +1045,9 @@ async def test_get_account_credentials_refreshes_expired_token():
     assert credentials.access_token == "new"
     # The credential and the status, not the whole row: the account in hand
     # was read before the refresh went out.
+    # Not yet in the vault (no version), so no lease and no version check.
     account_repo.store_refreshed.assert_awaited_once_with(
-        account.id, refreshed_credentials
+        account.id, refreshed_credentials, expected_version=None, lease=None
     )
     account_repo.update.assert_not_awaited()
     uow.commit.assert_awaited_once()
@@ -1114,8 +1115,9 @@ async def test_get_account_credentials_force_refreshes_valid_token():
     assert credentials.access_token == "new"
     # The credential and the status, not the whole row: the account in hand
     # was read before the refresh went out.
+    # Not yet in the vault (no version), so no lease and no version check.
     account_repo.store_refreshed.assert_awaited_once_with(
-        account.id, refreshed_credentials
+        account.id, refreshed_credentials, expected_version=None, lease=None
     )
     account_repo.update.assert_not_awaited()
     uow.commit.assert_awaited_once()

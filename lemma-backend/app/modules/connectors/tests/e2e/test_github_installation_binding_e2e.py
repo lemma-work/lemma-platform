@@ -307,12 +307,9 @@ async def _account_in(
         db_session.add(install)
         await db_session.commit()
         auth_config_id = install.id
-    from app.core.crypto import get_secret_cipher
     from app.modules.connectors.domain.account import AccountEntity
 
-    created = await AccountRepository(
-        SqlAlchemyUnitOfWork(db_session), encryption=get_secret_cipher()
-    ).create(
+    created = await AccountRepository(SqlAlchemyUnitOfWork(db_session)).create(
         AccountEntity(
             user_id=UUID(user_id),
             organization_id=UUID(org_id),
@@ -388,11 +385,7 @@ async def test_a_legacy_account_naming_another_orgs_installation_mints_nothing(
         external_ref=installation_id,
     )
 
-    from app.core.crypto import get_secret_cipher
-
-    repository = AccountRepository(
-        SqlAlchemyUnitOfWork(db_session), encryption=get_secret_cipher()
-    )
+    repository = AccountRepository(SqlAlchemyUnitOfWork(db_session))
     theirs = await repository.get(UUID(a_account_id))
     mine = await repository.get(UUID(b_account_id))
     assert await routable_external_ref(db_session, theirs) == installation_id
@@ -822,11 +815,13 @@ async def test_an_organization_reads_back_every_installation_it_holds_and_no_oth
 async def _stored_credentials(
     db_session: AsyncSession, account_id: str
 ) -> dict[str, object]:
-    from app.core.crypto import get_secret_cipher
-
+    # The row as stored now, through the repository: its vault secret, or the
+    # old column for a row seeded the way the previous release wrote it.
     db_session.expire_all()
-    account = await db_session.get(Account, UUID(account_id))
-    stored = await get_secret_cipher().decrypt_json_async(account.credentials)
+    stored = await AccountRepository(
+        SqlAlchemyUnitOfWork(db_session)
+    ).stored_credentials(UUID(account_id))
+    await db_session.commit()  # lets go of the row lock
     return dict(stored or {})
 
 
@@ -964,13 +959,12 @@ async def test_a_refresh_token_github_no_longer_honours_asks_for_a_reconnect(
 async def _another_request_stores(account_id: str, credentials: dict[str, str]) -> None:
     """A refresh by another request going through: its token stored and
     committed on a connection of its own."""
-    from app.core.crypto import get_secret_cipher
     from app.core.infrastructure.db.session import async_session_maker
 
     async with async_session_maker() as session:
-        await AccountRepository(
-            SqlAlchemyUnitOfWork(session), encryption=get_secret_cipher()
-        ).store_refreshed(UUID(account_id), credentials)
+        await AccountRepository(SqlAlchemyUnitOfWork(session)).store_refreshed(
+            UUID(account_id), credentials
+        )
         await session.commit()
 
 
@@ -1051,5 +1045,49 @@ async def test_a_mark_made_before_the_winner_stored_does_not_outlive_its_token(
 
     stored = await _stored_credentials(db_session, account_id)
     assert stored["refresh_token"] == "ghr_won"
+    account = await db_session.get(Account, UUID(account_id))
+    assert account.status == "CONNECTED"
+
+
+async def test_two_requests_on_one_expired_token_refresh_it_once(
+    scenario, db_session, github, github_sees
+):
+    """GitHub's refresh tokens work once, and a provider with reuse detection
+    revokes the whole family when a spent one comes back. Two requests finding
+    the same expired token at once must make ONE refresh: the first takes the
+    vault's lease on the credential, the second waits for the version to move
+    and uses what the first stored."""
+    import asyncio
+
+    installation_id = _installation_id()
+    member, account_id = await _stale_account_on_org_a(
+        scenario, db_session, github, github_sees, installation_id
+    )
+    refreshes: list[str] = []
+
+    async def slow_refresh(form: dict[str, list[str]]) -> None:
+        if (form.get("grant_type") or [""])[0] == "refresh_token":
+            refreshes.append((form.get("refresh_token") or [""])[0])
+            # Long enough that the other request reads the expired token too.
+            await asyncio.sleep(0.5)
+
+    github.before_token_request = slow_refresh
+
+    def ask():
+        return scenario.async_client.get(
+            f"/organizations/{scenario.org_id}/connectors/accounts/{account_id}"
+            "/github/installations",
+            headers=auth_headers(member),
+            params={"refresh": True},
+        )
+
+    first, second = await asyncio.gather(ask(), ask())
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert refreshes == ["ghr_first"], "one refresh, with the token as stored"
+    stored = await _stored_credentials(db_session, account_id)
+    assert stored["refresh_token"] == "ghr_first+"
+    assert stored["refresh_token"] in github.refresh_tokens, "still good at GitHub"
     account = await db_session.get(Account, UUID(account_id))
     assert account.status == "CONNECTED"

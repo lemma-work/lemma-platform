@@ -22,6 +22,7 @@ from sqlalchemy import select, update
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.agent_host.control import admission
+from app.modules.agent.agent_host.control.mcp_frame import seal_mcp_frame
 from app.modules.agent.agent_host.domain.host import (
     AgentHostCommandKind,
     AgentHostCommandState,
@@ -102,7 +103,7 @@ async def _queued_run(db_session, scenario) -> tuple[dict, UUID]:
                 prompt=[{"type": "text", "text": "Hello."}],
                 run_deadline=datetime.now(timezone.utc) + timedelta(minutes=30),
             ),
-            encrypted_mcp_payload={"encrypted": True},
+            encrypted_mcp_payload=await seal_mcp_frame({}, run_id=run.id),
             command_ttl_seconds=_WAIT_SECONDS,
         )
         await uow.commit()

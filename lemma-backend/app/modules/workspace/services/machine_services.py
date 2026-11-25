@@ -7,8 +7,8 @@ process too: the machine pauses, the process ends, and the definition is what
 starts it again. Kept here:
 
 - what to run and where, and whether to start it again after a pause;
-- the caller's own environment variables, encrypted under the deployment's
-  secret cipher and revealed only to start the process;
+- the caller's own environment variables, a vault secret bound to the
+  machine's owner and revealed only to start the process;
 - the claims its Lemma token was minted for, never the token -- a restart
   mints a fresh one for ``started_by`` with exactly the reach the first had;
 - how far its output has been read and when it last moved, for the idle
@@ -19,6 +19,7 @@ starts it again. Kept here:
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
@@ -29,7 +30,18 @@ from sqlalchemy.dialects.postgresql import insert
 
 from app.core.config import reveal_secret
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.modules.vault.contracts import (
+    JsonObject,
+    SecretValue,
+    legacy_text,
+    reveal_values,
+    vault_for,
+)
 from app.modules.workspace.infrastructure.machine_models import MachineServiceModel
+from app.modules.workspace.services.machine_secrets import (
+    MACHINE_SERVICE_ENV_PURPOSE,
+    machine_secret_scope,
+)
 
 
 #: The most services one machine keeps. Each is a name a person or an agent
@@ -136,24 +148,22 @@ class ServiceDefinition:
         return {name: reveal_secret(value) or "" for name, value in self.env.items()}
 
 
-def _cipher():
-    from app.core.crypto.factory import get_secret_cipher
-
-    return get_secret_cipher()
+def _masked(plain: JsonObject | None) -> dict[str, SecretStr]:
+    return {str(name): SecretStr(str(value)) for name, value in (plain or {}).items()}
 
 
-def _seal(env: dict[str, str]) -> str | None:
-    return _cipher().encrypt_str(json.dumps(env)) if env else None
+def _parsed(plain: str | None) -> dict[str, SecretStr]:
+    return _masked(json.loads(plain) if plain else None)
 
 
-def _open(ciphertext: str | None) -> dict[str, SecretStr]:
-    if not ciphertext:
-        return {}
-    plain = json.loads(_cipher().decrypt_str(ciphertext) or "{}")
-    return {str(name): SecretStr(str(value)) for name, value in plain.items()}
+async def _legacy_env(ciphertext: str | None) -> dict[str, SecretStr]:
+    """A service a process on the previous release recorded mid-rollout."""
+    return _parsed(await legacy_text(ciphertext))
 
 
-def _definition(row: MachineServiceModel) -> ServiceDefinition:
+def _definition(
+    row: MachineServiceModel, env: dict[str, SecretStr]
+) -> ServiceDefinition:
     return ServiceDefinition(
         machine_id=row.sandbox_id,
         name=row.name,
@@ -163,7 +173,7 @@ def _definition(row: MachineServiceModel) -> ServiceDefinition:
         started_by=row.started_by,
         restart_on_resume=row.restart_on_resume,
         process_id=row.process_id,
-        env=_open(row.env_ciphertext),
+        env=env,
     )
 
 
@@ -188,22 +198,37 @@ class MachineServices:
         restart_on_resume: bool,
         process_id: str,
     ) -> None:
-        """The service's definition, replacing any earlier one by its name."""
+        """The service's definition, replacing any earlier one by its name.
+
+        The variables are a fresh vault secret each time; repointing an
+        earlier definition's ``env_secret_id`` deletes the secret it held.
+        """
         now = datetime.now(timezone.utc)
-        values = {
-            "command": command,
-            "cwd": cwd,
-            "env_ciphertext": _seal(env),
-            "token_claims": claims.to_json() if claims else {},
-            "started_by": started_by,
-            "restart_on_resume": restart_on_resume,
-            "process_id": process_id,
-            "output_sequence": 0,
-            "last_active_at": now,
-            "stopped_at": None,
-            "updated_at": now,
-        }
         async with self._uow_factory() as uow:
+            env_secret_id = None
+            if env:
+                scope = await machine_secret_scope(uow.session, machine_id)
+                secret = await vault_for(uow).put(
+                    scope=scope,
+                    purpose=MACHINE_SERVICE_ENV_PURPOSE,
+                    value=dict(env),
+                    owner_table=MachineServiceModel.__tablename__,
+                )
+                env_secret_id = secret.id
+            values = {
+                "command": command,
+                "cwd": cwd,
+                "env_secret_id": env_secret_id,
+                "env_ciphertext": None,
+                "token_claims": claims.to_json() if claims else {},
+                "started_by": started_by,
+                "restart_on_resume": restart_on_resume,
+                "process_id": process_id,
+                "output_sequence": 0,
+                "last_active_at": now,
+                "stopped_at": None,
+                "updated_at": now,
+            }
             await uow.session.execute(
                 insert(MachineServiceModel)
                 .values(sandbox_id=machine_id, name=name, created_at=now, **values)
@@ -227,7 +252,15 @@ class MachineServices:
                     .limit(MAX_SERVICES)
                 )
             ).all()
-        return [_definition(row) for row in rows]
+            envs = await _vault_envs(uow, machine_id, rows)
+        definitions = []
+        for row in rows:
+            if row.env_secret_id is not None:
+                env = _masked(envs.get(row.env_secret_id))
+            else:
+                env = await _legacy_env(row.env_ciphertext)
+            definitions.append(_definition(row, env))
+        return definitions
 
     async def others_kept(self, machine_id: UUID, name: str) -> int:
         """How many services besides ``name`` this machine would bring back."""
@@ -319,6 +352,22 @@ class MachineServices:
                     MachineServiceModel.process_id == process_id,
                 )
             )
+
+
+async def _vault_envs(
+    uow, machine_id: UUID, rows: Sequence[MachineServiceModel]
+) -> dict[UUID, JsonObject]:
+    """Every row's variables, revealed in one read."""
+    ids = [row.env_secret_id for row in rows if row.env_secret_id is not None]
+    if not ids:
+        return {}
+    scope = await machine_secret_scope(uow.session, machine_id)
+    values: dict[UUID, SecretValue] = await reveal_values(
+        vault_for(uow),
+        [(secret_id, scope) for secret_id in ids],
+        purpose=MACHINE_SERVICE_ENV_PURPOSE,
+    )
+    return {key: value for key, value in values.items() if isinstance(value, dict)}
 
 
 __all__ = [

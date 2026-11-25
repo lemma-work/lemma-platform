@@ -1,8 +1,8 @@
 """Static key provider — keyring of raw Fernet keys from configuration.
 
 The default backend for OSS and local stacks: keys live in env/config, crypto
-happens in-process, and rotation is driven by adding a new primary key to the
-keyset and re-encrypting forward (see :mod:`app.core.crypto.rotation`).
+happens in-process. Kept only to read secrets the previous release wrote in
+their old columns; nothing new is encrypted here (see ``app.modules.vault``).
 """
 
 from __future__ import annotations

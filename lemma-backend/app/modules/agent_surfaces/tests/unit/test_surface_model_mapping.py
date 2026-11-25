@@ -118,18 +118,32 @@ def test_the_skip_is_logged_where_an_operator_will_see_it() -> None:
     assert {"surface_id", "column", "value"} <= spec.fields
 
 
-def test_a_surfaces_webhook_secret_never_appears_in_its_repr() -> None:
-    """An entity in a log line or a traceback must not carry the credential."""
-    from app.core.crypto import get_secret_cipher
+def test_a_surface_read_back_carries_whether_it_has_a_webhook_secret_not_the_secret() -> (
+    None
+):
+    """An entity in a log line or a traceback must not carry the credential.
 
-    row = _row(
-        surface_type="TELEGRAM",
-        name="telegram",
-        webhook_secret=get_secret_cipher().encrypt_str("telegram-secret-token"),
-    )
-    entity = row.to_entity()
+    A read leaves the secret where it is stored; the entity says only that one
+    exists, which is what deciding whether to re-register a webhook needs.
+    """
+    stored = _row(surface_type="TELEGRAM", name="telegram", webhook_secret_id=uuid4())
+    entity = stored.to_entity()
+
+    assert entity.webhook_secret is None
+    assert entity.webhook_secret_stored
+    assert "webhook_secret_stored" not in entity.model_dump()
+
+    # A row the previous release wrote mid-rollout: the old column only.
+    legacy = _row(surface_type="TELEGRAM", name="telegram", webhook_secret="lsenc1:x")
+    assert legacy.to_entity().webhook_secret_stored
+
+    none = _row(surface_type="TELEGRAM", name="telegram")
+    assert not none.to_entity().webhook_secret_stored
+
+
+def test_a_minted_webhook_secret_never_appears_in_the_entity_repr() -> None:
+    entity = _row(surface_type="TELEGRAM", name="telegram").to_entity()
+    entity.configure_webhook_secret(secret="telegram-secret-token")
 
     assert "telegram-secret-token" not in repr(entity)
     assert "telegram-secret-token" not in str(entity.model_dump())
-    assert entity.webhook_secret is not None
-    assert entity.webhook_secret.get_secret_value() == "telegram-secret-token"

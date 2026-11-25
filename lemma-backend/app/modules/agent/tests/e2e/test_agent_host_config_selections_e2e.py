@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
 from app.modules.agent.agent_host.control import admission
+from app.modules.agent.agent_host.control.mcp_frame import seal_mcp_frame
 from app.modules.agent.application.agents.manage_runtime_profiles import (
     RuntimeProfileCreation,
 )
@@ -25,7 +26,6 @@ import pytest
 from sqlalchemy import select, update
 from starlette import status
 
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.agent_host.domain.host import (
     AgentHostCommandKind,
@@ -168,7 +168,7 @@ async def _machine_with_profile(
     await db_session.flush()
     uow = SqlAlchemyUnitOfWork(db_session)
     profile = await RuntimeProfileCreation(
-        AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher()),
+        AgentRuntimeProfileRepository(uow),
         AgentHostRepository(uow),
     ).create_agent_host_profile(
         harness_id=machine["harness_id"],
@@ -314,7 +314,7 @@ async def _admit(
             prompt=[{"type": "text", "text": "Hello."}],
             run_deadline=datetime.now(timezone.utc) + timedelta(minutes=30),
         ),
-        encrypted_mcp_payload={"encrypted": True},
+        encrypted_mcp_payload=await seal_mcp_frame({}, run_id=run.id),
     )
     assert command.kind == AgentHostCommandKind.START_RUN.value
     payload = dict(command.payload)

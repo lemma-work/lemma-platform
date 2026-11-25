@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional, Protocol, Sequence, Tuple
 from uuid import UUID
 
@@ -15,6 +15,7 @@ from app.modules.connectors.domain.account import (
     OAuthCredentials,
 )
 from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
+from app.modules.vault.contracts import LeaseToken, SecretMeta
 from app.modules.connectors.domain.connect_request import ConnectRequestEntity
 from app.modules.connectors.domain.connector import (
     ConnectorEntity,
@@ -95,8 +96,40 @@ class AccountRepositoryPort(Protocol):
         """Write the routing key and nothing else (never the credentials)."""
         ...
 
-    async def store_refreshed(self, account_id: UUID, credentials: object) -> None:
-        """Write a refreshed credential and mark the account connected."""
+    async def store_refreshed(
+        self,
+        account_id: UUID,
+        credentials: object,
+        *,
+        expected_version: int | None = None,
+        lease: LeaseToken | None = None,
+    ) -> None:
+        """Write a refreshed credential and mark the account connected.
+
+        ``expected_version`` / ``lease`` make it a compare-and-set against the
+        credential the refresh started from (``SecretVersionConflict`` if it
+        moved), and end the refresh lease."""
+        ...
+
+    async def replace_credentials(
+        self, account_id: UUID, credentials: object | None
+    ) -> None:
+        """Store credentials outright -- a new grant, a credential the person
+        typed, a token the platform just minted. Never from a copy read earlier:
+        ``update`` does not write credentials at all."""
+        ...
+
+    async def try_lease_credentials(
+        self, account_id: UUID, *, if_version: int, holder: str, ttl: timedelta
+    ) -> LeaseToken | None:
+        """Take the refresh lease if nobody holds it and the stored version is
+        still ``if_version``; ``None`` otherwise."""
+        ...
+
+    async def release_credentials_lease(self, lease: LeaseToken) -> None: ...
+
+    async def credentials_meta(self, account_id: UUID) -> SecretMeta | None:
+        """Version and lease of the stored credentials, without decrypting."""
         ...
 
     async def stored_credentials(self, account_id: UUID) -> dict[str, object] | None:
@@ -301,22 +334,6 @@ class AuthProviderRegistryPort(Protocol):
 
 class OAuthRedirectUriBuilderPort(Protocol):
     def build(self) -> str: ...
-
-
-class SecretEncryptionPort(Protocol):
-    def encrypt_json(self, value: dict[str, Any] | None) -> dict[str, Any] | None: ...
-
-    def decrypt_json(self, value: dict[str, Any] | None) -> dict[str, Any] | None: ...
-
-    # Async variants offload the (possibly blocking, KMS-backed) crypto off the
-    # event loop. Callers on the worker loop must use these, not the sync ones.
-    async def encrypt_json_async(
-        self, value: dict[str, Any] | None
-    ) -> dict[str, Any] | None: ...
-
-    async def decrypt_json_async(
-        self, value: dict[str, Any] | None
-    ) -> dict[str, Any] | None: ...
 
 
 class SystemOAuthConfigPort(Protocol):

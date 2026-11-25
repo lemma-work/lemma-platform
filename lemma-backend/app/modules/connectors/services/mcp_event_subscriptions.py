@@ -25,10 +25,10 @@ from pydantic import JsonValue, SecretStr
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
-from app.core.crypto.factory import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.vault.contracts import VaultError
 from app.modules.connectors.domain.errors import (
     ConnectorDomainError,
     ConnectorInfrastructureError,
@@ -158,9 +158,7 @@ class McpEventSubscriptions:
                 user_id=user_id,
                 name=event,
                 arguments=dict(arguments),
-                secret_ciphertext=str(
-                    get_secret_cipher().encrypt_str(secret.get_secret_value())
-                ),
+                secret=secret,
             )
             await uow.commit()
         try:
@@ -235,9 +233,10 @@ class McpEventSubscriptions:
         return renewed
 
     async def _renew_guarded(self, stored: StoredEventSubscription) -> bool:
-        """One renewal, never the pass's end. A secret that will not decrypt (a
-        retired key: `RuntimeError`, a damaged envelope: `ValueError`,
-        `LookupError`, `InvalidToken`) or a database blip is that row's
+        """One renewal, never the pass's end. A secret that will not open (a
+        vault refusal: `VaultError`; an old-column value under a retired key:
+        `RuntimeError`, a damaged envelope: `ValueError`, `LookupError`,
+        `InvalidToken`) or a database blip is that row's
         failure, recorded and backed off like a refusal, rather than an
         exception that stops every row after it, every pass. A server's own
         refusal is `McpEventsError`, handled inside."""
@@ -249,6 +248,7 @@ class McpEventSubscriptions:
             RuntimeError,
             SQLAlchemyError,
             ValueError,
+            VaultError,
         ) as exc:
             logger.error(
                 "connectors.mcp_events.renew.failed",
@@ -264,11 +264,12 @@ class McpEventSubscriptions:
     ) -> tuple[StoredEventSubscription, SecretStr] | None:
         """The subscription a delivery names, and the secret to check it with."""
         async with self._uow_factory() as uow:
-            stored = await McpEventRepository(uow.session).subscription(subscription_id)
-        if stored is None:
-            return None
-        secret = get_secret_cipher().decrypt_str(stored.secret_ciphertext)
-        return (stored, SecretStr(secret)) if secret else None
+            events = McpEventRepository(uow.session)
+            stored = await events.subscription(subscription_id)
+            if stored is None:
+                return None
+            secret = await events.signing_secret(stored)
+        return (stored, secret) if secret is not None else None
 
     async def heard(self, subscription_id: UUID) -> None:
         async with self._uow_factory() as uow:
@@ -282,12 +283,13 @@ class McpEventSubscriptions:
             # Read again: the due list was loaded before this pass began, and
             # a schedule deleted since then has already unsubscribed. Renewing
             # it would subscribe again at the server with nothing listening.
-            current = await McpEventRepository(uow.session).subscription(stored.id)
+            events = McpEventRepository(uow.session)
+            current = await events.subscription(stored.id)
             if current is None:
                 return False
+            secret = await events.signing_secret(current)
             target = await self._target_or_none(uow, current)
-        plaintext = get_secret_cipher().decrypt_str(stored.secret_ciphertext)
-        if target is None or not plaintext:
+        if target is None or secret is None:
             await self._renewal_failed(stored, "account_unavailable")
             return False
         try:
@@ -295,7 +297,7 @@ class McpEventSubscriptions:
                 name=stored.name,
                 arguments=dict(stored.arguments),
                 url=callback_url(stored.id),
-                secret=SecretStr(plaintext),
+                secret=secret,
                 ttl_ms=int(REQUESTED_TTL.total_seconds() * 1000),
             )
         except McpEventsError as exc:

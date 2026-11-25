@@ -32,7 +32,9 @@ DECISION_CARDS = CacheNamespace("surface:decision-card", 30 * _DAY)
 LIVE_DISPLAYS = CacheNamespace("surface:live-display", _DAY)
 TELEGRAM_CALLBACK_TOKENS = CacheNamespace("surface:telegram-cb", 7 * _DAY)
 TELEGRAM_BOT_INFO = CacheNamespace("surface:telegram-bot", 3600)
-TEAMS_TOKENS = CacheNamespace("surface:teams-token", 3600)
+#: Sealed by the vault, bound to the "tenant:scope" key. v2: the v1 entries
+#: were plaintext tokens, and are simply not read again.
+TEAMS_TOKENS = CacheNamespace("surface:teams-token:v2", 3600)
 TEAMS_OIDC = CacheNamespace("surface:oidc", 10 * 60)
 TEAMS_CONSENT_NONCES = CacheNamespace("surface:teams-consent-nonce", 3600)
 TEAMS_CONSENT_CHECKS = CacheNamespace("surface:teams-consent", 60)

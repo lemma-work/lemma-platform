@@ -22,6 +22,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.infrastructure.db.base import Base, UUIDAuditBase, UUIDCreatedBase
+from app.modules.vault.contracts import vault_owned
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     RuntimeProfileKind,
@@ -326,7 +327,17 @@ class AgentRuntimeProfileModel(UUIDAuditBase):
     default_model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     model_catalog: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # The previous release's Fernet-encrypted credentials. Read only for a row
+    # that release wrote during the rollout (``secrets_secret_id`` empty);
+    # this release writes NULL here and the contract migration drops it.
     credentials: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Credentials and header values, as one vault secret
+    # (``{"credentials": ..., "headers": {...}}``, purpose
+    # ``agent.runtime_profile.secrets``, scoped to the organization). ``config``
+    # keeps every other setting; its ``headers`` are lifted out on write.
+    secrets_secret_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("vault_secrets.id"), unique=True, nullable=True
+    )
     status: Mapped[str] = mapped_column(
         String(32),
         nullable=False,
@@ -365,8 +376,12 @@ class AgentRuntimeProfileModel(UUIDAuditBase):
             default_model_name=self.default_model_name,
             model_catalog=self.model_catalog or [],
             config=self.config or {},
-            credentials=self.credentials,
+            # Filled in by the repository, which reveals them from the vault.
+            credentials=None,
             status=RuntimeProfileStatus(self.status),
             metadata=self.profile_metadata or {},
             version=self.version or 0,
         )
+
+
+vault_owned(AgentRuntimeProfileModel.__table__, "secrets_secret_id")

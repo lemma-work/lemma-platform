@@ -277,8 +277,9 @@ fi
 # credential undecryptable. Both were true of this script until a --force
 # against a live stack proved it.
 #
-# To actually rotate one, change it in .env deliberately — and for the
-# encryption key, run lemma-backend/scripts/reencrypt_secrets.py first.
+# To actually rotate one, change it in .env deliberately. For the encryption
+# key, add the new key to SECRET_ENCRYPTION_KEYSET as primary and keep the old
+# entry: the backend rewraps its vault keys under the new one when it starts.
 gen_key() { python3 -c 'import base64, secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())'; }
 gen_password() { python3 -c 'import secrets, string; print("".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(40)))'; }
 

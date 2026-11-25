@@ -16,6 +16,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.infrastructure.db.base import UUIDAuditBase
+from app.modules.vault.contracts import vault_owned
 
 
 class WebWidgetModel(UUIDAuditBase):
@@ -35,8 +36,15 @@ class WebWidgetModel(UUIDAuditBase):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     public_key: Mapped[str] = mapped_column(String(64), nullable=False)
-    #: Encrypted at rest; shown once when minted or rotated.
-    signing_secret: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Shown once when minted or rotated; kept as a vault secret (purpose
+    #: ``agent_surfaces.web_widget.signing_secret``, scoped to the pod).
+    signing_secret_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("vault_secrets.id"), unique=True, nullable=True
+    )
+    #: The previous release's Fernet column. Read only while a row written by
+    #: an old process mid-rollout has no ``signing_secret_id``; written only to
+    #: NULL. Dropped by the next release's contract migration.
+    signing_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
     allowed_origins: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list
     )
@@ -49,3 +57,6 @@ class WebWidgetModel(UUIDAuditBase):
     host_issuer: Mapped[str] = mapped_column(
         String(64), nullable=False, server_default=text("'default'")
     )
+
+
+vault_owned(WebWidgetModel.__table__, "signing_secret_id")

@@ -18,7 +18,10 @@ from httpx import AsyncClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.crypto import get_secret_cipher
+from app.modules.agent_surfaces.infrastructure.surface_webhook_secrets import (
+    reveal_webhook_secret,
+)
+from app.modules.vault.contracts import vault_for
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.work import RetryPolicy, WorkClass, WorkRegistry
 from app.core.infrastructure.work.testing import make_due, run_until_idle
@@ -159,9 +162,8 @@ async def a_telegram_bot(
     assert row is not None
     # A polled bot registers no webhook, and so has no secret.
     secret = (
-        get_secret_cipher().decrypt_str(row.webhook_secret)
-        if row.webhook_secret
-        else ""
+        await reveal_webhook_secret(vault_for(db_session), row, session=db_session)
+        or ""
     )
     return surface["id"], secret, connected
 

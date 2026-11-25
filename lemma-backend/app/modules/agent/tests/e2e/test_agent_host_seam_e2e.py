@@ -15,6 +15,7 @@ intake and the shipped reader, and asserts on what a conversation ends up with.
 from __future__ import annotations
 
 from app.modules.agent.agent_host.control import admission
+from app.modules.agent.agent_host.control.mcp_frame import seal_mcp_frame
 from app.modules.agent.domain.state_kinds import PauseKind
 
 import asyncio
@@ -575,7 +576,7 @@ async def test_a_run_outlives_the_credential_it_was_dispatched_with(
         "no replacement credential was issued, so the run would have been cut "
         "short at the expiry it was dispatched with"
     )
-    assert "encrypted_mcp" in queued.payload, (
+    assert str(queued.payload.get("encrypted_mcp", "")).startswith("lvs1:"), (
         "a credential must never be queued in the clear"
     )
     # The run ended on its own terms rather than on its credential.
@@ -949,7 +950,7 @@ async def test_full_dispatch_admits_polls_and_completes_a_run(db_session, scenar
         harness_id=machine["harness_id"],
         runtime_profile_id=profile_id,
         run_spec=run_spec,
-        encrypted_mcp_payload={"encrypted": True},
+        encrypted_mcp_payload=await seal_mcp_frame({}, run_id=run_spec.agent_run_id),
         now=now,
     )
     assert admitted.kind == AgentHostCommandKind.START_RUN
@@ -960,7 +961,7 @@ async def test_full_dispatch_admits_polls_and_completes_a_run(db_session, scenar
         harness_id=machine["harness_id"],
         runtime_profile_id=profile_id,
         run_spec=run_spec,
-        encrypted_mcp_payload={},
+        encrypted_mcp_payload=await seal_mcp_frame({}, run_id=run_spec.agent_run_id),
         now=now,
     )
     assert again.id == admitted.id
@@ -1111,7 +1112,7 @@ async def test_a_stale_revision_rejection_reaims_and_requeues_the_command(
         harness_id=machine["harness_id"],
         runtime_profile_id=profile_id,
         run_spec=run_spec,
-        encrypted_mcp_payload={},
+        encrypted_mcp_payload=await seal_mcp_frame({}, run_id=run_spec.agent_run_id),
         now=now,
     )
     await db_session.commit()

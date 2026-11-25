@@ -47,9 +47,9 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.crypto import get_secret_cipher
 from app.core.log.log import get_logger
 from app.core.infrastructure.db.base import UUIDAuditBase
+from app.modules.vault.contracts import vault_owned
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     AgentSurfaceStatus,
@@ -242,8 +242,16 @@ class AgentSurface(UUIDAuditBase):
     surface_identity_email: Mapped[str | None] = mapped_column(
         String(255), nullable=True
     )
-    # Encrypted at rest via app.core.crypto (compact ``lsenc1:`` envelope). Text
-    # (not String(255)) because the envelope is longer than the raw secret.
+    # Telegram's per-surface `secret_token`, as a vault secret (purpose
+    # `agent_surfaces.surface.webhook_secret`, scoped to the org and pod). The
+    # entity carries only whether one is stored; the paths that verify or
+    # register a webhook reveal it (`surface_webhook_secrets`).
+    webhook_secret_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("vault_secrets.id"), unique=True, nullable=True
+    )
+    # The previous release's Fernet column. Read only while a row written by an
+    # old process mid-rollout has no `webhook_secret_id`; written only to NULL.
+    # Dropped by the next release's contract migration.
     webhook_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     def to_entity_or_none(self) -> "AgentSurfaceEntity | None":
@@ -310,8 +318,9 @@ class AgentSurface(UUIDAuditBase):
             surface_identity_username=self.surface_identity_username,
             status=self.status or AgentSurfaceStatus.ACTIVE.value,
             surface_identity_email=self.surface_identity_email,
-            # Decrypt at rest; legacy plaintext rows pass through unchanged.
-            webhook_secret=get_secret_cipher().decrypt_str(self.webhook_secret),
+            webhook_secret_stored=bool(
+                self.webhook_secret_id is not None or self.webhook_secret
+            ),
         )
 
 
@@ -370,3 +379,6 @@ class AgentSurfaceExternalUser(UUIDAuditBase):
 
     def to_entity(self) -> ExternalSurfaceUserEntity:
         return ExternalSurfaceUserEntity.model_validate(self)
+
+
+vault_owned(AgentSurface.__table__, "webhook_secret_id")

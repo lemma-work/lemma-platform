@@ -10,7 +10,6 @@ from uuid import UUID
 from sqlalchemy import func, select, text, tuple_
 from sqlalchemy.orm import Session
 
-from app.core.crypto import get_secret_cipher
 from app.core.domain.uow import IUnitOfWork
 from app.modules.connectors.contracts.pod_connectors import (
     resolve_standing_pod_connector,
@@ -32,6 +31,11 @@ from app.modules.agent_surfaces.domain.ports import (
 from app.modules.agent_surfaces.infrastructure.models import (
     AgentSurface,
 )
+from app.modules.agent_surfaces.infrastructure.surface_webhook_secrets import (
+    reveal_webhook_secret,
+    store_webhook_secret,
+)
+from app.modules.vault.contracts import vault_for
 from app.modules.agent_surfaces.infrastructure.repositories.surface_routing_sql import (
     active_surfaces_of_type,
     in_a_live_pod,
@@ -414,14 +418,18 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             surface_identity_username=entity.surface_identity_username,
             status=entity.status.value,
             surface_identity_email=entity.surface_identity_email,
-            webhook_secret=get_secret_cipher().encrypt_str(
-                reveal_secret(entity.webhook_secret)
-            ),
         )
+        minted = reveal_secret(entity.webhook_secret)
+        if minted:
+            await store_webhook_secret(vault_for(self.session), model, minted)
         self.session.add(model)
         await self.session.flush()
         self._collect_events(entity)
-        return model.to_entity()
+        created = model.to_entity()
+        # The secret this call minted, for the registration that follows: a
+        # read never fills it in, so it is carried over from the entity.
+        created.webhook_secret = entity.webhook_secret
+        return created
 
     async def update(self, entity: AgentSurfaceEntity) -> AgentSurfaceEntity:
         model = await self.session.get(AgentSurface, entity.id)
@@ -444,12 +452,34 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         model.surface_identity_username = entity.surface_identity_username
         model.status = entity.status.value
         model.surface_identity_email = entity.surface_identity_email
-        model.webhook_secret = get_secret_cipher().encrypt_str(
-            reveal_secret(entity.webhook_secret)
-        )
+        # Only a secret in hand is written. Reads never fill it in, so None
+        # means "unchanged", not "clear it", and an ordinary edit leaves the
+        # stored secret alone.
+        secret = reveal_secret(entity.webhook_secret)
+        if secret:
+            await store_webhook_secret(vault_for(self.session), model, secret)
         await self.session.flush()
+        entity.webhook_secret_stored = bool(
+            model.webhook_secret_id is not None or model.webhook_secret
+        )
         self._collect_events(entity)
         return entity
+
+    async def reveal_webhook_secret(self, surface: AgentSurfaceEntity) -> str | None:
+        """The surface's stored webhook secret, or None when it has none.
+
+        Scoped by the row, not the entity: the organization is only on the row,
+        and `session.get` answers from the identity map when the surface was
+        just read on this session, so the usual caller pays no extra query.
+        """
+        if not surface.webhook_secret_stored:
+            return None
+        model = await self.session.get(AgentSurface, surface.id)
+        if model is None:
+            return None
+        return await reveal_webhook_secret(
+            vault_for(self.session), model, session=self.session
+        )
 
     async def delete(self, id: UUID) -> None:
         model = await self.session.get(AgentSurface, id)

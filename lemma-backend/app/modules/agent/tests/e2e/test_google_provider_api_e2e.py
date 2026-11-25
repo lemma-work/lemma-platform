@@ -16,7 +16,6 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from starlette import status
 
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.domain.runtime_profiles import (
@@ -118,9 +117,7 @@ async def test_a_vertex_provider_is_saved_with_its_key_file_and_never_shows_it(
     assert google.asked == [("VERTEX_AI", "key-file-project", "gemini-4-hydrogen")]
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        stored = await AgentRuntimeProfileRepository(
-            uow, encryption=get_secret_cipher()
-        ).get_visible_by_id(
+        stored = await AgentRuntimeProfileRepository(uow).get_visible_by_id(
             profile_id=body["id"],
             organization_id=UUID(str(fixed_test_org["id"])),
             user_id=uuid4(),

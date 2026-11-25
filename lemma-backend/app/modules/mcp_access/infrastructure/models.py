@@ -25,6 +25,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.infrastructure.db.base import Base, UUIDAuditBase, UUIDCreatedBase
+from app.modules.vault.contracts import vault_owned
 
 
 class McpOAuthClient(Base):
@@ -135,8 +136,9 @@ class McpEventSubscription(UUIDAuditBase):
     again with the same four refreshes this row rather than adding one. The
     grant's, so ending the connection ends it -- deleted with the grant, and
     refused at delivery the moment the grant is revoked. The client's signing
-    secret is stored encrypted; it is what makes a delivery believable to the
-    receiver, and it is never shown back.
+    secret is a vault secret (``signing_secret_id``) bound to the pod and the
+    person; it is what makes a delivery believable to the receiver, and it is
+    never shown back.
 
     `stopped_at` is the person's Stop, kept as a tombstone so the client's next
     refresh is refused instead of re-creating it. `paused_at` is delivery
@@ -170,7 +172,13 @@ class McpEventSubscription(UUIDAuditBase):
     arguments: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
     arguments_key: Mapped[str] = mapped_column(String(64), nullable=False)
     url: Mapped[str] = mapped_column(String(2048), nullable=False)
-    secret_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    signing_secret_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("vault_secrets.id"), unique=True, nullable=True
+    )
+    # The secret under the Fernet cipher, from before the vault. Read only for
+    # a subscription a process on the previous release wrote mid-rollout;
+    # written only to NULL. Dropped by the next release's contract migration.
+    secret_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     refresh_before: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -224,3 +232,6 @@ class McpEventDelivery(UUIDCreatedBase):
         DateTime(timezone=True), nullable=True
     )
     outcome: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+
+vault_owned(McpEventSubscription.__table__, "signing_secret_id")

@@ -32,6 +32,7 @@ decides who is asked whether it is them.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import secrets
@@ -66,6 +67,21 @@ logger = get_logger(__name__)
 _TTL_SECONDS = 600
 _CODE = "agent_surfaces:telegram_identity_link:"
 _OPENED = "agent_surfaces:telegram_identity_link:opened:"
+
+
+def _digest(secret: str) -> str:
+    """What a code is kept under: its SHA-256, never the code itself, so a
+    read of Redis (a key listing, a dump) yields nothing that opens a link."""
+    return hashlib.sha256(secret.encode("utf-8")).hexdigest()
+
+
+def _code_key(secret: str) -> str:
+    return _CODE + _digest(secret)
+
+
+def _opened_key(secret: str) -> str:
+    return _OPENED + _digest(secret)
+
 
 #: ``/start lk_<code>`` in a private chat with the bot. Telegram's start
 #: parameter is 1-64 of ``[A-Za-z0-9_-]``, so the prefix and code fit in it.
@@ -143,7 +159,7 @@ async def mint_link(
     }
     client = redis or get_redis()
     try:
-        await client.set(_CODE + secret, _encode(record), ex=_TTL_SECONDS)
+        await client.set(_code_key(secret), _encode(record), ex=_TTL_SECONDS)
     except (RedisError, OSError) as exc:
         raise LinkUnavailable("Could not keep the link's code") from exc
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=_TTL_SECONDS)
@@ -183,7 +199,7 @@ async def open_link(
         and code.expected_external_user_id != account.external_user_id
     ):
         await _keep_opened(client, secret, account, other_account=True)
-        await _forget(client, _CODE + secret)
+        await _forget(client, _code_key(secret))
         logger.info("agent_surfaces.telegram_identity_link.other_account.observed")
         return OTHER_ACCOUNT_REPLY
     if not await _keep_opened(client, secret, account, other_account=False):
@@ -228,7 +244,7 @@ async def take_confirmed(
         or opened.get("other_account")
     ):
         return None
-    await _forget(client, _CODE + secret, _OPENED + secret)
+    await _forget(client, _code_key(secret), _opened_key(secret))
     return code, _opened_account(opened)
 
 
@@ -284,7 +300,7 @@ async def decline_link(secret: str, *, user_id: UUID, redis=None) -> None:
     client = redis or get_redis()
     code = await _code(client, secret)
     if code is not None and code.user_id == user_id:
-        await _forget(client, _CODE + secret, _OPENED + secret)
+        await _forget(client, _code_key(secret), _opened_key(secret))
 
 
 @dataclass(frozen=True, slots=True)
@@ -369,7 +385,7 @@ def _account(parsed: ParsedInboundSurfaceEvent) -> TelegramAccount | None:
 
 
 async def _code(client, secret: str) -> LinkCode | None:
-    raw = await _get(client, _CODE + secret)
+    raw = await _get(client, _code_key(secret))
     if not isinstance(raw, dict):
         return None
     try:
@@ -386,7 +402,7 @@ async def _code(client, secret: str) -> LinkCode | None:
 
 
 async def _opened(client, secret: str) -> dict[str, object] | None:
-    raw = await _get(client, _OPENED + secret)
+    raw = await _get(client, _opened_key(secret))
     return raw if isinstance(raw, dict) else None
 
 
@@ -413,7 +429,7 @@ async def _keep_opened(
     }
     try:
         kept = await client.set(
-            _OPENED + secret, _encode(record), ex=_TTL_SECONDS, nx=True
+            _opened_key(secret), _encode(record), ex=_TTL_SECONDS, nx=True
         )
     except RedisError, OSError:
         logger.warning(

@@ -1,6 +1,6 @@
 """A Sign in with Apple is revoked with Apple when the account is deleted.
 
-Against the real SuperTokens core, its user metadata and the secret cipher.
+Against the real SuperTokens core, its user metadata and the vault.
 Apple's two halves are stood in for: the provider's sign-in, in front of the
 override (nothing here can complete a real Apple login), and Apple's revoke
 endpoint, as an HTTP transport handed to the deletion.
@@ -28,7 +28,10 @@ from supertokens_python.recipe.thirdparty.interfaces import (
     SignInUpOkResult,
 )
 from supertokens_python.recipe.thirdparty.types import RawUserInfoFromProvider
-from supertokens_python.recipe.usermetadata.asyncio import get_user_metadata
+from supertokens_python.recipe.usermetadata.asyncio import (
+    get_user_metadata,
+    update_user_metadata,
+)
 
 from app.core.infrastructure.work.types import Unavailable
 from app.modules.identity.config import identity_settings
@@ -37,6 +40,7 @@ from app.modules.identity.infrastructure.supertokens_auth.account_removal import
 )
 from app.modules.identity.infrastructure.supertokens_auth.apple import (
     APPLE_REVOKE_ENDPOINT,
+    REFRESH_TOKEN_PURPOSE,
     REVOCATION_METADATA_KEY,
     remember_apple_refresh_token,
 )
@@ -140,8 +144,18 @@ async def test_an_apple_account_deleted_is_revoked_with_apple_once(
 
     kept = (await get_user_metadata(user_id)).metadata[REVOCATION_METADATA_KEY]
     assert kept["client_id"] == "com.example.signin"
-    # Sealed, not stored as it came: the SuperTokens dashboard shows metadata.
+    # In the vault, not stored as it came: the SuperTokens dashboard shows
+    # metadata.
     assert "r.refresh-token" not in str(kept)
+    secret = await _vault_secret(UUID(kept["secret_id"]))
+    assert secret is not None
+    assert (secret.organization_id, secret.pod_id, secret.user_id) == (
+        None,
+        None,
+        UUID(user_id),
+    )
+    assert secret.purpose == REFRESH_TOKEN_PURPOSE
+    assert b"r.refresh-token" not in secret.ciphertext
 
     apple, asked = _apple_answering(httpx.Response(200))
     async with apple:
@@ -154,6 +168,7 @@ async def test_an_apple_account_deleted_is_revoked_with_apple_once(
     assert _form(revoke)["token"] == "r.refresh-token"
     assert _form(revoke)["client_id"] == "com.example.signin"
     assert await get_user(user_id) is None
+    assert await _vault_secret(UUID(kept["secret_id"])) is None, "spent, then gone"
 
 
 async def test_apple_being_down_keeps_the_account_and_its_token_for_the_retry(
@@ -226,4 +241,66 @@ async def test_an_answer_apple_will_not_change_lets_the_deletion_finish(
         await end_deleted_account_sign_in(UUID(user_id), apple_http=apple)
 
     assert len(asked) == 1
+    assert await get_user(user_id) is None
+
+
+async def _vault_secret(secret_id: UUID):
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.modules.vault.infrastructure.models import VaultSecret
+
+    async with async_session_maker() as session:
+        return await session.get(VaultSecret, secret_id)
+
+
+async def test_a_new_sign_in_replaces_the_kept_token_in_place(
+    test_app: FastAPI, apple_configured: None
+) -> None:
+    del test_app
+    created = await _apple_user()
+    user_id = created.user.id
+    assert await remember_apple_refresh_token(
+        user_id, {"refresh_token": "r.first"}, {"aud": "com.example.signin"}
+    )
+    first = (await get_user_metadata(user_id)).metadata[REVOCATION_METADATA_KEY]
+    assert await remember_apple_refresh_token(
+        user_id, {"refresh_token": "r.second"}, {"aud": "com.example.signin"}
+    )
+    second = (await get_user_metadata(user_id)).metadata[REVOCATION_METADATA_KEY]
+    assert second["secret_id"] == first["secret_id"]
+
+    apple, asked = _apple_answering(httpx.Response(200))
+    async with apple:
+        await end_deleted_account_sign_in(UUID(user_id), apple_http=apple)
+
+    assert [_form(request)["token"] for request in asked] == ["r.second"]
+
+
+async def test_a_token_kept_before_the_vault_is_still_revoked(
+    test_app: FastAPI, apple_configured: None
+) -> None:
+    """A user who signed in before the deploy: the token sealed with the old
+    secret cipher, in the metadata itself."""
+    from app.core.crypto import get_secret_cipher
+
+    del test_app
+    created = await _apple_user()
+    user_id = created.user.id
+    sealed = await get_secret_cipher().encrypt_json_async(
+        {"refresh_token": "r.legacy-token"}
+    )
+    await update_user_metadata(
+        user_id,
+        {
+            REVOCATION_METADATA_KEY: {
+                "client_id": "com.example.signin",
+                "sealed": sealed,
+            }
+        },
+    )
+
+    apple, asked = _apple_answering(httpx.Response(200))
+    async with apple:
+        await end_deleted_account_sign_in(UUID(user_id), apple_http=apple)
+
+    assert [_form(request)["token"] for request in asked] == ["r.legacy-token"]
     assert await get_user(user_id) is None

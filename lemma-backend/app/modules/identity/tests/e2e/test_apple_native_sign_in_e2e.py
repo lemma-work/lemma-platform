@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, cast
 from urllib.parse import parse_qs
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import jwt
@@ -43,11 +43,11 @@ from supertokens_python.recipe.thirdparty.recipe_implementation import (
 )
 from supertokens_python.recipe.usermetadata.asyncio import get_user_metadata
 
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.config import IdentitySettings
 from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.infrastructure.supertokens_auth import apple
+from app.modules.vault.contracts import SecretScope, vault_for
 from app.modules.identity.infrastructure.supertokens_auth.override_thirdparty import (
     override_thirdparty_functions,
 )
@@ -280,10 +280,16 @@ async def test_a_phone_signs_up_with_apple_and_holds_a_session_of_its_own(
     assert form["client_id"] == BUNDLE_ID
     kept = (await get_user_metadata(user_id)).metadata[apple.REVOCATION_METADATA_KEY]
     assert kept["client_id"] == BUNDLE_ID
-    # Sealed, and the token Apple traded is the one inside.
+    # In the vault, bound to the user, and the token Apple traded is the one
+    # inside.
     assert "r.native-refresh-token" not in str(kept)
-    opened = await get_secret_cipher().decrypt_json_async(kept["sealed"])
-    assert opened == {"refresh_token": "r.native-refresh-token"}
+    async with async_session_maker() as db:
+        revealed = await vault_for(db).reveal(
+            UUID(kept["secret_id"]),
+            expect=SecretScope(None, user_id=UUID(user_id)),
+            purpose=apple.REFRESH_TOKEN_PURPOSE,
+        )
+    assert revealed.text() == "r.native-refresh-token"
 
     # The phone's session works where the phone uses it ...
     me = await async_client.get(

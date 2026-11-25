@@ -145,7 +145,7 @@ def _stored(subscription_id: UUID, remote_id: str | None) -> StoredEventSubscrip
         user_id=uuid4(),
         name="issue.created",
         arguments={},
-        secret_ciphertext="",
+        signing_secret_id=None,
         remote_id=remote_id,
         granted_at=None,
         refresh_before=None,

@@ -22,8 +22,6 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from starlette import status
-
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import WorkClass, WorkRegistry
@@ -159,9 +157,7 @@ async def _world(scenario: E2EScenario, db_session) -> World:
 async def _connect(db_session, world: World, user: dict, secret: str) -> str:
     """An org account for ``user``, as the connect flow would have left it."""
     install = await db_session.get(AuthConfig, UUID(world.auth_config_id))
-    created = await AccountRepository(
-        SqlAlchemyUnitOfWork(db_session), encryption=get_secret_cipher()
-    ).create(
+    created = await AccountRepository(SqlAlchemyUnitOfWork(db_session)).create(
         AccountEntity(
             user_id=UUID(user["id"]),
             organization_id=install.organization_id,

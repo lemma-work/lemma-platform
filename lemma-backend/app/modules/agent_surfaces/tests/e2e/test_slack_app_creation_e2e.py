@@ -176,14 +176,22 @@ async def test_save_then_create_makes_the_orgs_own_install_and_a_retry_reuses_it
         (i["team_id"], i["team_name"], i["needs_new_token"]) for i in body["items"]
     ] == [(TEAM, "Acme", False)]
     assert "xoxe" not in listed.text and "xoxe" not in saved.text
-    # The pasted token is spent; the pair it rotated to is kept, encrypted.
-    stored = await _scalar(
-        db_session,
-        "SELECT access_token || refresh_token FROM slack_configuration_tokens "
-        "WHERE team_id = :team",
-        team=TEAM,
-    )
-    assert isinstance(stored, str) and "xoxe" not in stored
+    # The pasted token is spent; the pair it rotated to is kept in the vault,
+    # and the old columns hold nothing for a previous release to replay.
+    stored = (
+        await db_session.execute(
+            text(
+                "SELECT t.access_token, t.refresh_token, s.purpose, "
+                "encode(s.ciphertext, 'escape') "
+                "FROM slack_configuration_tokens t "
+                "JOIN vault_secrets s ON s.id = t.tokens_secret_id "
+                "WHERE t.team_id = :team"
+            ),
+            {"team": TEAM},
+        )
+    ).one()
+    assert stored[:3] == (None, None, "agent_surfaces.slack_configuration.tokens")
+    assert "xoxe" not in stored[3]
 
     created = await authenticated_client.post(
         f"{_base(pod_id)}/apps", json={"team_id": TEAM}

@@ -23,9 +23,9 @@ a pooled database connection is not held during provider I/O.
 | `connector_triggers` | Available external trigger metadata |
 | `auth_config_operations` | Operations discovered for one organization's install. MCP tools and OpenAPI-URL endpoints describe a customer's own systems, so they are kept out of the global catalog entirely rather than held there behind a nullable tenant column |
 | `auth_config_events` | Events an MCP install's server lists with `events/list`, discovered beside its tools and kept per install for the same reason |
-| `connector_event_subscriptions` | One subscription to an MCP server's event, made on a person's account for one schedule: our id (in the callback URL), our encrypted `whsec_` secret, the server's id and `refreshBefore` |
-| `auth_configs` | Organization installation/configuration and encrypted OAuth client secrets |
-| `accounts` | User-owned encrypted provider credentials and connection status |
+| `connector_event_subscriptions` | One subscription to an MCP server's event, made on a person's account for one schedule: our id (in the callback URL), our `whsec_` secret (a vault secret, `signing_secret_id`), the server's id and `refreshBefore` |
+| `auth_configs` | Organization installation/configuration; the config (OAuth client and signing secrets) is a vault secret, `config_secret_id` |
+| `accounts` | User-owned provider credentials (a vault secret, `credentials_secret_id`) and connection status |
 | `connect_requests` | Short-lived OAuth state and authorization flow metadata |
 | `pod_connectors` | A pod's declaration of one org installation under a pod-local slug, with its mode: PER_MEMBER (each caller's own account) or SHARED (one pod account). The only thing an operation is run through, so the account is the connector's decision and never an argument |
 | `pod_accounts` | One org account in use in one pod, owned by the account's owner, with a visibility only that owner may widen (PERSONAL, POD, RESTRICTED). A row rather than an inference so a pod's use of an account is recorded, authorized like any pod resource, and removed with the member. `allow_sandbox_use` is the owner's "allow use inside sandboxes": only with it may the sandbox git bridge write a shared account's token into another member's workspace; withdrawing the account clears it, and turning it off takes the token back out of a session on its next git command |
@@ -74,7 +74,7 @@ sequenceDiagram
     P->>API: callback(code, state)
     API->>DB: resolve pending request/config
     API->>P: exchange code
-    API->>DB: encrypt credentials + connect account
+    API->>DB: store credentials in the vault + connect account
 ```
 
 Storing a grant -- a new account, or an existing one granted again -- emits
@@ -131,7 +131,15 @@ asked to bring its own OAuth app.
 
 - Auth configurations are organization-scoped; accounts remain owned by one
   user even when the auth configuration is shared.
-- Credentials are encrypted by the shared versioned secret cipher.
+- Credentials, install configs and event-subscription secrets are vault
+  secrets (`app/modules/vault`), bound to the owning row's scope and a purpose
+  (`infrastructure/repositories/connector_secrets.py`). Until the contract
+  migration drops them, the old Fernet columns are read for rows a previous
+  release wrote mid-rollout and cleared on the next write.
+- `AccountRepository.update` never writes credentials; they change only through
+  `replace_credentials` (a new grant) and `store_refreshed`. An OAuth refresh is
+  single-flight on the vault's lease (`services/credential_refresh.py`), so two
+  callers never spend one rotating refresh token twice.
 - Operation execution resolves the caller's permitted account and scopes before
   calling a provider.
 - Provider-specific capabilities live behind auth-provider and operation-gateway

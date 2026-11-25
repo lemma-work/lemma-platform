@@ -8,6 +8,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.infrastructure.db.base import UUIDAuditBase
+from app.modules.vault.contracts import vault_owned
 from app.modules.connectors.domain.auth_config import (
     AuthConfigEntity,
     AuthConfigSource,
@@ -51,6 +52,15 @@ class AuthConfig(UUIDAuditBase):
     is_default: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false", nullable=False
     )
+    # The install's whole config -- client secrets, signing secrets, custom
+    # headers alongside the public endpoints -- is one vault secret, purpose
+    # `connectors.auth_config.config`, scoped to the organization.
+    config_secret_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("vault_secrets.id"), unique=True, nullable=True
+    )
+    # The previous release's Fernet column. Read only while a row written by an
+    # old process mid-rollout has no `config_secret_id`; written only to NULL.
+    # Dropped by the next release's contract migration.
     config: Mapped[dict | None] = mapped_column(JSONB, default=None, nullable=True)
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", JSONB, default=None, nullable=True
@@ -108,10 +118,14 @@ class AuthConfig(UUIDAuditBase):
             config_source=self.config_source,
             status=self.status,
             is_default=self.is_default,
-            config=self.config,
+            # Filled in by the repository, from the vault (or the old column).
+            config=None,
             metadata=self.metadata_,
             created_by_user_id=self.created_by_user_id,
             updated_by_user_id=self.updated_by_user_id,
             created_at=self.created_at,
             updated_at=self.updated_at,
         )
+
+
+vault_owned(AuthConfig.__table__, "config_secret_id")

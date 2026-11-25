@@ -772,3 +772,91 @@ async def test_a_paused_subscription_holds_none_of_the_pods_log(
     await _run(WorkClass.EVENTS)
     owed = [record for record, _ in await _owed(sub_id)]
     assert after in owed and not set(owed) & set(missed)
+
+
+async def _stored_secret(sub_id: str) -> tuple[UUID | None, str | None]:
+    from sqlalchemy import select
+
+    from app.modules.mcp_access.infrastructure.models import McpEventSubscription
+
+    async with _session_factory()() as uow:
+        row = (
+            await uow.session.execute(
+                select(
+                    McpEventSubscription.signing_secret_id,
+                    McpEventSubscription.secret_ciphertext,
+                ).where(McpEventSubscription.public_id == sub_id)
+            )
+        ).one()
+    return row.signing_secret_id, row.secret_ciphertext
+
+
+async def test_the_signing_secret_is_a_vault_secret_and_a_legacy_one_still_signs(
+    mcp_client, authenticated_client, test_pod, receiver
+):
+    """The secret is kept in the vault, bound to the pod and the person. A row
+    the previous release wrote mid-rollout -- the secret in the old Fernet
+    column, no vault reference -- still signs, and the client's next refresh
+    moves it into the vault."""
+    from sqlalchemy import select, update
+
+    from app.core.crypto.factory import get_secret_cipher
+    from app.modules.mcp_access.infrastructure.models import McpEventSubscription
+    from app.modules.vault.infrastructure.models import VaultSecret
+
+    pod_id = test_pod["id"]
+    token, params, sub_id, table, record_id = await _subscribed(
+        mcp_client, authenticated_client, pod_id, receiver
+    )
+    secret_id, ciphertext = await _stored_secret(sub_id)
+    assert secret_id is not None and ciphertext is None
+    async with _session_factory()() as uow:
+        user_id = await uow.session.scalar(
+            select(McpEventSubscription.user_id).where(
+                McpEventSubscription.public_id == sub_id
+            )
+        )
+        stored = await uow.session.get(VaultSecret, secret_id)
+        assert stored is not None
+        assert (stored.organization_id, stored.pod_id, stored.user_id) == (
+            None,
+            UUID(pod_id),
+            user_id,
+        )
+        assert stored.purpose == "mcp_access.event_subscription.secret"
+        assert SECRET.encode() not in stored.ciphertext
+
+    # What a process on the previous release leaves: the Fernet column, and
+    # no reference (clearing it deletes the vault copy, as the trigger does).
+    async with _session_factory()() as uow:
+        await uow.session.execute(
+            update(McpEventSubscription)
+            .where(McpEventSubscription.public_id == sub_id)
+            .values(
+                signing_secret_id=None,
+                secret_ciphertext=get_secret_cipher().encrypt_str(SECRET),
+            )
+        )
+        await uow.commit()
+        assert await uow.session.get(VaultSecret, secret_id) is None
+
+    delivery = EventDelivery(
+        SqlDeliveryLedger(_session_factory()), read_record=read_record_for
+    )
+    assert await delivery.deliver(_job_for(sub_id, pod_id, table, record_id)) is (
+        Outcome.SENT
+    )
+    assert receiver.bad_signatures == 0
+
+    refreshed = await _rpc(mcp_client, pod_id, token, "events/subscribe", params)
+    assert refreshed["result"]["id"] == sub_id
+    moved_id, ciphertext = await _stored_secret(sub_id)
+    assert moved_id is not None and ciphertext is None
+    assert await delivery.deliver(_job_for(sub_id, pod_id, table, record_id)) is (
+        Outcome.SENT
+    )
+    assert len(receiver.events) == 2 and receiver.bad_signatures == 0
+
+    # A refresh keeps the one vault secret rather than adding another.
+    await _rpc(mcp_client, pod_id, token, "events/subscribe", params)
+    assert (await _stored_secret(sub_id))[0] == moved_id

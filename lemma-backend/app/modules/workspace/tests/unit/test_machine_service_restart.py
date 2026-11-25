@@ -1,6 +1,7 @@
 """A service comes back after a pause from its durable definition, with a
-token minted afresh for the claims it first ran with -- and its caller's
-variables were never stored in the clear."""
+token minted afresh for the claims it first ran with. (That its caller's
+variables are a vault secret, never stored in the clear, is
+``tests/e2e/test_machine_secrets_e2e.py``.)"""
 
 from __future__ import annotations
 
@@ -16,21 +17,10 @@ from app.modules.workspace.services.machine_processes import (
 from app.modules.workspace.services.machine_services import (
     ServiceDefinition,
     TokenClaims,
-    _open,
-    _seal,
 )
 from sandbox_runtime.protocol import ProcessState
 
 MACHINE = uuid4()
-
-
-def test_the_callers_variables_are_ciphertext_at_rest() -> None:
-    sealed = _seal({"API_KEY": "s3cret-value"})
-
-    assert sealed is not None and "s3cret-value" not in sealed
-    opened = _open(sealed)
-    assert isinstance(opened["API_KEY"], SecretStr)
-    assert opened["API_KEY"].get_secret_value() == "s3cret-value"
 
 
 def test_claims_survive_the_round_trip() -> None:

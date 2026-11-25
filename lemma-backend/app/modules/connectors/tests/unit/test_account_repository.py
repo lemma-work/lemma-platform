@@ -8,6 +8,8 @@ need a real Postgres connection."""
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -18,11 +20,17 @@ from app.modules.connectors.domain.errors import AccountAlreadyConnectedError
 from app.modules.connectors.infrastructure.repositories.account_repository import (
     AccountRepository,
 )
+from app.modules.connectors.infrastructure.repositories.connector_secrets import (
+    ACCOUNT_CREDENTIALS_PURPOSE,
+)
+from app.modules.vault.contracts import Revealed, SecretKind, SecretRef
 
 pytestmark = pytest.mark.asyncio
 
 
 class _FakeResult:
+    rowcount = 1
+
     def __init__(self, instance):
         self._instance = instance
 
@@ -62,19 +70,60 @@ class _FakeUow:
     def __init__(self, session):
         self.session = session
 
+    def collect_events(self, events):
+        return None
 
-class _NoopEncryption:
-    def encrypt_json(self, value):
-        return value
 
-    def decrypt_json(self, value):
-        return value
+class _FakeVault:
+    """Records what the repository asks of the vault; holds JSON secrets."""
 
-    async def encrypt_json_async(self, value):
-        return value
+    def __init__(self, held: dict | None = None):
+        self.held = dict(held or {})
+        self.calls: list[tuple[str, dict]] = []
 
-    async def decrypt_json_async(self, value):
-        return value
+    async def put(self, **kwargs):
+        self.calls.append(("put", kwargs))
+        ref = SecretRef(uuid4(), 1)
+        self.held[ref.id] = kwargs["value"]
+        return ref
+
+    async def replace(self, secret_id, **kwargs):
+        self.calls.append(("replace", {"secret_id": secret_id, **kwargs}))
+        self.held[secret_id] = kwargs["value"]
+        return SecretRef(secret_id, 2)
+
+    async def reveal(self, secret_id, **kwargs):
+        self.calls.append(("reveal", {"secret_id": secret_id, **kwargs}))
+        return _revealed(secret_id, self.held[secret_id])
+
+    async def reveal_many(self, expected, *, purpose):
+        return {
+            secret_id: _revealed(secret_id, self.held[secret_id])
+            for secret_id in expected
+            if secret_id in self.held
+        }
+
+
+def _revealed(secret_id, value) -> Revealed:
+    import json
+
+    return Revealed(
+        secret_id, 1, SecretKind.JSON, None, json.dumps(value).encode("utf-8")
+    )
+
+
+def _repo(session, vault: _FakeVault | None = None) -> AccountRepository:
+    return AccountRepository(uow=_FakeUow(session), vault=vault or _FakeVault())
+
+
+def _located(secret_id=None, credentials=None):
+    """The columns the credential store selects to find an account's secret."""
+    return SimpleNamespace(
+        credentials_secret_id=secret_id,
+        organization_id=uuid4(),
+        user_id=uuid4(),
+        credentials=credentials,
+    )
 
 
 def _account_entity(**overrides) -> AccountEntity:
@@ -115,7 +164,7 @@ def _unrelated_error() -> IntegrityError:
 
 async def test_create_translates_duplicate_identity_violation():
     session = _FakeSession(flush_exc=_duplicate_identity_error())
-    repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
+    repo = _repo(session)
 
     with pytest.raises(AccountAlreadyConnectedError):
         await repo.create(_account_entity())
@@ -123,17 +172,20 @@ async def test_create_translates_duplicate_identity_violation():
 
 async def test_write_model_ignores_read_side_connector_relationship():
     session = _FakeSession()
-    repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
+    repo = _repo(session)
 
-    model = await repo._to_model(_account_entity(connector=None))
+    model = repo._to_model(_account_entity(connector=None))
 
     assert model.connector_id == "asana"
     assert "connector" not in model.__dict__
+    # The credentials go to the vault, never onto the row.
+    assert model.credentials is None
+    assert model.credentials_secret_id is None
 
 
 async def test_create_reraises_unrelated_integrity_error():
     session = _FakeSession(flush_exc=_unrelated_error())
-    repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
+    repo = _repo(session)
 
     with pytest.raises(IntegrityError):
         await repo.create(_account_entity())
@@ -152,7 +204,7 @@ async def test_update_translates_duplicate_identity_violation():
         credentials={"access_token": "tok"},
     )
     session = _FakeSession(flush_exc=_duplicate_identity_error(), existing=existing)
-    repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
+    repo = _repo(session)
 
     with pytest.raises(AccountAlreadyConnectedError):
         await repo.update(_account_entity(id=existing.id))
@@ -171,21 +223,65 @@ async def test_update_reraises_unrelated_integrity_error():
         credentials={"access_token": "tok"},
     )
     session = _FakeSession(flush_exc=_unrelated_error(), existing=existing)
-    repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
+    repo = _repo(session)
 
     with pytest.raises(IntegrityError):
         await repo.update(_account_entity(id=existing.id))
 
 
+async def test_create_stores_the_credentials_in_the_vault_and_points_at_them():
+    # Stopped at the insert: what matters is what was added, and with what.
+    session = _FakeSession(flush_exc=_unrelated_error())
+    vault = _FakeVault()
+    entity = _account_entity()
+
+    with pytest.raises(IntegrityError):
+        await _repo(session, vault).create(entity)
+
+    ((verb, put),) = [call for call in vault.calls if call[0] == "put"]
+    assert put["purpose"] == ACCOUNT_CREDENTIALS_PURPOSE
+    assert put["scope"].organization_id == entity.organization_id
+    assert put["scope"].user_id == entity.user_id
+    assert put["value"]["access_token"] == "tok"
+    (row,) = session.added
+    assert row.credentials_secret_id in vault.held
+    assert row.credentials is None
+
+
 class TestWritesThatLeaveTheCredentialsAlone:
-    """`update` writes the whole row from the entity it is handed, credentials
-    included, and an entity is a copy made when it was read. Marking an
-    account, or binding it, from a copy read before a token refresh put the
-    old token back -- a spent one, where refresh tokens are single-use."""
+    """An entity is a copy made when it was read. `update` once wrote the
+    credentials back from it, and marking or binding an account from a copy
+    read before a token refresh put the old token back -- a spent one, where
+    refresh tokens are single-use. Credentials are written only on purpose."""
+
+    async def test_update_never_writes_the_credentials(self):
+        from app.modules.connectors.infrastructure.models import Account
+
+        existing = Account(
+            id=uuid4(),
+            user_id=uuid4(),
+            organization_id=uuid4(),
+            auth_config_id=uuid4(),
+            connector_id="asana",
+            status="CONNECTED",
+            is_default=True,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        session = _FakeSession(existing=existing)
+        vault = _FakeVault()
+
+        await _repo(session, vault).update(
+            _account_entity(id=existing.id, credentials={"access_token": "stale"})
+        )
+
+        assert [verb for verb, _ in vault.calls if verb != "reveal"] == []
+        assert existing.credentials is None
+        assert existing.credentials_secret_id is None
 
     async def test_marking_an_account_writes_its_status_and_nothing_else(self):
         session = _FakeSession()
-        repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
+        repo = _repo(session)
 
         await repo.set_status(uuid4(), AccountStatus.REAUTH_REQUIRED)
 
@@ -197,7 +293,7 @@ class TestWritesThatLeaveTheCredentialsAlone:
 
     async def test_binding_an_account_writes_its_routing_key_and_nothing_else(self):
         session = _FakeSession()
-        repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
+        repo = _repo(session)
 
         await repo.set_external_ref(uuid4(), "158040062")
 
@@ -209,14 +305,20 @@ class TestWritesThatLeaveTheCredentialsAlone:
     async def test_the_stored_credentials_are_read_as_a_column(self):
         """Not as an entity: while the session still holds an instance, an
         entity read answers with it, and that is the copy being looked behind."""
-        session = _FakeSession(existing={"access_token": "new"})
-        repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
+        secret_id = uuid4()
+        located = _located(secret_id)
+        session = _FakeSession(existing=located)
+        vault = _FakeVault({secret_id: {"access_token": "new"}})
 
-        assert await repo.stored_credentials(uuid4()) == {"access_token": "new"}
+        stored = await _repo(session, vault).stored_credentials(uuid4())
 
+        assert stored == {"access_token": "new"}
+        ((_, reveal),) = vault.calls
+        assert reveal["purpose"] == ACCOUNT_CREDENTIALS_PURPOSE
+        assert reveal["expect"].user_id == located.user_id
         (statement,) = session.statements
         sql = str(statement)
-        assert sql.startswith("SELECT accounts.credentials")
+        assert sql.startswith("SELECT accounts.credentials_secret_id")
         # Locked, so a decision made from the answer cannot be overtaken by a
         # refresh that commits a moment later.
         assert sql.rstrip().endswith("FOR UPDATE")
@@ -225,21 +327,46 @@ class TestWritesThatLeaveTheCredentialsAlone:
         """The status is in the statement whether or not this session saw it
         change: a refresh that lost a race may have marked the account since,
         and the ORM writes a status only when its own copy says it changed."""
-        session = _FakeSession()
-        repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
+        secret_id = uuid4()
+        session = _FakeSession(existing=_located(secret_id))
+        vault = _FakeVault({secret_id: {"access_token": "old"}})
 
-        await repo.store_refreshed(uuid4(), {"access_token": "new"})
+        await _repo(session, vault).store_refreshed(
+            uuid4(), {"access_token": "new"}, expected_version=3
+        )
 
-        (statement,) = session.statements
+        ((_, replaced),) = vault.calls
+        assert replaced["value"] == {"access_token": "new"}
+        assert replaced["expected_version"] == 3
+        _locate, statement = session.statements
         params = statement.compile().params
         assert params["status"] == "CONNECTED"
-        assert params["credentials"] == {"access_token": "new"}
+        # The old column is cleared in the same statement, so a process on the
+        # previous release reading the row fails closed.
+        assert params["credentials"] is None
         # And nothing an older copy of the account could get wrong.
         assert {"external_ref", "email", "display_name"}.isdisjoint(params)
 
+    async def test_a_credential_only_in_the_old_column_moves_into_the_vault(self):
+        session = _FakeSession(existing=_located(None, {"access_token": "old"}))
+        vault = _FakeVault()
+
+        await _repo(session, vault).replace_credentials(
+            uuid4(), {"access_token": "new"}
+        )
+
+        ((verb, put),) = vault.calls
+        assert verb == "put"
+        _locate, statement = session.statements
+        params = statement.compile().params
+        assert params["credentials"] is None
+        assert params["credentials_secret_id"] in vault.held
+        # Only if nobody else pointed it at a secret meanwhile.
+        assert "credentials_secret_id IS NULL" in str(statement)
+
     async def test_an_account_that_is_gone_has_no_stored_credentials(self):
         session = _FakeSession(existing=None)
-        repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
+        repo = _repo(session)
 
         assert await repo.stored_credentials(uuid4()) is None
 
@@ -265,7 +392,7 @@ class TestEveryAccountReadLoadsItsConnectorEagerly:
 
     async def test_promoting_the_next_default_asks_for_it(self):
         session = _FakeSession(existing=None)
-        repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
+        repo = _repo(session)
 
         await repo.promote_next_default(
             user_id=uuid4(),

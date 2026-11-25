@@ -11,13 +11,10 @@ was a join, so neither is here: both became operations, and the surfaces module
 no longer holds a `select()` against another module's table.
 
 **The storage detail that had escaped.** `for_account` in
-`agent_surfaces/services/credential_resolver.py` was reading the raw
-`accounts.credentials` column *itself*, checking it for a `_encrypted` marker,
-and filling gaps in the decrypted credentials from the plaintext half. Which
-fields are stored in the clear, and how the encrypted ones are marked, is
-connectors' business twice over -- it is the storage format, and getting the
-test wrong hands out either nothing or a ciphertext. `account_with_secrets`
-answers that here, once.
+`agent_surfaces/services/credential_resolver.py` used to read the raw
+credentials column *itself*. Where an account's credentials are kept -- a vault
+secret now -- is connectors' business, and `account_with_secrets` answers it
+here, once.
 
 A submodule for the same reason as `retirement` beside it: these reach the
 service, repository and model layers, and `contracts/__init__` is imported by
@@ -32,7 +29,6 @@ from uuid import UUID
 
 from sqlalchemy import select
 
-from app.core.crypto import get_secret_cipher
 from app.modules.connectors.api.dependencies import get_connector_service
 from app.modules.connectors.domain.account import AccountEntity, GenericCredentials
 from app.modules.connectors.domain.auth_config import (
@@ -43,6 +39,7 @@ from app.modules.connectors.domain.auth_config import (
 from app.modules.connectors.domain.connector import AuthProvider, AuthScheme
 from app.modules.connectors.domain.errors import ConnectorNotFoundError
 from app.modules.connectors.infrastructure.models.account import Account
+from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 from app.modules.connectors.infrastructure.repositories.account_repository import (
     AccountRepository,
 )
@@ -114,11 +111,11 @@ class SurfaceConnector:
 
 
 def _accounts(uow) -> AccountRepository:
-    return AccountRepository(uow, encryption=get_secret_cipher())
+    return AccountRepository(uow)
 
 
 def _auth_configs(uow) -> AuthConfigRepository:
-    return AuthConfigRepository(uow, encryption=get_secret_cipher())
+    return AuthConfigRepository(uow)
 
 
 def _as_surface_account(account) -> SurfaceAccount:
@@ -150,9 +147,12 @@ def _as_mapping(credentials) -> dict[str, object]:
 
 
 async def account(uow, account_id: UUID) -> SurfaceAccount | None:
-    """One connected account, or ``None`` when it is gone."""
-    found = await _accounts(uow).get(account_id)
-    return _as_surface_account(found) if found is not None else None
+    """One connected account, or ``None`` when it is gone.
+
+    Read from columns, like :func:`account_summaries`: a ``SurfaceAccount``
+    carries no credentials, so there is nothing to decrypt.
+    """
+    return (await account_summaries(uow, [account_id])).get(account_id)
 
 
 async def account_summaries(
@@ -199,23 +199,13 @@ async def account_with_secrets(
 ) -> tuple[SurfaceAccount, dict[str, object]] | None:
     """An account and the credentials stored for it, decrypted.
 
-    The merge is the point. Credentials are written as an encrypted blob, but a
-    row can also carry plaintext keys beside it, and those are the only copy of
-    fields the encrypted half never had. A caller reading the column itself has
-    to know both that the marker is called ``_encrypted`` and which half wins;
-    reading it here means it is known in one place, by the module that writes it.
+    The repository answers from the vault, or from the old column for a row a
+    process on the previous release wrote mid-rollout.
     """
     found = await _accounts(uow).get(account_id)
     if found is None:
         return None
-    credentials = _as_mapping(found.credentials)
-    raw = await uow.session.scalar(
-        select(Account.credentials).where(Account.id == account_id)
-    )
-    if isinstance(raw, dict) and not raw.get("_encrypted"):
-        for key, value in raw.items():
-            credentials.setdefault(key, value)
-    return _as_surface_account(found), credentials
+    return _as_surface_account(found), _as_mapping(found.credentials)
 
 
 async def upsert_bot_token_account(
@@ -238,8 +228,7 @@ async def upsert_bot_token_account(
     other account write gets are not skipped, and does not commit: the caller
     owns the transaction it is also writing its own rows in.
     """
-    encryption = get_secret_cipher()
-    auth_configs = AuthConfigRepository(uow=uow, encryption=encryption)
+    auth_configs = AuthConfigRepository(uow=uow)
     install = await auth_configs.get_active_by_org_and_app(
         organization_id, connector_id
     )
@@ -257,13 +246,15 @@ async def upsert_bot_token_account(
                 updated_by_user_id=user_id,
             )
         )
-    accounts = AccountRepository(uow=uow, encryption=encryption)
+    accounts = AccountRepository(uow=uow)
     credentials = GenericCredentials.model_validate({"bot_token": bot_token})
     existing = await accounts.get_by_user_auth_config_and_provider_account(
         user_id, install.id, provider_account_id
     )
     if existing is not None:
-        existing.credentials = credentials
+        # The platform just minted this token, so it replaces the stored one
+        # outright; `update` below writes only the descriptive columns.
+        await accounts.replace_credentials(existing.id, credentials)
         existing.display_name = display_name
         return (await accounts.update(existing)).id
     default_account = await accounts.get_by_user_and_auth_config(user_id, install.id)
@@ -296,7 +287,8 @@ async def refreshed_credentials(
     "no such account", which reads as a missing account and is really a missing
     join.
     """
-    owner = await _accounts(uow).get(account_id)
+    # Columns only: the service reveals the credentials itself, once.
+    owner = await account(uow, account_id)
     if owner is None:
         return {}
     credentials = await get_connector_service(uow).get_account_credentials(
@@ -306,8 +298,21 @@ async def refreshed_credentials(
 
 
 async def auth_config(uow, auth_config_id: UUID) -> SurfaceAuthConfig | None:
-    """The install behind an account, or ``None`` when it is gone."""
-    found = await _auth_configs(uow).get(auth_config_id)
+    """The install behind an account, or ``None`` when it is gone.
+
+    Columns only: none of these is secret, and the install's config is.
+    """
+    found = (
+        await uow.session.execute(
+            select(
+                AuthConfig.id,
+                AuthConfig.kind,
+                AuthConfig.connector_id,
+                AuthConfig.config_source,
+                AuthConfig.metadata_.label("metadata"),
+            ).where(AuthConfig.id == auth_config_id)
+        )
+    ).first()
     if found is None:
         return None
     return SurfaceAuthConfig(

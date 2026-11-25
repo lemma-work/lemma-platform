@@ -1,16 +1,22 @@
 """Sealing a stream too large to hold, the way the login copies are sealed.
 
 A login copy is one small archive sealed as one AES-256-GCM message under a
-fresh data key, the key wrapped by the deployment's secret cipher. A home
-carried across a size move is the same kind of secret -- SSH keys, ``.env``
-files -- but can be gigabytes, so it is sealed the same way in frames: one
-fresh data key per object, the machine id as associated data, and each frame
-its own AES-GCM message. A frame's nonce is a random prefix, the frame's index
-and whether it is the last, so a frame cannot be dropped, reordered or the
-stream cut short without the open failing.
+fresh data key. A home carried across a size move is the same kind of secret
+-- SSH keys, ``.env`` files -- but can be gigabytes, so it is sealed the same
+way in frames: one fresh data key per object, the machine id as associated
+data, and each frame its own AES-GCM message. A frame's nonce is a random
+prefix, the frame's index and whether it is the last, so a frame cannot be
+dropped, reordered or the stream cut short without the open failing.
 
-The wrapped data key travels in the object's header. Unwrapping it needs the
-deployment's key, which is not in the bucket: a bucket alone opens nothing.
+The data key travels in the object's header, sealed by the vault's sealer
+(``lvs1:``) and bound to the same context. Opening it needs the vault's
+key-encryption key, which is not in the bucket: a bucket alone opens nothing.
+
+The sealer is for values that expire, because a sealed value names the KEK it
+was sealed under and ``rewrap`` cannot reach it. A carried home is one: it
+lives for the length of one move and is deleted when the move finishes (see
+``size_migration``). A header from before the vault (``lsenc1:``, the Fernet
+cipher) still opens, for a move that was under way across the deploy.
 """
 
 from __future__ import annotations
@@ -21,10 +27,18 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 
 from cryptography.exceptions import InvalidTag
+from cryptography.fernet import InvalidToken
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from app.core.crypto import envelope
-from app.core.crypto.ports import SecretCipher
+from app.modules.vault.contracts import (
+    SealingKeys,
+    VaultError,
+    is_sealed,
+    legacy_text,
+    open_text,
+    seal_value,
+)
 
 _MAGIC = b"LSS1"
 #: Plaintext bytes per frame; each sealed frame is this plus the tag.
@@ -32,16 +46,16 @@ FRAME_BYTES = 1024 * 1024
 _TAG_BYTES = 16
 _PREFIX_BYTES = 7
 _LENGTH_BYTES = 2
+#: What the data key in the header is sealed for.
+DATA_KEY_PURPOSE = "workspace.sealed_stream.key"
 
 
 class SealedStreamBroken(ValueError):
     """The sealed object is not one this deployment sealed, or was changed."""
 
 
-def _default_cipher() -> SecretCipher:
-    from app.core.crypto.factory import get_secret_cipher
-
-    return get_secret_cipher()
+def _bindings(context: bytes) -> list[str]:
+    return [context.hex()]
 
 
 def _nonce(prefix: bytes, index: int, *, last: bool) -> bytes:
@@ -52,12 +66,17 @@ async def seal(
     plain: AsyncIterable[bytes],
     *,
     context: bytes,
-    cipher: SecretCipher | None = None,
+    keyring: SealingKeys | None = None,
 ) -> AsyncIterator[bytes]:
     """``plain`` sealed, as it streams. ``context`` must be given again to open it."""
     key = AESGCM.generate_key(bit_length=256)
     wrapped = (
-        (cipher or _default_cipher()).encrypt_str(base64.b64encode(key).decode()) or ""
+        await seal_value(
+            base64.b64encode(key).decode(),
+            purpose=DATA_KEY_PURPOSE,
+            bindings=_bindings(context),
+            keyring=keyring,
+        )
     ).encode()
     if not wrapped or len(wrapped) >= 1 << (8 * _LENGTH_BYTES):
         raise SealedStreamBroken("The data key could not be wrapped.")
@@ -81,7 +100,7 @@ async def open_sealed(
     sealed: AsyncIterable[bytes],
     *,
     context: bytes,
-    cipher: SecretCipher | None = None,
+    keyring: SealingKeys | None = None,
 ) -> AsyncIterator[bytes]:
     """The plaintext of a stream :func:`seal` produced, as it streams.
 
@@ -92,7 +111,7 @@ async def open_sealed(
     buffer = bytearray()
     chunks = aiter(sealed)
     header = await _header(chunks, buffer)
-    aead = AESGCM(_unwrap(header.wrapped, cipher or _default_cipher()))
+    aead = AESGCM(await _unwrap(header.wrapped, context, keyring))
     sealed_frame = FRAME_BYTES + _TAG_BYTES
     index = 0
     async for chunk in chunks:
@@ -137,16 +156,26 @@ async def _header(chunks: AsyncIterator[bytes], buffer: bytearray) -> _Header:
     return header
 
 
-def _unwrap(wrapped: bytes, cipher: SecretCipher) -> bytes:
-    """The data key, only ever from a wrapped one: the cipher hands back a
-    plaintext value unchanged, and a key planted in the bucket in the clear
+async def _unwrap(wrapped: bytes, context: bytes, keyring: SealingKeys | None) -> bytes:
+    """The data key, only ever from a sealed one: the legacy cipher hands back
+    a plaintext value unchanged, and a key planted in the bucket in the clear
     must not open anything."""
     try:
         token = wrapped.decode()
-        if not envelope.is_encrypted_str(token):
-            raise ValueError("not wrapped")
-        key = base64.b64decode(cipher.decrypt_str(token) or "")
-    except (ValueError, InvalidTag) as exc:
+        if is_sealed(token):
+            encoded = await open_text(
+                token,
+                purpose=DATA_KEY_PURPOSE,
+                bindings=_bindings(context),
+                keyring=keyring,
+            )
+        elif envelope.is_encrypted_str(token):
+            # Sealed by the previous release, before the vault.
+            encoded = await legacy_text(token) or ""
+        else:
+            raise ValueError("not sealed")
+        key = base64.b64decode(encoded, validate=True)
+    except (ValueError, InvalidTag, InvalidToken, VaultError) as exc:
         raise SealedStreamBroken("The data key could not be unwrapped.") from exc
     if len(key) != 32:
         raise SealedStreamBroken("The data key could not be unwrapped.")

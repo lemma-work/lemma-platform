@@ -11,8 +11,8 @@ IndexedDB, preferences and the profile's own key state. Caches and history
 stay behind; they are most of the bytes and none of the value.
 
 The copy is AES-256-GCM ciphertext in object storage under a fresh data key,
-and the data key is stored on the row under the deployment's secret cipher.
-A bucket alone opens nothing. Chrome on Linux runs with the basic password
+and the data key is a vault secret bound to the machine's owner, deleted with
+the copy's row. A bucket alone opens nothing. Chrome on Linux runs with the basic password
 store, whose cookie key is the same on every machine, which is what makes a
 copy taken on one disk usable on another -- the survival matrix holds that.
 
@@ -42,8 +42,14 @@ from sqlalchemy import delete, select
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.object_storage import build_object_store, local_object_storage_path
+from app.modules.vault.contracts import legacy_text, vault_for
 from app.modules.workspace.infrastructure.machine_models import (
     MachineLoginBackupModel,
+)
+from app.modules.workspace.services.machine_secrets import (
+    LOGIN_BACKUP_KEY_PURPOSE,
+    MachineGone,
+    machine_secret_scope,
 )
 from app.modules.workspace.services.machine_shell import Shell, run_on_machine
 from sandbox_runtime.paths import BROWSER_PROFILE_ROOT, sandbox_command
@@ -114,12 +120,6 @@ def _store():
     )
 
 
-def _cipher():
-    from app.core.crypto.factory import get_secret_cipher
-
-    return get_secret_cipher()
-
-
 #: How long a clean close may take to let go of the profile.
 _CLOSE_WAIT_SECONDS = 10
 
@@ -170,12 +170,15 @@ class LoginBackups:
         *,
         shell: Shell | None = None,
         read_staged: Callable[[UUID], Awaitable[bytes]] | None = None,
+        write_staged: Callable[[UUID, bytes], Awaitable[None]] | None = None,
     ) -> None:
         self._uow_factory = uow_factory
         # How a command reaches the machine, and how the staged archive is
-        # read off it: the machine's runtime unless a caller hands in another.
+        # read off it and written onto it: the machine's runtime unless a
+        # caller hands in another.
         self._shell: Shell = shell or run_on_machine
         self._read_staged = read_staged or _read_staged
+        self._write_staged = write_staged or _write_staged
 
     async def latest(self, sandbox_id: UUID) -> LoginBackup | None:
         async with self._uow_factory() as uow:
@@ -284,13 +287,24 @@ class LoginBackups:
             )
             await _forget_object(object_key)
             return None
-        wrapped = _cipher().encrypt_str(base64.b64encode(key).decode())
         async with self._uow_factory() as uow:
+            try:
+                scope = await machine_secret_scope(uow.session, sandbox_id)
+            except MachineGone:
+                await _forget_object(object_key)
+                return None
+            secret = await vault_for(uow).put(
+                scope=scope,
+                purpose=LOGIN_BACKUP_KEY_PURPOSE,
+                value=base64.b64encode(key).decode(),
+                owner_table=MachineLoginBackupModel.__tablename__,
+            )
             row = MachineLoginBackupModel(
                 id=backup_id,
                 sandbox_id=sandbox_id,
                 object_key=object_key,
-                wrapped_key=wrapped or "",
+                key_secret_id=secret.id,
+                wrapped_key=None,
                 size_bytes=len(sealed),
                 sha256=hashlib.sha256(plain).hexdigest(),
                 reason=reason,
@@ -339,10 +353,14 @@ class LoginBackups:
                 .order_by(MachineLoginBackupModel.created_at.desc())
                 .limit(1)
             )
-        if row is None:
-            return False
-        plain = await self._open(sandbox_id, row)
-        await _write_staged(sandbox_id, plain)
+            if row is None:
+                return False
+            key = await _vault_key(uow, row)
+        if key is None:
+            # A copy a process on the previous release took mid-rollout.
+            key = await legacy_text(row.wrapped_key)
+        plain = await self._open(sandbox_id, row.object_key, key or "")
+        await self._write_staged(sandbox_id, plain)
         root = shlex.quote(BROWSER_PROFILE_ROOT)
         outcome = await self._shell(
             sandbox_id,
@@ -395,12 +413,11 @@ class LoginBackups:
             return False
         return await self.restore(sandbox_id, acting_user=acting_user)
 
-    async def _open(self, sandbox_id: UUID, row: MachineLoginBackupModel) -> bytes:
-        result = await _store().get_async(row.object_key)
+    async def _open(self, sandbox_id: UUID, object_key: str, key: str) -> bytes:
+        result = await _store().get_async(object_key)
         sealed = (await result.bytes_async()).to_bytes()
-        key = base64.b64decode(_cipher().decrypt_str(row.wrapped_key) or "")
         nonce, body = sealed[:12], sealed[12:]
-        return AESGCM(key).decrypt(nonce, body, sandbox_id.bytes)
+        return AESGCM(base64.b64decode(key)).decrypt(nonce, body, sandbox_id.bytes)
 
     async def forget(self, sandbox_id: UUID) -> None:
         """Drop every copy: a person who chose to forget their logins."""
@@ -420,6 +437,17 @@ class LoginBackups:
             await uow.commit()
         for row in rows:
             await _forget_object(row.object_key)
+
+
+async def _vault_key(uow, row: MachineLoginBackupModel) -> str | None:
+    """The copy's data key (base64) from the vault; None for a legacy row."""
+    if row.key_secret_id is None:
+        return None
+    scope = await machine_secret_scope(uow.session, row.sandbox_id)
+    revealed = await vault_for(uow).reveal(
+        row.key_secret_id, expect=scope, purpose=LOGIN_BACKUP_KEY_PURPOSE
+    )
+    return revealed.text()
 
 
 async def _read_staged(sandbox_id: UUID) -> bytes:

@@ -69,11 +69,6 @@ def test_a_value_opens_only_in_the_context_it_was_sealed_for(change):
         open_value(**{**sealed, **change})
 
 
-def test_scope_needs_an_organization_below_it():
-    with pytest.raises(ValueError):
-        SecretScope(organization_id=None, pod_id=uuid4())
-
-
 def test_revealed_never_prints_its_value():
     revealed = Revealed(uuid4(), 1, SecretKind.TEXT, None, b"sk-live-123")
     assert "sk-live" not in repr(revealed) and "sk-live" not in str(revealed)

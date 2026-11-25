@@ -5,8 +5,8 @@ so it outlives the week after which Safari clears what a script stores. A
 widget on somebody else's site has only its ``localStorage``; a cookie of ours
 there would be a third party's, which browsers block.
 
-The cookie holds the session's secret sealed with the deployment's cipher,
-never the secret itself, and is named by the widget's id -- nothing a request
+The cookie holds the session's secret sealed by the vault and bound to the
+widget, never the secret itself, and is named by the widget's id -- nothing a request
 supplied goes into a cookie's name or path.
 """
 
@@ -34,31 +34,57 @@ def _name(widget: WebWidget) -> str:
     return f"lemma_chat_{widget.id.hex}"
 
 
-def kept_secret(request: Request, widget: WebWidget) -> str | None:
-    """The secret this widget's cookie keeps, if it holds one this deployment
-    sealed: anything else is as if there were no cookie."""
-    # The cipher, and what it pulls in, only for a page that keeps a chat.
-    from cryptography.fernet import InvalidToken
+#: What a kept chat's cookie is sealed for, bound with the widget's id.
+_SEALED_PURPOSE = "agent_surfaces.web_widget.kept_chat"
 
-    from app.core.crypto import get_secret_cipher
-    from app.core.crypto.envelope import is_encrypted_str
+
+async def kept_secret(request: Request, widget: WebWidget) -> str | None:
+    """The secret this widget's cookie keeps, if it holds one this deployment
+    sealed for this widget: anything else is as if there were no cookie."""
+    # The vault, and what it pulls in, only for a page that keeps a chat.
+    from app.modules.vault.contracts import (
+        SealedValueInvalid,
+        VaultUnavailable,
+        is_sealed,
+        open_text,
+    )
 
     sealed = request.cookies.get(_name(widget))
-    if not sealed or not is_encrypted_str(sealed):
+    if not sealed:
+        return None
+    if is_sealed(sealed):
+        try:
+            return await open_text(
+                sealed, purpose=_SEALED_PURPOSE, bindings=(str(widget.id),)
+            )
+        except SealedValueInvalid, VaultUnavailable:
+            # Tampered, moved from another widget, or under a retired key.
+            return None
+    return await _legacy_secret(sealed)
+
+
+async def _legacy_secret(sealed: str) -> str | None:
+    """A cookie the previous release sealed with the Fernet cipher, so a
+    visitor is not logged out by the deploy. Re-sealed on their next visit."""
+    from cryptography.fernet import InvalidToken
+
+    from app.core.crypto.envelope import is_encrypted_str
+    from app.modules.vault.contracts import legacy_text
+
+    if not is_encrypted_str(sealed):
         return None
     try:
-        return get_secret_cipher().decrypt_str(sealed)
+        return await legacy_text(sealed)
     except ValueError, KeyError, InvalidToken, RuntimeError:
-        # Tampered, or sealed under a key since retired: start afresh.
         return None
 
 
-def keep(response: Response, widget: WebWidget, secret: str) -> None:
-    from app.core.crypto import get_secret_cipher
+async def keep(response: Response, widget: WebWidget, secret: str) -> None:
+    from app.modules.vault.contracts import seal_value
 
-    sealed = get_secret_cipher().encrypt_str(secret)
-    if sealed is None:  # pragma: no cover - a secret was given
-        return
+    sealed = await seal_value(
+        secret, purpose=_SEALED_PURPOSE, bindings=(str(widget.id),)
+    )
     response.set_cookie(
         _name(widget),
         sealed,

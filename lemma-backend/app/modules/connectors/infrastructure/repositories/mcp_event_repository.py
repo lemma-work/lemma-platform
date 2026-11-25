@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
+from pydantic import SecretStr
 from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +18,12 @@ from app.modules.connectors.infrastructure.models.mcp_event import (
     AuthConfigEvent,
     ConnectorEventSubscription,
 )
+from app.modules.connectors.infrastructure.repositories.connector_secrets import (
+    EVENT_SUBSCRIPTION_SECRET_PURPOSE,
+    EVENT_SUBSCRIPTIONS_TABLE,
+    event_subscription_scope,
+)
+from app.modules.vault.contracts import legacy_text, vault_for
 
 #: One refresh pass renews at most this many; the next pass takes the rest.
 REFRESH_BATCH = 200
@@ -34,7 +41,9 @@ class StoredEventSubscription:
     user_id: UUID
     name: str
     arguments: dict[str, object]
-    secret_ciphertext: str
+    #: The vault secret it is checked with; read through
+    #: `McpEventRepository.signing_secret`, never by hand.
+    signing_secret_id: UUID | None
     remote_id: str | None
     granted_at: datetime | None
     refresh_before: datetime | None
@@ -42,6 +51,9 @@ class StoredEventSubscription:
     created_at: datetime | None = None
     last_error: str | None = None
     last_event_at: datetime | None = None
+    #: The previous release's Fernet column, for a row an old process wrote
+    #: mid-rollout (no `signing_secret_id`). Gone with the contract migration.
+    legacy_secret_ciphertext: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +74,7 @@ def _stored(row: ConnectorEventSubscription) -> StoredEventSubscription:
         user_id=row.user_id,
         name=row.name,
         arguments=dict(row.arguments or {}),
-        secret_ciphertext=row.secret_ciphertext,
+        signing_secret_id=row.signing_secret_id,
         remote_id=row.remote_id,
         granted_at=row.granted_at,
         refresh_before=row.refresh_before,
@@ -70,6 +82,7 @@ def _stored(row: ConnectorEventSubscription) -> StoredEventSubscription:
         created_at=row.created_at,
         last_error=row.last_error,
         last_event_at=row.last_event_at,
+        legacy_secret_ciphertext=row.secret_ciphertext,
     )
 
 
@@ -172,8 +185,16 @@ class McpEventRepository:
         user_id: UUID,
         name: str,
         arguments: dict[str, object],
-        secret_ciphertext: str,
+        secret: SecretStr,
     ) -> UUID:
+        """A pending subscription, its signing secret stored in the vault in
+        the same transaction (the row's delete takes the secret with it)."""
+        ref = await vault_for(self._session).put(
+            scope=event_subscription_scope(organization_id, user_id),
+            purpose=EVENT_SUBSCRIPTION_SECRET_PURPOSE,
+            value=secret.get_secret_value(),
+            owner_table=EVENT_SUBSCRIPTIONS_TABLE,
+        )
         row = ConnectorEventSubscription(
             organization_id=organization_id,
             auth_config_id=auth_config_id,
@@ -181,11 +202,24 @@ class McpEventRepository:
             user_id=user_id,
             name=name,
             arguments=arguments,
-            secret_ciphertext=secret_ciphertext,
+            signing_secret_id=ref.id,
         )
         self._session.add(row)
         await self._session.flush()
         return row.id
+
+    async def signing_secret(self, stored: StoredEventSubscription) -> SecretStr | None:
+        """The secret a subscription is checked with, or ``None`` if it has
+        none. Scoped from the subscription row, never from the secret."""
+        if stored.signing_secret_id is None:
+            plaintext = await legacy_text(stored.legacy_secret_ciphertext)
+            return SecretStr(plaintext) if plaintext else None
+        revealed = await vault_for(self._session).reveal(
+            stored.signing_secret_id,
+            expect=event_subscription_scope(stored.organization_id, stored.user_id),
+            purpose=EVENT_SUBSCRIPTION_SECRET_PURPOSE,
+        )
+        return SecretStr(revealed.text())
 
     async def subscription(
         self, subscription_id: UUID

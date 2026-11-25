@@ -120,6 +120,15 @@ class AccountEntity(Entity):
     credentials: Optional[CredentialTypes] = Field(
         None, description="Stored credentials"
     )
+    credentials_version: Optional[int] = Field(
+        None,
+        description=(
+            "Version of the stored credentials when this entity was read, or "
+            "None when they are not in the vault yet. A refresh leases and "
+            "writes against it, so one based on a stale read is refused "
+            "instead of overwriting a newer credential. Read-side only."
+        ),
+    )
     preferences: Optional[Dict[str, Any]] = Field(
         None, description="User preferences for this connector"
     )

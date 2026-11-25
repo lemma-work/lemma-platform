@@ -1,7 +1,11 @@
 """Migration ``0074_machines`` creates the machine tables and columns exactly as
 the models declare them. The e2e suites build their schema from the models; a
 deploy runs the migration. A difference between the two is one every test
-passes over."""
+passes over.
+
+``0078_vault_cutover`` since added a vault reference to two of the tables and
+relaxed an old column; the models are compared with those changes taken back
+out, as that migration states them."""
 
 from __future__ import annotations
 
@@ -17,20 +21,37 @@ from sqlalchemy.schema import CreateIndex, CreateTable
 from app.core.infrastructure.db.base import Base
 from app.modules.test_support.e2e_base import _import_e2e_models
 
-_MIGRATION = (
-    Path(__file__).resolve().parents[5]
-    / "migrations"
-    / "versions"
-    / "2026-10-28_machines_0074.py"
-)
+_VERSIONS = Path(__file__).resolve().parents[5] / "migrations" / "versions"
+_MIGRATION = _VERSIONS / "2026-10-28_machines_0074.py"
+_VAULT_CUTOVER = _VERSIONS / "2026-11-25_vault_cutover_0078.py"
 
 
-def _migration() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("machines_0074", _MIGRATION)
+def _load(path: Path, name: str) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _migration() -> ModuleType:
+    return _load(_MIGRATION, "machines_0074")
+
+
+def _before_vault_cutover(table: str, ddl: str) -> str:
+    """``ddl`` (normalised) without what ``0078_vault_cutover`` added to ``table``."""
+    for owner in _load(_VAULT_CUTOVER, "vault_cutover_0078")._OWNERS:
+        if owner.table != table:
+            continue
+        column = owner.secret_column
+        ddl = (
+            ddl.replace(f"{column} UUID,", "")
+            .replace(f",UNIQUE({column})", "")
+            .replace(f",FOREIGN KEY({column})REFERENCES vault_secrets(id)", "")
+        )
+        for relaxed in owner.relax:
+            ddl = ddl.replace(f"{relaxed} TEXT,", f"{relaxed} TEXT NOT NULL,")
+    return ddl
 
 
 def _normal(ddl: str) -> str:
@@ -42,7 +63,8 @@ def _from_models(table: str) -> set[str]:
     _import_e2e_models()
     model = Base.metadata.tables[table]
     dialect = postgresql.dialect()
-    return {_normal(str(CreateTable(model).compile(dialect=dialect)))} | {
+    created = _normal(str(CreateTable(model).compile(dialect=dialect)))
+    return {_before_vault_cutover(table, created)} | {
         _normal(str(CreateIndex(index).compile(dialect=dialect)))
         for index in model.indexes
     }

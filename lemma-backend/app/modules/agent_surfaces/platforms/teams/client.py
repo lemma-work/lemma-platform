@@ -30,6 +30,12 @@ from app.modules.agent_surfaces.platforms.delivery import (
 from app.modules.agent_surfaces.platforms.teams.attachment_urls import (
     is_bot_framework_service_url,
 )
+from app.modules.vault.contracts import (
+    SealedValueInvalid,
+    VaultUnavailable,
+    open_text,
+    seal_value,
+)
 
 logger = get_logger(__name__)
 _token_cache_incident = DependencyIncident("teams_token_cache", logger=logger)
@@ -37,6 +43,8 @@ _token_cache_incident = DependencyIncident("teams_token_cache", logger=logger)
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 _GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 _BOT_SCOPE = "https://api.botframework.com/.default"
+#: What a cached token is sealed for; bound with its cache key as well.
+TOKEN_CACHE_PURPOSE = "agent_surfaces.teams.access_token"
 
 # Bot Framework Connector fallback endpoint (when no serviceUrl stored).
 # Prefer the serviceUrl from incoming activities — it is region-specific.
@@ -57,7 +65,8 @@ _GUID_RE = re.compile(
 def _get_token_cache() -> RedisJsonCache:
     """OAuth tokens by "tenant:scope", each kept for its remaining lifetime, so
     replicas reuse a token rather than each fetching its own. Redis down ->
-    refetch (never fails)."""
+    refetch (never fails). Sealed by the vault: a token in Redis is a bearer
+    credential for every tenant the bot is in."""
     return surface_caches.get(TEAMS_TOKENS)
 
 
@@ -123,7 +132,13 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
     else:
         _token_cache_incident.record_success()
     if cached_token:
-        return cached_token
+        try:
+            return await open_text(
+                cached_token, purpose=TOKEN_CACHE_PURPOSE, bindings=(cache_key,)
+            )
+        except SealedValueInvalid, VaultUnavailable:
+            # Not ours, or under a retired key: fetch a fresh one.
+            pass
 
     oauth_base = (
         surface_settings.microsoft_bot_oauth_base_url or _OAUTH_BASE_URL
@@ -177,8 +192,11 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
     expires_in = int(result.get("expires_in", 3600))
     # Subtract 60 s so we refresh before the token actually expires.
     try:
-        await cache.set_raw(cache_key, str(token), ttl_seconds=max(60, expires_in - 60))
-    except (RedisError, OSError, TimeoutError) as exc:
+        sealed = await seal_value(
+            str(token), purpose=TOKEN_CACHE_PURPOSE, bindings=(cache_key,)
+        )
+        await cache.set_raw(cache_key, sealed, ttl_seconds=max(60, expires_in - 60))
+    except (RedisError, OSError, TimeoutError, VaultUnavailable) as exc:
         _token_cache_incident.record_failure(error_type=type(exc).__name__)
     else:
         _token_cache_incident.record_success()

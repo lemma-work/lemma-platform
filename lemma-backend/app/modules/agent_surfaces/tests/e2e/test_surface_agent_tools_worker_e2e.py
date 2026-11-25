@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.tests.e2e.helpers import seed_teams_tokens
+
 import asyncio
 import json
 from typing import Any
@@ -9,7 +11,6 @@ from uuid import UUID
 
 import pytest
 
-from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.test_support.conversation_surfaces_double import record_place
@@ -273,16 +274,12 @@ async def test_public_agent_runs_teams_context_tools_through_real_worker(
             "allowed_channel_ids": [REAL_TEAMS_CHANNEL_ID],
         },
     )
-    token_cache = RedisJsonCache(
+    await seed_teams_tokens(
         e2e_settings.redis_url,
-        key_prefix="surface:teams-token",
-        ttl_seconds=3600,
+        {
+            f"{REAL_TEAMS_TENANT_ID}:https://graph.microsoft.com/.default": "teams-graph-token",
+        },
     )
-    await token_cache.set_raw(
-        f"{REAL_TEAMS_TENANT_ID}:https://graph.microsoft.com/.default",
-        "teams-graph-token",
-    )
-    await token_cache.close()
     teams_conversation_metadata = {
         "surface_id": teams_surface["id"],
         "surface_platform": "TEAMS",

@@ -70,6 +70,7 @@ issue.
 |---|---|
 | [Sandbox function benchmark](operators/sandbox-function-benchmark.md) | The repeatable full-path quality gate for function execution |
 | [Datastore ingestion benchmark](../lemma-backend/docs/operators/datastore-ingestion-benchmark.md) | The real upload → extract → index pipeline under load |
+| [Operating the secrets vault](../lemma-backend/docs/operators/secrets-vault.md) | Root key choice (Cloud KMS, keyset), backups, key rotation, and the vault cutover |
 | [Object storage](../lemma-backend/docs/operators/object-storage.md) | Local, S3, GCS, and Azure backends |
 | [Reliability](../lemma-backend/docs/operators/reliability.md) | Replay, dead-letter, and SLO guidance for the event path |
 

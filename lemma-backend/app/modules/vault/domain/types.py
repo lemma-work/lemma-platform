@@ -24,6 +24,9 @@ class SecretKind(StrEnum):
 class SecretScope:
     """Who a secret belongs to, as the *caller* understands it.
 
+    Any of the three may be absent: an owner binds what it knows without a
+    lookup (a widget its pod, a machine its owning person or pod).
+
     Every read passes the scope it expects, taken from the row that points at
     the secret (the account, the surface, ...), never from the secret itself.
     The scope is part of the ciphertext's associated data, so a row pointed at
@@ -33,10 +36,6 @@ class SecretScope:
     organization_id: UUID | None
     pod_id: UUID | None = None
     user_id: UUID | None = None
-
-    def __post_init__(self) -> None:
-        if self.organization_id is None and (self.pod_id or self.user_id):
-            raise ValueError("a pod- or user-scoped secret needs an organization")
 
     @classmethod
     def system(cls) -> SecretScope:

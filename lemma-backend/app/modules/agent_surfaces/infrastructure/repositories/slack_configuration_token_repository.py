@@ -1,4 +1,9 @@
-"""Slack configuration tokens, encrypted at rest; the only reader of the columns.
+"""Slack configuration tokens, kept in the vault; the only reader of them.
+
+The pair is one vault secret per row (``tokens_secret_id``). A row written by a
+process on the previous release mid-rollout may hold it only in the old Fernet
+columns; it is read from there and moved on the next write, which also clears
+them, so an old process fails closed rather than replaying a spent token.
 
 Every write that stores a pair is guarded by ``generation``, because a Slack
 refresh token is single-use and two writers must never both believe they hold
@@ -19,7 +24,6 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.crypto import get_secret_cipher
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.errors import (
     SlackAppCreationTokenExpiredError,
@@ -30,6 +34,14 @@ from app.modules.agent_surfaces.infrastructure.slack_configuration_models import
 from app.modules.agent_surfaces.platforms.slack.app_configuration import (
     RotatedConfigurationToken,
 )
+from app.modules.vault.contracts import (
+    SecretIntegrityError,
+    SecretNotFound,
+    SecretScope,
+    SecretScopeMismatch,
+    legacy_text,
+    vault_for,
+)
 
 logger = get_logger(__name__)
 
@@ -38,6 +50,9 @@ logger = get_logger(__name__)
 MAX_WORKSPACES_PER_ORGANIZATION = 50
 
 _Token = SlackConfigurationTokenModel
+
+TOKENS_PURPOSE = "agent_surfaces.slack_configuration.tokens"
+_OWNER_TABLE = "slack_configuration_tokens"
 
 
 @dataclass(frozen=True)
@@ -90,10 +105,10 @@ class SlackConfigurationTokenRepository:
         constraint. The generation moves on, so a rotation of the replaced pair
         that is still in flight stores nothing over it.
         """
-        cipher = get_secret_cipher()
         values = {
-            "access_token": cipher.encrypt_str(token.access_token.get_secret_value()),
-            "refresh_token": cipher.encrypt_str(token.refresh_token.get_secret_value()),
+            # The pair goes to the vault below; the old columns are cleared.
+            "access_token": None,
+            "refresh_token": None,
             "access_expires_at": token.expires_at,
             "slack_user_id": token.slack_user_id,
             "team_name": team_name,
@@ -126,8 +141,9 @@ class SlackConfigurationTokenRepository:
                 "saved_at": func.now(),
                 "updated_at": func.now(),
             },
-        ).returning(_Token.id)
-        row_id = (await self.session.execute(statement)).scalar_one()
+        ).returning(_Token.id, _Token.tokens_secret_id)
+        row_id, secret_id = (await self.session.execute(statement)).one()
+        await self._store_pair(row_id, secret_id, organization_id, token)
         row = await self.session.get(_Token, row_id, populate_existing=True)
         assert row is not None
         return row
@@ -155,24 +171,56 @@ class SlackConfigurationTokenRepository:
     async def store_rotation(
         self, row_id: UUID, *, generation: int, token: RotatedConfigurationToken
     ) -> bool:
-        """Keep a rotation's pair, if nothing replaced the one it rotated from."""
-        cipher = get_secret_cipher()
+        """Keep a rotation's pair, if nothing replaced the one it rotated from.
+
+        The generation-guarded update goes first: it takes the row lock and
+        decides, so the vault is written only by the one writer that won.
+        """
         result = await self.session.execute(
             update(_Token)
             .where(_Token.id == row_id, _Token.generation == generation)
             .values(
-                access_token=cipher.encrypt_str(token.access_token.get_secret_value()),
-                refresh_token=cipher.encrypt_str(
-                    token.refresh_token.get_secret_value()
-                ),
+                access_token=None,
+                refresh_token=None,
                 access_expires_at=token.expires_at,
                 generation=_Token.generation + 1,
                 rotation_claimed_until=None,
                 updated_at=func.now(),
             )
-            .returning(_Token.id)
+            .returning(_Token.tokens_secret_id, _Token.organization_id)
         )
-        return result.scalar_one_or_none() is not None
+        updated = result.one_or_none()
+        if updated is None:
+            return False
+        secret_id, organization_id = updated
+        await self._store_pair(row_id, secret_id, organization_id, token)
+        return True
+
+    async def _store_pair(
+        self,
+        row_id: UUID,
+        secret_id: UUID | None,
+        organization_id: UUID,
+        token: RotatedConfigurationToken,
+    ) -> None:
+        """Write the pair into the row's vault secret, on this transaction."""
+        vault = vault_for(self.session)
+        value = {
+            "access_token": token.access_token.get_secret_value(),
+            "refresh_token": token.refresh_token.get_secret_value(),
+        }
+        scope = SecretScope(organization_id=organization_id)
+        if secret_id is not None:
+            await vault.replace(
+                secret_id, expect=scope, purpose=TOKENS_PURPOSE, value=value
+            )
+            return
+        ref = await vault.put(
+            scope=scope, purpose=TOKENS_PURPOSE, value=value, owner_table=_OWNER_TABLE
+        )
+        await self.session.execute(
+            update(_Token).where(_Token.id == row_id).values(tokens_secret_id=ref.id)
+        )
 
     async def release_rotation(self, row_id: UUID, *, generation: int) -> None:
         """Give the lease back after a rotation that changed nothing at Slack."""
@@ -204,14 +252,37 @@ class SlackConfigurationTokenRepository:
         return bool(result.rowcount)
 
 
-def reveal_tokens(row: SlackConfigurationTokenModel) -> ConfigurationTokenPair:
+async def reveal_tokens(
+    session: AsyncSession, row: SlackConfigurationTokenModel
+) -> ConfigurationTokenPair:
     """The decrypted pair, or ``SlackAppCreationTokenExpiredError`` when it cannot
     be read: calling Slack with an empty token would only be refused there."""
-    cipher = get_secret_cipher()
+    access: str | None
+    refresh: str | None
     try:
-        access = cipher.decrypt_str(row.access_token)
-        refresh = cipher.decrypt_str(row.refresh_token)
-    except InvalidToken, RuntimeError, ValueError:
+        if row.tokens_secret_id is not None:
+            pair = (
+                await vault_for(session).reveal(
+                    row.tokens_secret_id,
+                    expect=SecretScope(organization_id=row.organization_id),
+                    purpose=TOKENS_PURPOSE,
+                )
+            ).json()
+            access = _text(pair.get("access_token"))
+            refresh = _text(pair.get("refresh_token"))
+        else:
+            # Written by the previous release during the rollout.
+            access = await legacy_text(row.access_token)
+            refresh = await legacy_text(row.refresh_token)
+    except (
+        InvalidToken,
+        RuntimeError,
+        ValueError,
+        TypeError,
+        SecretIntegrityError,
+        SecretNotFound,
+        SecretScopeMismatch,
+    ):
         logger.warning(
             "agent_surfaces.slack_app_creation.token_unreadable",
             organization_id=str(row.organization_id),
@@ -224,3 +295,7 @@ def reveal_tokens(row: SlackConfigurationTokenModel) -> ConfigurationTokenPair:
     return ConfigurationTokenPair(
         access_token=SecretStr(access), refresh_token=SecretStr(refresh)
     )
+
+
+def _text(value: object) -> str | None:
+    return value if isinstance(value, str) else None
