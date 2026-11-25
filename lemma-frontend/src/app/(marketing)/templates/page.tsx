@@ -1,8 +1,8 @@
-import { LISTING_INTRO, LISTING_TITLE, PluginListing } from "@/site/plugins/listing/listing";
+import { PluginStore, STORE_INTRO, STORE_TITLE } from "@/site/plugins/store/store";
 import { pageMetadata } from "@/site/metadata";
 
-export const metadata = pageMetadata("Plugins", `${LISTING_TITLE}. ${LISTING_INTRO}`, "/templates");
+export const metadata = pageMetadata("Plugins", `${STORE_TITLE}. ${STORE_INTRO}`, "/templates");
 
 export default function Page() {
-    return <PluginListing />;
+    return <PluginStore />;
 }

@@ -86,6 +86,23 @@ def test_create_for_agent_names_the_repository_to_work_in():
     pod.conversations.create_for_agent(title="fix it", repository="acme/web")
 
     assert transport.calls[0]["body"]["repository"] == "acme/web"
+    assert "ref" not in transport.calls[0]["body"]
+    assert "agent_runtime" not in transport.calls[0]["body"]
+
+
+def test_create_for_agent_starts_from_a_pull_request_on_a_chosen_runtime():
+    pod, transport = _pod()
+
+    pod.conversations.create_for_agent(
+        "builder",
+        repository="acme/web",
+        ref="pull/123/head",
+        agent_runtime={"profile_id": "system:lemma", "model_name": "fast"},
+    )
+
+    body = transport.calls[0]["body"]
+    assert body["ref"] == "pull/123/head"
+    assert body["agent_runtime"] == {"profile_id": "system:lemma", "model_name": "fast"}
 
 
 def test_repositories_asks_the_pod_what_a_conversation_can_open_in():
@@ -96,6 +113,19 @@ def test_repositories_asks_the_pod_what_a_conversation_can_open_in():
     (call,) = transport.calls
     assert call["endpoint"].endswith(".agent_conversation_repository_list")
     assert call["path_args"] == (UUID("22222222-2222-4222-8222-222222222222"),)
+
+
+def test_usage_asks_the_pod_what_one_conversation_cost():
+    pod, transport = _pod()
+
+    pod.conversations.usage("33333333-3333-4333-8333-333333333333")
+
+    (call,) = transport.calls
+    assert call["endpoint"].endswith(".agent_conversation_usage_get")
+    assert call["path_args"] == (
+        UUID("22222222-2222-4222-8222-222222222222"),
+        UUID("33333333-3333-4333-8333-333333333333"),
+    )
 
 
 def test_pending_interactions_asks_the_pod_and_pages_by_token():

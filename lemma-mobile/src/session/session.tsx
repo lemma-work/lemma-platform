@@ -5,8 +5,9 @@ import { liveSource } from "../data/live";
 import { setLiveEnabled } from "../live/pod-live";
 import { sampleSource } from "../data/sample";
 import type { LemmaSource } from "../data/source";
-import { installFetch, loadSession, onSession, signOut as revoke, signedIn, type Tokens } from "./auth";
+import { currentTokens, installFetch, loadSession, onSession, signOut as revoke, signedIn, type Tokens } from "./auth";
 import { forgetClients } from "./client";
+import { forgetOnDevice, keepOnDevice, restoreFromDevice } from "./device-cache";
 import { HOSTED, serverFrom, type Server } from "./server";
 import { store } from "./store";
 
@@ -47,6 +48,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             const chosen = serverFrom(await store.server());
             const held = await store.mode();
             const tokens = await loadSession(chosen);
+            /* What this person saw last, back in the cache before the first
+               screen draws: Home opens on it and the reads catch up behind. */
+            if (held !== "sample" && tokens?.userId) await restoreFromDevice(cache, { server: chosen.id, owner: tokens.userId });
             if (cancelled) return;
             setServerState(chosen);
             setMode(held === "sample" ? "sample" : tokens ? "live" : "signed-out");
@@ -54,11 +58,20 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [cache]);
+
+    /* The lists, kept on the phone for the next launch while this person is
+       signed in here (`device-cache.ts`). */
+    useEffect(() => {
+        const owner = mode === "live" ? currentTokens()?.userId : null;
+        if (!owner) return;
+        return keepOnDevice(cache, { server: server.id, owner }, () => currentTokens()?.userId === owner);
+    }, [mode, server.id, cache]);
 
     useEffect(() => onSession((event) => {
         if (event === "signed-out") {
             forgetClients();
+            void forgetOnDevice();
             cache.clear();
             setMode((was) => (was === "sample" ? was : "signed-out"));
         }
@@ -79,6 +92,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         await signedIn(server, tokens);
         await store.setMode("live");
         forgetClients();
+        /* Whoever this is, they start from their own answers. */
+        await forgetOnDevice();
         cache.clear();
         setMode("live");
     }, [server, cache]);
@@ -101,6 +116,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         await store.setMode(null);
         setWebSignOuts((was) => was + 1);
         forgetClients();
+        await forgetOnDevice();
         cache.clear();
         setMode("signed-out");
     }, [mode, server, cache]);

@@ -1,3 +1,4 @@
+import { runItYourselfPage, useLemmaPages } from "@/site/data/use-docs";
 import { discordUrl, githubUrl } from "@/site/links";
 import { absoluteUrl } from "@/site/seo/site-url";
 
@@ -8,6 +9,12 @@ import { absoluteUrl } from "@/site/seo/site-url";
  * has to say which jobs Lemma actually fits, not restate the homepage pitch.
  */
 export function llmsTxt(): string {
+    const using = [...useLemmaPages, runItYourselfPage]
+        .map(
+            (page) =>
+                `- [${page.title}](${absoluteUrl("/docs/" + page.slug)}): ${page.description}`,
+        )
+        .join("\n");
     return `# Lemma
 
 > Lemma is the runtime for agent-built software: a coding agent writes the app, and Lemma gives it a pod — durable tables, files, functions, agents, workflows, permissions, and apps — so a team can run it, not just the person who prompted it.
@@ -24,12 +31,16 @@ Open source (AGPLv3 core, Apache-2.0 SDKs). Runs on your own machine, your own s
 
 ## Docs
 
-- [Documentation](${absoluteUrl("/docs")}): platform concepts, SDK reference, CLI reference, and build guides.
+- [Documentation](${absoluteUrl("/docs")}): how to use Lemma, platform concepts, SDK reference, CLI reference, and build guides.
 - [Quickstart](${absoluteUrl("/docs/getting-started")}): create an account, run Lemma locally or in the cloud, install the CLI, and create a pod.
 - [Overview](${absoluteUrl("/docs/overview")}): the mental model — pods, tables, files, functions, agents, workflows, apps.
 - [SDK Installation](${absoluteUrl("/docs/sdk/installation")}): install and configure \`lemma-sdk\` (TypeScript) or \`lemma-sdk\` (Python).
 - [SDK Core Client](${absoluteUrl("/docs/sdk/client")}): the LemmaClient namespace map.
 - [CLI Overview](${absoluteUrl("/docs/cli/overview")}): command groups and global options for \`lemma-terminal\`.
+
+## Using Lemma
+
+${using}
 
 ## API
 

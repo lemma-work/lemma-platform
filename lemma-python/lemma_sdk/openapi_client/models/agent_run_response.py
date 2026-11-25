@@ -35,7 +35,8 @@ class AgentRunResponse:
         parent_run_id (None | Unset | UUID):
         usage (None | RunTokenUsage | Unset): Model tokens the run used, summed over its model calls; null when none
             were recorded against it. A run still working reads what it has used so far. Leaves out the conversation's title
-            and the memory kept after the run, which land later. Tokens only: no cost.
+            and the memory kept after the run, which land later. Tokens only: no cost (the conversation's usage route has
+            it).
     """
 
     conversation_id: UUID

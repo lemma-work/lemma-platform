@@ -100,32 +100,23 @@
     scrollbar-width: thin;
 }
 
-.docs-switch {
+/* The guide sits above both halves: one link, with a line on what it is. */
+.docs-list .docs-list__guide {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 3px;
-    margin-bottom: 18px;
-    padding: 3px;
-    border-radius: 11px;
-    background: var(--wash-a);
-}
-
-.docs-switch button {
-    height: 30px;
-    padding: 0 6px;
-    border: 0;
-    border-radius: 8px;
-    background: none;
-    color: var(--ink-2);
-    font-size: 13px;
-    white-space: nowrap;
-    cursor: pointer;
-}
-
-.docs-switch button[aria-pressed="true"] {
-    background: var(--paper);
+    gap: 1px;
+    margin-bottom: 6px;
+    padding: 9px 10px;
+    border: 1px solid var(--line-2);
+    border-radius: 10px;
     color: var(--ink);
-    box-shadow: 0 1px 2px rgb(25 23 18 / 0.08), 0 0 0 1px var(--line-2);
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.docs-list .docs-list__guide-d {
+    color: var(--ink-3);
+    font-size: 12.5px;
+    font-weight: 400;
 }
 
 .docs-list ul {
@@ -134,8 +125,25 @@
     list-style: none;
 }
 
+/* Each half of the docs under its own heading; its groups below it. */
+.docs-list__door {
+    margin-top: 22px;
+}
+
+.docs-list__door + .docs-list__door {
+    padding-top: 18px;
+    border-top: 1px solid var(--line-2);
+}
+
+.docs-list__door-h {
+    margin: 0 0 6px 10px;
+    color: var(--ink);
+    font-size: 13px;
+    font-weight: 500;
+}
+
 .docs-list__h {
-    margin: 18px 0 4px 10px;
+    margin: 14px 0 4px 10px;
     color: var(--ink-3);
     font-size: 12px;
     font-weight: 500;
@@ -160,22 +168,6 @@
     background: var(--wash-a);
     color: var(--ink);
     font-weight: 500;
-}
-
-.docs-list__soon {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 0 6px;
-    padding: 5px 10px;
-    color: var(--ink-2);
-    font-size: 14px;
-    line-height: 1.4;
-}
-
-.docs-list__soon span {
-    color: var(--ink-3);
-    font-size: 12px;
 }
 
 .docs-main {
@@ -285,6 +277,32 @@
 
 .docs-prose li::marker {
     color: var(--ink-3);
+}
+
+/* Places to go next: the name is the link, and what it holds follows it. */
+.docs-prose .docs-links {
+    padding-left: 0;
+    list-style: none;
+}
+
+.docs-links li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 10px;
+    align-items: baseline;
+}
+
+.docs-links a {
+    font-weight: 500;
+    text-decoration-color: var(--line-2);
+}
+
+.docs-links a:hover {
+    text-decoration-color: currentColor;
+}
+
+.docs-links span {
+    color: var(--ink-2);
 }
 
 .docs-prose :not(pre) > code,
@@ -596,11 +614,56 @@
     white-space: nowrap;
 }
 
+/* The way into the guide: one row above the two doors, because it is what a
+   newcomer should read before either of them. */
+.docs-guide {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 16px;
+    align-items: center;
+    margin-top: 36px;
+    padding: 20px 22px;
+    border-radius: 16px;
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    color: inherit;
+    text-decoration: none;
+    transition: background-color 0.2s;
+}
+
+.docs-guide:hover {
+    background: var(--wash-a);
+}
+
+.docs-guide .docs-tag {
+    justify-self: start;
+}
+
+.docs-guide__t {
+    grid-column: 1;
+    font-size: 18px;
+    font-weight: 500;
+}
+
+.docs-guide__d {
+    grid-column: 1;
+    color: var(--ink-2);
+    font-size: 14.5px;
+    line-height: 1.5;
+}
+
+.docs-guide svg {
+    grid-column: 2;
+    grid-row: 1 / 4;
+    width: 18px;
+    height: 18px;
+    color: var(--ink-2);
+}
+
 .docs-doors {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 14px;
-    margin-top: 36px;
+    margin-top: 14px;
 }
 
 .docs-door {
@@ -610,11 +673,6 @@
     padding: 22px;
     border-radius: 16px;
     box-shadow: inset 0 0 0 1px var(--line-2);
-}
-
-/* Not written yet, and drawn so: faintly hatched, with nothing to follow. */
-.docs-door[data-soon] {
-    background: repeating-linear-gradient(135deg, transparent 0 10px, color-mix(in srgb, var(--warn) 4%, transparent) 10px 20px);
 }
 
 .docs-door__i {
@@ -679,6 +737,51 @@
     width: 13px;
     height: 13px;
     color: var(--ink-3);
+}
+
+/* Where Lemma runs: one row under the two doors, because it is a question
+   both kinds of reader ask and neither door answers. */
+.docs-run {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 2px 14px;
+    align-items: center;
+    margin-top: 14px;
+    padding: 16px 22px;
+    border-radius: 16px;
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    color: inherit;
+    text-decoration: none;
+    transition: background-color 0.2s;
+}
+
+.docs-run:hover {
+    background: var(--wash-a);
+}
+
+.docs-run .docs-door__i {
+    grid-row: 1 / 3;
+}
+
+.docs-run__t {
+    grid-column: 2;
+    font-size: 16px;
+    font-weight: 500;
+}
+
+.docs-run__d {
+    grid-column: 2;
+    color: var(--ink-2);
+    font-size: 14.5px;
+    line-height: 1.5;
+}
+
+.docs-run > svg {
+    grid-column: 3;
+    grid-row: 1 / 3;
+    width: 18px;
+    height: 18px;
+    color: var(--ink-2);
 }
 
 .docs-tag {
@@ -1347,14 +1450,12 @@
 /* ── narrower ────────────────────────────────────────────────────────── */
 
 @media (pointer: coarse) {
-    .docs-switch button,
     .log-chip,
     .docs-code__tabs button {
         min-height: 44px;
     }
 
-    .docs-list a,
-    .docs-list__soon {
+    .docs-list a {
         padding-top: 10px;
         padding-bottom: 10px;
     }

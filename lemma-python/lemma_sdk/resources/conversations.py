@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
 from uuid import uuid4
 
 import httpx
@@ -21,6 +23,7 @@ from ..openapi_client.api.agent_conversations import (
     agent_conversation_stream,
     agent_conversation_stop,
     agent_conversation_update,
+    agent_conversation_usage_get,
 )
 from ..openapi_client.models.approval_decision_response import ApprovalDecisionResponse
 from ..openapi_client.models.agent_run_response import AgentRunResponse
@@ -32,6 +35,9 @@ from ..openapi_client.models.conversation_repository_list_response import (
 from ..openapi_client.models.conversation_response import ConversationResponse
 from ..openapi_client.models.conversation_status import ConversationStatus
 from ..openapi_client.models.conversation_type import ConversationType
+from ..openapi_client.models.conversation_usage_response import (
+    ConversationUsageResponse,
+)
 from ..openapi_client.models.create_conversation_request import (
     CreateConversationRequest,
 )
@@ -131,6 +137,8 @@ class PodConversations(BoundResource):
         metadata: Metadata | None = None,
         parent_id: str | None = None,
         repository: str | None = None,
+        ref: str | None = None,
+        agent_runtime: Mapping[str, Any] | None = None,
     ) -> ConversationResponse:
         """Open a conversation, in a worktree of a GitHub repository if one is named.
 
@@ -138,6 +146,12 @@ class PodConversations(BoundResource):
         refuses a repository the organization's GitHub installation does not
         cover for you. The conversation works in a git worktree of its own, on a
         branch of its own, made from one shared clone of the repository.
+
+        ``ref`` is where that branch starts: a branch, a tag, a commit or a pull
+        request's head as ``pull/<number>/head`` (default: the repository's
+        default branch). ``agent_runtime`` picks what runs it, as
+        ``{"profile_id": ..., "model_name": ...}`` from the organization's
+        runtime profiles; left out, the agent's own.
         """
         return self._call(
             agent_conversation_create,
@@ -150,6 +164,8 @@ class PodConversations(BoundResource):
                     "metadata": metadata,
                     "parent_id": parent_id,
                     "repository": repository,
+                    "ref": ref,
+                    "agent_runtime": dict(agent_runtime) if agent_runtime else None,
                 }
             ),
             body_model=CreateConversationRequest,
@@ -172,6 +188,18 @@ class PodConversations(BoundResource):
             self._pod_uuid(),
             as_uuid(conversation_id),
             as_uuid(run_id),
+        )
+
+    def usage(self, conversation_id: str) -> ConversationUsageResponse:
+        """What a conversation has cost you so far, in US dollars and tokens:
+        ``totals`` over every run, and ``runs`` (newest first) each with its
+        own ``usage``. A run whose ``usage`` is ``None`` reported nothing and
+        is counted in ``unreported_run_count``. Sub-agent conversations are
+        not included; read each one's own."""
+        return self._call(
+            agent_conversation_usage_get,
+            self._pod_uuid(),
+            as_uuid(conversation_id),
         )
 
     def update(
