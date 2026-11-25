@@ -19,9 +19,12 @@ export interface Abilities {
     manage: boolean;
     contactRead: boolean;
     contactMessage: boolean;
+    /** May change the pod itself (`pod.update`): stopping its agents
+     *  answering a contact is one such change. */
+    podUpdate: boolean;
 }
 
-export const EVERYTHING: Abilities = { known: true, read: true, write: true, manage: true, contactRead: true, contactMessage: true };
+export const EVERYTHING: Abilities = { known: true, read: true, write: true, manage: true, contactRead: true, contactMessage: true, podUpdate: true };
 const UNKNOWN: Abilities = { ...EVERYTHING, known: false };
 
 export function readAbilities(actions: readonly string[] | null | undefined): Abilities {
@@ -37,6 +40,7 @@ export function readAbilities(actions: readonly string[] | null | undefined): Ab
         manage,
         contactRead: contactMessage || held.has(SEE_CONTACTS[0]),
         contactMessage,
+        podUpdate: held.has("pod.update"),
     };
 }
 

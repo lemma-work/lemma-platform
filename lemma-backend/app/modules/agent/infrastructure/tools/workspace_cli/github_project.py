@@ -93,15 +93,24 @@ _WORKTREE_FAILED_EXIT = 76
 _PULL_REQUEST_REF = re.compile(r"^pull/[0-9]+/head$")
 
 
-def _clone_or_fetch(*, url: str, path: str, ref: str | None) -> str:
+def _clone_or_fetch(
+    *, url: str, path: str, ref: str | None, worked_in: bool = True
+) -> str:
     """Clone into ``path`` if nothing is there, else fetch; mark a failed fetch.
 
     The `[ -e ... ]` guard is what makes this idempotent and safe to run at the
     head of any command: an existing clone is never cloned over. A fetch that
     fails sets `stale` for the end of the step, so a worktree is still made.
+
+    A clone the conversation works in directly (``worked_in``) is cloned on
+    the ref's branch. One that only backs worktrees takes no `--branch`:
+    that refuses a commit, and a plain clone brings every branch and tag
+    anyway, so where a worktree starts is `_start_point`'s to resolve, the
+    same on a first clone as on a fetch.
     """
     pull_request = bool(ref and _PULL_REQUEST_REF.match(ref))
-    branch = f"--branch {shlex.quote(ref)} " if ref and not pull_request else ""
+    on_branch = ref and worked_in and not pull_request
+    branch = f"--branch {shlex.quote(ref)} " if on_branch else ""
     clone = shlex.quote(path)
     command = (
         f"if [ -e {shlex.quote(path + '/.git')} ]; then "
@@ -144,7 +153,10 @@ def _checkout_command(
 
     With a run directory instead: that directory, detached at the same start.
     """
-    steps = [_clone_or_fetch(url=url, path=clone_dir, ref=ref)]
+    backs_worktrees = run_dir is not None or (worktree is not None and slug is not None)
+    steps = [
+        _clone_or_fetch(url=url, path=clone_dir, ref=ref, worked_in=not backs_worktrees)
+    ]
     git = f"git -C {shlex.quote(clone_dir)}"
     if run_dir is not None:
         steps.append(

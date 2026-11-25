@@ -18,7 +18,8 @@ from app.modules.agent.domain.workspace_location import (
     resolve_workspace_location,
 )
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.domain.project_repo import parse_repository_name
+from app.modules.agent.domain.project_repo import is_checkout_ref, parse_repository_name
+from app.modules.agent.domain.prompt.directories import _project_paragraph
 from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
     workspace_runtime_context,
 )
@@ -289,6 +290,39 @@ def test_a_picked_repository_name_is_an_owner_and_a_repo():
     )
 
 
+@pytest.mark.parametrize(
+    "ref", ["main", "release/2.4", "v1.2.0", "pull/123/head", "3f2a9c1", "feat_x-1"]
+)
+def test_a_picked_repository_keeps_a_ref_a_checkout_can_start_from(ref):
+    assert is_checkout_ref(ref)
+    assert parse_repository_name("acme/web", ref=ref) == ProjectRepo(
+        owner="acme", repo="web", ref=ref
+    )
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "",
+        "-x",
+        "--upload-pack=x",
+        "main..evil",
+        "a/../b",
+        "feature/",
+        "x.",
+        "x.lock",
+        "a b",
+        "a;b",
+        "a@{1}",
+        "x" * 256,
+    ],
+)
+def test_a_ref_git_would_misread_or_refuse_is_not_a_checkout_ref(ref):
+    assert not is_checkout_ref(ref)
+    repo = parse_repository_name("acme/web", ref=ref)
+    assert repo is not None and repo.ref is None
+
+
 def test_parse_project_repo_drops_a_ref_git_would_read_as_a_flag():
     """A ref reaches `git clone --branch`, so `--upload-pack=...` is an exploit."""
 
@@ -404,3 +438,36 @@ async def test_a_subagent_inherits_the_parent_project():
     assert parent.repo.worktree_slug(parent.cwd) is not None
     assert child_location.repo == resolve_workspace_location(parent).repo
     assert child.repo == parent.repo
+
+
+def _start_named(ref: str | None) -> str:
+    repo = ProjectRepo(owner="acme", repo="web", ref=ref)
+    paragraph = _project_paragraph(repo, repo.worktree_dir("ab12cd34"))
+    return paragraph.split("made for this conversation from ", 1)[1].split(" before")[0]
+
+
+def test_a_worktree_on_no_ref_is_said_to_start_from_the_default_branch():
+    assert _start_named(None) == "the default branch"
+
+
+def test_a_pull_request_worktree_is_said_to_start_from_its_fetched_head():
+    assert _start_named("pull/12/head") == "`origin/pull/12/head`"
+
+
+@pytest.mark.parametrize("ref", ["3f2a9c1", "3f2a9c1" + "0" * 33])
+def test_a_commit_worktree_never_names_an_origin_ref_that_does_not_exist(ref):
+    """``origin/<sha>`` is no name git knows: an agent told it started there
+    reads ``unknown revision`` as a broken checkout."""
+    start = _start_named(ref)
+
+    assert f"origin/{ref}" not in start
+    assert f"`{ref}`" in start
+
+
+def test_a_ref_that_may_be_a_tag_is_not_promised_as_an_origin_branch():
+    start = _start_named("v1.2.0")
+
+    assert not start.startswith("`origin/")
+    assert "`v1.2.0`" in start
+    # A branch is still found where the checkout took it from.
+    assert "`origin/v1.2.0`" in start
