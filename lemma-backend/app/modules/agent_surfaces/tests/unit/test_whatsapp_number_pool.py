@@ -20,7 +20,6 @@ import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 
-from app.core.crypto import get_secret_cipher
 from app.modules.agent_surfaces.domain.whatsapp_numbers import (
     WhatsAppNumberEntity,
     WhatsAppNumberStatus,
@@ -32,6 +31,8 @@ from app.modules.agent_surfaces.infrastructure.whatsapp_pool_models import (
     WhatsAppNumber,
 )
 from app.modules.test_support.mappers import configure_test_mappers
+from app.modules.test_support.vault_fake import FakeVault
+from app.modules.vault.contracts import SecretScope
 
 # Compiling a statement configures the mappers, and a partial model graph fails
 # to resolve its relationship targets by name -- so without this the file passes
@@ -192,14 +193,13 @@ async def test_a_deployment_with_no_rows_has_no_cold_open_line_of_its_own():
     assert oldest is None
 
 
-async def test_secrets_are_encrypted_on_the_way_in_and_readable_on_the_way_out():
-    """The column holds an envelope; the entity holds the token.
+async def test_secrets_go_to_the_vault_and_come_back_on_the_way_out():
+    """The row holds a vault reference; the entity holds the token.
 
-    Written as a round trip rather than as "encrypt was called" because the
-    failure that matters is asymmetric: a write that skips encryption stores a
-    Meta access token in plaintext, and a read that skips decryption hands the
-    envelope to the Graph API, where it fails as a bad credential rather than as
-    a bug in this file.
+    Written as a round trip because the failure that matters is asymmetric: a
+    write that skips the vault stores a Meta access token on the row, and a read
+    that skips the reveal hands the Graph API nothing, where it fails as a bad
+    credential rather than as a bug in this file.
     """
     entity = WhatsAppNumberEntity(
         phone_number_id="pn-1",
@@ -210,22 +210,66 @@ async def test_secrets_are_encrypted_on_the_way_in_and_readable_on_the_way_out()
         verify_token="verify-secret",
     )
     uow = _Uow()
-    repository = WhatsAppNumberRepository(uow)
+    vault = FakeVault()
+    repository = WhatsAppNumberRepository(uow, vault=vault)
 
     stored = await repository.create(entity)
 
     model = uow.session.added[0]
-    for column, plaintext in (
-        ("access_token", "EAAG-secret-token"),
-        ("app_secret", "app-secret"),
-        ("verify_token", "verify-secret"),
-    ):
-        written = getattr(model, column)
-        assert written != plaintext, f"{column} reached the column in plaintext"
-        assert get_secret_cipher().decrypt_str(written) == plaintext
+    for column in ("access_token", "app_secret", "verify_token"):
+        assert getattr(model, column) is None, f"{column} reached the old column"
+    secret = vault.secrets[model.credentials_secret_id]
+    # Exactly the migration's scope and purpose: they are bound into the
+    # ciphertext, so anything else cannot read the secrets it copied.
+    assert secret.scope == SecretScope.system()
+    assert secret.purpose == "agent_surfaces.whatsapp_number.credentials"
+    assert secret.value == {
+        "access_token": "EAAG-secret-token",
+        "app_secret": "app-secret",
+        "verify_token": "verify-secret",
+    }
     assert stored.access_token == "EAAG-secret-token"
     assert stored.app_secret == "app-secret"
     assert stored.verify_token == "verify-secret"
+
+    uow.session._rows = [model]
+    read = await repository.get_by_phone_number_id("pn-1")
+    assert read is not None
+    assert read.access_token == "EAAG-secret-token"
+    assert read.verify_token == "verify-secret"
+
+
+async def test_a_number_that_declares_no_secret_stores_none():
+    """No secret means "fall back to settings", not an empty one."""
+    uow = _Uow()
+    vault = FakeVault()
+    repository = WhatsAppNumberRepository(uow, vault=vault)
+
+    stored = await repository.create(
+        WhatsAppNumberEntity(
+            phone_number_id="pn-2", display_phone_number="+15550000002", waba_id="w"
+        )
+    )
+
+    assert uow.session.added[0].credentials_secret_id is None
+    assert vault.secrets == {}
+    assert stored.credential_overrides() == {"phone_number_id": "pn-2", "waba_id": "w"}
+
+
+async def test_a_row_the_previous_release_wrote_is_read_from_its_old_columns():
+    """Mid-rollout, an old process may add a number with only the Fernet columns."""
+    from app.core.crypto import get_secret_cipher
+
+    row = _row(
+        "pn-3", access_token=get_secret_cipher().encrypt_str("legacy-access-token")
+    )
+    repository = WhatsAppNumberRepository(_Uow([row]), vault=FakeVault())
+
+    read = await repository.get_by_phone_number_id("pn-3")
+
+    assert read is not None
+    assert read.access_token == "legacy-access-token"
+    assert read.app_secret is None
 
 
 async def test_a_number_this_organisation_already_holds_is_not_offered():

@@ -39,7 +39,6 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from app.core.config import settings
-from app.core.crypto import get_secret_cipher
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -299,7 +298,7 @@ async def organization_default_runtime(
     Organization-wide providers only. A run in a shared pod must not land on one
     member's personal key because that member happened to add it.
     """
-    repository = AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher())
+    repository = AgentRuntimeProfileRepository(uow)
     profiles = await repository.get_visible(
         organization_id=organization_id, user_id=ORGANIZATION_WIDE_VIEWER
     )

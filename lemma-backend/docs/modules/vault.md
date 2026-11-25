@@ -14,8 +14,29 @@ holds only a `*_secret_id`, and reads and writes it through
 | `vault_secrets` | One row per secret: owner scope (`organization_id`, `pod_id`, `user_id`), `purpose`, `kind` (text or JSON), the data key wrapped by a KEK, the AES-256-GCM ciphertext, `version`, non-secret `metadata`, `expires_at`, and a refresh lease (`lease_holder`, `lease_until`). The current version only: a new value replaces the old in place under a new data key. |
 | `vault_secret_events` | The audit trail: created, replaced, revealed (when a person or workload asked), deleted (including by an owner row going away), rewrapped and imported, with actor and request id. |
 
-No table stores its secrets here yet. The connector, agent and surface tables
-still encrypt their own columns; moving them in is the next change.
+Every stored secret lives here. Each owner and the purpose and scope its value
+is bound to:
+
+| Owner (`*_secret_id`) | Purpose | Scope |
+| --- | --- | --- |
+| `accounts.credentials_secret_id` | `connectors.account.credentials` | org, user |
+| `auth_configs.config_secret_id` | `connectors.auth_config.config` | org |
+| `connector_event_subscriptions.signing_secret_id` | `connectors.event_subscription.secret` | org, user |
+| `agent_runtime_profiles.secrets_secret_id` | `agent.runtime_profile.secrets` (credentials and header values) | org |
+| `agent_surfaces.webhook_secret_id` | `agent_surfaces.surface.webhook_secret` | org, pod |
+| `surface_whatsapp_numbers.credentials_secret_id` | `agent_surfaces.whatsapp_number.credentials` | deployment |
+| `slack_configuration_tokens.tokens_secret_id` | `agent_surfaces.slack_configuration.tokens` | org |
+| `agent_surface_web_widgets.signing_secret_id` | `agent_surfaces.web_widget.signing_secret` | pod |
+| `mcp_event_subscriptions.signing_secret_id` | `mcp_access.event_subscription.secret` | pod, user |
+| `machine_login_backups.key_secret_id` | `workspace.login_backup.key` | sandbox owner |
+| `machine_services.env_secret_id` | `workspace.machine_service.env` | sandbox owner |
+| SuperTokens user metadata (no trigger; deleted on revocation) | `identity.apple.refresh_token` | user |
+
+Until the next release's contract migration, each owner keeps its old Fernet
+column too: a row the previous release wrote during the rollout is read from
+there (`legacy_json` / `legacy_text`) and moved into the vault on its next
+write, and a write to the old column by the previous release drops the vault
+copy (migration `0078_vault_cutover`).
 
 ## How a secret is protected
 
@@ -41,8 +62,11 @@ flowchart TB
   move, and a stale writer gets a conflict instead of overwriting a newer token.
 - **Short-lived values.** The sealer (`seal_value` / `open_json`) applies the
   same protection to values held outside the table — the sandbox environment
-  cached in Redis, a GitHub installation token, a queued agent-host MCP frame —
-  bound to the cache key or run they belong to.
+  cached in Redis, a GitHub installation token, Teams tokens, a pending Slack
+  form, a kept-chat cookie, a queued agent-host MCP frame, the data key of a
+  home carried across a machine size move — bound to the cache key, run or
+  object they belong to. Rewrap does not reach them, so only values that expire
+  are sealed; anything long-lived is a row here.
 
 ## Runtime contributions
 

@@ -23,8 +23,6 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import WorkClass
@@ -72,9 +70,7 @@ async def _account(db_session: AsyncSession, *, org_id: str, user_id: str) -> st
     )
     db_session.add(install)
     await db_session.commit()
-    created = await AccountRepository(
-        SqlAlchemyUnitOfWork(db_session), encryption=get_secret_cipher()
-    ).create(
+    created = await AccountRepository(SqlAlchemyUnitOfWork(db_session)).create(
         AccountEntity(
             user_id=UUID(user_id),
             organization_id=UUID(org_id),

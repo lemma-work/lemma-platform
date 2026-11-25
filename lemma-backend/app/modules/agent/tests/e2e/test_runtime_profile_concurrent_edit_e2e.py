@@ -17,7 +17,6 @@ import pytest
 from httpx import AsyncClient
 from starlette import status
 
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.domain.errors import RuntimeProfileConflictError
@@ -65,7 +64,7 @@ async def _provider(client: AsyncClient) -> tuple[UUID, dict[str, object]]:
 def _editor(uow) -> AgentRuntimeProfileEditor:
     return AgentRuntimeProfileEditor(
         AgentRuntimeProfileService(
-            AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher()),
+            AgentRuntimeProfileRepository(uow),
             AgentHostRepository(uow),
         )
     )
@@ -157,9 +156,7 @@ async def test_an_edit_built_on_a_read_another_edit_overtook_is_refused(
     profile_id = str(profile["id"])
 
     async with create_uow_from_session_maker(async_session_maker) as stale_uow:
-        repository = AgentRuntimeProfileRepository(
-            stale_uow, encryption=get_secret_cipher()
-        )
+        repository = AgentRuntimeProfileRepository(stale_uow)
         read_before = await repository.get_visible_by_id(
             profile_id=profile_id, organization_id=org_id, user_id=uuid4()
         )

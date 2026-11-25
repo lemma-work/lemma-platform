@@ -10,7 +10,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
-from app.core.crypto import get_secret_cipher
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.errors import RuntimeUnavailableError
@@ -414,7 +413,7 @@ def runtime_profile_service_for(
     model can see.
     """
     return AgentRuntimeProfileService(
-        AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher()),
+        AgentRuntimeProfileRepository(uow),
         AgentHostRepository(uow),
     )
 

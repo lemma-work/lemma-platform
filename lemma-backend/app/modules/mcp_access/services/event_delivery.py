@@ -11,15 +11,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Protocol
 from uuid import UUID
 
-from pydantic import SecretStr
 
-from app.core.crypto.factory import get_secret_cipher
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.mcp_access.domain.entities import Scope, parse_scopes
@@ -28,6 +26,7 @@ from app.modules.mcp_access.infrastructure.repositories import McpAccessReposito
 from app.modules.mcp_access.infrastructure.subscription_repository import (
     EventSubscriptionRepository,
     StoredSubscription,
+    legacy_signing_secret,
 )
 from app.modules.mcp_access.infrastructure.webhook_sender import (
     SendResult,
@@ -108,7 +107,10 @@ def outcome_of(result: SendResult) -> Outcome:
 
 
 class DeliveryLedger(Protocol):
-    async def still_wanted(self, job: DeliveryJob) -> StoredSubscription | None: ...
+    async def still_wanted(self, job: DeliveryJob) -> StoredSubscription | None:
+        """The subscription, with its signing secret revealed, if it still
+        wants this delivery."""
+        ...
 
     async def record(
         self, subscription: StoredSubscription, result: SendResult
@@ -146,7 +148,10 @@ class SqlDeliveryLedger:
                 await subscriptions.remove(subscription.public_id)
                 await uow.commit()
                 return None
-        return subscription
+            secret = await subscriptions.signing_secret(subscription)
+        if secret is None:
+            secret = await legacy_signing_secret(subscription)
+        return replace(subscription, secret=secret)
 
     async def record(
         self, subscription: StoredSubscription, result: SendResult
@@ -189,12 +194,12 @@ class EventDelivery:
         )
         if record is None:
             return Outcome.DROPPED
-        secret = get_secret_cipher().decrypt_str(subscription.secret_ciphertext)
-        if not secret:
+        secret = subscription.secret
+        if secret is None or not secret.get_secret_value():
             return Outcome.DROPPED
         result = await self._send(
             url=subscription.url,
-            secret=SecretStr(secret),
+            secret=secret,
             message_id=job.event_id,
             subscription_id=subscription.public_id,
             body=occurrence_body(job, record),

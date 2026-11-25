@@ -19,6 +19,7 @@ from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 from fastapi import Depends
+from pydantic import SecretStr
 
 from app.core.api.dependencies import get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -80,12 +81,18 @@ def get_surface_lookup(
     """The real surface read: one short session scope per read.
 
     An id with no surface raises ``AgentSurfaceNotFoundError``, the 404 the
-    route has always answered with.
+    route has always answered with. The surface comes with its webhook secret
+    revealed, inside the scope, since the route verifies the delivery with it.
     """
 
     async def lookup(surface_id: UUID) -> AgentSurfaceEntity:
         async with uow_scope(uow_factory) as uow:
-            return await get_surface_service(uow).get_surface(surface_id)
+            service = get_surface_service(uow)
+            surface = await service.get_surface(surface_id)
+            secret = await service.surface_repository.reveal_webhook_secret(surface)
+        if secret:
+            surface.webhook_secret = SecretStr(secret)
+        return surface
 
     return lookup
 

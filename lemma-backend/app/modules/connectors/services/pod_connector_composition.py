@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.core.authorization.context import Context
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.infrastructure.adapters.organization_access import (
     SqlAlchemyOrganizationAccessAdapter,
@@ -55,8 +54,8 @@ def build_pod_connector_resolver(uow: SqlAlchemyUnitOfWork) -> PodConnectorResol
     return PodConnectorResolver(
         pod_connectors=PodConnectorRepository(uow),
         pod_accounts=PodAccountRepository(uow),
-        auth_configs=AuthConfigRepository(uow=uow, encryption=get_secret_cipher()),
-        accounts=AccountRepository(uow=uow, encryption=get_secret_cipher()),
+        auth_configs=AuthConfigRepository(uow=uow),
+        accounts=AccountRepository(uow=uow),
         is_pod_member=is_pod_member,
         person_context=person_context,
     )
@@ -67,8 +66,8 @@ def build_pod_connector_service(uow: SqlAlchemyUnitOfWork) -> PodConnectorServic
         uow=uow,
         pod_connectors=PodConnectorRepository(uow),
         pod_accounts=PodAccountRepository(uow),
-        auth_configs=AuthConfigRepository(uow=uow, encryption=get_secret_cipher()),
-        accounts=AccountRepository(uow=uow, encryption=get_secret_cipher()),
+        auth_configs=AuthConfigRepository(uow=uow),
+        accounts=AccountRepository(uow=uow),
         organization_access=SqlAlchemyOrganizationAccessAdapter(uow),
     )
 

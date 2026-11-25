@@ -32,7 +32,6 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.authorization.grant_generation import agent_grant_generation
 from app.core.config import settings
-from app.core.crypto import get_secret_cipher
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
@@ -328,7 +327,7 @@ async def resolved_runtime_profile(
     stored = run.agent_runtime.model_dump(mode="json")
     try:
         service = AgentRuntimeProfileService(
-            AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher()),
+            AgentRuntimeProfileRepository(uow),
             # Passed so a harness that has since reported it reads images is
             # believed, rather than the catalog copied from it before its probe
             # landed.

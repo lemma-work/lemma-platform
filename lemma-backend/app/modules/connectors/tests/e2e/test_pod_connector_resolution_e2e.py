@@ -21,7 +21,6 @@ from sqlalchemy import select, update
 from starlette import status
 
 from app.core.authorization.service import AuthorizationDataService
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import WorkClass, WorkRegistry
@@ -70,9 +69,7 @@ pytestmark = pytest.mark.e2e
 async def _second_account(db_session, world: World, user: dict, secret: str) -> str:
     """Another account of ``user``'s on the same installation, not their default."""
     install = await db_session.get(AuthConfig, UUID(world.auth_config_id))
-    created = await AccountRepository(
-        SqlAlchemyUnitOfWork(db_session), encryption=get_secret_cipher()
-    ).create(
+    created = await AccountRepository(SqlAlchemyUnitOfWork(db_session)).create(
         AccountEntity(
             user_id=UUID(user["id"]),
             organization_id=install.organization_id,

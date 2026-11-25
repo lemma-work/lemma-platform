@@ -11,7 +11,6 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.crypto.factory import get_secret_cipher
 from app.core.infrastructure.db.integrity import violated_constraint
 from app.modules.agent_surfaces.domain.web_widgets import (
     WebWidget,
@@ -21,12 +20,21 @@ from app.modules.agent_surfaces.domain.web_widgets import (
 from app.modules.agent_surfaces.infrastructure.web_widget_models import (
     WebWidgetModel,
 )
+from app.modules.vault.contracts import SecretScope, legacy_text, vault_for
 
 #: The most widgets one pod lists.
 MAX_WIDGETS = 100
 
 #: The index that keeps one widget name to one widget in a pod.
 _NAME_TAKEN = "uq_web_widget_pod_name"
+
+SIGNING_SECRET_PURPOSE = "agent_surfaces.web_widget.signing_secret"
+_OWNER_TABLE = "agent_surface_web_widgets"
+
+
+def _scope(pod_id: UUID) -> SecretScope:
+    # The pod alone: a widget knows its pod without a lookup.
+    return SecretScope(organization_id=None, pod_id=pod_id)
 
 
 def _widget(row: WebWidgetModel) -> WebWidget:
@@ -73,7 +81,6 @@ class WebWidgetRepository:
             agent_id=agent_id,
             name=name,
             public_key=public_key,
-            signing_secret=get_secret_cipher().encrypt_str(secret),
             allowed_origins=allowed_origins,
             answer=answer.value,
             looked_after_by=looked_after_by,
@@ -87,6 +94,17 @@ class WebWidgetRepository:
             if violated_constraint(error) == _NAME_TAKEN:
                 raise WidgetNameTaken(name) from None
             raise
+        # After the savepoint, not in it: a name already taken leaves no secret
+        # behind, and the vault's first key load may hand the connection back,
+        # which a savepoint cannot survive. Same transaction as the row.
+        ref = await vault_for(self.session).put(
+            scope=_scope(pod_id),
+            purpose=SIGNING_SECRET_PURPOSE,
+            value=secret,
+            owner_table=_OWNER_TABLE,
+        )
+        row.signing_secret_id = ref.id
+        await self.session.flush()
         return _widget(row)
 
     async def get(self, *, pod_id: UUID, widget_id: UUID) -> WebWidget | None:
@@ -104,10 +122,25 @@ class WebWidgetRepository:
         return _widget(row) if row else None
 
     async def signing_secret(self, widget_id: UUID) -> str | None:
-        encrypted = await self.session.scalar(
-            select(WebWidgetModel.signing_secret).where(WebWidgetModel.id == widget_id)
+        found = (
+            await self.session.execute(
+                select(
+                    WebWidgetModel.pod_id,
+                    WebWidgetModel.signing_secret_id,
+                    WebWidgetModel.signing_secret,
+                ).where(WebWidgetModel.id == widget_id)
+            )
+        ).one_or_none()
+        if found is None:
+            return None
+        pod_id, secret_id, legacy = found
+        if secret_id is None:
+            # Written by the previous release during the rollout.
+            return await legacy_text(legacy)
+        revealed = await vault_for(self.session).reveal(
+            secret_id, expect=_scope(pod_id), purpose=SIGNING_SECRET_PURPOSE
         )
-        return get_secret_cipher().decrypt_str(encrypted) if encrypted else None
+        return revealed.text()
 
     async def list(self, *, pod_id: UUID) -> list[WebWidget]:
         rows = await self.session.scalars(
@@ -130,10 +163,38 @@ class WebWidgetRepository:
         return await self.get(pod_id=pod_id, widget_id=widget_id)
 
     async def rotate_secret(self, *, widget_id: UUID, secret: str) -> None:
+        """Replace the widget's secret; the old Fernet column is cleared."""
+        found = (
+            await self.session.execute(
+                select(WebWidgetModel.pod_id, WebWidgetModel.signing_secret_id)
+                .where(WebWidgetModel.id == widget_id)
+                .with_for_update()
+            )
+        ).one_or_none()
+        if found is None:
+            return
+        pod_id, secret_id = found
+        vault = vault_for(self.session)
+        if secret_id is not None:
+            await vault.replace(
+                secret_id,
+                expect=_scope(pod_id),
+                purpose=SIGNING_SECRET_PURPOSE,
+                value=secret,
+            )
+            values: dict[str, object] = {"signing_secret": None}
+        else:
+            ref = await vault.put(
+                scope=_scope(pod_id),
+                purpose=SIGNING_SECRET_PURPOSE,
+                value=secret,
+                owner_table=_OWNER_TABLE,
+            )
+            values = {"signing_secret_id": ref.id, "signing_secret": None}
         await self.session.execute(
             update(WebWidgetModel)
             .where(WebWidgetModel.id == widget_id)
-            .values(signing_secret=get_secret_cipher().encrypt_str(secret))
+            .values(**values)
         )
 
     async def delete(self, *, pod_id: UUID, widget_id: UUID) -> bool:

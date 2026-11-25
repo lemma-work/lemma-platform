@@ -59,7 +59,7 @@ def _admitted() -> _AdmittedRun:
             wait_timeout_seconds=60,
             model_name=None,
         ),
-        encrypted_mcp={"encrypted": True},
+        encrypted_mcp="lvs1:sealed-frame",
         carried=frozenset(),
         instructions_digest="digest",
         credential_expires_at=None,

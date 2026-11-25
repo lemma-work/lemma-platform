@@ -423,7 +423,9 @@ async def _record_installation(
         organization_id=account.organization_id,
         user_id=account.user_id,
     )
-    account.credentials = identity.credentials
+    await service.account_repository.replace_credentials(
+        account.id, identity.credentials
+    )
     if identity.external_ref:
         account.external_ref = identity.external_ref
     account.status = AccountStatus.CONNECTED
@@ -540,8 +542,10 @@ async def _persist_account(
         )
 
     if account:
-        account.credentials = _renewed_credentials(
-            account, pending_request, identity.credentials
+        # A new grant replaces them outright; `update` never writes credentials.
+        await service.account_repository.replace_credentials(
+            account.id,
+            _renewed_credentials(account, pending_request, identity.credentials),
         )
         account.external_ref = identity.external_ref
         if provider_account_id:

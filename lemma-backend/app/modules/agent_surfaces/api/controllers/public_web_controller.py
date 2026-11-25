@@ -234,7 +234,9 @@ async def web_start_session(
     on_pages = kept_chats.keeps_chats(request)
     keeps = on_pages and body.host_token is None
     kept = (
-        kept_chats.kept_secret(request, widget) if keeps and not body.secret else None
+        await kept_chats.kept_secret(request, widget)
+        if keeps and not body.secret
+        else None
     )
     secret = body.secret or kept
     try:
@@ -253,7 +255,7 @@ async def web_start_session(
             widget, secret=None, host_token=None, altcha=body.altcha, address=address
         )
     if keeps and started.secret:
-        kept_chats.keep(response, widget, started.secret)
+        await kept_chats.keep(response, widget, started.secret)
     elif on_pages and body.host_token is not None:
         # Somebody signed in: their chat must not outlive that on this machine.
         kept_chats.forget(response, widget)

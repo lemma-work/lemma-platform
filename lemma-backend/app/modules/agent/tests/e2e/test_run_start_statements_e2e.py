@@ -39,8 +39,9 @@ pytestmark = [pytest.mark.e2e]
 #: conversation, its newest runs, their total and each run's message count --
 #: the log's checkpoint is found in the statement that reads the steps after
 #: it, and the brief's schedules come with their count: 13. (A third log read,
-#: the last logged run's status, only once there are steps.)
-RUN_START_STATEMENTS = 13
+#: the last logged run's status, only once there are steps.) The runtime
+#: profile's credentials then moved into the vault, read in one more: 14.
+RUN_START_STATEMENTS = 14
 
 
 @pytest.fixture

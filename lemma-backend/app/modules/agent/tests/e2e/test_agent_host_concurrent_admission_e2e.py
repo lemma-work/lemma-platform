@@ -35,6 +35,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.agent_host.control import admission
+from app.modules.agent.agent_host.control.mcp_frame import seal_mcp_frame
 from app.modules.agent.agent_host.domain.host import (
     TERMINAL_AGENT_HOST_RUN_STATES,
     AgentHostCommandKind,
@@ -151,13 +152,14 @@ async def _admit(uow: SqlAlchemyUnitOfWork, host: _Host, spec: AgentHostRunSpec)
         harness_id=host.harness_id,
         runtime_profile_id=host.profile_id,
         run_spec=spec,
-        encrypted_mcp_payload={"encrypted": True},
+        encrypted_mcp_payload=await seal_mcp_frame({}, run_id=spec.agent_run_id),
     )
 
 
 async def _refresh(uow: SqlAlchemyUnitOfWork, run_id: UUID):
     return await AgentHostDispatchRepository(uow).enqueue_credential_refresh(
-        run_id=run_id, encrypted_mcp_payload={"encrypted": True}
+        run_id=run_id,
+        encrypted_mcp_payload=await seal_mcp_frame({}, run_id=run_id),
     )
 
 

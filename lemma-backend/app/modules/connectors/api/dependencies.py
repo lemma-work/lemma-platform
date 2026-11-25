@@ -7,7 +7,6 @@ from fastapi import Depends
 from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.authorization.context import Context
 from app.core.config import settings
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.cache.resilient_cache import ResilientJsonCache
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.connectors.application.connector_operation_use_cases import (
@@ -86,17 +85,11 @@ def _connector_repository(uow: UoWDep) -> ConnectorRepository:
 
 
 def _account_repository(uow: UoWDep) -> AccountRepository:
-    return AccountRepository(
-        uow=uow,
-        encryption=get_secret_cipher(),
-    )
+    return AccountRepository(uow=uow)
 
 
 def _auth_config_repository(uow: UoWDep) -> AuthConfigRepository:
-    return AuthConfigRepository(
-        uow=uow,
-        encryption=get_secret_cipher(),
-    )
+    return AuthConfigRepository(uow=uow)
 
 
 def _connect_request_repository(uow: UoWDep) -> ConnectRequestRepository:

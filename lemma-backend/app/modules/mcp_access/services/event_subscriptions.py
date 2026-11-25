@@ -19,7 +19,6 @@ from uuid import UUID
 
 from pydantic import JsonValue, SecretStr
 
-from app.core.crypto.factory import get_secret_cipher
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.net.url_guard import UnsafeUrlError, assert_safe_url
 from app.modules.mcp_access.domain.entities import McpPrincipal, Scope
@@ -176,9 +175,7 @@ class EventSubscriptions:
                 arguments=dict(request.arguments),
                 arguments_key=arguments_key,
                 url=request.url,
-                secret_ciphertext=str(
-                    get_secret_cipher().encrypt_str(request.secret.get_secret_value())
-                ),
+                secret=request.secret,
                 refresh_before=now + granted_ttl(request.ttl_ms),
                 verified_at=now,
                 now=now,

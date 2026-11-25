@@ -21,8 +21,6 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import facts
@@ -328,7 +326,7 @@ async def test_adding_lemma_keeps_the_persons_own_slack_token(
     (install,) = await _installs_of(db_session, org_id)
     async with async_session_maker() as session:
         account = await AccountRepository(
-            SqlAlchemyUnitOfWork(session), get_secret_cipher()
+            SqlAlchemyUnitOfWork(session)
         ).get_by_user_and_auth_config(UUID(fixed_test_user["id"]), install.id)
     assert account is not None
     assert account.status == AccountStatus.CONNECTED

@@ -19,8 +19,19 @@ from app.modules.connectors.domain.auth_config import (
     AuthConfigStatus,
 )
 from app.modules.connectors.domain.errors import ConnectorConflictError
-from app.modules.connectors.domain.ports import SecretEncryptionPort
 from app.modules.connectors.infrastructure.models import AuthConfig
+from app.modules.connectors.infrastructure.repositories.connector_secrets import (
+    AUTH_CONFIG_PURPOSE,
+    AUTH_CONFIGS_TABLE,
+    auth_config_scope,
+)
+from app.modules.vault.contracts import (
+    JsonObject,
+    Revealed,
+    Vault,
+    legacy_json,
+    vault_for,
+)
 
 #: One active install per name in an organization: the name is how a pod, an
 #: agent's toolset and the API ask for it.
@@ -33,38 +44,115 @@ _DEFAULT_TAKEN = "uq_auth_configs_default_per_connector"
 class AuthConfigRepository(
     SqlAlchemyRepository[AuthConfig, AuthConfigEntity],
 ):
+    """Repository for installs.
+
+    The install's config -- client secrets and signing secrets beside public
+    endpoints -- is one vault secret, revealed on every read that returns an
+    entity. Deleting the row deletes the secret (a trigger does it). A row a
+    process on the previous release wrote mid-rollout has its config only in
+    the old column; it is read from there and moves on its next write.
+    """
+
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        encryption: SecretEncryptionPort,
+        *,
+        vault: Vault | None = None,
     ):
         super().__init__(uow, AuthConfig, AuthConfigEntity)
-        self.encryption = encryption
+        self._vault = vault or vault_for(self.session)
 
-    async def _to_model(self, entity: AuthConfigEntity) -> AuthConfig:
+    def _to_model(self, entity: AuthConfigEntity) -> AuthConfig:
         data = entity.model_dump(exclude_unset=True)
         # `provider`/`provider_config` are read-only compatibility views on the
-        # entity; the columns are `kind` and `config`. Dropped rather than
-        # renamed, because the entity has already resolved them.
+        # entity; the column is `kind`. Dropped rather than renamed, because the
+        # entity has already resolved them. The config goes to the vault.
         data.pop("provider", None)
         data.pop("provider_config", None)
+        data.pop("config", None)
         data["kind"] = entity.kind.value
-        data["config"] = await self.encryption.encrypt_json_async(entity.config)
         data["metadata_"] = data.pop("metadata", None)
         return self.model_cls(**data)
 
     async def _to_entity(self, instance: AuthConfig) -> AuthConfigEntity:
+        secret = None
+        if instance.config_secret_id is not None:
+            secret = await self._vault.reveal(
+                instance.config_secret_id,
+                expect=auth_config_scope(instance.organization_id),
+                purpose=AUTH_CONFIG_PURPOSE,
+            )
+        return await self._entity_from(instance, secret)
+
+    @staticmethod
+    async def _entity_from(
+        instance: AuthConfig, secret: Revealed | None
+    ) -> AuthConfigEntity:
         entity = instance.to_entity()
-        entity.config = await self.encryption.decrypt_json_async(entity.config)
+        if instance.config_secret_id is not None:
+            entity.config = secret.json() if secret is not None else None
+        else:
+            entity.config = await legacy_json(instance.config)
         return entity
+
+    async def _write_config(
+        self, instance: AuthConfig, config: JsonObject | None
+    ) -> None:
+        """Point ``instance`` at a secret holding ``config``, or at none, and
+        clear the old column.
+
+        An empty config is no secret -- there is nothing in it to protect -- so
+        it is stored as no pointer and reads back as ``None``. An unchanged
+        config writes no new version, so saving an install's name does not
+        mint one.
+        """
+        instance.config = None
+        scope = auth_config_scope(instance.organization_id)
+        if not config:
+            # The release trigger deletes the orphaned vault row.
+            instance.config_secret_id = None
+            return
+        if instance.config_secret_id is not None:
+            await self._vault.replace(
+                instance.config_secret_id,
+                expect=scope,
+                purpose=AUTH_CONFIG_PURPOSE,
+                value=config,
+                skip_if_equal=True,
+            )
+            return
+        ref = await self._vault.put(
+            scope=scope,
+            purpose=AUTH_CONFIG_PURPOSE,
+            value=config,
+            owner_table=AUTH_CONFIGS_TABLE,
+        )
+        instance.config_secret_id = ref.id
+
+    async def _drop_unowned(self, instance: AuthConfig) -> None:
+        if instance.config_secret_id is not None:
+            await self._vault.delete(
+                instance.config_secret_id,
+                expect=auth_config_scope(instance.organization_id),
+                purpose=AUTH_CONFIG_PURPOSE,
+            )
 
     async def create(self, entity: AuthConfigEntity) -> AuthConfigEntity:
         """The new install. Raises ``ConnectorConflictError`` for a name an
         active install of the organization already has."""
-        instance = await self._to_model(entity)
-        async with self._name_must_be_free(entity.name):
-            self.session.add(instance)
-            await self.session.flush()
+        instance = self._to_model(entity)
+        # Before the savepoint, not in it: a first vault write in a process may
+        # load keys, which hands the connection back -- not possible mid-savepoint.
+        await self._write_config(instance, entity.config)
+        try:
+            async with self._name_must_be_free(entity.name):
+                self.session.add(instance)
+                await self.session.flush()
+        except ConnectorConflictError:
+            # The row was refused; its secret must not outlive it in a caller
+            # that catches the conflict and commits.
+            await self._drop_unowned(instance)
+            raise
         return await self._to_entity(instance)
 
     async def update(self, entity: AuthConfigEntity) -> AuthConfigEntity:
@@ -74,6 +162,9 @@ class AuthConfigRepository(
         if not instance:
             raise ValueError(f"AuthConfig {entity.id} not found")
 
+        # First, while nothing else on the row is pending: the vault's row read
+        # would autoflush a rename outside the savepoint that reports it.
+        await self._write_config(instance, entity.config)
         instance.name = entity.name
         instance.kind = entity.kind.value
         instance.config_source = (
@@ -86,7 +177,6 @@ class AuthConfigRepository(
             if hasattr(entity.status, "value")
             else str(entity.status)
         )
-        instance.config = await self.encryption.encrypt_json_async(entity.config)
         instance.is_default = entity.is_default
         instance.metadata_ = entity.metadata
         instance.updated_by_user_id = entity.updated_by_user_id
@@ -239,7 +329,23 @@ class AuthConfigRepository(
         if len(instances) > limit:
             next_cursor = instances[limit - 1].id
             instances = instances[:limit]
-        return await aconvert_valid_rows(instances, self._to_entity), next_cursor
+        # One vault read for the page, not one per install.
+        revealed = await self._vault.reveal_many(
+            {
+                instance.config_secret_id: auth_config_scope(instance.organization_id)
+                for instance in instances
+                if instance.config_secret_id is not None
+            },
+            purpose=AUTH_CONFIG_PURPOSE,
+        )
+
+        async def to_entity(instance: AuthConfig) -> AuthConfigEntity:
+            secret_id = instance.config_secret_id
+            return await self._entity_from(
+                instance, revealed.get(secret_id) if secret_id is not None else None
+            )
+
+        return await aconvert_valid_rows(instances, to_entity), next_cursor
 
     async def delete(self, id: UUID) -> bool:
         stmt = select(AuthConfig).where(AuthConfig.id == id)

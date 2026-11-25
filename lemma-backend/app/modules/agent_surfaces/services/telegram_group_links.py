@@ -16,6 +16,7 @@ expired or been spent does nothing; the group can be added again from Lemma.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import secrets
 from dataclasses import dataclass
@@ -31,6 +32,13 @@ logger = get_logger(__name__)
 
 _TTL_SECONDS = 3600
 _PREFIX = "agent_surfaces:telegram_group_link:"
+
+
+def _key(code: str) -> str:
+    """What a code is kept under: its SHA-256, never the code itself, so a
+    read of Redis yields nothing that claims a group."""
+    return _PREFIX + hashlib.sha256(code.encode("utf-8")).hexdigest()
+
 
 #: What Telegram accepts as a start parameter: 1-64 of these characters.
 _START = re.compile(r"^/start(?:@[A-Za-z0-9_]+)?\s+([A-Za-z0-9_-]{16,64})\s*$")
@@ -66,7 +74,7 @@ async def mint_group_link(
     code = secrets.token_urlsafe(24)
     client = redis or get_redis()
     try:
-        await client.set(_PREFIX + code, f"{surface_id}:{user_id}", ex=_TTL_SECONDS)
+        await client.set(_key(code), f"{surface_id}:{user_id}", ex=_TTL_SECONDS)
     except (RedisError, OSError) as exc:
         raise GroupLinkUnavailable("Could not keep the link's code") from exc
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=_TTL_SECONDS)
@@ -77,7 +85,7 @@ async def redeem_group_link(code: str, *, redis=None) -> GroupLinkClaim | None:
     """Who a code was minted for, spending it; None when it is unknown or spent."""
     client = redis or get_redis()
     try:
-        raw = await client.getdel(_PREFIX + code)
+        raw = await client.getdel(_key(code))
     except RedisError, OSError:
         logger.warning(
             "agent_surfaces.telegram_group_links.redeem_unavailable.degraded",

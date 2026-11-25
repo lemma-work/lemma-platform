@@ -2,8 +2,8 @@
 
 The tenant each account speaks for -- a Slack ``team.id``, an Atlassian
 ``cloud_id``, a Teams ``tid``, a Composio ``connection_id`` -- has always been
-in the credentials. Those are encrypted at rest, so this cannot be a SQL
-migration: reading them needs the application's cipher.
+in the credentials. Those are a vault secret per account, so this cannot be a
+SQL migration: reading them needs the application's vault keys.
 
 Dry-run is the default and prints a per-connector summary:
 
@@ -29,16 +29,19 @@ from uuid import UUID
 
 from sqlalchemy import select
 
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.connectors.domain.install_binding import resolve_external_ref
 from app.modules.connectors.infrastructure.models.account import Account
+from app.modules.connectors.infrastructure.repositories.connector_secrets import (
+    ACCOUNT_CREDENTIALS_PURPOSE,
+    account_scope,
+)
+from app.modules.vault.contracts import JsonObject, legacy_json, vault_for
 
 _BATCH = 500
 
 
 async def _run(apply_changes: bool) -> dict[str, object]:
-    cipher = get_secret_cipher()
     filled: Counter[str] = Counter()
     corrected: Counter[str] = Counter()
     absent: Counter[str] = Counter()
@@ -65,7 +68,7 @@ async def _run(apply_changes: bool) -> dict[str, object]:
                 scanned += 1
                 connector_id = account.connector_id
                 try:
-                    credentials = await cipher.decrypt_json_async(account.credentials)
+                    credentials = await _credentials(session, account)
                 except Exception:
                     # A credential we cannot read is a key-rotation or corruption
                     # problem of its own. Counting it and moving on beats aborting
@@ -97,6 +100,19 @@ async def _run(apply_changes: bool) -> dict[str, object]:
         "no_tenant": dict(absent),
         "unreadable_credentials": dict(unreadable),
     }
+
+
+async def _credentials(session, account: Account) -> JsonObject | None:
+    """The account's credentials: its vault secret, or -- for a row a process
+    on the previous release wrote mid-rollout -- the old column."""
+    if account.credentials_secret_id is None:
+        return await legacy_json(account.credentials)
+    revealed = await vault_for(session).reveal(
+        account.credentials_secret_id,
+        expect=account_scope(account.organization_id, account.user_id),
+        purpose=ACCOUNT_CREDENTIALS_PURPOSE,
+    )
+    return revealed.json()
 
 
 def main() -> None:

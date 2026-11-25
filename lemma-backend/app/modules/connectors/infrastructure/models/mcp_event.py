@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.infrastructure.db.base import UUIDAuditBase
+from app.modules.vault.contracts import vault_owned
 
 
 class AuthConfigEvent(UUIDAuditBase):
@@ -45,7 +46,7 @@ class ConnectorEventSubscription(UUIDAuditBase):
     `id` is ours and rides in the callback URL, which is how a delivery -- and
     the challenge that arrives before the server has named its own id -- finds
     the secret to check it with. The secret is ours too, made per subscription
-    and stored encrypted.
+    and kept in the vault.
     """
 
     __tablename__ = "connector_event_subscriptions"
@@ -64,7 +65,15 @@ class ConnectorEventSubscription(UUIDAuditBase):
     arguments: Mapped[dict[str, object]] = mapped_column(
         JSONB, nullable=False, default=dict
     )
-    secret_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    #: The signing secret, as a vault secret (purpose
+    #: `connectors.event_subscription.secret`, scoped to the org and user).
+    signing_secret_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("vault_secrets.id"), unique=True, nullable=True
+    )
+    #: The previous release's Fernet column. Read only while a row written by
+    #: an old process mid-rollout has no `signing_secret_id`; never written.
+    #: Dropped by the next release's contract migration.
+    secret_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: The server's id for it, once it has answered; `X-MCP-Subscription-Id`.
     remote_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     granted_at: Mapped[datetime | None] = mapped_column(
@@ -91,3 +100,6 @@ class ConnectorEventSubscription(UUIDAuditBase):
         Index("ix_connector_event_subscriptions_renew", "renew_after"),
         Index("ix_connector_event_subscriptions_account", "account_id"),
     )
+
+
+vault_owned(ConnectorEventSubscription.__table__, "signing_secret_id")

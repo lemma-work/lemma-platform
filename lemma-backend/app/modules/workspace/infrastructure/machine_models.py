@@ -24,6 +24,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.infrastructure.db.base import UUIDAuditBase
+from app.modules.vault.contracts import vault_owned
 
 
 class MachinePreviewModel(UUIDAuditBase):
@@ -109,8 +110,9 @@ class MachineSessionModel(UUIDAuditBase):
 class MachineLoginBackupModel(UUIDAuditBase):
     """An encrypted copy of the login-bearing parts of a browser profile.
 
-    The object holds AES-GCM ciphertext; ``wrapped_key`` is its data key under
-    the deployment's secret cipher, so a leaked bucket alone opens nothing.
+    The object holds AES-GCM ciphertext; its data key is a vault secret
+    (``key_secret_id``) bound to the machine's owner, so a leaked bucket alone
+    opens nothing.
     """
 
     __tablename__ = "machine_login_backups"
@@ -122,7 +124,13 @@ class MachineLoginBackupModel(UUIDAuditBase):
         ForeignKey("sandboxes.id", ondelete="CASCADE"), nullable=False
     )
     object_key: Mapped[str] = mapped_column(String(512), nullable=False)
-    wrapped_key: Mapped[str] = mapped_column(Text, nullable=False)
+    key_secret_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("vault_secrets.id"), unique=True, nullable=True
+    )
+    # The data key under the Fernet cipher, from before the vault. Read only
+    # for a copy a process on the previous release took mid-rollout; written
+    # only to NULL. Dropped by the next release's contract migration.
+    wrapped_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     # Why it was taken: a clean close, the daily copy, or before a reset.
@@ -186,8 +194,9 @@ class MachineServiceModel(UUIDAuditBase):
 
     Durable, unlike the process registry in Redis, because a service outlives
     any one process: the machine pauses, the process ends, and the definition
-    is what brings it back. The caller's own environment variables are
-    ciphertext under the deployment's secret cipher; ``token_claims`` records
+    is what brings it back. The caller's own environment variables are a
+    vault secret (``env_secret_id``) bound to the machine's owner;
+    ``token_claims`` records
     what the starting token was minted for, never the token, so a restart
     mints a fresh one with the same reach.
     """
@@ -203,6 +212,12 @@ class MachineServiceModel(UUIDAuditBase):
     name: Mapped[str] = mapped_column(String(64), nullable=False)
     command: Mapped[str] = mapped_column(Text, nullable=False)
     cwd: Mapped[str] = mapped_column(Text, nullable=False)
+    env_secret_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("vault_secrets.id"), unique=True, nullable=True
+    )
+    # The variables under the Fernet cipher, from before the vault. Read only
+    # for a service a process on the previous release recorded mid-rollout;
+    # written only to NULL. Dropped by the next release's contract migration.
     env_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_claims: Mapped[dict[str, object]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
@@ -224,3 +239,7 @@ class MachineServiceModel(UUIDAuditBase):
     stopped_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+vault_owned(MachineLoginBackupModel.__table__, "key_secret_id")
+vault_owned(MachineServiceModel.__table__, "env_secret_id")

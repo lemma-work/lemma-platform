@@ -20,7 +20,6 @@ from httpx import AsyncClient
 from starlette import status
 
 from app.core.config import settings
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.domain.errors import OrganizationDefaultConflictError
@@ -236,9 +235,7 @@ async def test_two_owners_choosing_at_once_leave_one_default(
     beta = await _provider(authenticated_client, org_id, model_names=["beta-1"])
 
     def service(uow) -> OrganizationDefaultService:
-        return OrganizationDefaultService(
-            AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher())
-        )
+        return OrganizationDefaultService(AgentRuntimeProfileRepository(uow))
 
     first_marked = asyncio.Event()
 

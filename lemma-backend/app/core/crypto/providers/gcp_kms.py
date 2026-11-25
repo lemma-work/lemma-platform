@@ -5,8 +5,8 @@ locally with a fresh Fernet **data key (DEK)**; the DEK is wrapped by KMS
 ``Encrypt`` and stored next to the ciphertext, and recovered with KMS
 ``Decrypt``. Key rotation is KMS-native: a new KEK version becomes primary for
 new wraps while old versions still unwrap existing DEKs, so the data ciphertext
-never has to be rewritten (an optional rewrap-forward can re-wrap DEKs under the
-newest version — see :mod:`app.core.crypto.rotation`).
+never has to be rewritten. Kept only to read secrets the previous release wrote
+in their old columns; nothing new is encrypted here (see ``app.modules.vault``).
 
 Performance / caveats:
 - The sync cipher interface means the KMS Encrypt/Decrypt calls block the event

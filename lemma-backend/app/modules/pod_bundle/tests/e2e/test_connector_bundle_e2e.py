@@ -24,8 +24,6 @@ import pytest
 from fastapi import status
 
 from lemma_pod_bundle import extract_bundle
-
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.domain.account import AccountEntity
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
@@ -75,9 +73,7 @@ async def _install(db_session, org_id: str, connector_id: str) -> str:
 async def _connect(
     db_session, *, user_id: str, org_id: str, install_id: str, connector_id: str
 ) -> str:
-    created = await AccountRepository(
-        SqlAlchemyUnitOfWork(db_session), encryption=get_secret_cipher()
-    ).create(
+    created = await AccountRepository(SqlAlchemyUnitOfWork(db_session)).create(
         AccountEntity(
             user_id=UUID(user_id),
             organization_id=UUID(org_id),

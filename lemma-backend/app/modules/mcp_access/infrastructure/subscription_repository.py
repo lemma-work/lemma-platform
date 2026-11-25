@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
+from pydantic import SecretStr
 from sqlalchemy import case, delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
@@ -19,6 +20,7 @@ from app.modules.mcp_access.infrastructure.models import (
     McpEventSubscription,
     McpOAuthGrant,
 )
+from app.modules.vault.contracts import SecretScope, legacy_text, vault_for
 
 logger = get_logger(__name__)
 
@@ -32,6 +34,13 @@ MAX_LISTED = 500
 #: client's next refresh -- proof it is still there -- resumes it.
 PAUSE_AFTER_FAILURES = 20
 
+#: The vault purpose of a subscription's signing secret (``signing_secret_id``).
+SIGNING_SECRET_PURPOSE = "mcp_access.event_subscription.secret"
+
+
+def _secret_scope(pod_id: UUID, user_id: UUID) -> SecretScope:
+    return SecretScope(None, pod_id=pod_id, user_id=user_id)
+
 
 @dataclass(frozen=True, slots=True)
 class StoredSubscription:
@@ -42,7 +51,9 @@ class StoredSubscription:
     name: str
     arguments: dict[str, object]
     url: str
-    secret_ciphertext: str
+    #: The signing secret in the vault; None only for a row the previous
+    #: release wrote mid-rollout, whose secret is ``legacy_secret``.
+    signing_secret_id: UUID | None
     refresh_before: datetime
     verified_at: datetime | None
     last_delivery_at: datetime | None
@@ -50,6 +61,10 @@ class StoredSubscription:
     stopped_at: datetime | None = None
     paused_at: datetime | None = None
     failures: int = 0
+    #: The old Fernet column, for a row without ``signing_secret_id``.
+    legacy_secret: str | None = field(default=None, repr=False)
+    #: The secret itself, revealed only for a delivery (`signing_secret`).
+    secret: SecretStr | None = None
 
 
 def _stored(row: McpEventSubscription) -> StoredSubscription:
@@ -61,7 +76,8 @@ def _stored(row: McpEventSubscription) -> StoredSubscription:
         name=row.name,
         arguments=dict(row.arguments or {}),
         url=row.url,
-        secret_ciphertext=row.secret_ciphertext,
+        signing_secret_id=row.signing_secret_id,
+        legacy_secret=row.secret_ciphertext,
         refresh_before=row.refresh_before,
         verified_at=row.verified_at,
         last_delivery_at=row.last_delivery_at,
@@ -79,6 +95,13 @@ def _delivering(now: datetime):
         McpEventSubscription.stopped_at.is_(None),
         McpEventSubscription.paused_at.is_(None),
     )
+
+
+async def legacy_signing_secret(subscription: StoredSubscription) -> SecretStr | None:
+    """The secret of a subscription the previous release wrote mid-rollout,
+    from its old Fernet column. May call Cloud KMS: no session held."""
+    plain = await legacy_text(subscription.legacy_secret)
+    return SecretStr(plain) if plain else None
 
 
 class EventSubscriptionRepository:
@@ -104,7 +127,7 @@ class EventSubscriptionRepository:
         arguments: dict[str, object],
         arguments_key: str,
         url: str,
-        secret_ciphertext: str,
+        secret: SecretStr,
         refresh_before: datetime,
         verified_at: datetime | None,
         now: datetime,
@@ -116,15 +139,48 @@ class EventSubscriptionRepository:
         also the client showing it is still there, so it lifts a pause that
         failed deliveries set. It never lifts the person's Stop: a stopped
         subscription is refused before it gets here.
+
+        The caller holds the grant's lock (`lock_grant`), so no other write
+        to this identity races the vault write.
         """
-        paused_since = await self._session.scalar(
-            select(McpEventSubscription.paused_at).where(
-                McpEventSubscription.grant_id == grant_id,
-                McpEventSubscription.url == url,
-                McpEventSubscription.name == name,
-                McpEventSubscription.arguments_key == arguments_key,
+        existing = (
+            await self._session.execute(
+                select(
+                    McpEventSubscription.paused_at,
+                    McpEventSubscription.signing_secret_id,
+                    McpEventSubscription.pod_id,
+                    McpEventSubscription.user_id,
+                )
+                .where(
+                    McpEventSubscription.grant_id == grant_id,
+                    McpEventSubscription.url == url,
+                    McpEventSubscription.name == name,
+                    McpEventSubscription.arguments_key == arguments_key,
+                )
+                # A delivery's 410 may delete it meanwhile, taking its secret.
+                .with_for_update()
             )
-        )
+        ).one_or_none()
+        paused_since = existing.paused_at if existing is not None else None
+        vault = vault_for(self._uow)
+        if existing is not None and existing.signing_secret_id is not None:
+            signing_secret_id = existing.signing_secret_id
+            await vault.replace(
+                signing_secret_id,
+                expect=_secret_scope(existing.pod_id, existing.user_id),
+                purpose=SIGNING_SECRET_PURPOSE,
+                value=secret.get_secret_value(),
+                skip_if_equal=True,
+            )
+        else:
+            signing_secret_id = (
+                await vault.put(
+                    scope=_secret_scope(pod_id, user_id),
+                    purpose=SIGNING_SECRET_PURPOSE,
+                    value=secret.get_secret_value(),
+                    owner_table=McpEventSubscription.__tablename__,
+                )
+            ).id
         values = {
             "public_id": public_id,
             "grant_id": grant_id,
@@ -134,7 +190,8 @@ class EventSubscriptionRepository:
             "arguments": arguments,
             "arguments_key": arguments_key,
             "url": url,
-            "secret_ciphertext": secret_ciphertext,
+            "signing_secret_id": signing_secret_id,
+            "secret_ciphertext": None,
             "refresh_before": refresh_before,
             "verified_at": verified_at,
             "created_at": now,
@@ -146,7 +203,8 @@ class EventSubscriptionRepository:
             .on_conflict_do_update(
                 index_elements=["grant_id", "url", "name", "arguments_key"],
                 set_={
-                    "secret_ciphertext": secret_ciphertext,
+                    "signing_secret_id": signing_secret_id,
+                    "secret_ciphertext": None,
                     "refresh_before": refresh_before,
                     "verified_at": func.coalesce(
                         McpEventSubscription.verified_at, verified_at
@@ -181,6 +239,20 @@ class EventSubscriptionRepository:
             )
         ).scalar_one_or_none()
         return _stored(row) if row is not None else None
+
+    async def signing_secret(
+        self, subscription: StoredSubscription
+    ) -> SecretStr | None:
+        """The secret deliveries to ``subscription`` are signed with, from the
+        vault; None for a row without one (see :func:`legacy_signing_secret`)."""
+        if subscription.signing_secret_id is None:
+            return None
+        revealed = await vault_for(self._uow).reveal(
+            subscription.signing_secret_id,
+            expect=_secret_scope(subscription.pod_id, subscription.user_id),
+            purpose=SIGNING_SECRET_PURPOSE,
+        )
+        return SecretStr(revealed.text())
 
     async def remove(self, public_id: str) -> bool:
         removed = await self._session.execute(

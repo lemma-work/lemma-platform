@@ -35,7 +35,6 @@ from app.modules.connectors.domain.errors import (
     AccountAlreadyConnectedError,
     AccountNotFoundError,
     ConnectorNotFoundError,
-    ConnectorReauthRequiredError,
     ConnectorValidationError,
     CredentialsNotFoundError,
     OAuthWorkflowError,
@@ -62,10 +61,12 @@ from app.modules.connectors.services.account_credentials import (
     validated_account_credentials,
     validated_connection_fields,
 )
+from app.modules.connectors.services.credential_refresh import (
+    CredentialRefresher,
+    RefreshRequest,
+)
 from app.modules.connectors.services.credential_refresh_failure import (
-    raise_refresh_failure,
     reauth_required,
-    renewed_elsewhere,
 )
 from app.modules.connectors.services.upstream_error_details import (
     upstream_error_details,
@@ -936,67 +937,35 @@ class ConnectorService:
             is_expired = expires_at < now
         else:
             is_expired = False
-        should_refresh = force_refresh or is_expired
+        if not (force_refresh or is_expired):
+            return oauth_credentials
 
-        if should_refresh:
-            auth_provider = self._get_auth_provider_by_name(
-                self._provider_value(auth_config)
-            )
-            can_refresh = bool(
-                oauth_credentials.refresh_token or oauth_credentials.connection_id
-            )
-
-            if can_refresh:
-                try:
-                    new_credentials = await auth_provider.refresh_credentials(
-                        install=auth_install,
-                        credentials=oauth_credentials,
-                        user_id=account.user_id,
-                    )
-                except Exception as exc:
-                    # Only the issuer withdrawing the grant marks the account.
-                    # A timeout, 5xx or 429 says nothing about the grant, and
-                    # marking on it disabled accounts that never recovered: an
-                    # expired token fails this call, an unexpired one carries
-                    # on, and the next use tries again either way.
-                    if isinstance(exc, ConnectorReauthRequiredError):
-                        renewed = await renewed_elsewhere(
-                            self.account_repository, account, oauth_credentials
-                        )
-                        if renewed is not None:
-                            await self.uow.commit()  # lets go of the row
-                            return self._to_oauth_credentials(renewed)
-                        await self._persist_account_status(
-                            account, AccountStatus.REAUTH_REQUIRED
-                        )
-                        # An account already marked gets no write and so no
-                        # commit; the read above locked its row all the same.
-                        await self.uow.commit()
-                        raise_refresh_failure(account, exc)
-                    logger.warning(
-                        "connectors.connector_service.credential_refresh_rejected.degraded",
-                        account_id=str(account_id),
-                        connector_id=account.connector_id,
-                        error_type=type(exc).__name__,
-                        exc_info=True,
-                    )
-                    if is_expired or isinstance(exc, DomainError):
-                        raise_refresh_failure(account, exc)
-                else:
-                    # A successful refresh restores a previously-degraded account.
-                    await self.account_repository.store_refreshed(
-                        account.id, new_credentials
-                    )
-                    await self.uow.commit()
-                    account.credentials = new_credentials
-                    account.status = AccountStatus.CONNECTED
-                    credentials = new_credentials
-            elif is_expired:
+        if not (oauth_credentials.refresh_token or oauth_credentials.connection_id):
+            if is_expired:
                 await self._persist_account_status(
                     account, AccountStatus.REAUTH_REQUIRED
                 )
                 raise reauth_required(account, "expired_without_refresh")
-
+            return oauth_credentials
+        auth_provider = self._get_auth_provider_by_name(
+            self._provider_value(auth_config)
+        )
+        # Single-flight, and with no connection held across the provider call:
+        # see `credential_refresh`.
+        refreshed = await CredentialRefresher(
+            self.account_repository, self.uow
+        ).refresh(
+            RefreshRequest(
+                account=account,
+                auth_provider=auth_provider,
+                install=auth_install,
+                current=oauth_credentials,
+                is_expired=is_expired,
+            )
+        )
+        if not refreshed:
+            raise CredentialsNotFoundError(str(account_id))
+        credentials = refreshed
         return self._to_oauth_credentials(credentials)
 
     async def _persist_account_status(

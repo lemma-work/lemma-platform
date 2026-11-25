@@ -93,14 +93,6 @@ def _fields(protocol: RuntimeProfileProtocol, config: object) -> dict[str, objec
     }
 
 
-class _Encryption:
-    def encrypt_json(self, value: object) -> object:
-        return value
-
-    def decrypt_json(self, value: object) -> object:
-        return value
-
-
 @dataclass
 class _Result:
     row: _StoredRow | None
@@ -125,7 +117,6 @@ class _UnitOfWork:
 def _repository(row: "_StoredRow | None") -> AgentRuntimeProfileRepository:
     return AgentRuntimeProfileRepository(
         _UnitOfWork(_Session(row)),  # type: ignore[arg-type]  # TST-03: one read is all this needs
-        encryption=_Encryption(),  # type: ignore[arg-type]  # TST-03: the port's two methods
     )
 
 
@@ -154,6 +145,8 @@ class _StoredRow:
     status: str
     profile_metadata: dict[str, object]
     version: int
+    #: No vault secret: the rows here hold no credentials.
+    secrets_secret_id: object = None
 
     to_entity = AgentRuntimeProfileModel.to_entity
 
@@ -247,19 +240,50 @@ def test_a_refusal_names_the_field_and_quotes_none_of_the_input() -> None:
     assert refused.value.status_code == 400
 
 
+@dataclass
+class _Ref:
+    id: UUID
+
+
+class _Vault:
+    """Records what a write stores; the only vault call a new row makes."""
+
+    def __init__(self) -> None:
+        self.stored: list[dict[str, object]] = []
+
+    async def put(self, *, value: dict[str, object], **_: object) -> _Ref:
+        self.stored.append(value)
+        return _Ref(uuid4())
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", list(RuntimeProfileProtocol))
-def test_a_stored_row_loads_and_writes_back_the_same_json(
+async def test_a_stored_row_loads_and_writes_back_the_same_json(
     protocol: RuntimeProfileProtocol,
 ) -> None:
-    repository = _repository(None)
+    """Header values round-trip through the vault; the rest stays in config."""
+    vault = _Vault()
+    repository = AgentRuntimeProfileRepository(
+        _UnitOfWork(_Session(None)),  # type: ignore[arg-type]  # TST-03: no read happens
+        vault=vault,  # type: ignore[arg-type]  # TST-03: the one call a new row's write makes
+    )
     row = _row(protocol, dict(_STORED[protocol]))
 
-    profile = repository._to_entity(row)  # type: ignore[arg-type]  # TST-03: the columns a read maps
-    written = repository._apply_entity(_row(protocol, {}), profile)  # type: ignore[arg-type]  # TST-03: the columns an edit writes
+    profile = await repository._readable(row)  # type: ignore[arg-type]  # TST-03: the columns a read maps
+    written, _ = await repository._apply_entity(_row(protocol, {}), profile)  # type: ignore[arg-type]  # TST-03: the columns an edit writes
 
     assert type(profile.config) is _TYPE[protocol]
     assert profile.version == 3
-    assert written.config == _STORED[protocol]
+    stored = dict(_STORED[protocol])
+    headers = stored.pop("headers", None)
+    assert written.config == stored
+    assert written.credentials is None
+    if headers:
+        assert vault.stored == [{"credentials": None, "headers": headers}]
+        assert written.secrets_secret_id is not None
+    else:
+        assert vault.stored == []
+        assert written.secrets_secret_id is None
 
 
 @pytest.mark.asyncio

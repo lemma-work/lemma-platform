@@ -1,3 +1,4 @@
+from datetime import timedelta
 from typing import Optional, Sequence
 from uuid import UUID
 
@@ -13,46 +14,47 @@ from app.modules.connectors.domain.errors import (
     AccountAlreadyConnectedError,
     AccountNotFoundError,
 )
-from app.modules.connectors.domain.ports import (
-    AccountRepositoryPort,
-    SecretEncryptionPort,
-)
+from app.modules.connectors.domain.ports import AccountRepositoryPort
 from app.modules.connectors.infrastructure.models import Account
+from app.modules.connectors.infrastructure.repositories.account_credential_store import (
+    AccountCredentialStore,
+    StoredCredentials,
+)
+from app.modules.vault.contracts import LeaseToken, SecretMeta, Vault, vault_for
 
 
 class AccountRepository(
     SqlAlchemyRepository[Account, AccountEntity],
     AccountRepositoryPort,
 ):
-    """Repository for Account operations."""
+    """Repository for Account operations.
+
+    The credentials are one vault secret per account (``connector_secrets``),
+    revealed on every read that returns an entity and written only through
+    :meth:`create`, :meth:`replace_credentials` and :meth:`store_refreshed`.
+    :meth:`update` deliberately leaves them alone -- see there for why.
+    """
 
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        encryption: SecretEncryptionPort,
+        *,
+        vault: Vault | None = None,
     ):
         super().__init__(uow, Account, AccountEntity)
-        self.encryption = encryption
+        self._credentials = AccountCredentialStore(
+            self.session, vault or vault_for(self.session)
+        )
 
-    @staticmethod
-    def _serialize_credentials(credentials: object | None) -> dict | None:
-        if credentials is None:
-            return None
-        model_dump = getattr(credentials, "model_dump", None)
-        if callable(model_dump):
-            return model_dump(mode="json")
-        if isinstance(credentials, dict):
-            return credentials
-        return None
-
-    async def _to_model(self, entity: AccountEntity) -> Account:
+    def _to_model(self, entity: AccountEntity) -> Account:
         # ``connector`` is a read-side domain projection, not a relationship
         # assignment for writes. Passing an explicit ``connector=None`` to the
         # ORM model makes SQLAlchemy synchronize the relationship by clearing
         # ``connector_id``, even when the entity contains a valid connector id.
-        data = entity.model_dump(exclude_unset=True, exclude={"connector"})
-        data["credentials"] = await self.encryption.encrypt_json_async(
-            self._serialize_credentials(entity.credentials)
+        # The credentials go to the vault, and their version is read-side only.
+        data = entity.model_dump(
+            exclude_unset=True,
+            exclude={"connector", "credentials", "credentials_version"},
         )
         return self.model_cls(**data)
 
@@ -75,7 +77,17 @@ class AccountRepository(
         raise exc
 
     async def _to_entity(self, instance: Account) -> AccountEntity:
-        credentials = await self.encryption.decrypt_json_async(instance.credentials)
+        return (await self._to_entities([instance]))[0]
+
+    async def _to_entities(self, instances: Sequence[Account]) -> list[AccountEntity]:
+        """Entities for a page of rows, with one vault read for all of them."""
+        stored = await self._credentials.read_many(instances)
+        return [
+            self._entity_from(instance, stored[instance.id]) for instance in instances
+        ]
+
+    @staticmethod
+    def _entity_from(instance: Account, stored: StoredCredentials) -> AccountEntity:
         data = {
             "id": instance.id,
             "user_id": instance.user_id,
@@ -88,7 +100,8 @@ class AccountRepository(
             "external_ref": instance.external_ref,
             "email": instance.email,
             "display_name": instance.display_name,
-            "credentials": credentials,
+            "credentials": stored.value,
+            "credentials_version": stored.version,
             "preferences": instance.preferences,
             "allowed_scopes": instance.allowed_scopes,
             "created_at": instance.created_at,
@@ -99,8 +112,15 @@ class AccountRepository(
         return AccountEntity.model_validate(data)
 
     async def create(self, entity: AccountEntity) -> AccountEntity:
-        """Create new account with eager loaded connector."""
-        instance = await self._to_model(entity)
+        """Create new account with eager loaded connector.
+
+        The secret is written first, in the same transaction, so the row can
+        reference it; a failed insert rolls both back together.
+        """
+        instance = self._to_model(entity)
+        instance.credentials_secret_id = await self._credentials.put_new(
+            entity.organization_id, entity.user_id, entity.credentials
+        )
         self.session.add(instance)
         try:
             await self.session.flush()
@@ -123,7 +143,17 @@ class AccountRepository(
         return await self._to_entity(instance)
 
     async def update(self, entity: AccountEntity) -> AccountEntity:
-        """Update account with eager loaded connector."""
+        """Update the account's descriptive columns. NOT its credentials.
+
+        It used to write ``entity.credentials`` back too, which made every
+        caller that had read an account a credential writer -- and an entity
+        is a copy made when it was read. A token refreshed since, by this
+        request or another, is not on it, so writing it back put a spent
+        single-use refresh token (GitHub's among them) over the live one, and
+        the account fell to REAUTH_REQUIRED for no reason anyone could see.
+        Credentials change only through :meth:`replace_credentials` and
+        :meth:`store_refreshed`.
+        """
         stmt = (
             select(Account)
             .where(Account.id == entity.id)
@@ -135,9 +165,6 @@ class AccountRepository(
         if not instance:
             raise AccountNotFoundError(str(entity.id))
 
-        instance.credentials = await self.encryption.encrypt_json_async(
-            self._serialize_credentials(entity.credentials)
-        )
         instance.provider_account_id = entity.provider_account_id
         # Written here because re-auth changes it. Someone reconnecting Slack
         # into a different workspace keeps the old `team.id` otherwise, and
@@ -316,14 +343,10 @@ class AccountRepository(
         )
         return int(result.rowcount or 0)
 
-    # Narrow statements, because `update` writes the whole row from the
-    # entity it is handed -- credentials included -- and an entity is a copy
-    # made when it was read. A token refreshed since (by this request or by
-    # another) is not on it, so marking an account or binding it with `update`
-    # put the old token back. For a provider whose refresh tokens are
-    # single-use, GitHub's among them, the old one is already spent: the
-    # account could never refresh again, and answered "Unable to refresh
-    # connector credentials." until somebody reconnected it.
+    # Narrow statements, because `update` writes every descriptive column from
+    # the entity it is handed, and an entity is a copy made when it was read: a
+    # status a refresh set since is not on it. (It once wrote the credentials
+    # too, which put spent single-use refresh tokens back; it no longer does.)
 
     async def set_status(self, account_id: UUID, status: AccountStatus) -> None:
         """Write the status and nothing else."""
@@ -341,8 +364,20 @@ class AccountRepository(
             .values(external_ref=external_ref)
         )
 
-    async def store_refreshed(self, account_id: UUID, credentials: object) -> None:
+    async def store_refreshed(
+        self,
+        account_id: UUID,
+        credentials: object,
+        *,
+        expected_version: int | None = None,
+        lease: LeaseToken | None = None,
+    ) -> None:
         """Write a refreshed credential, and that the account is connected.
+
+        ``expected_version`` is the version the refresh started from and
+        ``lease`` the refresh lease it holds: a write whose base has moved
+        raises ``SecretVersionConflict`` rather than overwriting the newer
+        credential, and the write ends the lease.
 
         The status is written every time, not only when this session thinks it
         changed. A refresh that lost a race may have marked the account for a
@@ -352,16 +387,40 @@ class AccountRepository(
         install that names its target does not retry a marked account
         (``reauth_recovery``).
         """
-        await self.session.execute(
-            update(Account)
-            .where(Account.id == account_id)
-            .values(
-                credentials=await self.encryption.encrypt_json_async(
-                    self._serialize_credentials(credentials)
-                ),
-                status=AccountStatus.CONNECTED.value,
-            )
+        await self._credentials.write(
+            account_id,
+            credentials,
+            expected_version=expected_version,
+            lease=lease,
+            also={"status": AccountStatus.CONNECTED.value},
         )
+
+    async def replace_credentials(
+        self, account_id: UUID, credentials: object | None
+    ) -> None:
+        """Store credentials outright, keeping the account.
+
+        For a new grant, a credential the person supplied, or a token the
+        platform just minted -- never a copy read earlier, which is why there
+        is no version check. ``None`` removes them.
+        """
+        await self._credentials.write(account_id, credentials)
+
+    async def try_lease_credentials(
+        self, account_id: UUID, *, if_version: int, holder: str, ttl: timedelta
+    ) -> LeaseToken | None:
+        """The refresh lease, if nobody holds it and the stored credentials are
+        still at ``if_version``."""
+        return await self._credentials.try_lease(
+            account_id, if_version=if_version, holder=holder, ttl=ttl
+        )
+
+    async def release_credentials_lease(self, lease: LeaseToken) -> None:
+        await self._credentials.release_lease(lease)
+
+    async def credentials_meta(self, account_id: UUID) -> SecretMeta | None:
+        """Version and lease of the stored credentials, without decrypting."""
+        return await self._credentials.meta(account_id)
 
     async def stored_credentials(self, account_id: UUID) -> dict[str, object] | None:
         """The credentials the row holds now, read past this session's copy.
@@ -378,15 +437,7 @@ class AccountRepository(
         behind. Whether it still holds one is up to the garbage collector; a
         column always comes from the row.
         """
-        result = await self.session.execute(
-            select(Account.credentials)
-            .where(Account.id == account_id)
-            .with_for_update()
-        )
-        encrypted = result.scalar_one_or_none()
-        if encrypted is None:
-            return None
-        return await self.encryption.decrypt_json_async(encrypted)
+        return await self._credentials.read_locked(account_id)
 
     async def list_by_auth_config(
         self,
@@ -398,7 +449,7 @@ class AccountRepository(
             .options(selectinload(Account.connector))
         )
         result = await self.session.execute(stmt)
-        return [await self._to_entity(instance) for instance in result.scalars().all()]
+        return await self._to_entities(list(result.scalars().all()))
 
     async def list_by_user(
         self,
@@ -423,7 +474,7 @@ class AccountRepository(
             next_cursor = instances[limit - 1].id
             instances = instances[:limit]
 
-        return [await self._to_entity(instance) for instance in instances], next_cursor
+        return await self._to_entities(instances), next_cursor
 
     async def list_by_user_and_org(
         self,
@@ -453,4 +504,4 @@ class AccountRepository(
             next_cursor = instances[limit - 1].id
             instances = instances[:limit]
 
-        return [await self._to_entity(instance) for instance in instances], next_cursor
+        return await self._to_entities(instances), next_cursor

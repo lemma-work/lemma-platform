@@ -67,9 +67,9 @@ class WhatsAppNumberEntity(Entity):
     #: added so that allocation itself never makes an API call.
     display_phone_number: str
     waba_id: str
-    #: Decrypted at the repository boundary, exactly as
-    #: ``AgentSurfaceEntity.webhook_secret`` is: an entity in hand holds usable
-    #: values, and the envelope never leaves infrastructure.
+    #: Revealed from the vault at the repository boundary, on every read: an
+    #: entity in hand holds usable values, and the vault never leaves
+    #: infrastructure. None means "fall back to settings".
     access_token: str | None = None
     app_secret: str | None = None
     verify_token: str | None = None

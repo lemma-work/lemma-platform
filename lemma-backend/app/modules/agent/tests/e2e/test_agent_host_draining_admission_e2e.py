@@ -17,6 +17,7 @@ from sqlalchemy import update
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.agent_host.control import admission
+from app.modules.agent.agent_host.control.mcp_frame import seal_mcp_frame
 from app.modules.agent.agent_host.domain.host import AgentHostRunSpec, AgentHostStatus
 from app.modules.agent.agent_host.control.dispatch_repository import (
     AgentHostDispatchRepository,
@@ -93,7 +94,7 @@ async def test_a_draining_host_refuses_a_new_run_and_keeps_its_own(
             harness_id=machine["harness_id"],
             runtime_profile_id=profile.id,
             run_spec=spec,
-            encrypted_mcp_payload={"encrypted": True},
+            encrypted_mcp_payload=await seal_mcp_frame({}, run_id=spec.agent_run_id),
         )
 
     running_id, running_conversation = await _run(db_session, scenario)

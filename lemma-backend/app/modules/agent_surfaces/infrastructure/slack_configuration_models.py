@@ -23,10 +23,11 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.infrastructure.db.base import UUIDAuditBase
+from app.modules.vault.contracts import vault_owned
 
 
 class SlackConfigurationTokenModel(UUIDAuditBase):
-    """Both tokens are ciphertext; the repository is the only thing that reads them.
+    """Both tokens are one vault secret; the repository is the only thing that reads it.
 
     Slack refresh tokens are treated as single-use, so the row is also the
     rotation's coordination point: ``generation`` moves on every pair stored,
@@ -53,8 +54,16 @@ class SlackConfigurationTokenModel(UUIDAuditBase):
     #: Whose token it is: Slack creates every app under the person who
     #: generated it.
     slack_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    access_token: Mapped[str] = mapped_column(Text, nullable=False)
-    refresh_token: Mapped[str] = mapped_column(Text, nullable=False)
+    #: The pair, as one vault secret (JSON ``{access_token, refresh_token}``;
+    #: purpose ``agent_surfaces.slack_configuration.tokens``, org scope).
+    tokens_secret_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("vault_secrets.id"), unique=True, nullable=True
+    )
+    #: The previous release's Fernet columns. Read only while a row written by
+    #: an old process mid-rollout has no ``tokens_secret_id``; written only to
+    #: NULL. Dropped by the next release's contract migration.
+    access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     access_expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -72,3 +81,6 @@ class SlackConfigurationTokenModel(UUIDAuditBase):
     saved_by_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+
+
+vault_owned(SlackConfigurationTokenModel.__table__, "tokens_secret_id")

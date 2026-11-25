@@ -3,10 +3,13 @@
 Apple asks an app that offers Sign in with Apple to revoke the person's
 authorization when they delete their account (its technote TN3194). Revoking
 spends a token Apple issued, and the refresh token from the code exchange is
-the only one that outlives the sign-in. So it is kept, sealed with the secret
-cipher, in the SuperTokens user's own metadata -- which needs no table of ours
-and goes when that user does -- and the deletion's work item spends it just
-before it deletes the user.
+the only one that outlives the sign-in. So it is kept as a vault secret bound
+to the user, and the SuperTokens user's own metadata names it (with the client
+it was issued to) -- which needs no table of ours and goes when that user does.
+The deletion's work item spends it just before it deletes the user, and
+deletes the secret once Apple has answered. A user who signed in before the
+vault has the token sealed with the old secret cipher in the metadata itself;
+that is still read, and the next sign-in moves it into the vault.
 
 The phone app signs in with Apple natively rather than through the web's
 redirect. Apple issues that sign-in to the app's bundle id, so the provider
@@ -24,11 +27,11 @@ from collections.abc import Mapping
 from datetime import timedelta
 from enum import StrEnum
 from typing import NamedTuple
+from uuid import uuid7
 
 import httpx
 import jwt
 from cryptography.exceptions import UnsupportedAlgorithm
-from cryptography.fernet import InvalidToken
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from supertokens_python.exceptions import BadInputError
@@ -46,10 +49,13 @@ from supertokens_python.recipe.usermetadata.asyncio import (
 )
 
 from app.core.config import reveal_secret
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.work.types import Unavailable, UnavailableEvidence
 from app.core.log.log import get_logger
 from app.modules.identity.config import IdentitySettings, identity_settings
+from app.modules.identity.infrastructure.supertokens_auth import apple_refresh_tokens
+from app.modules.identity.infrastructure.supertokens_auth.apple_refresh_tokens import (
+    REFRESH_TOKEN_PURPOSE,
+)
 
 logger = get_logger(__name__)
 
@@ -337,13 +343,24 @@ async def remember_apple_refresh_token(
         return _not_kept(user_id, "Apple sent no refresh token")
     if not (isinstance(client_id, str) and client_id):
         return _not_kept(user_id, "the id token named no audience")
-    sealed = await get_secret_cipher().encrypt_json_async(
-        {"refresh_token": refresh_token}
+    kept = (await get_user_metadata(user_id)).metadata.get(REVOCATION_METADATA_KEY)
+    previous = (
+        apple_refresh_tokens.secret_id_of(kept) if isinstance(kept, Mapping) else None
     )
+    # The record first, naming the secret before it exists: if keeping the
+    # token then fails, the sign-in fails and its retry keeps it under the same
+    # id -- no secret is ever left that nothing names.
+    secret_id = previous or uuid7()
     await update_user_metadata(
         user_id,
-        {REVOCATION_METADATA_KEY: {"client_id": client_id, "sealed": sealed}},
+        {
+            REVOCATION_METADATA_KEY: {
+                "client_id": client_id,
+                "secret_id": str(secret_id),
+            }
+        },
     )
+    await apple_refresh_tokens.keep(user_id, secret_id, refresh_token)
     return True
 
 
@@ -425,7 +442,7 @@ async def revoke_apple_sign_in(
     record = (await get_user_metadata(user_id)).metadata.get(REVOCATION_METADATA_KEY)
     if not isinstance(record, dict):
         return None
-    kept = await _open(record)
+    kept = await _open(user_id, record)
     outcome: Revocation | None = None
     if kept is None:
         logger.warning(
@@ -447,6 +464,11 @@ async def revoke_apple_sign_in(
                 refresh_token=kept.refresh_token,
                 http=client,
             )
+    secret_id = apple_refresh_tokens.secret_id_of(record)
+    if secret_id is not None:
+        # Before the record: a record left naming a deleted secret is dropped
+        # by the retry, while a secret named by nothing would never go.
+        await apple_refresh_tokens.forget(user_id, secret_id)
     await update_user_metadata(user_id, {REVOCATION_METADATA_KEY: None})
     return outcome
 
@@ -458,18 +480,17 @@ def _not_kept(user_id: str, reason: str) -> bool:
     return False
 
 
-async def _open(record: Mapping[str, object]) -> _Kept | None:
+async def _open(user_id: str, record: Mapping[str, object]) -> _Kept | None:
     """``client_id`` and ``refresh_token`` from a kept record, if it still opens."""
     client_id = record.get("client_id")
-    sealed = record.get("sealed")
-    if not isinstance(client_id, str) or not isinstance(sealed, dict):
+    if not isinstance(client_id, str):
         return None
-    try:
-        opened = await get_secret_cipher().decrypt_json_async(sealed)
-    except InvalidToken, ValueError:
-        return None
-    refresh_token = (opened or {}).get("refresh_token")
-    if not isinstance(refresh_token, str):
+    secret_id = apple_refresh_tokens.secret_id_of(record)
+    if secret_id is not None:
+        refresh_token = await apple_refresh_tokens.reveal(user_id, secret_id)
+    else:
+        refresh_token = await apple_refresh_tokens.open_legacy(record)
+    if refresh_token is None:
         return None
     return _Kept(client_id=client_id, refresh_token=refresh_token)
 
@@ -518,6 +539,7 @@ __all__ = [
     "APPLE_TOKEN_ENDPOINT",
     "NATIVE_CLIENT_TYPE",
     "NATIVE_CODE_KEY",
+    "REFRESH_TOKEN_PURPOSE",
     "REVOCATION_METADATA_KEY",
     "Revocation",
     "WEB_CLIENT_TYPE",

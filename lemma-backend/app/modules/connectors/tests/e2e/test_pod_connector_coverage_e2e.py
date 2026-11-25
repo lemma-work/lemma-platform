@@ -17,8 +17,6 @@ from uuid import UUID, uuid4
 
 import pytest
 from starlette import status
-
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.domain.account import AccountEntity, AccountStatus
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
@@ -99,9 +97,7 @@ async def _world(scenario: E2EScenario, db_session) -> World:
 
 async def _connect(db_session, world: World, who: str, *, status_: AccountStatus):
     install = await db_session.get(AuthConfig, UUID(world.auth_config_id))
-    await AccountRepository(
-        SqlAlchemyUnitOfWork(db_session), encryption=get_secret_cipher()
-    ).create(
+    await AccountRepository(SqlAlchemyUnitOfWork(db_session)).create(
         AccountEntity(
             user_id=UUID(world.users[who]["id"]),
             organization_id=install.organization_id,

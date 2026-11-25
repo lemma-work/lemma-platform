@@ -2,13 +2,14 @@
 
 The listing skips a row it cannot validate rather than failing the whole page,
 and says so. It used to decrypt the key into the row before validating it and
-log the validation error's text, which quotes the input it rejected.
+log the validation error's text, which quotes the input it rejected. A header
+value, revealed from the vault with the credentials, is as secret as the key.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -22,13 +23,25 @@ pytestmark = pytest.mark.unit
 _DECRYPTED = "sk-decrypted-must-not-be-logged"
 
 
-class _Encryption:
-    def encrypt_json(self, value: object) -> object:
-        return value
+@dataclass
+class _Revealed:
+    value: dict[str, object]
 
-    def decrypt_json(self, value: object) -> object:
-        # A key stored in a shape this build no longer accepts.
-        return _DECRYPTED
+    def json(self) -> dict[str, object]:
+        return self.value
+
+
+class _Vault:
+    async def reveal_many(
+        self, expected: dict[UUID, object], *, purpose: str
+    ) -> dict[UUID, _Revealed]:
+        # A header value stored in a shape this build no longer accepts.
+        return {
+            secret_id: _Revealed(
+                {"credentials": None, "headers": {"Authorization": [_DECRYPTED]}}
+            )
+            for secret_id in expected
+        }
 
 
 @dataclass
@@ -68,13 +81,14 @@ async def test_an_unreadable_row_is_skipped_without_logging_its_key(
         default_model_name="model-a",
         model_catalog=[{"name": "model-a", "provider_model_name": "model-a"}],
         config={"base_url": "https://api.example.com/v1"},
-        credentials={"ciphertext": "opaque"},
+        credentials=None,
+        secrets_secret_id=uuid4(),
         status="ACTIVE",
         profile_metadata={},
     )
     repository = AgentRuntimeProfileRepository(
         _UnitOfWork(_Session([row])),  # type: ignore[arg-type]  # TST-03: a two-method stand-in for the session
-        encryption=_Encryption(),  # type: ignore[arg-type]  # TST-03: the port's two methods
+        vault=_Vault(),  # type: ignore[arg-type]  # TST-03: the one vault call a listing makes
     )
 
     profiles = await repository.get_visible(

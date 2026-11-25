@@ -1126,6 +1126,7 @@ async def test_persist_managed_bot_reuses_matching_account_and_surface(
     )
     accounts = SimpleNamespace(
         get_by_user_auth_config_and_provider_account=AsyncMock(return_value=account),
+        replace_credentials=AsyncMock(),
         update=AsyncMock(return_value=account),
     )
     surface = SimpleNamespace(
@@ -1194,7 +1195,10 @@ async def test_persist_managed_bot_reuses_matching_account_and_surface(
         bot_token="child-token",
     )
     assert result == ("telegram-surface-bot", surface_id)
-    assert account.credentials.model_dump() == {"bot_token": "child-token"}
+    # The new token goes straight to the vault; `update` writes only the name.
+    (account_id, credentials), _ = accounts.replace_credentials.await_args
+    assert account_id == account.id
+    assert credentials.model_dump() == {"bot_token": "child-token"}
     assert account.display_name == "@surface_bot"
     accounts.update.assert_awaited_once_with(account)
     surface_service.create_surface.assert_not_awaited()

@@ -329,9 +329,11 @@ class AgentSurfaceEntity(AggregateRoot):
     surface_identity_username: str | None = None
     #: The address this surface receives on, and the one it replies from.
     surface_identity_email: str | None = None
-    #: Telegram's per-surface `secret_token`. A secret on the aggregate, so a
-    #: `repr` or a logged entity shows it masked; revealed where it is sent.
+    #: Telegram's per-surface `secret_token`, masked in a repr. Set only where it
+    #: is minted or revealed to verify with; None on a write means "unchanged".
     webhook_secret: SecretStr | None = None
+    #: Whether the row holds one, without revealing it (a read leaves it stored).
+    webhook_secret_stored: bool = Field(default=False, exclude=True)
     status: AgentSurfaceStatus = AgentSurfaceStatus.ACTIVE
 
     @property

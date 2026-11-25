@@ -40,6 +40,7 @@ from app.modules.vault.domain.types import (
 )
 from app.modules.vault.domain.ports import KEEP, KeepExpiry, Vault
 from app.modules.vault.infrastructure.models import vault_owned
+from app.modules.vault.services.legacy import legacy_json, legacy_text
 from app.modules.vault.services.sealer import (
     SealedValueInvalid,
     SealingKeys,
@@ -76,6 +77,8 @@ __all__ = [
     "VaultError",
     "VaultUnavailable",
     "is_sealed",
+    "legacy_json",
+    "legacy_text",
     "open_json",
     "open_text",
     "open_value",

@@ -15,8 +15,6 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import select, text
 from starlette import status
-
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceStatus
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
@@ -112,9 +110,7 @@ async def _schedule(db_session, pod_id: str, owner_id: str, **config) -> None:
 
 
 async def _subscription(db_session, install: AuthConfig, owner_id: str) -> str:
-    account = await AccountRepository(
-        SqlAlchemyUnitOfWork(db_session), encryption=get_secret_cipher()
-    ).create(
+    account = await AccountRepository(SqlAlchemyUnitOfWork(db_session)).create(
         AccountEntity(
             user_id=UUID(owner_id),
             organization_id=install.organization_id,

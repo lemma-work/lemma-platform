@@ -15,7 +15,6 @@ from uuid import UUID
 
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.transient_errors import (
     is_deadlock,
     is_transient_database_error,
@@ -38,6 +37,8 @@ from app.modules.agent.agent_host.control.channels import poke_host
 from app.modules.agent.agent_host.control.dispatch_repository import (
     AgentHostDispatchRepository,
 )
+from app.modules.agent.agent_host.control.mcp_frame import seal_mcp_frame
+from app.modules.vault.contracts import VaultError
 from app.modules.agent.agent_host.control.repository import AgentHostRepository
 from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
 from app.modules.agent.infrastructure.db.pauses import Pauses
@@ -137,13 +138,11 @@ async def refresh_credential[DepsT: ToolContext](
             ctx=ctx,
             options=options,
         )
-        encrypted = await get_secret_cipher().encrypt_json_async(mcp)
-        if encrypted is None:
-            raise RuntimeError("could not encrypt the refreshed MCP configuration")
+        sealed = await seal_mcp_frame(mcp, run_id=agent_run_id)
         async with uow_factory() as uow:
             command = await AgentHostDispatchRepository(uow).enqueue_credential_refresh(
                 run_id=agent_run_id,
-                encrypted_mcp_payload=encrypted,
+                encrypted_mcp_payload=sealed,
             )
             if command is not None:
                 # Read back only by a worker that reclaims the run.
@@ -157,6 +156,8 @@ async def refresh_credential[DepsT: ToolContext](
         ValueError,
         KeyError,
         SQLAlchemyError,
+        # The vault's keyring could not be reached to seal the frame.
+        VaultError,
     ) as exc:
         # A database that was only busy -- a deadlock, a pool with no free
         # connection -- is a refresh that did not land, like the rest of
@@ -413,7 +414,7 @@ class _AdmittedRun:
     run_spec: AgentHostRunSpec
     host_id: UUID
     run_config: AgentHostRunConfig
-    encrypted_mcp: JsonObject
+    encrypted_mcp: str  # sealed to the run (``mcp_frame``)
     carried: frozenset[UUID]
     instructions_digest: str
     credential_expires_at: datetime | None
@@ -524,9 +525,7 @@ async def _admit[DepsT: ToolContext](
         ctx=ctx,
         options=options,
     )
-    encrypted_mcp = await get_secret_cipher().encrypt_json_async(mcp)
-    if encrypted_mcp is None:
-        raise RuntimeError("could not encrypt MCP configuration")
+    encrypted_mcp = await seal_mcp_frame(mcp, run_id=agent_run_id)
     # A conversation is one provider session, and a session keeps its own
     # history — so instructions delivered when it opened are still there on
     # every later turn. Re-sending them each time put another copy of a

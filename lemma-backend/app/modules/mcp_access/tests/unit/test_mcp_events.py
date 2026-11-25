@@ -128,7 +128,8 @@ class _Subscription:
     public_id = "sub_x"
     user_id = uuid4()
     url = "https://receiver.example.com/hook"
-    secret_ciphertext = "whsec_" + base64.b64encode(b"k" * 32).decode()
+    #: What the ledger hands over: revealed from the vault, still masked.
+    secret = SecretStr("whsec_" + base64.b64encode(b"k" * 32).decode())
     refresh_before = datetime.now(timezone.utc) + timedelta(hours=1)
 
 
@@ -196,3 +197,15 @@ async def test_the_secret_reaches_the_signer_masked_and_revealable() -> None:
     [secret] = seen
     assert isinstance(secret, SecretStr)
     assert secret.get_secret_value() not in repr(secret)
+
+
+@pytest.mark.asyncio
+async def test_a_subscription_whose_secret_is_gone_sends_nothing() -> None:
+    class _NoSecret(_Subscription):
+        secret = None
+
+    delivery, _, sent = _delivery(
+        wanted=_NoSecret(), record={"a": 1}, result=SendResult(status=200)
+    )
+    assert await delivery.deliver(_job()) is Outcome.DROPPED
+    assert sent == []

@@ -91,8 +91,8 @@ def _secret_encryption_key(doc: TOMLDocument) -> str:
     Rows written *before* this key existed stay readable: they are tagged with
     the fallback's key id, and the backend keeps that key as a decrypt-only
     candidate while ``ENVIRONMENT`` is local (``crypto/keys.py::
-    legacy_candidate_secrets``). New writes take this key; to move the old rows
-    forward, run ``scripts/reencrypt_secrets.py`` in the backend.
+    legacy_candidate_secrets``). This key is the root of the backend's secrets
+    vault; the vault moves its own keys under it when the backend starts.
     """
 
     digest = hmac.digest(

@@ -456,7 +456,7 @@ class SlackAppProvisioner:
                 raise SlackAppCreationNotSetUpError(team_id)
             if row.refused_at is not None:
                 raise SlackAppCreationTokenExpiredError(team_id)
-            pair = reveal_tokens(row)
+            pair = await reveal_tokens(self.tokens.session, row)
             left = row.access_expires_at - datetime.now(UTC)
             if left > _ROTATE_WITHIN:
                 return pair.access_token
