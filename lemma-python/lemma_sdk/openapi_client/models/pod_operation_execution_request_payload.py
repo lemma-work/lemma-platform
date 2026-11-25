@@ -6,11 +6,11 @@ from typing import Any, TypeVar
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
-T = TypeVar("T", bound="OperationExecutionRequestPayload")
+T = TypeVar("T", bound="PodOperationExecutionRequestPayload")
 
 
 @_attrs_define
-class OperationExecutionRequestPayload:
+class PodOperationExecutionRequestPayload:
     """The operation's arguments. A file argument takes a reference -- `{"pod_path": "/me/report.pdf"}`, `{"file_id":
     "..."}`, `{"url": "https://..."}` or `{"base64": "...", "filename": "..."}` -- read with the caller's own access
     before the call is made. `output_path` chooses where a file result lands in the pod.
@@ -29,10 +29,10 @@ class OperationExecutionRequestPayload:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        operation_execution_request_payload = cls()
+        pod_operation_execution_request_payload = cls()
 
-        operation_execution_request_payload.additional_properties = d
-        return operation_execution_request_payload
+        pod_operation_execution_request_payload.additional_properties = d
+        return pod_operation_execution_request_payload
 
     @property
     def additional_keys(self) -> list[str]:

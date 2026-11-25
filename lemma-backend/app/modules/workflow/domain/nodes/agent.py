@@ -2,7 +2,7 @@
 
 from typing import Dict, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.core.domain.generation import GenerationSettings
 from app.modules.workflow.domain.nodes.base import BaseNode, NodeType
@@ -60,6 +60,23 @@ class AgentNodeConfig(BaseModel):
             "left unset keeps it."
         ),
     )
+    repository: InputBinding | None = Field(
+        default=None,
+        description=(
+            "The GitHub repository the agent works in, as `owner/name`. The "
+            "run starts in a worktree of it, cloned through the pod's `github` "
+            "connector as the run's person, as a webhook-started run does. "
+            "Usually an expression, e.g. `start.payload.repository.full_name`."
+        ),
+    )
+    ref: InputBinding | None = Field(
+        default=None,
+        description=(
+            "Where that worktree starts: a branch, a tag, a commit sha, or a "
+            "pull request's head as `pull/<n>/head`. Unset is the repository's "
+            "default branch. Needs `repository`."
+        ),
+    )
     timeout_seconds: int | None = Field(
         default=None,
         # The expiry sweep looks only at waits older than ten minutes, so a
@@ -73,6 +90,14 @@ class AgentNodeConfig(BaseModel):
             "on a person gets the usual multiple of it."
         ),
     )
+
+    @model_validator(mode="after")
+    def _ref_needs_a_repository(self) -> "AgentNodeConfig":
+        if self.ref is not None and self.repository is None:
+            raise ValueError(
+                "`ref` says where to check a repository out; set `repository` too"
+            )
+        return self
 
 
 class AgentNode(BaseNode):

@@ -1255,6 +1255,58 @@
             "description": "Another model from the agent's runtime profile, for this step only. Unset runs on the agent's model.",
             "title": "Model Name"
           },
+          "ref": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "expression": "#/components/schemas/ExpressionInputBinding",
+                    "literal": "#/components/schemas/LiteralInputBinding"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ExpressionInputBinding"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LiteralInputBinding"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where that worktree starts: a branch, a tag, a commit sha, or a pull request's head as `pull/<n>/head`. Unset is the repository's default branch. Needs `repository`.",
+            "title": "Ref"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "expression": "#/components/schemas/ExpressionInputBinding",
+                    "literal": "#/components/schemas/LiteralInputBinding"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ExpressionInputBinding"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LiteralInputBinding"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The GitHub repository the agent works in, as `owner/name`. The run starts in a worktree of it, cloned through the pod's `github` connector as the run's person, as a webhook-started run does. Usually an expression, e.g. `start.payload.repository.full_name`.",
+            "title": "Repository"
+          },
           "timeout_seconds": {
             "anyOf": [
               {
@@ -16745,21 +16797,6 @@
         "title": "OperationDiscoveryStatus",
         "type": "string"
       },
-      "OperationExecutionRequest": {
-        "properties": {
-          "payload": {
-            "additionalProperties": true,
-            "description": "The operation's arguments. A file argument takes a reference -- `{\"pod_path\": \"/me/report.pdf\"}`, `{\"file_id\": \"...\"}`, `{\"url\": \"https://...\"}` or `{\"base64\": \"...\", \"filename\": \"...\"}` -- read with the caller's own access before the call is made. `output_path` chooses where a file result lands in the pod.",
-            "title": "Payload",
-            "type": "object"
-          }
-        },
-        "required": [
-          "payload"
-        ],
-        "title": "OperationExecutionRequest",
-        "type": "object"
-      },
       "OperationExecutionResponse": {
         "properties": {
           "result": {
@@ -20153,6 +20190,32 @@
           "roles"
         ],
         "title": "PodMemberUpdateRoleRequest",
+        "type": "object"
+      },
+      "PodOperationExecutionRequest": {
+        "description": "A pod connector call's body: its arguments, and who it presents as.",
+        "properties": {
+          "act_as": {
+            "default": "user",
+            "description": "Who the call presents as. `user` (the default) is the account's own person. `app` is the connector's app -- for GitHub, the Lemma App's bot -- and only a function run may ask for it: anyone else is refused with `APP_IDENTITY_FUNCTIONS_ONLY`. It is the app or nothing: an operation only a person may call, an account with no App installation, or a connector with no app is refused with `APP_IDENTITY_UNAVAILABLE` before anything is sent.",
+            "enum": [
+              "user",
+              "app"
+            ],
+            "title": "Act As",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "description": "The operation's arguments. A file argument takes a reference -- `{\"pod_path\": \"/me/report.pdf\"}`, `{\"file_id\": \"...\"}`, `{\"url\": \"https://...\"}` or `{\"base64\": \"...\", \"filename\": \"...\"}` -- read with the caller's own access before the call is made. `output_path` chooses where a file result lands in the pod.",
+            "title": "Payload",
+            "type": "object"
+          }
+        },
+        "required": [
+          "payload"
+        ],
+        "title": "PodOperationExecutionRequest",
         "type": "object"
       },
       "PodOutcome": {
@@ -46108,7 +46171,7 @@
     },
     "/pods/{pod_id}/connectors/{slug}/operations/{operation_name}/execute": {
       "post": {
-        "description": "Run an operation through a pod connector. The account it runs as is decided by the connector: the caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals: `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`.",
+        "description": "Run an operation through a pod connector. The account it runs as is decided by the connector: the caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals: `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`; with `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and `APP_IDENTITY_UNAVAILABLE`.",
         "operationId": "pod.connector.operation.execute",
         "parameters": [
           {
@@ -46144,7 +46207,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OperationExecutionRequest"
+                "$ref": "#/components/schemas/PodOperationExecutionRequest"
               }
             }
           },

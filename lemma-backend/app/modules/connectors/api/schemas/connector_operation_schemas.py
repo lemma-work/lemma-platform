@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -135,6 +135,25 @@ class OperationExecutionRequest(BaseModel):
     # No account: the pod connector's mode and the caller decide it. An
     # account id here was a free argument a model could type to run as a
     # colleague.
+
+
+class PodOperationExecutionRequest(OperationExecutionRequest):
+    """A pod connector call's body: its arguments, and who it presents as."""
+
+    # Not an account: the same account either way, as itself or as the app it
+    # was connected through.
+    act_as: Literal["user", "app"] = Field(
+        default="user",
+        description=(
+            "Who the call presents as. `user` (the default) is the account's "
+            "own person. `app` is the connector's app -- for GitHub, the Lemma "
+            "App's bot -- and only a function run may ask for it: anyone else "
+            "is refused with `APP_IDENTITY_FUNCTIONS_ONLY`. It is the app or "
+            "nothing: an operation only a person may call, an account with no "
+            "App installation, or a connector with no app is refused with "
+            "`APP_IDENTITY_UNAVAILABLE` before anything is sent."
+        ),
+    )
 
 
 class InstallationOperationExecutionRequest(OperationExecutionRequest):

@@ -374,7 +374,6 @@ export type { OperationDetailsBatchResponse } from './models/OperationDetailsBat
 export type { OperationDiscoverResponse } from './models/OperationDiscoverResponse.js';
 export type { OperationDiscoverySchema } from './models/OperationDiscoverySchema.js';
 export { OperationDiscoveryStatus } from './models/OperationDiscoveryStatus.js';
-export type { OperationExecutionRequest } from './models/OperationExecutionRequest.js';
 export type { OperationExecutionResponse } from './models/OperationExecutionResponse.js';
 export type { OperationSummary } from './models/OperationSummary.js';
 export type { OrganizationAppListResponse } from './models/OrganizationAppListResponse.js';
@@ -455,6 +454,7 @@ export type { PodMemberDetailResponse } from './models/PodMemberDetailResponse.j
 export type { PodMemberListResponse } from './models/PodMemberListResponse.js';
 export type { PodMemberResponse } from './models/PodMemberResponse.js';
 export type { PodMemberUpdateRoleRequest } from './models/PodMemberUpdateRoleRequest.js';
+export { PodOperationExecutionRequest } from './models/PodOperationExecutionRequest.js';
 export type { PodOutcome } from './models/PodOutcome.js';
 export type { PodPermissionCatalogResponse } from './models/PodPermissionCatalogResponse.js';
 export type { PodPermissionResponse } from './models/PodPermissionResponse.js';

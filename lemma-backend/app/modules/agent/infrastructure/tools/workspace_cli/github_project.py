@@ -33,6 +33,8 @@ pile up. The person's own worktree sweep does not run there.
 A pull request (``pull/123/head``) is not among what a clone fetches, so it is
 fetched by name, into ``origin/pull/123/head``, and checked out from there --
 a review sees the pull request itself rather than a branch that may be gone.
+A commit is fetched by its sha the same way: `git clone --branch` takes a branch
+or a tag and refuses a sha, and a fork's commit is on no branch a clone gets.
 
 Once a checkout has run, the person's finished worktrees are cleared
 (``worktree_sweep``): this is where worktrees are made, and the one moment the
@@ -62,6 +64,10 @@ from app.core.log.log import get_logger
 from app.modules.agent.domain.project_repo import ProjectRepo, worktree_branch
 from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.workspace_cli.checkout_failures import (
+    forget_checkout_failure,
+    remember_checkout_failure,
+)
 from app.modules.agent.infrastructure.tools.workspace_cli.github_credential_bridge import (
     ensure_github_credentials,
 )
@@ -91,6 +97,8 @@ _FETCH_FAILED_EXIT = 75
 _WORKTREE_FAILED_EXIT = 76
 # A pull request's head, which only a fetch by name brings into a clone.
 _PULL_REQUEST_REF = re.compile(r"^pull/[0-9]+/head$")
+#: A full commit id. An abbreviated one cannot be fetched by name.
+_COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _clone_or_fetch(
@@ -109,7 +117,8 @@ def _clone_or_fetch(
     same on a first clone as on a fetch.
     """
     pull_request = bool(ref and _PULL_REQUEST_REF.match(ref))
-    on_branch = ref and worked_in and not pull_request
+    commit = bool(ref and _COMMIT_SHA.match(ref))
+    on_branch = ref and worked_in and not (pull_request or commit)
     branch = f"--branch {shlex.quote(ref)} " if on_branch else ""
     clone = shlex.quote(path)
     command = (
@@ -120,11 +129,23 @@ def _clone_or_fetch(
     if pull_request:
         refspec = shlex.quote(f"+refs/{ref}:refs/remotes/origin/{ref}")
         command += f"; git -C {clone} fetch --quiet origin {refspec} || stale=1"
+    elif commit and ref:
+        # GitHub serves any reachable commit by its sha; `_start_point` then
+        # finds no `origin/<sha>` and starts from the commit itself.
+        command += (
+            f"; git -C {clone} fetch --quiet origin {shlex.quote(ref)} || stale=1"
+        )
     return command
 
 
-def _start_point(git: str, ref: str | None) -> str:
-    """Set `start` to `origin/<ref>`, or the ref itself for a tag or a commit."""
+def _start_point(git: str, ref: str | None, *, commit: bool = False) -> str:
+    """Set `start` to `origin/<ref>`, or the ref itself for a tag or a commit.
+
+    A commit never goes through the `origin/` probe: a branch can be named
+    exactly a 40-char sha, and `origin/<sha>` would resolve to that branch
+    rather than the commit just fetched."""
+    if commit and ref is not None:
+        return f"start={shlex.quote(ref)}"
     target = ref or "HEAD"
     return (
         f"start={shlex.quote('origin/' + target)}; "
@@ -158,10 +179,11 @@ def _checkout_command(
         _clone_or_fetch(url=url, path=clone_dir, ref=ref, worked_in=not backs_worktrees)
     ]
     git = f"git -C {shlex.quote(clone_dir)}"
+    commit = bool(ref and _COMMIT_SHA.match(ref))
     if run_dir is not None:
         steps.append(
             f"if [ ! -e {shlex.quote(run_dir + '/.git')} ]; then "
-            f"{git} worktree prune; {_start_point(git, ref)}; "
+            f"{git} worktree prune; {_start_point(git, ref, commit=commit)}; "
             f'{git} worktree add --quiet --detach {shlex.quote(run_dir)} "$start" '
             f"|| exit {_WORKTREE_FAILED_EXIT}; fi"
         )
@@ -170,7 +192,7 @@ def _checkout_command(
         path = shlex.quote(worktree)
         steps.append(
             f"if [ ! -e {shlex.quote(worktree + '/.git')} ]; then "
-            f"{git} worktree prune; {_start_point(git, ref)}; "
+            f"{git} worktree prune; {_start_point(git, ref, commit=commit)}; "
             f"if {git} show-ref --verify --quiet {shlex.quote('refs/heads/' + branch)}; "
             f"then {git} worktree add --quiet {path} {shlex.quote(branch)}; "
             f'else {git} worktree add --quiet -b {shlex.quote(branch)} {path} "$start"; '
@@ -249,6 +271,15 @@ async def ensure_project_checkout(
     notice = await _settle(
         result, redis=redis, marker_key=marker_key, repo=repo, here=here
     )
+    if ctx.conversation_id is not None:
+        # Whoever waits on the conversation -- a workflow step that named the
+        # repository -- reads this rather than the agent's prompt.
+        if result.get("exit_code") in (0, _FETCH_FAILED_EXIT):
+            await forget_checkout_failure(redis, ctx.conversation_id)
+        else:
+            await remember_checkout_failure(
+                redis, ctx.conversation_id, notice or "the checkout failed"
+            )
     if run_dir is not None:
         # A shared machine clears its own run directories (`machine_lifecycle`).
         return notice

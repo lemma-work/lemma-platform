@@ -98,7 +98,11 @@ The App issues both kinds and Lemma uses both, on purpose.
 **Installation token** — the App acting as itself, minted per installation and
 valid an hour. This runs an agent's connector operations. A schedule keeps
 working after its author leaves, and a webhook-triggered run has an identity
-even with nobody present.
+even with nobody present. It also runs a function's operation when the function
+asks for it (`act_as: "app"` on the pod execute route): check runs, which GitHub
+takes only from an App, and reviews a team wants from its bot. A function's ask
+is the App or a refusal (`APP_IDENTITY_UNAVAILABLE`), never the person's token
+in its place, and only a function run may ask (`APP_IDENTITY_FUNCTIONS_ONLY`).
 
 **User token** — the person acting as themselves, from the OAuth half of the
 install. This runs the sandbox's `git`/`gh`, pod bundle publish and import, and
