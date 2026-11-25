@@ -59,6 +59,9 @@ def _checkout(node: AgentNode, step: StepContext) -> dict[str, object]:
     A malformed name is the run's error, said here, rather than a run that
     quietly starts in an empty folder: the agent module drops a ``repo`` it
     cannot parse, which suits a webhook's payload and not an author's step.
+    Only the shape is checked. The checkout is made in the sandbox before the
+    agent's first command, after this step has started its run, so a ref git
+    cannot fetch reaches the agent as a notice, not this step as an error.
     """
     config = node.config
     if config.repository is None:
