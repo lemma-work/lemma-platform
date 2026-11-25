@@ -1,0 +1,82 @@
+/* The guide's palette, and the docs': Lemma's own colours. The neutrals are
+   the app's tokens (`tokens.css`), so both pages follow the app's light and
+   dark exactly. The violet is pinned here rather than read from `--accent`,
+   because the accent is a preference (the default is "mono", grey) and these
+   pages wear the brand whoever is reading: #6b4fe0 on paper, the lighter
+   #a08cff on the dark ground, the same pair the app's violet accent uses.
+
+   The guide names its colours for what they do: `--bg` the page, `--card`
+   what sits on it, `--mu` quieter text, `--co` the accent and `--on-co` the
+   ink on an accent fill, `--band` the chapter openers. Scoped to
+   `.guidebook` and `.site--dev`, so none of these names reach the rest of the
+   site. (`.guide` is the app's tour panel.)
+
+   The earlier warm palette (cream #fff6ec, coral #e8553a, aubergine #1c0e21)
+   was hard to read in the dark: coral on aubergine. */
+.guidebook,
+.site--dev {
+    --bg: var(--canvas);
+    --card: var(--paper);
+    --mu: var(--ink-2);
+    --co: #6b4fe0;
+    --on-co: #fffefa;
+    --accent: #6b4fe0;
+    --on-accent: #fffefa;
+    --accent-soft: rgb(107 79 224 / 0.09);
+    --accent-line: rgb(107 79 224 / 0.3);
+    --brand: #5a3fd4;
+    --wash-a: #efeafc;
+    --wash-b: #f8f6fe;
+    --hair: var(--line-2);
+    --ring: rgb(32 33 31 / 0.28);
+    --disc: var(--wash-a);
+    --band: #6b4fe0;
+    --band-fg: #fffefa;
+    --head: rgb(244 243 237 / 0.86);
+    --shadow: var(--shadow-soft);
+    --pop-shadow: var(--shadow-lift);
+    --mono: var(--font-mono), ui-monospace, "SF Mono", Menlo, monospace;
+    --jost: var(--font-guide), "Futura", "Century Gothic", "Avenir Next", sans-serif;
+    --serif: var(--font-serif), "Iowan Old Style", Georgia, serif;
+    --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+/* In the dark a full violet band would glare, so chapter openers sit on the
+   deep violet wash with the page's ink. */
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .guidebook,
+    :root:not([data-theme="light"]) .site--dev {
+        --ring: rgb(246 244 236 / 0.3);
+        --co: #a08cff;
+        --on-co: #1b1a18;
+        --accent: #a08cff;
+        --on-accent: #1b1a18;
+        --accent-soft: rgb(160 140 255 / 0.14);
+        --accent-line: rgb(160 140 255 / 0.36);
+        --brand: #8b7af5;
+        --wash-a: #221d3d;
+        --wash-b: #17161f;
+        --band: #221d3d;
+        --band-fg: var(--ink);
+        --head: rgb(20 19 16 / 0.86);
+        color-scheme: dark;
+    }
+}
+
+:root[data-theme="dark"] .guidebook,
+:root[data-theme="dark"] .site--dev {
+    --ring: rgb(246 244 236 / 0.3);
+    --co: #a08cff;
+    --on-co: #1b1a18;
+    --accent: #a08cff;
+    --on-accent: #1b1a18;
+    --accent-soft: rgb(160 140 255 / 0.14);
+    --accent-line: rgb(160 140 255 / 0.36);
+    --brand: #8b7af5;
+    --wash-a: #221d3d;
+    --wash-b: #17161f;
+    --band: #221d3d;
+    --band-fg: var(--ink);
+    --head: rgb(20 19 16 / 0.86);
+    color-scheme: dark;
+}

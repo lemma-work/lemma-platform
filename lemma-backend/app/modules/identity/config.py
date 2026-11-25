@@ -283,6 +283,16 @@ class IdentitySettings(BaseSettings):
             "Env: ``APPLE_PRIVATE_KEY``."
         ),
     )
+    apple_app_bundle_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Bundle id of the Lemma phone app (for example "
+            "``work.lemma.mobile``): the client Apple issues a native Sign in "
+            "with Apple to. Registered beside the Services ID, and only while "
+            "the four values above are set and usable. "
+            "Env: ``APPLE_APP_BUNDLE_ID``."
+        ),
+    )
 
     def is_google_oauth_configured(self) -> bool:
         """Check if Google OAuth is properly configured."""

@@ -1,0 +1,169 @@
+/* The docs in the guide's faces: Jost for headings and everything you
+   click, Newsreader for the words you read, the site's mono for code, and
+   Lemma's own colours (`guide-tokens.css`, under `.site--dev`, maps the
+   guide's colour names onto the app's tokens). Headings stay in sentence
+   case here, unlike the guide, because docs titles carry names like SDK and
+   CLI that must not be lowercased. Layout and spacing stay as `docs.css`
+   has them; this file changes only how they look. */
+
+.site--reading.site--dev {
+    --jost: var(--font-guide), "Futura", "Avenir Next", sans-serif;
+    --read: var(--font-serif), "Iowan Old Style", Georgia, serif;
+    font-family: var(--jost);
+    font-size: 15.5px;
+    color: var(--ink);
+}
+
+.site--dev .site-header {
+    font-family: var(--jost);
+}
+
+/* Titles and the line under them */
+.site--dev .docs-h1 {
+    font-family: var(--jost);
+    font-weight: 300;
+    font-size: clamp(36px, 4.6vw, 54px);
+    line-height: 1.04;
+    letter-spacing: -0.025em;
+}
+
+.site--dev .docs-lede {
+    font-family: var(--read);
+    font-size: 19.5px;
+    line-height: 1.55;
+}
+
+.site--dev .docs-crumbs,
+.site--dev .docs-list__door-h,
+.site--dev .docs-outline__title,
+.site--dev .docs-tag {
+    font-family: var(--jost);
+    font-weight: 500;
+    font-size: 11px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+}
+
+.site--dev .docs-tag {
+    background: var(--wash-a);
+    color: var(--accent);
+}
+
+/* The words */
+.site--dev .docs-prose {
+    font-family: var(--read);
+    font-size: 17.5px;
+    line-height: 1.65;
+}
+
+.site--dev .docs-prose h2 {
+    margin-top: 52px;
+    font-family: var(--jost);
+    font-weight: 300;
+    font-size: 30px;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    color: var(--co);
+}
+
+.site--dev .docs-prose h3 {
+    font-family: var(--jost);
+    font-weight: 400;
+}
+
+.site--dev .docs-prose a {
+    color: var(--accent);
+    text-decoration-color: var(--accent-line);
+}
+
+.site--dev .docs-prose li::marker {
+    color: var(--co);
+}
+
+.site--dev .docs-table,
+.site--dev .docs-note,
+.site--dev .docs-steps,
+.site--dev .docs-links span {
+    font-family: var(--jost);
+    font-size: 15.5px;
+}
+
+.site--dev .docs-note {
+    border-color: var(--accent-line);
+    background: var(--accent-soft);
+}
+
+/* The list at the left and what is on this page at the right */
+.site--dev .docs-list a {
+    font-size: 14.5px;
+}
+
+.site--dev .docs-list a[aria-current="page"] {
+    background: var(--wash-a);
+    color: var(--accent);
+}
+
+.site--dev .docs-list .docs-list__guide {
+    background: var(--co);
+    border-color: var(--co);
+    color: var(--on-co);
+}
+
+.site--dev .docs-list .docs-list__guide-d {
+    color: var(--on-co);
+    opacity: 0.85;
+}
+
+.site--dev .docs-outline a[aria-current],
+.site--dev .docs-outline a:hover {
+    color: var(--accent);
+}
+
+/* The docs home */
+.site--dev .docs-guide {
+    background: var(--co);
+    color: var(--on-co);
+    box-shadow: none;
+}
+
+.site--dev .docs-guide .docs-tag {
+    background: none;
+    color: var(--on-co);
+    padding-left: 0;
+}
+
+.site--dev .docs-guide__t {
+    font-family: var(--jost);
+    font-weight: 300;
+    font-size: 30px;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+}
+
+.site--dev .docs-guide__d {
+    color: var(--on-co);
+    font-size: 16px;
+}
+
+.site--dev .docs-door,
+.site--dev .docs-run {
+    background: var(--card);
+}
+
+.site--dev .docs-door h2,
+.site--dev .docs-sec-h {
+    font-family: var(--jost);
+    font-weight: 300;
+    font-size: 26px;
+    letter-spacing: -0.015em;
+}
+
+.site--dev .docs-door__i {
+    background: var(--wash-a);
+    color: var(--accent);
+}
+
+.site--dev .docs-big-search,
+.site--dev .docs-head-search {
+    background: var(--card);
+}

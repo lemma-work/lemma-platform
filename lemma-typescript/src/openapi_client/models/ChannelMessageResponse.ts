@@ -10,6 +10,10 @@ import type { PersonRef } from './PersonRef.js';
 import type { QuestionResponse } from './QuestionResponse.js';
 export type ChannelMessageResponse = {
     /**
+     * Written by somebody the reader blocked (`/pods/{pod}/blocks`): shown only that it is there, until they unblock them.
+     */
+    blocked?: boolean;
+    /**
      * The reader is the member an `asker_only` answer was made for, and may share it with the channel (`…/messages/{id}/share`).
      */
     can_share?: boolean;
@@ -58,7 +62,7 @@ export type ChannelMessageResponse = {
      */
     source_id?: (string | null);
     /**
-     * Absent where the line is withheld from the reader, or deleted.
+     * Absent where the line is withheld from the reader, written by somebody they blocked, or deleted.
      */
     text?: (string | null);
     /**

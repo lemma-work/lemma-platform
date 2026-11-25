@@ -6,8 +6,9 @@ const SEARCHED = "src/styles";
 
 /** The palette itself. A file whose job is to name colours is the one place a
  *  literal colour belongs. `space-tokens.css` is the app's appearance: the
- *  same job, loaded after the other two so it wins. */
-const PALETTE = new Set(["tokens.css", "accents.css", "space-tokens.css"]);
+ *  same job, loaded after the other two so it wins. `guide-tokens.css` names
+ *  the guide's own colours, scoped to `.guide`. */
+const PALETTE = new Set(["tokens.css", "accents.css", "space-tokens.css", "guide-tokens.css"]);
 
 /** Colour set outside the palette, and the one reason each is there.
  *

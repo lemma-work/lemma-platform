@@ -15,13 +15,22 @@ T = TypeVar("T", bound="ContactUpdateRequest")
 class ContactUpdateRequest:
     """
     Attributes:
+        blocked (bool | None | Unset): True stops the pod's agents answering them, or writing to them; false lets them
+            again. Absent leaves it as it is.
         display_name (None | str | Unset):
     """
 
+    blocked: bool | None | Unset = UNSET
     display_name: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        blocked: bool | None | Unset
+        if isinstance(self.blocked, Unset):
+            blocked = UNSET
+        else:
+            blocked = self.blocked
+
         display_name: None | str | Unset
         if isinstance(self.display_name, Unset):
             display_name = UNSET
@@ -31,6 +40,8 @@ class ContactUpdateRequest:
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
+        if blocked is not UNSET:
+            field_dict["blocked"] = blocked
         if display_name is not UNSET:
             field_dict["display_name"] = display_name
 
@@ -39,6 +50,15 @@ class ContactUpdateRequest:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
+
+        def _parse_blocked(data: object) -> bool | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(bool | None | Unset, data)
+
+        blocked = _parse_blocked(d.pop("blocked", UNSET))
 
         def _parse_display_name(data: object) -> None | str | Unset:
             if data is None:
@@ -50,6 +70,7 @@ class ContactUpdateRequest:
         display_name = _parse_display_name(d.pop("display_name", UNSET))
 
         contact_update_request = cls(
+            blocked=blocked,
             display_name=display_name,
         )
 

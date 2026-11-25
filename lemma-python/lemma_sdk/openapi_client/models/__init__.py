@@ -118,6 +118,8 @@ _NAME_TO_MODULE = {
     'AvailableSurfaceChannelResponse': 'available_surface_channel_response',
     'AvailableSurfaceChannelsResponse': 'available_surface_channels_response',
     'AvailableSurfacesResponse': 'available_surfaces_response',
+    'BlockResponse': 'block_response',
+    'BlocksResponse': 'blocks_response',
     'BrowserAccessRequest': 'browser_access_request',
     'BrowserAccessResponse': 'browser_access_response',
     'BrowserCommandRequest': 'browser_command_request',
@@ -149,6 +151,8 @@ _NAME_TO_MODULE = {
     'ChannelMessagesResponse': 'channel_messages_response',
     'ChannelPostRequest': 'channel_post_request',
     'ChannelRef': 'channel_ref',
+    'ChannelReportRequest': 'channel_report_request',
+    'ChannelReportResponse': 'channel_report_response',
     'ChannelResponse': 'channel_response',
     'ChannelSourceResponse': 'channel_source_response',
     'ChannelUpdateRequest': 'channel_update_request',
@@ -191,12 +195,15 @@ _NAME_TO_MODULE = {
     'ContactsCapResponse': 'contacts_cap_response',
     'ContactsCapUpdate': 'contacts_cap_update',
     'ConversationListResponse': 'conversation_list_response',
+    'ConversationReportRequest': 'conversation_report_request',
+    'ConversationReportResponse': 'conversation_report_response',
     'ConversationRepositoryListResponse': 'conversation_repository_list_response',
     'ConversationRepositoryResponse': 'conversation_repository_response',
     'ConversationResponse': 'conversation_response',
     'ConversationResponseMetadataType0': 'conversation_response_metadata_type_0',
     'ConversationStatus': 'conversation_status',
     'ConversationType': 'conversation_type',
+    'ConversationUsageResponse': 'conversation_usage_response',
     'CreateAgentHostRuntimeProfileRequest': 'create_agent_host_runtime_profile_request',
     'CreateAgentHostRuntimeProfileRequestConfigSelections': 'create_agent_host_runtime_profile_request_config_selections',
     'CreateAgentRequest': 'create_agent_request',
@@ -396,6 +403,7 @@ _NAME_TO_MODULE = {
     'JoinablePodListResponse': 'joinable_pod_list_response',
     'JoinablePodResponse': 'joinable_pod_response',
     'JsonObject': 'json_object',
+    'LedgerTotals': 'ledger_totals',
     'LineDelivery': 'line_delivery',
     'LinePreview': 'line_preview',
     'LinkPart': 'link_part',
@@ -613,6 +621,7 @@ _NAME_TO_MODULE = {
     'RecordUpdateResponseRecordUpdate': 'record_update_response_record_update',
     'ReportFeedbackRequest': 'report_feedback_request',
     'ReportFeedbackResponse': 'report_feedback_response',
+    'ReportReason': 'report_reason',
     'ResetRequest': 'reset_request',
     'ResetRequestScopesItem': 'reset_request_scopes_item',
     'ResetResponse': 'reset_response',
@@ -629,6 +638,7 @@ _NAME_TO_MODULE = {
     'RowRequest': 'row_request',
     'RowRequestValues': 'row_request_values',
     'RunTokenUsage': 'run_token_usage',
+    'RunUsageResponse': 'run_usage_response',
     'RuntimeModelCapability': 'runtime_model_capability',
     'RuntimeModelCatalogEntry': 'runtime_model_catalog_entry',
     'RuntimeModelCatalogEntryDefaultModelSettings': 'runtime_model_catalog_entry_default_model_settings',
@@ -988,6 +998,8 @@ if TYPE_CHECKING:
     from .available_surface_channel_response import AvailableSurfaceChannelResponse
     from .available_surface_channels_response import AvailableSurfaceChannelsResponse
     from .available_surfaces_response import AvailableSurfacesResponse
+    from .block_response import BlockResponse
+    from .blocks_response import BlocksResponse
     from .browser_access_request import BrowserAccessRequest
     from .browser_access_response import BrowserAccessResponse
     from .browser_command_request import BrowserCommandRequest
@@ -1019,6 +1031,8 @@ if TYPE_CHECKING:
     from .channel_messages_response import ChannelMessagesResponse
     from .channel_post_request import ChannelPostRequest
     from .channel_ref import ChannelRef
+    from .channel_report_request import ChannelReportRequest
+    from .channel_report_response import ChannelReportResponse
     from .channel_response import ChannelResponse
     from .channel_source_response import ChannelSourceResponse
     from .channel_update_request import ChannelUpdateRequest
@@ -1061,12 +1075,15 @@ if TYPE_CHECKING:
     from .contacts_cap_response import ContactsCapResponse
     from .contacts_cap_update import ContactsCapUpdate
     from .conversation_list_response import ConversationListResponse
+    from .conversation_report_request import ConversationReportRequest
+    from .conversation_report_response import ConversationReportResponse
     from .conversation_repository_list_response import ConversationRepositoryListResponse
     from .conversation_repository_response import ConversationRepositoryResponse
     from .conversation_response import ConversationResponse
     from .conversation_response_metadata_type_0 import ConversationResponseMetadataType0
     from .conversation_status import ConversationStatus
     from .conversation_type import ConversationType
+    from .conversation_usage_response import ConversationUsageResponse
     from .create_agent_host_runtime_profile_request import CreateAgentHostRuntimeProfileRequest
     from .create_agent_host_runtime_profile_request_config_selections import CreateAgentHostRuntimeProfileRequestConfigSelections
     from .create_agent_request import CreateAgentRequest
@@ -1266,6 +1283,7 @@ if TYPE_CHECKING:
     from .joinable_pod_list_response import JoinablePodListResponse
     from .joinable_pod_response import JoinablePodResponse
     from .json_object import JsonObject
+    from .ledger_totals import LedgerTotals
     from .line_delivery import LineDelivery
     from .line_preview import LinePreview
     from .link_part import LinkPart
@@ -1483,6 +1501,7 @@ if TYPE_CHECKING:
     from .record_update_response_record_update import RecordUpdateResponseRecordUpdate
     from .report_feedback_request import ReportFeedbackRequest
     from .report_feedback_response import ReportFeedbackResponse
+    from .report_reason import ReportReason
     from .reset_request import ResetRequest
     from .reset_request_scopes_item import ResetRequestScopesItem
     from .reset_response import ResetResponse
@@ -1499,6 +1518,7 @@ if TYPE_CHECKING:
     from .row_request import RowRequest
     from .row_request_values import RowRequestValues
     from .run_token_usage import RunTokenUsage
+    from .run_usage_response import RunUsageResponse
     from .runtime_model_capability import RuntimeModelCapability
     from .runtime_model_catalog_entry import RuntimeModelCatalogEntry
     from .runtime_model_catalog_entry_default_model_settings import RuntimeModelCatalogEntryDefaultModelSettings
@@ -1871,6 +1891,8 @@ __all__ = [
     'AvailableSurfaceChannelResponse',
     'AvailableSurfaceChannelsResponse',
     'AvailableSurfacesResponse',
+    'BlockResponse',
+    'BlocksResponse',
     'BrowserAccessRequest',
     'BrowserAccessResponse',
     'BrowserCommandRequest',
@@ -1902,6 +1924,8 @@ __all__ = [
     'ChannelMessagesResponse',
     'ChannelPostRequest',
     'ChannelRef',
+    'ChannelReportRequest',
+    'ChannelReportResponse',
     'ChannelResponse',
     'ChannelSourceResponse',
     'ChannelUpdateRequest',
@@ -1944,12 +1968,15 @@ __all__ = [
     'ContactsCapResponse',
     'ContactsCapUpdate',
     'ConversationListResponse',
+    'ConversationReportRequest',
+    'ConversationReportResponse',
     'ConversationRepositoryListResponse',
     'ConversationRepositoryResponse',
     'ConversationResponse',
     'ConversationResponseMetadataType0',
     'ConversationStatus',
     'ConversationType',
+    'ConversationUsageResponse',
     'CreateAgentHostRuntimeProfileRequest',
     'CreateAgentHostRuntimeProfileRequestConfigSelections',
     'CreateAgentRequest',
@@ -2149,6 +2176,7 @@ __all__ = [
     'JoinablePodListResponse',
     'JoinablePodResponse',
     'JsonObject',
+    'LedgerTotals',
     'LineDelivery',
     'LinePreview',
     'LinkPart',
@@ -2366,6 +2394,7 @@ __all__ = [
     'RecordUpdateResponseRecordUpdate',
     'ReportFeedbackRequest',
     'ReportFeedbackResponse',
+    'ReportReason',
     'ResetRequest',
     'ResetRequestScopesItem',
     'ResetResponse',
@@ -2382,6 +2411,7 @@ __all__ = [
     'RowRequest',
     'RowRequestValues',
     'RunTokenUsage',
+    'RunUsageResponse',
     'RuntimeModelCapability',
     'RuntimeModelCatalogEntry',
     'RuntimeModelCatalogEntryDefaultModelSettings',

@@ -28,6 +28,8 @@ class ContactResponse:
             that they are a web visitor.
         answered_at (datetime.datetime | None | Unset): When an agent first answered them; what the contact limit
             counts.
+        blocked_at (datetime.datetime | None | Unset): When the pod's agents were stopped from answering them: what they
+            write still reaches the pod's chats, and no agent answers it or writes to them. Members still can.
         channel_id (None | Unset | UUID): Their own chat with the pod, to open it without looking it up; absent until
             they first write.
         display_name (None | str | Unset):
@@ -40,6 +42,7 @@ class ContactResponse:
     id: UUID
     label: str
     answered_at: datetime.datetime | None | Unset = UNSET
+    blocked_at: datetime.datetime | None | Unset = UNSET
     channel_id: None | Unset | UUID = UNSET
     display_name: None | str | Unset = UNSET
     identities: list[ContactIdentityResponse] | Unset = UNSET
@@ -60,6 +63,14 @@ class ContactResponse:
             answered_at = self.answered_at.isoformat()
         else:
             answered_at = self.answered_at
+
+        blocked_at: None | str | Unset
+        if isinstance(self.blocked_at, Unset):
+            blocked_at = UNSET
+        elif isinstance(self.blocked_at, datetime.datetime):
+            blocked_at = self.blocked_at.isoformat()
+        else:
+            blocked_at = self.blocked_at
 
         channel_id: None | str | Unset
         if isinstance(self.channel_id, Unset):
@@ -95,6 +106,8 @@ class ContactResponse:
         )
         if answered_at is not UNSET:
             field_dict["answered_at"] = answered_at
+        if blocked_at is not UNSET:
+            field_dict["blocked_at"] = blocked_at
         if channel_id is not UNSET:
             field_dict["channel_id"] = channel_id
         if display_name is not UNSET:
@@ -133,6 +146,23 @@ class ContactResponse:
             return cast(datetime.datetime | None | Unset, data)
 
         answered_at = _parse_answered_at(d.pop("answered_at", UNSET))
+
+        def _parse_blocked_at(data: object) -> datetime.datetime | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                blocked_at_type_0 = isoparse(data)
+
+                return blocked_at_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(datetime.datetime | None | Unset, data)
+
+        blocked_at = _parse_blocked_at(d.pop("blocked_at", UNSET))
 
         def _parse_channel_id(data: object) -> None | Unset | UUID:
             if data is None:
@@ -178,6 +208,7 @@ class ContactResponse:
             id=id,
             label=label,
             answered_at=answered_at,
+            blocked_at=blocked_at,
             channel_id=channel_id,
             display_name=display_name,
             identities=identities,

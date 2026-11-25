@@ -2,9 +2,15 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { docsPageMap, docsPages, type DocsPage } from "../src/site/data/docs.ts";
+import { runItYourselfPage, useLemmaPages } from "../src/site/data/use-docs.ts";
+import { markdownForPath } from "../src/site/markdown/pages.ts";
+import { llmsTxt } from "../src/site/markdown/llms-txt.ts";
 import {
     buildDocsSearchIndex,
+    docsCrumbs,
+    docsDoorOf,
     docsInOrder,
+    docsNavFor,
     docsNeighbours,
     docsPieces,
     docsSections,
@@ -29,6 +35,69 @@ test("the guide list and the search hold every page, once", () => {
     assert.equal(index.filter((hit) => hit.kind === "page").length, docsPages.length);
     assert.equal(docsNeighbours(listed[0]).previous, null);
     assert.equal(docsNeighbours(listed[1]).previous?.slug, listed[0]);
+});
+
+test("the half for people using Lemma is written: six pages, and where it runs", () => {
+    const use = docsNavFor("use");
+    assert.deepEqual(use.map((group) => group.title), ["Use Lemma", "Set up"]);
+    assert.deepEqual(
+        use[0].pages.map((page) => page.title),
+        ["Lemmas", "Apps", "Automations", "Where to reach a Lemma", "People", "Connectors"],
+    );
+    assert.deepEqual(use[1].pages, [{ slug: "run-it-yourself", title: "Run it yourself" }]);
+    /* Each half lists its own pages and none of the other's. */
+    const build = docsNavFor("build").flatMap((group) => group.pages.map((page) => page.slug));
+    assert.ok(build.includes("getting-started"));
+    assert.ok(!build.some((slug) => docsDoorOf(slug) === "use"));
+    assert.equal(docsDoorOf("use/apps"), "use");
+    assert.equal(docsDoorOf("cli/apps"), "build");
+    assert.equal(docsDoorOf(""), null);
+    assert.deepEqual(docsCrumbs(docsPageMap.get("use/apps")!), ["Use Lemma"]);
+    assert.deepEqual(docsCrumbs(runItYourselfPage), ["Use Lemma", "Set up"]);
+    assert.deepEqual(docsCrumbs(docsPageMap.get("cli/apps")!), ["Build on Lemma", "CLI"]);
+    /* Search, the Markdown index and llms.txt each hold every one of them. */
+    const docsIndex = markdownForPath("/docs") ?? "";
+    for (const page of [...useLemmaPages, runItYourselfPage]) {
+        const href = "/docs/" + page.slug;
+        assert.equal(docsPageMap.get(page.slug), page);
+        assert.equal(searchDocs(index, page.title).find((g) => g.kind === "page")?.hits[0].href, href, page.title);
+        assert.ok(docsIndex.includes(`](${href})`), href);
+        assert.ok(llmsTxt().includes(href + ")"), href);
+    }
+});
+
+test("the pages for people using Lemma keep to the app's own words", () => {
+    /* A Lemma is a Lemma: never the API's word for it, nor an older one. */
+    const banned = /\b(pods?|teammates?|bots?|workspaces?)\b/i;
+    for (const page of useLemmaPages) {
+        const said = [page.title, page.description];
+        for (const block of page.blocks) {
+            if (block.title) said.push(block.title);
+            if ("body" in block && block.body) said.push(block.body);
+            if (block.type === "list" || block.type === "steps") said.push(...block.items);
+            if (block.type === "links") for (const item of block.items) said.push(item.label, item.note ?? "");
+            if (block.type === "table") said.push(...block.columns, ...block.rows.flat());
+            assert.notEqual(block.type, "code", page.slug + " is not for developers");
+        }
+        for (const line of said) assert.doesNotMatch(line, banned, page.slug);
+    }
+});
+
+test("a links block is followed, on the page and in Markdown", () => {
+    const markdown = markdownForPath("/docs/run-it-yourself") ?? "";
+    for (const guide of ["installation", "self-hosting", "configuration", "observability"])
+        assert.ok(
+            markdown.includes(`](https://github.com/lemma-work/lemma-platform/blob/main/docs/${guide}.md)`),
+            guide,
+        );
+    assert.match(markdownForPath("/docs/use/lemmas") ?? "", /- \[Apps\]\(\/docs\/use\/apps\): /);
+    /* Every link to another docs page names one that exists. */
+    for (const page of docsPages)
+        for (const block of page.blocks)
+            if (block.type === "links")
+                for (const item of block.items)
+                    if (item.href.startsWith("/docs/"))
+                        assert.ok(docsPageMap.has(item.href.slice("/docs/".length)), item.href);
 });
 
 test("search finds pages, the sections in them, and their commands", () => {

@@ -6,10 +6,13 @@ import type { AgentRunResponse } from '../models/AgentRunResponse.js';
 import type { AgentRunStartResponse } from '../models/AgentRunStartResponse.js';
 import type { ApprovalDecisionResponse } from '../models/ApprovalDecisionResponse.js';
 import type { ConversationListResponse } from '../models/ConversationListResponse.js';
+import type { ConversationReportRequest } from '../models/ConversationReportRequest.js';
+import type { ConversationReportResponse } from '../models/ConversationReportResponse.js';
 import type { ConversationRepositoryListResponse } from '../models/ConversationRepositoryListResponse.js';
 import type { ConversationResponse } from '../models/ConversationResponse.js';
 import type { ConversationStatus } from '../models/ConversationStatus.js';
 import type { ConversationType } from '../models/ConversationType.js';
+import type { ConversationUsageResponse } from '../models/ConversationUsageResponse.js';
 import type { CreateConversationRequest } from '../models/CreateConversationRequest.js';
 import type { MessageListResponse } from '../models/MessageListResponse.js';
 import type { PendingInteractionListResponse } from '../models/PendingInteractionListResponse.js';
@@ -379,6 +382,38 @@ export class AgentConversationsService {
         });
     }
     /**
+     * Report Conversation Message
+     * Report a reply of the Lemma's, or a message from somebody outside, to the team that runs Lemma: why, and anything to add. Reporting it again replaces the report.
+     * @param podId
+     * @param conversationId
+     * @param messageId
+     * @param requestBody
+     * @returns ConversationReportResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentConversationMessageReport(
+        podId: string,
+        conversationId: string,
+        messageId: string,
+        requestBody: ConversationReportRequest,
+    ): CancelablePromise<ConversationReportResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/conversations/{conversation_id}/messages/{message_id}/report',
+            path: {
+                'pod_id': podId,
+                'conversation_id': conversationId,
+                'message_id': messageId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                404: `Conversation or message not found, or not visible`,
+                422: `Not something that can be reported`,
+            },
+        });
+    }
+    /**
      * Retry Failed Pod Conversation Run
      * Start a new run from the latest failed run's persisted conversation history without appending a duplicate user message. Retry is allowed only when the failed run produced no assistant, tool, or system activity. Attach to the returned run with the conversation stream endpoint.
      * @param podId
@@ -471,6 +506,30 @@ export class AgentConversationsService {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/pods/{pod_id}/conversations/{conversation_id}/stream',
+            path: {
+                'pod_id': podId,
+                'conversation_id': conversationId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Get Conversation Usage
+     * What a conversation has cost so far, in US dollars and model tokens: summed over every run, and run by run for the newest 200. Readable by whoever may read the conversation (its owner), and only from what was recorded against them: the same rows their own usage shows. A run with nothing recorded has null `usage` and is counted in `unreported_run_count`: an Agent Host run whose harness reports no usage, or one not reported yet. Sub-agent conversations are not included; read each one's own.
+     * @param podId
+     * @param conversationId
+     * @returns ConversationUsageResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentConversationUsageGet(
+        podId: string,
+        conversationId: string,
+    ): CancelablePromise<ConversationUsageResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/conversations/{conversation_id}/usage',
             path: {
                 'pod_id': podId,
                 'conversation_id': conversationId,

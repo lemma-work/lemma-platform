@@ -132,9 +132,15 @@ class LinePreview(BaseModel):
     seq: int
     sender: PersonRef
     text: str = Field(
-        description="The start of what was said; empty when withheld or deleted."
+        description=(
+            "The start of what was said; empty when withheld, written by "
+            "somebody the reader blocked, or deleted."
+        )
     )
     withheld: bool = False
+    blocked: bool = Field(
+        default=False, description="Written by somebody the reader blocked."
+    )
     deleted: bool = Field(default=False, description="Its writer deleted it.")
     created_at: datetime
 

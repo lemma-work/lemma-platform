@@ -18,6 +18,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.conversation.list` | GET | `/pods/{pod_id}/conversations` | List Pod Agent Conversations |
 | `agent.conversation.message.append` | POST | `/pods/{pod_id}/conversations/{conversation_id}/messages/append` | Append Pod Conversation Message |
 | `agent.conversation.message.list` | GET | `/pods/{pod_id}/conversations/{conversation_id}/messages` | List Pod Conversation Messages |
+| `agent.conversation.message.report` | POST | `/pods/{pod_id}/conversations/{conversation_id}/messages/{message_id}/report` | Report Conversation Message |
 | `agent.conversation.message.send` | POST | `/pods/{pod_id}/conversations/{conversation_id}/messages` | Send Pod Conversation Message |
 | `agent.conversation.message.withdraw` | DELETE | `/pods/{pod_id}/conversations/{conversation_id}/messages/{message_id}` | Withdraw Queued Conversation Message |
 | `agent.conversation.pending_interaction.list` | GET | `/pods/{pod_id}/conversations/pending-interactions` | List Interactions Waiting On You |
@@ -27,6 +28,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.conversation.stop` | POST | `/pods/{pod_id}/conversations/{conversation_id}/stop` | Stop Pod Conversation |
 | `agent.conversation.stream` | GET | `/pods/{pod_id}/conversations/{conversation_id}/stream` | Stream Pod Conversation |
 | `agent.conversation.update` | PATCH | `/pods/{pod_id}/conversations/{conversation_id}` | Update Pod Conversation |
+| `agent.conversation.usage.get` | GET | `/pods/{pod_id}/conversations/{conversation_id}/usage` | Get Conversation Usage |
 | `agent.create` | POST | `/pods/{pod_id}/agents` | Create Agent |
 | `agent.delete` | DELETE | `/pods/{pod_id}/agents/{agent_name}` | Delete Agent |
 | `agent.get` | GET | `/pods/{pod_id}/agents/{agent_name}` | Get Agent |
