@@ -13,6 +13,9 @@
       "bundleIdentifier": "work.lemma.mobile",
       "buildNumber": "1",
       "usesAppleSignIn": true,
+      "associatedDomains": [
+        "applinks:lemma.work"
+      ],
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSAppTransportSecurity": {
@@ -82,6 +85,11 @@
               "scheme": "https",
               "host": "lemma.work",
               "pathPrefix": "/sign-in-to-site"
+            },
+            {
+              "scheme": "https",
+              "host": "lemma.work",
+              "pathPrefix": "/join/"
             },
             {
               "scheme": "https",

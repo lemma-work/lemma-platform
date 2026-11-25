@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { APP_LINK_PATHS, appleAppSiteAssociation } from "@web/site/app-links";
 import { LINK_HOSTS, LINK_WAIT_MS, appPathOf, isLinkPath, linkArrived, rememberLink, takeWaitingLink } from "../src/areas/more/links";
 
 /** Links from outside (PARITY.md, G): the web's addresses open the phone's
@@ -54,11 +55,21 @@ describe("where a link opens", () => {
         for (const one of app.expo.android.intentFilters[0].data) {
             const example: Record<string, string> = {
                 "/invitations": "/inv_1/accept", "/import/github": "/acme/frontdesk", "/remix": "?source=x", "/templates": "", "/t/": "pod-1",
-                "/sign-in-to-site": "/conv/call", "/l/": "pod-1/chats/c1", "/home": "", "/needs": "", "/apps": "", "/chats": "", "/people": "", "/connectors": "",
+                "/sign-in-to-site": "/conv/call", "/join/": "abc", "/l/": "pod-1/chats/c1", "/home": "", "/needs": "", "/apps": "", "/chats": "", "/people": "", "/connectors": "",
             };
             expect(one.pathPrefix in example).toBe(true);
             expect(appPathOf(`https://${one.host}${one.pathPrefix}${example[one.pathPrefix]}`)).not.toBeNull();
         }
+    });
+
+    it("claims on iOS the paths it claims on Android, from the file the web serves", () => {
+        const app = JSON.parse(readFileSync(fileURLToPath(new URL("../app.json", import.meta.url)), "utf8")) as { expo: { ios: { associatedDomains: string[] }; android: { intentFilters: { data: { pathPrefix: string }[] }[] } } };
+        expect(app.expo.ios.associatedDomains).toEqual(["applinks:lemma.work"]);
+        const bare = (path: string) => path.replace(/\/$/, "");
+        const android = app.expo.android.intentFilters[0].data.map((one) => bare(one.pathPrefix));
+        expect(new Set(APP_LINK_PATHS.map(bare))).toEqual(new Set(android));
+        const claimed = appleAppSiteAssociation().applinks.details[0].components.map((one) => one["/"]);
+        for (const path of android) expect(claimed.some((one) => one === path || one.startsWith(path + "/"))).toBe(true);
     });
 });
 
