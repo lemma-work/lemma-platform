@@ -18,6 +18,7 @@ import pytest
 
 from app.modules.agent.domain.conversation_changes import (
     LIST_BYTES,
+    MAX_PATCH_BYTES,
     NOT_CHECKED_OUT_EXIT,
     ChangedFile,
     ChangesOutputError,
@@ -197,6 +198,17 @@ def test_the_patch_is_cut_at_its_cap() -> None:
     changes = parse_changes(stdout, patch_bytes=2048)
 
     assert changes.patch == "a" * 2048
+    assert changes.truncated is True
+
+
+def test_a_patch_cut_short_to_fit_the_output_says_so() -> None:
+    """Cut below what was asked, the patch is shorter than its cap, so only
+    the command can say it was cut."""
+    stdout = _output(_part("meta", _meta(patch_cut="1")), _part("patch", b"a" * 10))
+
+    changes = parse_changes(stdout, patch_bytes=2048)
+
+    assert changes.patch == "a" * 10
     assert changes.truncated is True
 
 
@@ -417,3 +429,32 @@ def test_a_directory_with_no_checkout_exits_as_not_checked_out(
 
     assert _read(git, empty).returncode == NOT_CHECKED_OUT_EXIT
     assert _read(git, git.root / "missing").returncode == NOT_CHECKED_OUT_EXIT
+
+
+#: The sandbox runtime keeps this much of a command's output and drops the
+#: oldest beyond it (``exec_command``'s ``output_limit``): past it, the header
+#: is what goes first.
+_SANDBOX_OUTPUT_BYTES = 2 * 1024 * 1024
+
+
+def test_the_largest_patch_beside_full_file_lists_still_fits_the_output(
+    git: LocalGit,
+) -> None:
+    """Both file lists at their cap and the most patch anybody may ask for:
+    the answer is cut and says so, never past the ceiling, where its header
+    would be dropped and the read would fail as unreadable."""
+    code, worktree = git.step("abc12345")
+    assert code == 0
+    line = "x" * 100 + "\n"
+    for n in range(3000):
+        (worktree / f"{n:05d}-{'long-name-' * 9}.txt").write_text(line * 3)
+    git.run("-C", str(worktree), "add", ".")
+    git.run("-C", str(worktree), "commit", "-q", "-m", "a very large change")
+
+    done = _read(git, worktree, patch_bytes=MAX_PATCH_BYTES)
+
+    assert done.returncode == 0, done.stderr
+    assert len(done.stdout.encode()) <= _SANDBOX_OUTPUT_BYTES
+    changes = parse_changes(done.stdout, patch_bytes=MAX_PATCH_BYTES)
+    assert changes.truncated is True
+    assert changes.patch

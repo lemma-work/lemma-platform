@@ -15,9 +15,11 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import update
 from starlette import status
 
+from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.agent_host.control.run_records import record_run_execution
@@ -154,6 +156,48 @@ async def test_another_member_cannot_read_a_conversations_changes(
     )
 
     # Not found, not forbidden: whether it exists is not theirs to learn.
+    assert response.status_code == status.HTTP_404_NOT_FOUND, response.text
+
+
+_APP_DOMAIN = "apps.changes.test"
+
+
+async def _app_origin(seeded: Seeded, scenario, monkeypatch) -> str:
+    """An app in the conversation's pod, and the origin its page runs on."""
+    monkeypatch.setattr(settings, "app_base_domain", "apps.changes.test")
+    name = f"app_{uuid4().hex[:8]}"
+    created = await scenario.owner_client.post(
+        f"/pods/{seeded.pod_id}/apps",
+        json={"name": name, "public_slug": name.replace("_", "-")},
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    return f"https://{created.json()['public_slug']}.{_APP_DOMAIN}"
+
+
+async def test_an_app_cannot_read_a_conversation_its_viewer_does_not_own(
+    scenario, test_app, monkeypatch
+) -> None:
+    """An app's page acts as its viewer, so it reaches the viewer's own
+    conversations and nobody else's: a colleague's is not found, as it is
+    for the colleague asking directly."""
+    seeded = await seeded_conversation(scenario)
+    await _in_repository(seeded)
+    origin = await _app_origin(seeded, scenario, monkeypatch)
+    colleague = await scenario.create_user("changes-app-viewer")
+    await scenario.add_user_to_pod(user=colleague, role="POD_EDITOR")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=test_app), base_url="http://testserver"
+    ) as browser:
+        response = await browser.get(
+            _changes(seeded),
+            headers={
+                "Cookie": f"sAccessToken={colleague['token']}",
+                "rid": "session",
+                "Origin": origin,
+            },
+        )
+
     assert response.status_code == status.HTTP_404_NOT_FOUND, response.text
 
 

@@ -389,7 +389,11 @@ async def read_if_awake(
     """Run one fixed, read-only command on a machine that is running now.
 
     None when it is not: a released or paused machine is not woken to answer
-    a question about it, and the caller says so instead. The command runs as
+    a question about it, and the caller says so instead. The check is a
+    describe before the session opens, and opening a session ensures the
+    sandbox, so a machine whose idle timer stops it in the instant between the
+    two is started again -- the sandbox service has no open-only-if-running
+    session to close that window with. The command runs as
     housekeeping does (``machine_shell``): no Lemma token in its environment,
     in the home, never in a run's slot. Being asked is still use, so a
     running machine's idle clock starts again -- as listing its files does.

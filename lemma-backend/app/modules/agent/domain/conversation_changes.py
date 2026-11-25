@@ -47,13 +47,18 @@ ChangesState = Literal[
 FileStatus = Literal["added", "modified", "deleted", "renamed", "untracked"]
 
 #: The patch's size when nobody asks for less, and the most anybody may ask
-#: for. Both are under the sandbox runtime's own output ceiling with base64
-#: and the file lists on top.
+#: for. A patch also gets no more than ``OUTPUT_BYTES`` leaves once the file
+#: lists are written, so at the most it is cut sooner and says so.
 DEFAULT_PATCH_BYTES = 256 * 1024
 MAX_PATCH_BYTES = 1024 * 1024
 #: The file lists (tracked changes, their statuses) are cut at this many bytes
 #: each: a checkout with a vendored tree committed on its branch still answers.
 LIST_BYTES = 256 * 1024
+#: Every part together, before base64. The sandbox runtime keeps 2 MiB of a
+#: command's output and drops the oldest past it -- the header first -- so the
+#: parts, a third larger once encoded, stay under three quarters of that, less
+#: room for the meta part and the framing.
+OUTPUT_BYTES = 2 * 1024 * 1024 * 3 // 4 - 4096
 #: Untracked files counted and listed, at most. ``--exclude-standard`` keeps a
 #: dependency tree out when the repository ignores it; this, when it does not.
 MAX_UNTRACKED = 200
@@ -167,8 +172,9 @@ def changes_command(*, directory: str, ref: str | None, patch_bytes: int | None)
         _patch_step(patch_bytes),
         (
             "printf 'branch=%s\\nstart=%s\\nbase=%s\\nhead=%s\\nahead=%s\\n"
-            "dirty=%s\\nmore=%s\\n' "
-            '"$branch" "$start" "$base" "$head" "$ahead" "$dirty" "$more" > "$t/meta"'
+            "dirty=%s\\nmore=%s\\npatch_cut=%s\\n' "
+            '"$branch" "$start" "$base" "$head" "$ahead" "$dirty" "$more" '
+            '"${patch_cut:-0}" > "$t/meta"'
         ),
         f"echo {shlex.quote(_FORMAT_VERSION)}",
         (
@@ -208,9 +214,21 @@ def _patch_step(patch_bytes: int | None) -> str:
         "IFS= read -r -d '' _; "
         'done < "$t/untracked"'
     )
+    wanted = patch_bytes + 1
+    # What the lists leave of OUTPUT_BYTES. Cut below what was asked, the
+    # patch cannot say so by its length, so `patch_cut` does.
+    room = (
+        'used=$(cat "$t/numstat" "$t/status" "$t/untracked" | wc -c); '
+        f"room=$(({OUTPUT_BYTES} - used)); "
+        '[ "$room" -gt 0 ] || room=0; '
+        f'[ "$room" -lt {wanted} ] || room={wanted}'
+    )
     return (
+        f"{room}; "
         f'{{ g {_DIFF} -M "$from" --; {untracked}; }} '
-        f'| head -c {patch_bytes + 1} > "$t/patch"'
+        f'| head -c "$room" > "$t/patch"; '
+        f'patch_cut=0; [ "$room" -ge {wanted} ] '
+        '|| [ "$(wc -c < "$t/patch")" -lt "$room" ] || patch_cut=1'
     )
 
 
@@ -254,7 +272,8 @@ def parse_changes(stdout: str, *, patch_bytes: int | None) -> ConversationChange
         uncommitted=meta.get("dirty") == "1" or bool(untracked),
         patch=patch,
         truncated=any((numstat_cut, status_cut, untracked_cut, patch_cut))
-        or meta.get("more") == "1",
+        or meta.get("more") == "1"
+        or meta.get("patch_cut") == "1",
     )
 
 

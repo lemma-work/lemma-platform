@@ -56,8 +56,10 @@ card). It is a conversation route, so only the conversation's owner may call
 it -- an app's page as its viewer, for the viewer's own conversations -- and
 it runs one fixed, read-only `git` command, built by the backend, in that
 conversation's checkout on the machine a run of it would use, decided by
-`resolve_agent_machine`. It never starts a sleeping machine
-(`agent_machines.read_if_awake`) and accepts no command from the caller. An
+`resolve_agent_machine`. It does not start a sleeping machine
+(`agent_machines.read_if_awake` checks first; one that stops in the instant
+between that check and the read is started again) and accepts no command from
+the caller. An
 app's script can therefore read its viewer's diff; it could already read most
 of it in the conversation's `edit_file` calls.
 

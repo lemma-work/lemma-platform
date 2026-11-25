@@ -14,8 +14,10 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi import status
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import update
 
+from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.project_repo import ProjectRepo
@@ -33,6 +35,7 @@ pytestmark = [pytest.mark.e2e, pytest.mark.workspace, pytest.mark.timeout(600)]
 
 _REPO = ProjectRepo(owner="acme", repo="web")
 _SLUG = "chg12345"
+_APP_DOMAIN = "apps.changes.test"
 
 #: An origin, its clone and this conversation's worktree, then the work a
 #: coding agent leaves: a commit not pushed, an edit not committed, a new file.
@@ -97,6 +100,8 @@ async def test_a_running_machine_answers_its_checkouts_changes_and_a_released_on
     authenticated_client,
     fixed_test_org,
     fixed_test_user,
+    test_app,
+    monkeypatch,
 ) -> None:
     del local_sandbox_server, backend_server, configure_workspace_api_url
     ctx, route = await _owner_context(
@@ -132,6 +137,31 @@ async def test_a_running_machine_answers_its_checkouts_changes_and_a_released_on
     assert files["notes.md"]["status"] == "untracked"
     assert body["totals"] == {"files": 2, "additions": 3, "deletions": 1}
     assert "+three" in body["patch"]
+
+    # An app's page in the pod, acting as the same person, reads the same
+    # checkout on that person's own machine: the read resolves the machine as
+    # a run of the conversation would, not as an app caller.
+    monkeypatch.setattr(settings, "app_base_domain", "apps.changes.test")
+    name = f"app_{uuid4().hex[:8]}"
+    app = await authenticated_client.post(
+        route.split("/conversations/")[0] + "/apps",
+        json={"name": name, "public_slug": name.replace("_", "-")},
+    )
+    assert app.status_code == status.HTTP_201_CREATED, app.text
+    async with AsyncClient(
+        transport=ASGITransport(app=test_app), base_url="http://testserver"
+    ) as browser:
+        from_app = await browser.get(
+            route,
+            headers={
+                "Cookie": f"sAccessToken={fixed_test_user['token']}",
+                "rid": "session",
+                "Origin": f"https://{app.json()['public_slug']}.{_APP_DOMAIN}",
+            },
+        )
+    assert from_app.status_code == status.HTTP_200_OK, from_app.text
+    assert from_app.json()["state"] == "ready", from_app.json()
+    assert from_app.json()["totals"] == body["totals"]
 
     # Released, the machine is asked nothing and stays asleep.
     from app.modules.workspace.services.sandbox_composition import (
