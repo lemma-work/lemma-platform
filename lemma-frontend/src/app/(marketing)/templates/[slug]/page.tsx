@@ -3,8 +3,7 @@ import { notFound, redirect } from "next/navigation";
 
 import { getPublicTemplateBySlug, PUBLIC_TEMPLATES, templateRunHref } from "@/site/templates/catalog";
 import { BUILT, getPlugin, PLANNED } from "@/site/plugins/catalog";
-import { LandingPluginPage } from "@/site/plugins/page/landing";
-import { BuiltPluginPage, PlannedPluginPage } from "@/site/plugins/page/plugin-page";
+import { DevPlannedPage, DevPluginPage } from "@/site/plugins/store/plugin-page";
 import { pageMetadata } from "@/site/metadata";
 
 interface TemplatePageProps {
@@ -43,10 +42,11 @@ export async function generateMetadata({ params }: TemplatePageProps): Promise<M
 export default async function TemplatePage({ params }: TemplatePageProps) {
     const { slug } = await params;
     const plugin = getPlugin(slug);
-    /* A plugin whose listing has moments gets its landing page; the rest keep
-       the older page until theirs are written. */
-    if (plugin?.kind === "built") return plugin.landing ? <LandingPluginPage plugin={plugin} landing={plugin.landing} /> : <BuiltPluginPage plugin={plugin} />;
-    if (plugin?.kind === "planned") return <PlannedPluginPage plugin={plugin} />;
+    /* Every plugin's page is in the docs' and the guide's look; one whose
+       listing has moments shows them, the rest show what their listing says
+       they do and their pictures. */
+    if (plugin?.kind === "built") return <DevPluginPage plugin={plugin} />;
+    if (plugin?.kind === "planned") return <DevPlannedPage plugin={plugin} />;
     const template = getPublicTemplateBySlug(slug);
     if (!template) notFound();
     redirect(templateRunHref(template));

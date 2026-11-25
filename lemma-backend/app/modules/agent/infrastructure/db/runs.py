@@ -11,6 +11,7 @@ whole run collections to answer them was the defect this layout came from.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -49,8 +50,20 @@ from app.modules.agent.infrastructure.models import (
     ConversationModel,
     MessageModel,
 )
+from app.modules.usage.contracts.run_usage import LedgerTotals, ledger_totals
 
 _ACTIVE_AGENT_RUN_STATUS_VALUES = [status.value for status in ACTIVE_AGENT_RUN_STATUSES]
+
+
+@dataclass(frozen=True, slots=True)
+class RunWindow:
+    """When one run started and ended, and how it stands: a run's row without
+    its messages or metadata."""
+
+    id: UUID
+    status: AgentRunStatus
+    started_at: datetime
+    finished_at: datetime | None
 
 
 class Runs(UnitOfWorkRepository):
@@ -319,6 +332,58 @@ class Runs(UnitOfWorkRepository):
                     AgentRunModel.run_metadata, text("'{}'::jsonb")
                 ).op("||")(func.jsonb_build_object(SENT_FROM_APP_KEY, str(app_id)))
             )
+        )
+
+    async def newest_windows(
+        self, conversation_id: UUID, *, limit: int
+    ) -> list[RunWindow]:
+        """The conversation's newest ``limit`` runs, newest first."""
+        rows = (
+            await self.session.execute(
+                select(
+                    AgentRunModel.id,
+                    AgentRunModel.status,
+                    AgentRunModel.started_at,
+                    AgentRunModel.finished_at,
+                )
+                .where(AgentRunModel.conversation_id == conversation_id)
+                .order_by(AgentRunModel.created_at.desc(), AgentRunModel.id.desc())
+                .limit(limit)
+            )
+        ).all()
+        return [
+            RunWindow(
+                id=run_id,
+                status=AgentRunStatus(status),
+                started_at=started_at,
+                finished_at=finished_at,
+            )
+            for run_id, status, started_at, finished_at in rows
+        ]
+
+    async def count_for_conversation(self, conversation_id: UUID) -> int:
+        return int(
+            await self.session.scalar(
+                select(func.count())
+                .select_from(AgentRunModel)
+                .where(AgentRunModel.conversation_id == conversation_id)
+            )
+            or 0
+        )
+
+    async def ledger_totals(
+        self, conversation_id: UUID, *, user_id: UUID
+    ) -> tuple[LedgerTotals, int]:
+        """What the conversation cost ``user_id`` -- every run, its title and
+        the memory kept after its runs -- summed in the database, and how many
+        of its runs have anything recorded."""
+        return await ledger_totals(
+            self.session,
+            select(AgentRunModel.id).where(
+                AgentRunModel.conversation_id == conversation_id
+            ),
+            conversation_id=conversation_id,
+            user_id=user_id,
         )
 
     async def latest_kind(self, conversation_id: UUID) -> RunKind | None:

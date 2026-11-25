@@ -203,6 +203,7 @@ _NAME_TO_MODULE = {
     'ConversationResponseMetadataType0': 'conversation_response_metadata_type_0',
     'ConversationStatus': 'conversation_status',
     'ConversationType': 'conversation_type',
+    'ConversationUsageResponse': 'conversation_usage_response',
     'CreateAgentHostRuntimeProfileRequest': 'create_agent_host_runtime_profile_request',
     'CreateAgentHostRuntimeProfileRequestConfigSelections': 'create_agent_host_runtime_profile_request_config_selections',
     'CreateAgentRequest': 'create_agent_request',
@@ -402,6 +403,7 @@ _NAME_TO_MODULE = {
     'JoinablePodListResponse': 'joinable_pod_list_response',
     'JoinablePodResponse': 'joinable_pod_response',
     'JsonObject': 'json_object',
+    'LedgerTotals': 'ledger_totals',
     'LineDelivery': 'line_delivery',
     'LinePreview': 'line_preview',
     'LinkPart': 'link_part',
@@ -637,6 +639,7 @@ _NAME_TO_MODULE = {
     'RowRequest': 'row_request',
     'RowRequestValues': 'row_request_values',
     'RunTokenUsage': 'run_token_usage',
+    'RunUsageResponse': 'run_usage_response',
     'RuntimeModelCapability': 'runtime_model_capability',
     'RuntimeModelCatalogEntry': 'runtime_model_catalog_entry',
     'RuntimeModelCatalogEntryDefaultModelSettings': 'runtime_model_catalog_entry_default_model_settings',
@@ -1081,6 +1084,7 @@ if TYPE_CHECKING:
     from .conversation_response_metadata_type_0 import ConversationResponseMetadataType0
     from .conversation_status import ConversationStatus
     from .conversation_type import ConversationType
+    from .conversation_usage_response import ConversationUsageResponse
     from .create_agent_host_runtime_profile_request import CreateAgentHostRuntimeProfileRequest
     from .create_agent_host_runtime_profile_request_config_selections import CreateAgentHostRuntimeProfileRequestConfigSelections
     from .create_agent_request import CreateAgentRequest
@@ -1280,6 +1284,7 @@ if TYPE_CHECKING:
     from .joinable_pod_list_response import JoinablePodListResponse
     from .joinable_pod_response import JoinablePodResponse
     from .json_object import JsonObject
+    from .ledger_totals import LedgerTotals
     from .line_delivery import LineDelivery
     from .line_preview import LinePreview
     from .link_part import LinkPart
@@ -1515,6 +1520,7 @@ if TYPE_CHECKING:
     from .row_request import RowRequest
     from .row_request_values import RowRequestValues
     from .run_token_usage import RunTokenUsage
+    from .run_usage_response import RunUsageResponse
     from .runtime_model_capability import RuntimeModelCapability
     from .runtime_model_catalog_entry import RuntimeModelCatalogEntry
     from .runtime_model_catalog_entry_default_model_settings import RuntimeModelCatalogEntryDefaultModelSettings
@@ -1972,6 +1978,7 @@ __all__ = [
     'ConversationResponseMetadataType0',
     'ConversationStatus',
     'ConversationType',
+    'ConversationUsageResponse',
     'CreateAgentHostRuntimeProfileRequest',
     'CreateAgentHostRuntimeProfileRequestConfigSelections',
     'CreateAgentRequest',
@@ -2171,6 +2178,7 @@ __all__ = [
     'JoinablePodListResponse',
     'JoinablePodResponse',
     'JsonObject',
+    'LedgerTotals',
     'LineDelivery',
     'LinePreview',
     'LinkPart',
@@ -2406,6 +2414,7 @@ __all__ = [
     'RowRequest',
     'RowRequestValues',
     'RunTokenUsage',
+    'RunUsageResponse',
     'RuntimeModelCapability',
     'RuntimeModelCatalogEntry',
     'RuntimeModelCatalogEntryDefaultModelSettings',

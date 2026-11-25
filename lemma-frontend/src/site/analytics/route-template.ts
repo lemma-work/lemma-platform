@@ -79,6 +79,7 @@ export const ROUTE_TEMPLATES: readonly string[] = [
     "/demo/query-context",
     "/docs/[[...slug]]",
     "/download",
+    "/guide",
     "/history",
     "/history/[lemma]",
     "/home",

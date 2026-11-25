@@ -29,6 +29,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/messages` | `agent.conversation.message.list` | List Pod Conversation Messages |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/runs/{run_id}` | `agent.conversation.run.get` | Get Conversation Run |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/stream` | `agent.conversation.stream` | Stream Pod Conversation |
+| GET | `/pods/{pod_id}/conversations/{conversation_id}/usage` | `agent.conversation.usage.get` | Get Conversation Usage |
 | GET | `/pods/{pod_id}/pod-links` | `agent.pod_link.list` | List Pods That Can Ask This Pod |
 | PATCH | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | `agent.runtime.profiles.update` | Update Agent Runtime Profile |
 | PATCH | `/pods/{pod_id}/agents/{agent_name}` | `agent.update` | Update Agent |
