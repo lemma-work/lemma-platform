@@ -32,14 +32,15 @@ class UpdateScheduleRequest:
             IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when
             it will next fire. A TIME schedule may set `repository` to a GitHub repository as `owner/name`: its agent runs
             then start in a checkout of it on the default branch, cloned as the person the run is for, as a webhook-
-            triggered run does. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight
-            at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may
-            set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the
-            trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting
-            `triggers.bulk_writes_default` changes the default for `bulk_writes`. DATASTORE `rows: OWNER_READABLE` hands the
-            trigger only rows its owner can read (their own on a per-person table, every row on a shared one), each run as
-            the owner; making it needs only to read the table's rows, where the default `rows: ALL` needs
-            `datastore.table.update`.
+            triggered run does. A clone that fails (the person cannot reach the repository, say) does not stop the run: it
+            starts in an empty directory and the agent is told why. Any type may set `max_concurrent_runs`: at most that
+            many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded
+            as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a
+            bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped,
+            aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`. DATASTORE
+            `rows: OWNER_READABLE` hands the trigger only rows its owner can read (their own on a per-person table, every
+            row on a shared one), each run as the owner; making it needs only to read the table's rows, where the default
+            `rows: ALL` needs `datastore.table.update`.
         filter_instruction (None | str | Unset):
         filter_output_schema (None | Unset | UpdateScheduleRequestFilterOutputSchemaType0):
         include_outside_rows (bool | None | Unset): DATASTORE schedules only: also fire on rows people outside the pod
