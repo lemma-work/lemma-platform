@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { APP_LINK_PATHS, appleAppSiteAssociation, assetLinks } from "@web/site/app-links";
+import { ANDROID_PACKAGE, APP_LINK_PATHS, IOS_APP_ID, appleAppSiteAssociation, assetLinks } from "@web/site/app-links";
 import { LINK_HOSTS, LINK_WAIT_MS, appPathOf, isLinkPath, linkArrived, rememberLink, takeWaitingLink } from "../src/areas/more/links";
 
 /** Links from outside (PARITY.md, G): the web's addresses open the phone's
@@ -64,8 +64,11 @@ describe("where a link opens", () => {
     });
 
     it("claims on iOS the paths it claims on Android, from the file the web serves", () => {
-        const app = JSON.parse(readFileSync(fileURLToPath(new URL("../app.json", import.meta.url)), "utf8")) as { expo: { ios: { associatedDomains: string[] }; android: { intentFilters: { data: { pathPrefix?: string; path?: string }[] }[] } } };
+        const app = JSON.parse(readFileSync(fileURLToPath(new URL("../app.json", import.meta.url)), "utf8")) as { expo: { ios: { bundleIdentifier: string; associatedDomains: string[] }; android: { package: string; intentFilters: { data: { pathPrefix?: string; path?: string }[] }[] } } };
         expect(app.expo.ios.associatedDomains).toEqual(["applinks:lemma.work"]);
+        // The web names the app this file builds: team, then bundle ID; the Android package.
+        expect(IOS_APP_ID.slice(IOS_APP_ID.indexOf(".") + 1)).toBe(app.expo.ios.bundleIdentifier);
+        expect(ANDROID_PACKAGE).toBe(app.expo.android.package);
         const bare = (path: string) => path.replace(/\/$/, "");
         const android = app.expo.android.intentFilters[0].data.map((one) => bare(one.pathPrefix ?? one.path ?? ""));
         expect(new Set(APP_LINK_PATHS.map(bare))).toEqual(new Set(android));
@@ -78,7 +81,7 @@ describe("where a link opens", () => {
         expect(assetLinks(["AA:BB"])).toEqual([
             {
                 relation: ["delegate_permission/common.handle_all_urls"],
-                target: { namespace: "android_app", package_name: "work.lemma.mobile", sha256_cert_fingerprints: ["AA:BB"] },
+                target: { namespace: "android_app", package_name: ANDROID_PACKAGE, sha256_cert_fingerprints: ["AA:BB"] },
             },
         ]);
     });
