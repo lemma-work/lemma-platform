@@ -1507,7 +1507,7 @@
                 "type": "null"
               }
             ],
-            "description": "Model tokens the run used, summed over its model calls; null when none were recorded against it. A run still working reads what it has used so far. Leaves out the conversation's title and the memory kept after the run, which land later. Tokens only: no cost."
+            "description": "Model tokens the run used, summed over its model calls; null when none were recorded against it. A run still working reads what it has used so far. Leaves out the conversation's title and the memory kept after the run, which land later. Tokens only: no cost (the conversation's usage route has it)."
           }
         },
         "required": [
@@ -7118,6 +7118,53 @@
         ],
         "title": "ConversationType",
         "type": "string"
+      },
+      "ConversationUsageResponse": {
+        "description": "What one conversation has cost its owner so far.",
+        "properties": {
+          "conversation_id": {
+            "format": "uuid",
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "has_more_runs": {
+            "description": "Whether older runs exist than `runs` lists; `totals` has them.",
+            "title": "Has More Runs",
+            "type": "boolean"
+          },
+          "run_count": {
+            "description": "Every run of the conversation.",
+            "title": "Run Count",
+            "type": "integer"
+          },
+          "runs": {
+            "description": "The newest runs, newest first, each with its own usage.",
+            "items": {
+              "$ref": "#/components/schemas/RunUsageResponse"
+            },
+            "title": "Runs",
+            "type": "array"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/LedgerTotals",
+            "description": "Summed over every run of the conversation, the title and the memory kept after a run included. A sub-agent's conversation is its own: list them with `parent_id` and read each one's usage."
+          },
+          "unreported_run_count": {
+            "description": "Runs with nothing recorded against them. Above zero, `totals` leaves those runs out: show the total as incomplete, not as everything spent.",
+            "title": "Unreported Run Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "totals",
+          "run_count",
+          "unreported_run_count",
+          "runs",
+          "has_more_runs"
+        ],
+        "title": "ConversationUsageResponse",
+        "type": "object"
       },
       "CreateAgentHostRuntimeProfileRequest": {
         "properties": {
@@ -14153,6 +14200,49 @@
         "type": "object"
       },
       "JsonValue": {},
+      "LedgerTotals": {
+        "description": "What a set of ledger rows cost, and the model tokens among them.",
+        "properties": {
+          "cache_write_tokens": {
+            "default": 0,
+            "description": "Input tokens written to the provider's prompt cache.",
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "cached_input_tokens": {
+            "default": 0,
+            "description": "Input tokens read from the provider's prompt cache.",
+            "title": "Cached Input Tokens",
+            "type": "integer"
+          },
+          "cost_usd": {
+            "default": 0.0,
+            "description": "What every recorded call cost, in US dollars, whichever provider profile paid for it. A call recorded without a price adds nothing.",
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "input_tokens": {
+            "default": 0,
+            "description": "Tokens sent to the model, cached ones included (cached_input_tokens says how many of these were cache reads).",
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "model_calls": {
+            "default": 0,
+            "description": "Model calls recorded: one per request for a run Lemma answers itself; an Agent Host reports each turn's calls as one.",
+            "title": "Model Calls",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "description": "Tokens the model wrote.",
+            "title": "Output Tokens",
+            "type": "integer"
+          }
+        },
+        "title": "LedgerTotals",
+        "type": "object"
+      },
       "LineDelivery": {
         "description": "Where a line went outside Lemma, as everybody who reads it is shown.",
         "properties": {
@@ -21948,6 +22038,54 @@
           }
         },
         "title": "RunTokenUsage",
+        "type": "object"
+      },
+      "RunUsageResponse": {
+        "description": "One run of a conversation and what it cost.",
+        "properties": {
+          "agent_run_id": {
+            "format": "uuid",
+            "title": "Agent Run Id",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AgentRunStatus"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LedgerTotals"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the run cost and the tokens it used; null when nothing was recorded against it, which is not the same as nothing spent. A run on an Agent Host is recorded only if its harness reports usage, and only as each turn ends. A run still working reads what has been recorded so far."
+          }
+        },
+        "required": [
+          "agent_run_id",
+          "status",
+          "started_at"
+        ],
+        "title": "RunUsageResponse",
         "type": "object"
       },
       "RuntimeModelCapability": {
@@ -47761,6 +47899,67 @@
           "resource": "agent.conversation",
           "result": "entity",
           "verb": "stream"
+        }
+      }
+    },
+    "/pods/{pod_id}/conversations/{conversation_id}/usage": {
+      "get": {
+        "description": "What a conversation has cost so far, in US dollars and model tokens: summed over every run, and run by run for the newest 200. Readable by whoever may read the conversation (its owner), and only from what was recorded against them: the same rows their own usage shows. A run with nothing recorded has null `usage` and is counted in `unreported_run_count`: an Agent Host run whose harness reports no usage, or one not reported yet. Sub-agent conversations are not included; read each one's own.",
+        "operationId": "agent.conversation.usage.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationUsageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Conversation Usage",
+        "tags": [
+          "agent_conversations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.conversation.usage",
+          "result": "entity",
+          "verb": "get"
         }
       }
     },
