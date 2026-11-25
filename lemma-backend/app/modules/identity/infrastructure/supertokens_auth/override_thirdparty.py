@@ -1,4 +1,4 @@
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Union
 from uuid import UUID
@@ -18,6 +18,10 @@ from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.domain.errors import SignupNotAllowedError
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.services.signup_gate import get_signup_gate
+from app.modules.identity.infrastructure.supertokens_auth.apple import (
+    remember_apple_refresh_token,
+    with_native_refresh_token,
+)
 from app.modules.identity.infrastructure.supertokens_auth.provider_profile import (
     names_from_provider,
 )
@@ -51,6 +55,14 @@ async def _admit_signup(email: str) -> object:
     return await get_signup_gate().admit(email)
 
 
+#: `with_native_refresh_token`: the tokens an Apple sign-in brought, with a
+#: refresh token traded for a phone's one-time code where there is one.
+TradeNativeCode = Callable[
+    [Mapping[str, object], Mapping[str, object] | None],
+    Awaitable[Mapping[str, object]],
+]
+
+
 async def _signup_refusal(
     admit_signup: AdmitSignup, email: str, *, linking: bool, known: bool
 ) -> SignInUpNotAllowed | None:
@@ -67,6 +79,7 @@ def override_thirdparty_functions(
     original_implementation: RecipeInterface,
     *,
     admit_signup: AdmitSignup = _admit_signup,
+    trade_native_code: TradeNativeCode = with_native_refresh_token,
 ) -> RecipeInterface:
     original_sign_in_up = original_implementation.sign_in_up
 
@@ -175,6 +188,22 @@ def override_thirdparty_functions(
                             signup_method=third_party_id,
                         )
                         await uow.commit()
+                if third_party_id == "apple":
+                    # What a deletion of this account will revoke with Apple.
+                    # Kept on every sign-in, since each exchange issues a new
+                    # refresh token; a phone's comes from trading the code it
+                    # sent. A sign-in that brought none (an older phone that
+                    # sent only the id token, or Apple refusing the code) goes
+                    # ahead with nothing to revoke, and is logged so those
+                    # accounts can be found. Failing to keep one that did come
+                    # is not swallowed: that sign-in fails, and the person
+                    # tries again.
+                    id_token_payload = raw_user_info_from_provider.from_id_token_payload
+                    await remember_apple_refresh_token(
+                        result.user.id,
+                        await trade_native_code(oauth_tokens, id_token_payload),
+                        id_token_payload,
+                    )
 
             await lease.require_ownership()
             return result

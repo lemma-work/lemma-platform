@@ -19,7 +19,7 @@ import { isLocalDeployment } from "@/site/config";
 import { capitalised, useThisComputer } from "@/desktop/this-computer";
 import { crowd, waitingFor } from "./waiting";
 import { headingTo } from "./heading";
-import { Glyph, GoogleMark, MicrosoftMark } from "./marks";
+import { AppleMark, Glyph, GoogleMark, MicrosoftMark } from "./marks";
 import { fetchConfiguredProviders, type ProviderId } from "./login-methods";
 import { portalTrip } from "@/session/portal-trip";
 import { Chip, Problem, Screen, type Speaker } from "./frame";
@@ -221,17 +221,30 @@ function ReturnLoop({ destination }: { destination: string }) {
 
 /* ── the providers ──────────────────────────────────────────────────── */
 
-/** Google and Microsoft, which are the two the backend can register — see
- *  `build_thirdparty_providers`, where each is conditional on being
- *  configured. Only the ones this deployment registered are drawn: it says
- *  which through SuperTokens' `/loginmethods` (`login-methods.ts`). */
-const PROVIDERS: { id: ProviderId; name: string; Mark: typeof GoogleMark }[] = [
+/** Google, Microsoft and Apple, which are the three the backend can
+ *  register — see `build_thirdparty_providers`, where each is conditional on
+ *  being configured. Only the ones this deployment registered are drawn: it
+ *  says which through SuperTokens' `/loginmethods` (`login-methods.ts`).
+ *
+ *  `look` is for a provider whose rules fix its button. Apple's may only be
+ *  black or white, logo and words in the other (`.auth-apple`), so it keeps
+ *  that look wherever a screen would draw a primary or a secondary. */
+const PROVIDERS: { id: ProviderId; name: string; Mark: typeof GoogleMark; look?: string }[] = [
     { id: "google", name: "Google", Mark: GoogleMark },
     { id: "active-directory", name: "Microsoft", Mark: MicrosoftMark },
+    { id: "apple", name: "Apple", Mark: AppleMark, look: "auth-apple" },
 ];
+
+type Provider = (typeof PROVIDERS)[number];
 
 function providerOf(id: string | null | undefined) {
     return PROVIDERS.find((provider) => provider.id === id) ?? null;
+}
+
+/** A large, full-width button for `provider`, in the screen's `kind` unless
+ *  the provider fixes its own look. */
+function providerButton(provider: Provider, kind: "b--primary" | "b--secondary"): string {
+    return `b b--l ${provider.look ?? kind} auth-wide`;
 }
 
 /** The configured providers, or null until the deployment has said. Nothing
@@ -269,7 +282,7 @@ function Providers({ configured, onProblem, onLeaving }: {
                 <button
                     key={provider.id}
                     type="button"
-                    className="b b--l b--secondary auth-wide"
+                    className={providerButton(provider, "b--secondary")}
                     disabled={going !== null}
                     onClick={() => void leave(provider.id)}
                 >
@@ -422,7 +435,7 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
                 speaker={progress ?? STILL}
             >
                 <form className="auth-stack" onSubmit={(event) => { event.preventDefault(); code.retry(); }}>
-                    <button className="b b--l b--primary auth-wide" disabled={code.busy}>
+                    <button className={providerButton(provider, "b--primary")} disabled={code.busy}>
                         <provider.Mark />
                         {code.busy ? <LoadingIndicator inline label={"Connecting to " + provider.name} /> : "Continue with " + provider.name}
                     </button>
@@ -637,7 +650,7 @@ export function Callback({ provider: id }: { provider?: string }) {
             >
                 <div className="auth-stack">
                     {provider && (
-                        <button type="button" className="b b--l b--primary auth-wide" onClick={() => void again()}>
+                        <button type="button" className={providerButton(provider, "b--primary")} onClick={() => void again()}>
                             <provider.Mark />Use another {provider.name} account
                         </button>
                     )}
@@ -655,7 +668,7 @@ export function Callback({ provider: id }: { provider?: string }) {
             >
                 <div className="auth-stack">
                     {provider && (
-                        <button type="button" className="b b--l b--primary auth-wide" onClick={() => void again()}>
+                        <button type="button" className={providerButton(provider, "b--primary")} onClick={() => void again()}>
                             <provider.Mark />Try {provider.name} again
                         </button>
                     )}

@@ -13,7 +13,9 @@ import { PortalHost } from "../portal-host";
  *  The path segments decide the screen (`auth/which.ts`), and every one of
  *  them is a promise made to something outside this app: `reset-password` and
  *  `verify-email` are in emails the backend has already sent, and
- *  `callback/{provider}` is registered with Google and Microsoft.
+ *  `callback/{provider}` is registered with Google and Microsoft. Apple's
+ *  registered return URL is the API's `/st/auth/callback/apple`, which takes
+ *  Apple's form post and redirects to `callback/apple` here.
  */
 export default async function AuthRoute({ params }: { params: Promise<{ path?: string[] }> }) {
     const { path } = await params;

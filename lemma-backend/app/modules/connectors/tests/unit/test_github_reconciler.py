@@ -43,12 +43,15 @@ class _Cache:
 
 
 class _Repository:
-    def __init__(self) -> None:
-        self.updated: list[object] = []
+    """Records each binding written. It has no whole-row `update` on purpose:
+    the reconciler holds an account read before its token may have been
+    refreshed, and writing that back would undo the refresh."""
 
-    async def update(self, account):
-        self.updated.append(account)
-        return account
+    def __init__(self) -> None:
+        self.updated: list[tuple[object, str | None]] = []
+
+    async def set_external_ref(self, account_id, external_ref):
+        self.updated.append((account_id, external_ref))
 
 
 class _Service:
@@ -137,7 +140,7 @@ async def test_an_installation_made_out_of_band_is_picked_up(answers):
 
     assert outcome.state is InstallState.READY
     assert account.external_ref == "158040062"
-    assert service.account_repository.updated == [account]
+    assert service.account_repository.updated == [(account.id, "158040062")]
     assert service.commits == 1
 
 

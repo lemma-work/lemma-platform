@@ -10,6 +10,14 @@ from app.modules.identity.domain.email import normalize_identity_email
 
 EMAIL_PASSWORD_SIGN_IN_METHOD = "email and password"
 GOOGLE_SIGN_IN_METHOD = "Google"
+# What a person calls each provider `build_thirdparty_providers` registers.
+# The ids are SuperTokens' and read as jargon in a sentence ("registered with
+# active-directory").
+THIRDPARTY_SIGN_IN_METHODS = {
+    "google": GOOGLE_SIGN_IN_METHOD,
+    "active-directory": "Microsoft",
+    "apple": "Apple",
+}
 
 
 def has_passwordless_login_method(users: list[User], email: str) -> bool:
@@ -89,9 +97,7 @@ def get_emailpassword_conflict_reason() -> str:
 
 
 def get_thirdparty_conflict_reason(third_party_id: str) -> str:
-    provider_name = (
-        GOOGLE_SIGN_IN_METHOD if third_party_id == "google" else third_party_id
-    )
+    provider_name = THIRDPARTY_SIGN_IN_METHODS.get(third_party_id, third_party_id)
     return f"This email is already registered with {provider_name}. Please sign in using {provider_name}."
 
 

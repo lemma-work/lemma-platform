@@ -5,7 +5,7 @@ import { MicIcon, MicOffIcon, EndCallIcon, MinimizeIcon, ChevronLeftIcon, Chevro
 import { ResourceCard } from "@/thread/resource-card";
 import { CallMark } from "./call-mark";
 import type { CallStatus } from "./use-call";
-import type { CanvasItem } from "./canvas";
+import { onScreenIndex, type CanvasItem } from "./canvas";
 import type { CallLine } from "./call-transcript";
 import { statusLine } from "./call-status";
 
@@ -80,8 +80,7 @@ export function CallScreen({
        something up, not for holding the screen. */
     const resources = canvas;
     const newest = Math.max(0, resources.length - 1);
-    const picked = showing === null ? -1 : resources.findIndex((one) => one.id === showing);
-    const active = picked >= 0 ? picked : newest;
+    const active = onScreenIndex(resources, showing);
     const onScreen = resources[active];
 
     /* Every page the person turns is them pointing at something, back to the

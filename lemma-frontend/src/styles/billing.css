@@ -1,0 +1,497 @@
+/* Billing: what you are on, the plans as cards to buy from, and the dialog
+   that takes the yes (src/billing). Built on the kit (kit.css): `.b`
+   buttons, `.ktag`, `.kmeter`, `.kstatus`, `.ksk`, and the kit's dialog.
+   Every class here starts `kbill-`.
+
+   The plans are cards because each is a thing to buy, with its own button;
+   the rows inside them line up across the cards (subgrid) so the plans can
+   be read across. Everything else is rows on hairlines. */
+
+.kbill {
+    container-type: inline-size;
+}
+
+.kbill-fig {
+    font-family: var(--ui), var(--font-ui), system-ui;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ── what you are on ──────────────────────────────────────────────────── */
+
+.kbill-now {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 300px);
+    gap: 18px 40px;
+    align-items: end;
+    padding-bottom: 22px;
+    border-bottom: 1px solid var(--line-2);
+}
+
+.kbill-now__plan {
+    display: grid;
+    justify-items: start;
+    gap: 2px;
+    min-width: 0;
+}
+
+.kbill-now__k {
+    color: var(--ink-3);
+    font-size: 13px;
+}
+
+.kbill-now__name {
+    font-size: 26px;
+    font-weight: 500;
+    line-height: 1.25;
+    letter-spacing: -0.01em;
+}
+
+.kbill-now__meta {
+    color: var(--ink-2);
+    font-size: 14.5px;
+}
+
+.kbill-now__stop {
+    margin-top: 10px;
+}
+
+.kbill-now--sk {
+    display: block;
+    height: 78px;
+    border-radius: 12px;
+}
+
+.kbill-meter {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+}
+
+.kbill-meter__top {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--ink-2);
+    font-size: 13.5px;
+}
+
+.kbill-meter__top .kbill-fig {
+    color: var(--ink);
+}
+
+.kbill-meter .kmeter {
+    height: 6px;
+}
+
+.kbill-meter__note {
+    color: var(--ink-3);
+    font-size: 13px;
+}
+
+.kbill-meter--hot .kmeter > i {
+    background: var(--warn);
+}
+
+.kbill-meter--hot .kbill-meter__top .kbill-fig {
+    color: var(--warn);
+}
+
+/* ── the plans ────────────────────────────────────────────────────────── */
+
+.kbill-plans {
+    display: grid;
+    grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr));
+    column-gap: 12px;
+    row-gap: 0;
+}
+
+.kbill-plan {
+    display: grid;
+    grid-row: span var(--rows, 5);
+    grid-template-rows: subgrid;
+    min-width: 0;
+    padding: 20px 22px 8px;
+    border-radius: 16px;
+    background: var(--wash-a);
+}
+
+/* The plan you are on sits back: outlined on paper, never the highlight. */
+.kbill-plan--here {
+    background: var(--paper);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+}
+
+/* The one plan the page points at, in ink. */
+.kbill-plan--pick {
+    background: var(--paper);
+    box-shadow: inset 0 0 0 1.5px var(--ink);
+}
+
+.kbill-plan--sk {
+    grid-row: auto;
+    min-height: 330px;
+    padding: 0;
+    background: none;
+}
+
+.kbill-plan--sk .ksk {
+    display: block;
+    height: 100%;
+    border-radius: 16px;
+}
+
+.kbill-plan__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.kbill-plan__name {
+    font-size: 18px;
+    font-weight: 500;
+}
+
+.kbill-tag--pick {
+    background: var(--ink);
+    color: var(--paper);
+}
+
+.kbill-plan__for {
+    margin: 4px 0 18px;
+    color: var(--ink-2);
+    font-size: 14px;
+    line-height: 1.45;
+}
+
+/* The figure, and its unit on the line under it on every card, so a
+   longer figure never pushes one card's unit down and not the others'. */
+.kbill-plan__price {
+    display: grid;
+    justify-items: start;
+    gap: 6px;
+}
+
+.kbill-plan__price b {
+    font-size: 34px;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: -0.025em;
+}
+
+.kbill-plan__price span {
+    color: var(--ink-3);
+    font-size: 13.5px;
+}
+
+.kbill-plan__total {
+    margin: 8px 0 18px;
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.kbill-plan__total:empty {
+    margin: 0;
+}
+
+.kbill-plan__total b {
+    color: var(--ink);
+    font-weight: 500;
+}
+
+.kbill-plan__act {
+    display: grid;
+    align-content: start;
+    padding-bottom: 18px;
+}
+
+.kbill-plan__act .b {
+    width: 100%;
+}
+
+.kbill-plan__said {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 40px;
+    color: var(--ink-3);
+    font-size: 14px;
+}
+
+.kbill-plan__row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    padding: 11px 0;
+    border-top: 1px solid var(--line-2);
+    font-size: 14px;
+}
+
+.kbill-plan__row > span:first-child {
+    color: var(--ink-3);
+}
+
+.kbill-plan__row > span:last-child {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.kbill-plan__times {
+    font-size: 19px;
+    letter-spacing: -0.01em;
+}
+
+/* Why this person can look but not buy, once, above the cards. */
+.kbill-who {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px;
+    margin: 0;
+    padding: 12px 16px;
+    border-radius: 12px;
+    background: var(--wash-a);
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.kbill-every {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 22px;
+    margin: -4px 2px 0;
+    color: var(--ink-2);
+    font-size: 13.5px;
+}
+
+.kbill-every > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.kbill-every > span:first-child,
+.kbill-every svg {
+    color: var(--ink-3);
+}
+
+/* A plan bought by talking to us: a line, with the way to do that. */
+.kbill-ent {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px 24px;
+    padding: 16px 0;
+    border-top: 1px solid var(--line-2);
+    border-bottom: 1px solid var(--line-2);
+}
+
+.kbill-ent b {
+    display: block;
+    font-size: 16px;
+    font-weight: 500;
+}
+
+.kbill-ent p {
+    margin: 2px 0 0;
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.kbill-rows--sk {
+    display: block;
+    height: 96px;
+    border-radius: 12px;
+}
+
+/* ── the dialog ───────────────────────────────────────────────────────── */
+
+.kbill-dlg {
+    display: grid;
+    gap: 16px;
+}
+
+.kbill-bill {
+    display: grid;
+    border-top: 1px solid var(--line-2);
+}
+
+.kbill-bill > div {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--line-2);
+    font-size: 14.5px;
+}
+
+.kbill-bill > div > span:first-child {
+    color: var(--ink-2);
+}
+
+.kbill-bill > .kbill-bill__was > span {
+    color: var(--ink-3);
+}
+
+.kbill-bill > .kbill-bill__due {
+    font-size: 15.5px;
+}
+
+.kbill-bill > .kbill-bill__due > span:first-child {
+    color: var(--ink);
+}
+
+.kbill-gets {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.kbill-gets li {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.kbill-gets svg {
+    flex: none;
+    margin-top: 3px;
+    color: var(--ok);
+}
+
+.kbill-gets--down svg {
+    color: var(--ink-3);
+}
+
+.kbill-small {
+    margin: 0;
+    color: var(--ink-3);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+/* Waiting on the provider: progress turns a ring, on the thing waited for. */
+.kbill-wait {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 12px;
+    padding: 16px;
+    border-radius: 14px;
+    background: var(--wash-a);
+}
+
+.kbill-ring {
+    position: relative;
+    flex: none;
+    width: 44px;
+    height: 44px;
+}
+
+.kbill-ring svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.kbill-ring circle {
+    fill: none;
+    stroke: var(--line-2);
+    stroke-width: 3;
+}
+
+.kbill-ring__turn {
+    animation: kbill-turn 1.4s linear infinite;
+}
+
+.kbill-ring__turn circle {
+    stroke: var(--ink);
+    stroke-linecap: round;
+    stroke-dasharray: 30 200;
+}
+
+.kbill-wait__t {
+    display: grid;
+    gap: 2px;
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.kbill-wait__t b {
+    color: var(--ink);
+    font-size: 15px;
+    font-weight: 500;
+}
+
+/* The plan landed: one rise of the logo's bars, because it happened. */
+.kbill-landed {
+    display: grid;
+    justify-items: center;
+    gap: 14px;
+    padding-top: 6px;
+    text-align: center;
+}
+
+.kbill-landed p {
+    max-width: 360px;
+    margin: 0;
+    color: var(--ink-2);
+}
+
+.kbill-landed .ox-bars rect {
+    transform-box: fill-box;
+    transform-origin: 50% 100%;
+    animation: kbill-rise 900ms cubic-bezier(0.34, 1.5, 0.55, 1) both;
+}
+
+.kbill-landed .ox-bars rect:nth-child(2) {
+    animation-delay: 90ms;
+}
+
+.kbill-landed .ox-bars rect:nth-child(3) {
+    animation-delay: 180ms;
+}
+
+@keyframes kbill-turn {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes kbill-rise {
+    from {
+        transform: scaleY(0.05);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .kbill-ring__turn,
+    .kbill-landed .ox-bars rect {
+        animation: none;
+    }
+}
+
+/* ── narrow: one card under another, each read on its own ─────────────── */
+
+@container (max-width: 640px) {
+    .kbill-now {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .kbill-plans {
+        grid-template-columns: minmax(0, 1fr);
+        row-gap: 12px;
+    }
+
+    .kbill-plan {
+        grid-row: auto;
+        grid-template-rows: none;
+    }
+}

@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-    canChangeTier, formatPrice, isPaid, moveTo, offered, onDate, paying, priceLine, standing,
+    canChangeTier, compare, formatPrice, isPaid, isUpgrade, lemmaCap, monthlyCents, moveTo, offered, onDate,
+    paying, priceLine, recommended, runsDocker, shortName, standing, tagline, usageBase, usageTimes, workspaceOf,
     type Plan, type Subscription,
 } from "../src/billing/plan.ts";
 
@@ -113,4 +114,111 @@ test("an unreadable date is nothing, never Invalid Date", () => {
     assert.equal(onDate(null), "");
     assert.equal(onDate("not a date"), "");
     assert.equal(onDate("2026-10-12T00:00:00Z"), "12 October");
+});
+
+/* ── comparing plans ──────────────────────────────────────────────────── */
+
+/** The team tiers as `plans.json` ships them: the shape the cards are built
+ *  from, so a test here is a test against the real catalogue's fields. */
+function tier(id: string, name: string, priceCents: number, credits: number, cores: number, memoryMb: number, docker: boolean, maxPods: number | null = null): Plan {
+    return plan({
+        id, name, plan_type: "TEAM", price_cents: priceCents, seat_limit: null,
+        features: {
+            price_unit: "seat", remove_lemma_branding: true, included_llm_credits_cents: credits,
+            limits: {
+                max_pods: maxPods,
+                workspace: { cpu_count: cores, memory_mb: memoryMb },
+                machines: { templates: docker ? ["workspace", "workspace-docker"] : ["workspace"] },
+            },
+        },
+    });
+}
+const team = tier("team", "Lemma Team", 1000, 1000, 2, 4096, false);
+const plus = tier("plus", "Lemma Team Plus", 2500, 3000, 4, 8192, true);
+const max = tier("max", "Lemma Team Max", 20000, 30000, 8, 16384, true);
+
+test("a card names the plan without the frame it sits in", () => {
+    // The page already says "Lemma" and "Team", so a card keeps the rest.
+    assert.equal(shortName(team), "Team");
+    assert.equal(shortName(plus), "Plus");
+    assert.equal(shortName(plan({ name: "Lemma Personal Max" })), "Max");
+    assert.equal(shortName(plan({ name: "Lemma Enterprise" })), "Enterprise");
+    assert.equal(shortName(free), "Free");
+    // The catalogue's own short name wins once it has one.
+    assert.equal(shortName(plan({ name: "Lemma Team Plus", features: { short_name: "Plus+" } })), "Plus+");
+});
+
+test("usage is a multiple of the smallest plan, never a dollar figure", () => {
+    const tiers = [team, plus, max];
+    assert.equal(usageBase(tiers)?.id, "team");
+    assert.equal(usageTimes(team, tiers), 1);
+    assert.equal(usageTimes(plus, tiers), 3);
+    // Every multiple is against the same plan, so the cards read across:
+    // Max is thirty times Team.
+    assert.equal(usageTimes(max, tiers), 30);
+    assert.equal(usageTimes(tier("half", "Lemma Team Half", 1500, 2500, 2, 4096, false), tiers), 2.5);
+    assert.equal(usageTimes(enterprise, tiers), null);
+});
+
+test("the comparison reads the limits the workspace is started with", () => {
+    assert.deepEqual(workspaceOf(plus), { cores: 4, gb: 8 });
+    assert.equal(workspaceOf(free), null);
+    assert.equal(runsDocker(team), false);
+    assert.equal(runsDocker(plus), true);
+    assert.equal(runsDocker(free), undefined);
+    assert.equal(lemmaCap(team), null);
+    assert.equal(lemmaCap(tier("p", "Lemma Personal", 1000, 1000, 2, 4096, false, 10)), 10);
+    assert.equal(lemmaCap(free), undefined);
+});
+
+test("rows are what differs; what every plan shares is said once", () => {
+    const { rows, shared } = compare([team, plus, max], "TEAM");
+    assert.deepEqual(rows, [
+        { label: "Usage", cells: ["1×", "3×", "30×"] },
+        { label: "Workspace", cells: ["2 cores · 4 GB", "4 cores · 8 GB", "8 cores · 16 GB"] },
+        { label: "Docker", cells: ["—", "Included", "Included"] },
+    ]);
+    // No team plan caps Lemmas, so that is not a row on three cards.
+    assert.ok(shared.includes("As many Lemmas as you need"));
+    assert.ok(shared.includes("Your branding instead of Lemma’s"));
+    // A question one plan cannot answer is left off rather than drawn as a gap.
+    assert.deepEqual(compare([team, enterprise], "TEAM").rows, []);
+});
+
+test("a per-seat plan is quoted for everyone in the organization", () => {
+    // What the checkout charges: one seat per member.
+    assert.equal(monthlyCents(plus, 6), 15000);
+    assert.equal(monthlyCents(plus, 0), 2500);
+    assert.equal(monthlyCents(plan({ price_cents: 2500 }), 6), 2500);
+    assert.equal(isUpgrade(null, team), true);
+    assert.equal(isUpgrade(max, plus), false);
+    assert.equal(isUpgrade(team, plus), true);
+});
+
+test("a pick for somebody not paying, more usage for somebody near the limit", () => {
+    const tiers = [team, plus, max];
+    const onFree = subscription({ plan_id: "plan-free", plan: free });
+    assert.equal(recommended(tiers, onFree, false)?.plan.id, "plus");
+    assert.equal(recommended(tiers, null, false)?.why, "pick");
+    // The catalogue's own pick wins over the middle.
+    const flagged = { ...max, features: { ...max.features, recommended: true } };
+    assert.equal(recommended([team, plus, flagged], null, false)?.plan.id, "max");
+    // Paying and comfortable: nothing to push.
+    const onTeam = subscription({ plan_id: "team", plan: team });
+    assert.equal(recommended(tiers, onTeam, false), null);
+    // Paying and near the limit: the next plan up, for more usage.
+    assert.deepEqual(recommended(tiers, onTeam, true), { plan: plus, why: "more" });
+    // Nothing above the top.
+    assert.equal(recommended(tiers, subscription({ plan_id: "max", plan: max }), true), null);
+});
+
+test("a card's one line is who the plan is for, not what the page already says", () => {
+    const described = (description: string) => plan({ description });
+    assert.equal(tagline(described("For teams. Fair LLM and compute sandbox usage for everyday agent work, billed per seat.")), "For everyday agent work.");
+    assert.equal(tagline(described("For teams. Higher LLM and compute sandbox usage, for longer and heavier agent runs. Billed per seat.")), "For longer and heavier agent runs.");
+    assert.equal(tagline(described("For individuals. Our highest LLM and compute sandbox usage, for continuous heavy work.")), "For continuous heavy work.");
+    // Any other shape is kept whole rather than guessed at.
+    assert.equal(tagline(described("For large organizations. Custom usage, security and support.")), "For large organizations. Custom usage, security and support.");
+    assert.equal(tagline(plan({ description: null })), "");
+    assert.equal(tagline(plan({ features: { tagline: "Built for agents that never stop." } })), "Built for agents that never stop.");
 });

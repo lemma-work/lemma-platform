@@ -608,6 +608,17 @@
     width: 100%;
 }
 
+/* Sign in with Apple, in the only two looks Apple allows: black on a light
+   page, white on a dark one, logo and words in the other. It takes the place
+   of a button's kind rather than sitting on one, so no kind's hover can tint
+   it; a tinted fill or edge would be a third look. With `.b`, because kit.css
+   loads after this file and its `.b` border would otherwise win. */
+.b.auth-apple {
+    border-color: var(--apple);
+    background: var(--apple);
+    color: var(--apple-ink);
+}
+
 /* A rule with a word in it. Without the word the two halves read as one form
    somebody has to fill in all of. */
 .auth-or {

@@ -72,6 +72,10 @@ from app.modules.agent_surfaces.infrastructure import (  # noqa: F401
     web_widget_models,
 )
 
+# Reports (content_reports) and who a member blocked (person_blocks)
+from app.modules.reports.infrastructure import models as report_models  # noqa: F401
+from app.modules.channels.infrastructure import block_models  # noqa: F401
+
 
 # Every import above exists for its side effect: importing a models module is
 # what registers its tables on Base.metadata, which is the whole input to
@@ -100,6 +104,8 @@ REGISTERED_MODEL_MODULES = (
     contact_models,
     visitor_session_models,
     web_widget_models,
+    report_models,
+    block_models,
 )
 
 config = context.config

@@ -20,9 +20,16 @@ from app.core.email.email_sender import email_delivery_state
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.identity.contracts.onboarding import email_challenge_service
-from app.modules.identity.domain.email import normalize_identity_email
+from app.modules.identity.config import identity_settings
+from app.modules.identity.domain.email import (
+    is_apple_private_relay,
+    normalize_identity_email,
+)
 from app.modules.identity.domain.email_challenge import PENDING_TTL_SECONDS
 from app.modules.identity.infrastructure.models.user_models import User
+from app.modules.identity.infrastructure.supertokens_auth.apple import (
+    is_apple_sign_in_available,
+)
 from app.modules.identity.infrastructure.supertokens_auth.auth_method_conflicts import (
     get_conflicting_thirdparty_id,
     has_emailpassword_login_method,
@@ -303,6 +310,17 @@ async def _method_for(
         provider = get_conflicting_thirdparty_id(users, email=email)
         if provider is not None:
             return ThirdPartyMethod(provider=provider)
+        # A relay address with no account here is one Apple made for another
+        # developer, or for an Apple sign-in to this deployment since deleted.
+        # A code would bounce from the first, and from the second it would
+        # make a code account that Apple could never sign in to again. It is
+        # the answer an Apple account at the address gets, so it tells nobody
+        # whether one exists. Only while the Apple button is there to press:
+        # a key that does not load hides it, and then the address gets a code.
+        if is_apple_private_relay(email) and is_apple_sign_in_available(
+            identity_settings
+        ):
+            return ThirdPartyMethod(provider="apple")
 
     if abandon is not None:
         try:

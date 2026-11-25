@@ -3,8 +3,15 @@
 from uuid import uuid4
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+)
 from fastapi import FastAPI, Request
 from httpx import AsyncClient
+from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -243,6 +250,64 @@ async def test_continue_sends_each_account_to_the_door_that_opens(
     # Mail is sent on the code branch and nowhere else: a person who owns a
     # password must not be made to read their inbox to find that out.
     assert bool(mailbox.code) is (expected == "code")
+
+
+@pytest.mark.parametrize("apple", ["registered", "key_does_not_load", "unset"])
+async def test_continue_sends_an_apple_relay_address_to_apple(
+    async_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    test_app,
+    apple: str,
+) -> None:
+    """A Hide My Email address with no account here is told to use Apple.
+
+    A code would bounce from another developer's relay address, and from one
+    of this deployment's own it would make an account Apple could never sign
+    in to. Without Sign in with Apple registered there is no such button to
+    send anybody to -- nothing set, or a key that does not load -- so the
+    address gets a code like any other.
+    """
+    from app.modules.identity.config import identity_settings
+
+    pem = (
+        ec.generate_private_key(ec.SECP256R1())
+        .private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
+        .decode()
+    )
+    if apple == "unset":
+        monkeypatch.setattr(identity_settings, "apple_client_id", None)
+    else:
+        monkeypatch.setattr(identity_settings, "apple_client_id", "com.example.signin")
+        monkeypatch.setattr(identity_settings, "apple_team_id", "TEAM123456")
+        monkeypatch.setattr(identity_settings, "apple_key_id", "KEY1234567")
+        monkeypatch.setattr(
+            identity_settings,
+            "apple_private_key",
+            SecretStr(pem if apple == "registered" else "/secrets/AuthKey.p8"),
+        )
+    apple_configured = apple == "registered"
+
+    mailbox = Mailbox()
+    _with_email_code_service(
+        test_app, monkeypatch, _challenge_service(db_session, mailbox)
+    )
+    origin = settings.auth_frontend_url.rstrip("/")
+    nonce = await _bind_browser(async_client, origin)
+
+    answered = await async_client.post(
+        "/auth/email-code/continue",
+        json={"email": f"{uuid4().hex}@privaterelay.appleid.com", "nonce": nonce},
+        headers={"origin": origin},
+    )
+    assert answered.status_code == 200, answered.text
+    body = answered.json()
+    if apple_configured:
+        assert body == {"method": "thirdparty", "provider": "apple"}
+        assert mailbox.code == ""
+    else:
+        assert body["method"] == "code", body
+        assert mailbox.code
 
 
 async def test_continue_signs_in_the_account_whatsapp_made(

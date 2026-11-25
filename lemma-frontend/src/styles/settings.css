@@ -500,41 +500,6 @@
     line-height: 1.6;
 }
 
-/* Plans, side by side, the price under the name. */
-.kset-plans {
-    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-}
-
-.kset-price {
-    grid-column: 1;
-    margin-top: 6px;
-    font-size: 18px;
-    font-variant-numeric: tabular-nums;
-}
-
-.kset-plan-has {
-    display: grid;
-    grid-column: 1 / -1;
-    gap: 4px;
-    margin: 8px 0 0;
-    padding: 0;
-    list-style: none;
-    color: var(--ink-2);
-    font-size: 13px;
-    line-height: 1.4;
-}
-
-.kset-plan-has > span {
-    display: flex;
-    gap: 6px;
-}
-
-.kset-plan-has svg {
-    flex: none;
-    margin-top: 2px;
-    color: var(--ink-3);
-}
-
 /* A command to type, and its Copy. */
 .kset-command {
     display: flex;
