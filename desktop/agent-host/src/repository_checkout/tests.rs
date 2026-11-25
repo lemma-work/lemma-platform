@@ -17,6 +17,24 @@ fn plan(reference: Option<&str>) -> Checkout {
     .expect("a valid repository")
 }
 
+/// The clone and worktree paths as this platform joins them (`\` on Windows).
+fn clone_path() -> &'static str {
+    let path = Path::new("/home/me/lemma")
+        .join("repos")
+        .join("octo-org")
+        .join("widgets.js");
+    Box::leak(path.to_string_lossy().into_owned().into_boxed_str())
+}
+
+fn worktree_path() -> &'static str {
+    let path = Path::new("/home/me/lemma")
+        .join("worktrees")
+        .join("octo-org")
+        .join("widgets.js")
+        .join("ab3f2k7q");
+    Box::leak(path.to_string_lossy().into_owned().into_boxed_str())
+}
+
 #[test]
 fn paths_are_derived_from_the_names_under_the_root() {
     let checkout = plan(None);
@@ -96,20 +114,13 @@ fn every_value_is_one_argument_and_none_can_be_read_as_an_option() {
             "--no-checkout",
             "--",
             "https://github.com/octo-org/widgets.js.git",
-            "/home/me/lemma/repos/octo-org/widgets.js",
+            clone_path(),
         ]
         .map(OsString::from)
     );
     assert_eq!(
         fetch_args(clone),
-        [
-            "-C",
-            "/home/me/lemma/repos/octo-org/widgets.js",
-            "fetch",
-            "--quiet",
-            "origin"
-        ]
-        .map(OsString::from)
+        ["-C", clone_path(), "fetch", "--quiet", "origin"].map(OsString::from)
     );
     assert_eq!(
         worktree_add_args(
@@ -120,13 +131,13 @@ fn every_value_is_one_argument_and_none_can_be_read_as_an_option() {
         ),
         [
             "-C",
-            "/home/me/lemma/repos/octo-org/widgets.js",
+            clone_path(),
             "worktree",
             "add",
             "--quiet",
             "-b",
             "lemma/ab3f2k7q",
-            "/home/me/lemma/worktrees/octo-org/widgets.js/ab3f2k7q",
+            worktree_path(),
             "origin/release/v1.2",
         ]
         .map(OsString::from)
@@ -136,11 +147,11 @@ fn every_value_is_one_argument_and_none_can_be_read_as_an_option() {
         worktree_add_args(clone, worktree, &checkout.branch(), None),
         [
             "-C",
-            "/home/me/lemma/repos/octo-org/widgets.js",
+            clone_path(),
             "worktree",
             "add",
             "--quiet",
-            "/home/me/lemma/worktrees/octo-org/widgets.js/ab3f2k7q",
+            worktree_path(),
             "lemma/ab3f2k7q",
         ]
         .map(OsString::from)
@@ -155,7 +166,7 @@ fn a_pull_request_is_fetched_by_name_into_the_remotes_namespace() {
         pull_request_fetch_args(checkout.clone_dir(), "pull/42/head"),
         [
             "-C",
-            "/home/me/lemma/repos/octo-org/widgets.js",
+            clone_path(),
             "fetch",
             "--quiet",
             "origin",
@@ -194,7 +205,7 @@ fn the_agent_is_told_what_its_directory_is_and_once_why_it_is_empty() {
     assert!(instructions.contains("git worktree of **octo-org/widgets.js**"));
     assert!(instructions.contains("`lemma/ab3f2k7q`"));
     assert!(instructions.contains("`main`"));
-    assert!(instructions.contains("\"/home/me/lemma/repos/octo-org/widgets.js\""));
+    assert!(instructions.contains(&serde_json::to_string(clone_path()).unwrap()));
     assert_eq!(ready.notice, None);
 
     let stale = Report::of(
