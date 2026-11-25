@@ -209,3 +209,70 @@ async def test_a_named_agent_is_refused_with_what_a_grant_card_needs(
     assert details["connector_id"] == install.connector_id
     assert details["workload_id"] == agent["id"]
     assert "connector.use" in details["permission_ids"]
+
+
+async def test_a_grant_waiting_for_the_connector_lands_on_its_first_use(
+    own_installation, db_session, connector_test_pod, authenticated_client
+):
+    """A bundle import left this connector out -- the organization had none
+    then -- and kept the agent's grant on it waiting. The agent's first run
+    declares the connector, the waiting grant lands in the same transaction,
+    and the run goes through rather than being refused ``connector.use``."""
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.agent.infrastructure.tools.authority import (
+        tool_authorization_context,
+    )
+    from app.modules.agent.infrastructure.tools.connectors.models import (
+        RunConnectorOperationRequest,
+    )
+    from app.modules.agent.infrastructure.tools.connectors.tools import (
+        run_connector_operation,
+    )
+    from app.modules.connectors.contracts.bundles import (
+        WaitingConnectorGrant,
+        hold_grants_until_declared,
+    )
+
+    install, _org, user_id, pod_id = own_installation
+    agent = await _create_agent(authenticated_client, connector_test_pod)
+    uow = SqlAlchemyUnitOfWork(db_session)
+    importer = await tool_authorization_context(uow, _deps(own_installation))
+    await hold_grants_until_declared(
+        uow,
+        importer,
+        pod_id=pod_id,
+        grantee_type="AGENT",
+        grantee_id=UUID(agent["id"]),
+        grants=[
+            WaitingConnectorGrant(
+                connector=install.connector_id,
+                mode="PER_MEMBER",
+                permission_ids=("connector.use",),
+            )
+        ],
+        created_by_user_id=user_id,
+    )
+    await db_session.commit()
+
+    deps = _deps(own_installation, agent_id=UUID(agent["id"]), agent_name=agent["name"])
+    result = await run_connector_operation(
+        deps,
+        RunConnectorOperationRequest(
+            connector=install.name,
+            operation="convert_currency",
+            payload={"amount": 21, "to_currency": "EUR"},
+        ),
+    )
+
+    assert "42" in str(result), result
+    declared = await _declared(db_session, pod_id, install.id)
+    assert [(c.mode, c.source) for c in declared] == [("PER_MEMBER", "AUTO")]
+    grants = await authenticated_client.get(
+        f"/pods/{pod_id}/agents/{agent['name']}/permissions"
+    )
+    assert grants.status_code == 200, grants.text
+    assert [
+        (g["resource_name"], g["permission_ids"])
+        for g in grants.json()["grants"]
+        if g["resource_type"] == "connector"
+    ] == [(declared[0].slug, ["connector.use"])]

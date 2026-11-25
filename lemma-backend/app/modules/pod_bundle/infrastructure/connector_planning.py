@@ -226,7 +226,8 @@ def _left_out_message(
     granted = ", ".join(used_by)
     without = (
         f" {granted} {'is' if len(used_by) == 1 else 'are'} imported without "
-        "access to it."
+        f"access to it until this pod has a {connector.connector} connector, "
+        "which grants it then."
         if used_by
         else ""
     )

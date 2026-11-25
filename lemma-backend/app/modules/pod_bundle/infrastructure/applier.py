@@ -16,7 +16,7 @@ from __future__ import annotations
 import csv
 import io
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from lemma_pod_bundle import load_resource_payload
@@ -45,6 +45,9 @@ from app.modules.pod_bundle.infrastructure.grants import (
     grants_from_payload as _grants_from_payload,
     has_grants as _has_grants,
 )
+
+if TYPE_CHECKING:
+    from app.modules.connectors.contracts.bundles import WaitingConnectorGrant
 
 logger = get_logger(__name__)
 
@@ -404,7 +407,12 @@ class BundleApplier:
     ) -> None:
         """Replace the grantee's resource grants on the step's short UoW session,
         declaring first any connector they name that the pod does not, and
-        dropping those on one the import left out (see connector_grants.py)."""
+        holding those on one the import left out (see connector_grants.py)."""
+        from app.modules.connectors.contracts.bundles import (
+            hold_grants_until_declared,
+        )
+
+        waiting: list[WaitingConnectorGrant] = []
         grants = await resolve_connector_grants(
             self._uow,
             self._ctx,
@@ -412,7 +420,19 @@ class BundleApplier:
             grants=grants,
             choices=self._connector_choices,
             warnings=self._warnings,
+            bundle_root=self._root,
+            waiting=waiting,
         )
+        if waiting:
+            await hold_grants_until_declared(
+                self._uow,
+                self._ctx,
+                pod_id=self._pod_id,
+                grantee_type=grantee_type,
+                grantee_id=grantee_id,
+                grants=waiting,
+                created_by_user_id=self._user_id,
+            )
         await apply_grants(
             self._uow.session,
             ctx=self._ctx,

@@ -9,11 +9,15 @@ from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 
+from app.core.authorization.context import ResourceType
+from app.core.authorization.pending_grants import settle_pending_grants
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.domain.pod_connector import (
     PodAccountEntity,
     PodAccountVisibility,
     PodConnectorEntity,
+    PodConnectorVisibility,
+    pending_grant_key,
 )
 from app.modules.connectors.domain.errors import ConnectorConflictError
 from app.modules.connectors.domain.pod_connector_errors import (
@@ -21,6 +25,7 @@ from app.modules.connectors.domain.pod_connector_errors import (
     PodConnectorConflictError,
     PodConnectorNotFoundError,
 )
+from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 from app.modules.connectors.infrastructure.models.pod_connector import (
     PodAccount,
     PodConnector,
@@ -133,7 +138,35 @@ class PodConnectorRepository:
             if "uq_pod_connectors_pod_slug" not in str(exc.orig):
                 raise
             raise PodConnectorConflictError(entity.slug) from exc
-        return row.to_entity()
+        created = row.to_entity()
+        await self._settle_waiting_grants(created)
+        return created
+
+    async def _settle_waiting_grants(self, connector: PodConnectorEntity) -> None:
+        """Grant on a new connector what was waiting for one like it.
+
+        Here, where every declaration ends, so a connector declared on first
+        use, by hand or by an import settles them alike -- in the transaction
+        that declares it, so a first use refused after it takes both back.
+        Only onto one the whole pod may use: a held grant was bounded by what
+        its holder could use, and a RESTRICTED connector is not that.
+        """
+        if connector.visibility is not PodConnectorVisibility.POD:
+            return
+        catalog_id = await self.session.scalar(
+            select(AuthConfig.connector_id).where(
+                AuthConfig.id == connector.auth_config_id
+            )
+        )
+        if catalog_id is None:
+            return
+        await settle_pending_grants(
+            self.session,
+            pod_id=connector.pod_id,
+            resource_type=ResourceType.CONNECTOR,
+            resource_key=pending_grant_key(catalog_id, connector.mode),
+            resource_id=connector.id,
+        )
 
     async def update(self, entity: PodConnectorEntity) -> PodConnectorEntity:
         row = await self.session.get(PodConnector, entity.id)

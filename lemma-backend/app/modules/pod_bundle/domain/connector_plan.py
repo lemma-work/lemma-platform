@@ -15,7 +15,8 @@ map to cannot be declared at all, and everything naming its slug would be bound
 to nothing -- that blocks the apply until the importer picks or creates one.
 Unless the bundle marks it optional (``required: false``) and nothing runs
 through it -- only grants name it: then it is SKIPPED, left out, and the grants
-on it are dropped with a warning, so the rest imports and works without it. An
+on it wait, with a warning, until the pod has such a connector (declared on
+somebody's first use, or by hand), so the rest imports and works without it. An
 importer may still create an installation for it, and may leave out any other
 optional connector on purpose (``ConnectorChoice.skip``).
 """
@@ -48,7 +49,7 @@ class ConnectorPlanStatus(str, Enum):
     #: or the reverse).
     CONFLICT = "CONFLICT"
     #: Optional, no installation of the catalog connector in the org, and only
-    #: grants name it: imported without it, and those grants are dropped. The
+    #: grants name it: imported without it, and those grants wait for it. The
     #: importer may still create an installation (``can_create_installation``).
     SKIPPED = "SKIPPED"
 

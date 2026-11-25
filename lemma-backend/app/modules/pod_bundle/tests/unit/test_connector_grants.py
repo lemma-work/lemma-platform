@@ -234,3 +234,63 @@ async def test_grants_with_no_connector_are_returned_untouched():
     )
 
     assert resolved == [table]
+
+
+async def test_a_left_out_grant_waits_only_while_the_org_has_nothing_to_map_it_to(
+    monkeypatch, tmp_path
+):
+    """Left out because the organization has no installation of it: the grant
+    waits for the pod to declare one. Left out while it has one: that was the
+    importer's choice, and the grant is dropped as they were told."""
+    installed: dict[str, UUID] = {}
+
+    async def get_pod_connector(_uow, *, pod_id, slug):
+        return None
+
+    async def installation_for_bundle_name(_uow, *, organization_id, name):
+        return installed.get(name)
+
+    monkeypatch.setattr(
+        "app.modules.connectors.contracts.pod_connectors.get_pod_connector",
+        get_pod_connector,
+    )
+    monkeypatch.setattr(
+        "app.modules.connectors.contracts.provisioning.installation_for_bundle_name",
+        installation_for_bundle_name,
+    )
+    root = tmp_path / "bundle"
+    _write(
+        root / "connectors" / "calendar" / "calendar.json",
+        {"connector": "google_calendar", "mode": "PER_MEMBER", "required": False},
+    )
+
+    async def resolve() -> tuple[list[GrantInput], list, list[str]]:
+        waiting: list = []
+        warnings: list[str] = []
+        kept = await resolve_connector_grants(
+            object(),
+            SimpleNamespace(organization_id=_ORG),
+            pod_id=_POD,
+            grants=[_connector_grant("calendar")],
+            choices={"calendar": ConnectorChoice(skip=True)},
+            warnings=warnings,
+            bundle_root=root,
+            waiting=waiting,
+        )
+        return kept, waiting, warnings
+
+    kept, waiting, warnings = await resolve()
+    assert kept == []
+    assert [(w.connector, w.mode, w.permission_ids) for w in waiting] == [
+        ("google_calendar", "PER_MEMBER", ("connector.use",))
+    ]
+    waits = (
+        "A grant on connector 'calendar' waits for it: it was left out, and is "
+        "granted once this pod has a google_calendar connector."
+    )
+    assert warnings == [waits]
+
+    installed["google_calendar"] = uuid4()
+    kept, waiting, warnings = await resolve()
+    assert (kept, waiting) == ([], [])
+    assert warnings == ["A grant on connector 'calendar' was dropped: it was left out."]

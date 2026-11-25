@@ -205,3 +205,49 @@ class ResourcePermissionGrantModel(UUIDCreatedBase):
             postgresql_where=text("grantee_type = 'POD'"),
         ),
     )
+
+
+class PendingResourceGrantModel(UUIDCreatedBase):
+    """A grant on a resource the pod does not have yet (`pending_grants.py`).
+
+    ``resource_key`` is what the resource's own module says will identify it
+    once it exists -- for a connector, the catalog connector and the mode --
+    since there is no id to name it by.
+    """
+
+    __tablename__ = "pending_resource_grants"
+
+    pod_id: Mapped[UUID] = mapped_column(
+        ForeignKey("pods.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    resource_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    resource_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    grantee_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    grantee_id: Mapped[UUID] = mapped_column(nullable=False)
+    permission_id: Mapped[str] = mapped_column(
+        ForeignKey("auth_permissions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_by_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "pod_id",
+            "resource_type",
+            "resource_key",
+            "grantee_type",
+            "grantee_id",
+            "permission_id",
+            name="uq_pending_resource_grants_scope",
+        ),
+        Index(
+            "ix_pending_resource_grants_grantee",
+            "pod_id",
+            "grantee_type",
+            "grantee_id",
+        ),
+    )

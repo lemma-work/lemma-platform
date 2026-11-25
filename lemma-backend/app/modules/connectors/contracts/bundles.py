@@ -452,17 +452,74 @@ async def ensure_lemma_app_installation(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class WaitingConnectorGrant:
+    """A bundled grant on a connector the import could not declare: the
+    catalog connector and mode the bundle gave it, and what was granted."""
+
+    connector: str
+    mode: str
+    permission_ids: tuple[str, ...]
+
+
+async def hold_grants_until_declared(
+    uow: SqlAlchemyUnitOfWork,
+    ctx: Context,
+    *,
+    pod_id: UUID,
+    grantee_type: str,
+    grantee_id: UUID,
+    grants: Sequence[WaitingConnectorGrant],
+    created_by_user_id: UUID | None,
+) -> None:
+    """Keep ``grantee_id``'s grants on connectors the pod lacks until it has one.
+
+    The pod connector's repository grants them when a POD-wide connector of
+    that catalog connector and mode is declared here -- on somebody's first
+    use, by hand, or by a later import -- whatever its slug. Replaces what
+    the grantee was waiting for before; bounded by what ``ctx`` holds.
+    """
+    from app.core.authorization.context import ResourceType
+    from app.core.authorization.pending_grants import (
+        PendingGrant,
+        replace_grantee_pending_grants,
+    )
+    from app.modules.connectors.domain.pod_connector import pending_grant_key
+
+    await replace_grantee_pending_grants(
+        uow.session,
+        ctx=ctx,
+        pod_id=pod_id,
+        grantee_type=grantee_type,
+        grantee_id=grantee_id,
+        grants=[
+            PendingGrant(
+                resource_type=ResourceType.CONNECTOR,
+                resource_key=pending_grant_key(
+                    grant.connector, PodConnectorMode(grant.mode)
+                ),
+                permission_ids=grant.permission_ids,
+            )
+            for grant in grants
+        ],
+        created_by_user_id=created_by_user_id,
+        action="let an imported workload wait for a connector you could not use",
+    )
+
+
 __all__ = [
     "ACCOUNT_SHARED_WITH_SOME",
     "AccountSharedWithSomeError",
     "DeclaredPodConnector",
     "InstallationChoice",
     "OwnAccountChoice",
+    "WaitingConnectorGrant",
     "declare_bundled_pod_connector",
     "declared_pod_connectors",
     "deprecated_account_refusal",
     "ensure_lemma_app_installation",
     "exported_pod_connectors",
+    "hold_grants_until_declared",
     "installations_of",
     "lemma_app_installable",
     "own_accounts_on",

@@ -13,6 +13,13 @@ pod connector for that installation through the one helper every caller uses
 (`ensure_pod_connector_for_installation`, PER_MEMBER: each person uses their
 own account) and grants on the slug it answers with
 (:func:`resolve_connector_grants`).
+
+A grant on a bundled connector the import leaves out -- optional, and the
+organization has nothing to map it to -- cannot be written: there is no pod
+connector to name. It waits instead (`hold_grants_until_declared`), and is
+granted on the connector the pod later declares for that catalog connector,
+on somebody's first use or by hand. One left out while an installation exists
+was left out by choice, and its grant is dropped as the importer was told.
 """
 
 from __future__ import annotations
@@ -20,10 +27,14 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Collection, Mapping
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
-from lemma_pod_bundle import load_resource_payload
+from lemma_pod_bundle import (
+    BundleConnector,
+    load_bundle_connectors,
+    load_resource_payload,
+)
 
 from app.core.authorization.context import Context
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -37,6 +48,9 @@ from app.modules.pod_bundle.infrastructure.grants import (
     grants_from_payload,
     has_grants,
 )
+
+if TYPE_CHECKING:
+    from app.modules.connectors.contracts.bundles import WaitingConnectorGrant
 
 #: The grant holders whose grants name connectors, as ``(directory, label)``.
 _HOLDERS = (("agents", "agent"), ("functions", "function"))
@@ -157,6 +171,8 @@ async def resolve_connector_grants(
     grants: list[GrantInput],
     choices: Mapping[str, ConnectorChoice] | None = None,
     warnings: list[str] | None = None,
+    bundle_root: Path | None = None,
+    waiting: list[WaitingConnectorGrant] | None = None,
 ) -> list[GrantInput]:
     """``grants`` with each undeclared connector declared and named by its slug.
 
@@ -168,7 +184,9 @@ async def resolve_connector_grants(
     (optional, nothing to map it to) is dropped and said in ``warnings``: the holder is
     imported without it rather than the whole grant write refusing a name the
     importer was told would be missing. Unless the pod declares that slug after
-    all -- by hand, since the plan -- when the grant stands.
+    all -- by hand, since the plan -- when the grant stands. Given ``waiting``
+    and the ``bundle_root`` that says what the connector is, a grant left out
+    for want of any installation goes into ``waiting`` rather than away.
     """
     if not any(g.resource_type.value == _CONNECTOR for g in grants):
         return grants
@@ -187,7 +205,20 @@ async def resolve_connector_grants(
             resolved.append(grant)
             continue
         if name in left_out:
-            note = f"A grant on connector '{name}' was dropped: it was left out."
+            waits = (
+                await _waiting_grant(directory, bundle_root, grant)
+                if waiting is not None
+                else None
+            )
+            if waits is not None and waiting is not None:
+                waiting.append(waits)
+                note = (
+                    f"A grant on connector '{name}' waits for it: it was left "
+                    f"out, and is granted once this pod has a {waits.connector} "
+                    "connector."
+                )
+            else:
+                note = f"A grant on connector '{name}' was dropped: it was left out."
             if warnings is not None and note not in warnings:
                 warnings.append(note)
             continue
@@ -204,3 +235,28 @@ async def resolve_connector_grants(
             slugs[name] = declared.slug
         resolved.append(dataclasses.replace(grant, resource_name=slugs[name]))
     return resolved
+
+
+async def _waiting_grant(
+    directory: ConnectorDirectory, bundle_root: Path | None, grant: GrantInput
+) -> WaitingConnectorGrant | None:
+    """``grant`` kept to wait for its connector, or ``None`` to drop it: when
+    the organization has an installation of it, leaving it out was a choice."""
+    from app.modules.connectors.contracts.bundles import WaitingConnectorGrant
+
+    bundled = _bundled_connector(bundle_root, grant.resource_name)
+    if bundled is None or await directory.installation_for(bundled.connector):
+        return None
+    return WaitingConnectorGrant(
+        connector=bundled.connector,
+        mode=bundled.mode,
+        permission_ids=tuple(grant.permission_ids),
+    )
+
+
+def _bundled_connector(bundle_root: Path | None, slug: str) -> BundleConnector | None:
+    if bundle_root is None:
+        return None
+    return next(
+        (c for c in load_bundle_connectors(bundle_root) if c.slug == slug), None
+    )
