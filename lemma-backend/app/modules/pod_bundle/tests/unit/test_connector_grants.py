@@ -338,3 +338,34 @@ async def test_the_importer_is_told_a_grant_was_dropped_when_none_can_wait():
         "Something else.",
         "A grant on connector 'calendar' was dropped: it was left out.",
     ]
+
+
+async def test_the_grant_step_keeps_its_locks_until_it_commits(monkeypatch):
+    """An authorization check releases a clean session by committing it,
+    which would let the waiting-grant locks go before the grants are
+    replaced. The step marks its session so that cannot happen."""
+    from app.core.infrastructure.db.transaction_locks import (
+        holds_transaction_scoped_lock,
+        safe_to_release,
+    )
+    from app.modules.pod_bundle.infrastructure.connector_grants import (
+        lock_waiting_grants,
+    )
+
+    async def locked(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "app.core.authorization.pending_grants.lock_grantee_pending_keys", locked
+    )
+    session = SimpleNamespace(info={}, new=(), dirty=(), deleted=())
+
+    await lock_waiting_grants(
+        SimpleNamespace(session=session),  # type: ignore[arg-type]
+        pod_id=_POD,
+        grantee_type="FUNCTION",
+        grantee_id=uuid4(),
+    )
+
+    assert holds_transaction_scoped_lock(session)
+    assert not safe_to_release(session)

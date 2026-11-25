@@ -287,9 +287,17 @@ async def lock_waiting_grants(
     uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, grantee_type: str, grantee_id: UUID
 ) -> None:
     """Before a grantee's grants are replaced: lock what it waits for, so a
-    connector declared meanwhile settles it only after the step commits."""
-    from app.core.authorization.pending_grants import lock_grantee_pending_keys
+    connector declared meanwhile settles it only after the step commits.
 
+    The session is marked as holding the locks (`transaction_locks`): an
+    authorization check between here and the hold must not commit early and
+    let them go. The step's commit clears the mark."""
+    from app.core.authorization.pending_grants import lock_grantee_pending_keys
+    from app.core.infrastructure.db.transaction_locks import (
+        mark_transaction_scoped_lock,
+    )
+
+    mark_transaction_scoped_lock(uow.session)
     await lock_grantee_pending_keys(
         uow.session, pod_id=pod_id, grantee_type=grantee_type, grantee_id=grantee_id
     )
