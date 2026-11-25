@@ -98,21 +98,74 @@ def filter_items(items: list[dict[str, Any]], text: str) -> list[dict[str, Any]]
     return [item for item in items if needle in item_label(item).casefold()]
 
 
-#: How long to wait after Esc for the rest of an arrow-key sequence. A lone
-#: Esc press sends one byte; an arrow sends three at once, so the follow-up
-#: bytes are already waiting and this is only ever spent on a real Esc.
+#: How long to wait for the next byte of an escape sequence. A lone Esc press
+#: sends one byte; an arrow key sends its whole sequence at once, so this wait
+#: is only ever spent on a real Esc.
 _ESC_WAIT_SECONDS = 0.05
+
+#: Longest escape sequence read before giving up. Real key sequences are far
+#: shorter; the bound stops a stream of parameter bytes from looping forever.
+_MAX_ESCAPE_BYTES = 16
 
 
 def _read_key(fd: int) -> str:
-    """One key press. Reads the fd directly: sys.stdin buffers, and select()
-    cannot see bytes that are already inside that buffer."""
+    """One key press, whole: a character or a complete escape sequence.
+
+    Reads the fd directly, because sys.stdin buffers and select() cannot see
+    bytes that are already inside that buffer. A read may return fewer bytes
+    than asked for, so multi-byte input is gathered until it is complete.
+    """
     first = os.read(fd, 1)
+    if not first:
+        return "\x04"  # end of input, treated like Ctrl+D
     if first == b"\x1b":
-        if not select.select([fd], [], [], _ESC_WAIT_SECONDS)[0]:
-            return "\x1b"
-        return (first + os.read(fd, 2)).decode(errors="ignore")
-    return (first + os.read(fd, _utf8_tail_length(first[0]))).decode(errors="ignore")
+        return _read_escape(fd)
+    return _read_exactly(fd, first, _utf8_tail_length(first[0])).decode(errors="ignore")
+
+
+def _read_exactly(fd: int, data: bytes, extra: int) -> bytes:
+    """``data`` plus ``extra`` more bytes, stopping early only at end of input."""
+    while extra > 0:
+        chunk = os.read(fd, extra)
+        if not chunk:
+            break
+        data += chunk
+        extra -= len(chunk)
+    return data
+
+
+def _read_escape(fd: int) -> str:
+    """The rest of an escape sequence, after its first byte.
+
+    A lone Esc returns at once. ``Esc [`` starts a CSI sequence, which runs to
+    its final byte (so ``Esc [ 3 ~`` for Delete is consumed whole and its tail
+    never lands in the filter). ``Esc O`` is the same for application mode.
+    """
+    sequence = b"\x1b"
+    second = _read_byte(fd)
+    if second is None:
+        return "\x1b"
+    sequence += second
+    if second == b"O":
+        third = _read_byte(fd)
+        if third is not None:
+            sequence += third
+    elif second == b"[":
+        while len(sequence) < _MAX_ESCAPE_BYTES:
+            byte = _read_byte(fd)
+            if byte is None:
+                break
+            sequence += byte
+            if 0x40 <= byte[0] <= 0x7E:  # final byte ends the sequence
+                break
+    return sequence.decode(errors="ignore")
+
+
+def _read_byte(fd: int) -> bytes | None:
+    """The next byte if one arrives within the escape wait, else None."""
+    if not select.select([fd], [], [], _ESC_WAIT_SECONDS)[0]:
+        return None
+    return os.read(fd, 1) or None
 
 
 def _utf8_tail_length(lead_byte: int) -> int:
@@ -124,6 +177,10 @@ def _utf8_tail_length(lead_byte: int) -> int:
     if lead_byte >= 0xC0:
         return 1
     return 0
+
+
+#: Up and down in normal and application cursor mode.
+_ARROW_STEPS = {"\x1b[A": -1, "\x1b[B": 1, "\x1bOA": -1, "\x1bOB": 1}
 
 
 def _apply_key(
@@ -138,8 +195,8 @@ def _apply_key(
         return state, "pick" if visible_count else None
     if key in {"\x03", "\x04", "\x1b"}:
         return state, "cancel"
-    if key in {"\x1b[A", "\x1b[B"} and visible_count:
-        step = -1 if key == "\x1b[A" else 1
+    if key in _ARROW_STEPS and visible_count:
+        step = _ARROW_STEPS[key]
         return replace(state, selected=(state.selected + step) % visible_count), None
     if key in {"\x7f", "\x08"}:
         return replace(state, filter_text=state.filter_text[:-1], selected=0), None

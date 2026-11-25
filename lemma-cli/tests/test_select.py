@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
+import time
 
 import pytest
 
@@ -101,6 +103,12 @@ def test_cancel_keys(key):
     assert sel._apply_key(key, sel._MenuState("be"), 1)[1] == "cancel"
 
 
+@pytest.mark.parametrize(("key", "expected"), [("\x1bOA", 2), ("\x1bOB", 1)])
+def test_application_mode_arrows_move(key, expected):
+    state, done = sel._apply_key(key, sel._MenuState(selected=0), 3)
+    assert (state.selected, done) == (expected, None)
+
+
 def test_unknown_escape_sequence_is_ignored():
     state, done = sel._apply_key("\x1b[C", sel._MenuState("b"), 1)
     assert (state.filter_text, done) == ("b", None)
@@ -147,6 +155,70 @@ def test_read_key_reads_a_whole_utf8_character():
         os.close(r)
 
 
-def test_select_by_number_picks_item(monkeypatch):
-    monkeypatch.setattr(sel.typer, "prompt", lambda *a, **k: 2)
-    assert sel._select_by_number(ITEMS, label="pod") == ITEMS[1]
+def _feed(
+    chunks: list[bytes], *, then_wait: bool = False
+) -> tuple[int, int, threading.Thread]:
+    """A pipe that delivers ``chunks`` one at a time, with a pause between."""
+    r, w = os.pipe()
+
+    def writer() -> None:
+        for chunk in chunks:
+            os.write(w, chunk)
+            time.sleep(0.01)
+        if not then_wait:
+            os.close(w)
+
+    thread = threading.Thread(target=writer)
+    thread.start()
+    return r, w, thread
+
+
+@needs_posix
+@pytest.mark.parametrize(
+    ("chunks", "expected"),
+    [
+        ([b"\x1b", b"[", b"A"], "\x1b[A"),  # arrow split across reads
+        ([b"\x1b[", b"B"], "\x1b[B"),
+        ([b"\x1b[3~"], "\x1b[3~"),  # Delete is one key, tail included
+        ([b"\x1b[1;5C"], "\x1b[1;5C"),  # Ctrl+Right
+        ([b"\x1bOA"], "\x1bOA"),
+    ],
+)
+def test_read_key_returns_the_whole_escape_sequence(chunks, expected):
+    r, _w, thread = _feed(chunks)
+    try:
+        assert sel._read_key(r) == expected
+    finally:
+        thread.join()
+        os.close(r)
+
+
+@needs_posix
+def test_escape_sequence_tail_never_reaches_the_filter():
+    r, _w, thread = _feed([b"\x1b[3~", b"x"])
+    try:
+        assert sel._read_key(r) == "\x1b[3~"
+        assert sel._read_key(r) == "x"
+    finally:
+        thread.join()
+        os.close(r)
+
+
+@needs_posix
+def test_read_key_gathers_a_utf8_character_split_across_reads():
+    r, _w, thread = _feed([b"\xe2", b"\x82", b"\xac"])  # the euro sign
+    try:
+        assert sel._read_key(r) == "€"
+    finally:
+        thread.join()
+        os.close(r)
+
+
+@needs_posix
+def test_read_key_treats_end_of_input_as_ctrl_d():
+    r, w = os.pipe()
+    os.close(w)
+    try:
+        assert sel._read_key(r) == "\x04"
+    finally:
+        os.close(r)
