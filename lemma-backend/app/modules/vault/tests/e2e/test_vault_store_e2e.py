@@ -316,8 +316,10 @@ async def test_a_key_is_retired_only_once_nothing_is_wrapped_under_it(
         await keyring.retire(old_kek)
     await db_session.execute(
         text(
-            "UPDATE vault_keys SET created_at = now() - interval '1 day' "
-            "WHERE purpose = 'encrypt' AND state = 'active'"
+            # Every key a day older, keeping their order: the rotation is now
+            # past the wait, and the replacement still follows the old key.
+            "UPDATE vault_keys SET created_at = created_at - interval '1 day' "
+            "WHERE purpose = 'encrypt'"
         )
     )
     await db_session.commit()
