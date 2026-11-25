@@ -57,11 +57,14 @@ MAX_PATCH_BYTES = 1024 * 1024
 #: The file lists (tracked changes, their statuses) are cut at this many bytes
 #: each: a checkout with a vendored tree committed on its branch still answers.
 LIST_BYTES = 256 * 1024
+#: The most of git's stderr passed on: its last lines say why it failed.
+STDERR_BYTES = 4096
 #: Every part together, before base64. The sandbox runtime keeps 2 MiB of a
-#: command's output and drops the oldest past it -- the header first -- so the
-#: parts, a third larger once encoded, stay under three quarters of that, less
-#: room for the meta part and the framing.
-OUTPUT_BYTES = 2 * 1024 * 1024 * 3 // 4 - 4096
+#: command's output, stdout and stderr together, and drops the oldest past it
+#: -- the header first -- so the parts, a third larger once encoded, stay under
+#: three quarters of that, less room for stderr's tail, the meta part and the
+#: framing.
+OUTPUT_BYTES = 2 * 1024 * 1024 * 3 // 4 - 16 * 1024
 #: Untracked files counted and listed, at most. ``--exclude-standard`` keeps a
 #: dependency tree out when the repository ignores it; this, when it does not.
 MAX_UNTRACKED = 200
@@ -138,7 +141,11 @@ def changes_command(*, directory: str, ref: str | None, patch_bytes: int | None)
         "export GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0",
         f'g() {{ {_GIT} "$@"; }}',
         "t=$(mktemp -d) || exit 70",
-        "trap 'rm -rf \"$t\"' EXIT",
+        # stderr shares the runtime's buffer with the answer, and that buffer
+        # drops the oldest output first -- the header. git's own chatter goes
+        # to a file, and only its tail is passed on, after the answer.
+        'exec 3>&2 2>"$t/stderr"',
+        (f'trap \'tail -c {STDERR_BYTES} "$t/stderr" >&3; rm -rf "$t"\' EXIT'),
         "head=$(g rev-parse --verify --quiet HEAD) || head=",
         "branch=$(g symbolic-ref --quiet --short HEAD) || branch=",
         f"start={remote}",
