@@ -84,6 +84,9 @@ class MachineOutput(Protocol):
     @property
     def stderr(self) -> str: ...
 
+    @property
+    def error(self) -> str | None: ...
+
 
 #: The command to run, given the run's own directory on a shared machine.
 CommandFor = Callable[[str | None], str]
@@ -224,6 +227,13 @@ class ConversationChangesReader:
 
         output = await self._reach(target, command_for)
         if output is None:
+            return ConversationChanges(state="machine_unavailable")
+        if output.exit_code is None and output.error:
+            # The runtime never ran it: the machine is not there to answer.
+            logger.warning(
+                "agent.conversation_changes.machine_unreachable.degraded",
+                error_type="command_not_started",
+            )
             return ConversationChanges(state="machine_unavailable")
         if output.exit_code is None:
             # The machine answered; the read is what ran out of time, and may

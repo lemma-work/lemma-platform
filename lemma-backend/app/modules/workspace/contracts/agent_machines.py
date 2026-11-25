@@ -377,6 +377,9 @@ class MachineRead:
     exit_code: int | None
     stdout: str
     stderr: str
+    #: Why the runtime did not run it; None for a command that ran, or was
+    #: still running at its deadline.
+    error: str | None = None
 
 
 async def read_if_awake(
@@ -414,7 +417,10 @@ async def read_if_awake(
         timeout_seconds=timeout_seconds,
     )
     return MachineRead(
-        exit_code=outcome.exit_code, stdout=outcome.stdout, stderr=outcome.stderr
+        exit_code=outcome.exit_code,
+        stdout=outcome.stdout,
+        stderr=outcome.stderr,
+        error=outcome.error,
     )
 
 

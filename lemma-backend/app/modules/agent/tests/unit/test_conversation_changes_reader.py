@@ -60,6 +60,7 @@ class _Output:
     exit_code: int | None
     stdout: str = ""
     stderr: str = ""
+    error: str | None = None
 
 
 @dataclass
@@ -121,6 +122,20 @@ async def test_a_machine_that_is_not_there_to_ask_is_unavailable() -> None:
     """Asleep, refused to a run of the conversation, or unreachable: the
     reach answers None for each, and none of them is woken."""
     reader = ConversationChangesReader(_rows(_target()), reach=_Machine(output=None))
+
+    assert (await _read(reader)).state == "machine_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_a_command_the_sandbox_could_not_start_is_unavailable_not_a_timeout() -> (
+    None
+):
+    """No exit code there means the runtime never ran it: the machine is not
+    there to answer, which is not a read that ran out of time."""
+    reader = ConversationChangesReader(
+        _rows(_target()),
+        reach=_Machine(output=_Output(exit_code=None, error="sandbox unreachable")),
+    )
 
     assert (await _read(reader)).state == "machine_unavailable"
 
