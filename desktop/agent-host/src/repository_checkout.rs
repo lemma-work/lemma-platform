@@ -24,7 +24,9 @@
 //!   the agent is told it is not the repository.
 //! - **Failing never stops the run.** No `git`, no access, no network, a ref
 //!   that does not exist: the agent starts in the empty folder anyway and is
-//!   told once, in plain words, why it is empty.
+//!   told, in plain words, why it is empty. The failure is remembered for a
+//!   few minutes, so the turns after it are told the same reason without
+//!   cloning again, as the sandbox's failure marker does.
 //!
 //! Every value from the run spec is checked against the backend's own patterns
 //! (`domain/project_repo.py`) before it reaches a path or an argument, every
@@ -38,7 +40,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use uuid::Uuid;
 
@@ -49,10 +51,19 @@ use crate::protocol::RunRepository;
 /// The cloud sandbox's figure (`_CLONE_TIMEOUT_SECONDS`), for the same reason:
 /// a first clone of a large repository over a slow link is legitimately
 /// minutes, and past this it is more useful to start the agent in the empty
-/// folder and say so than to keep the person waiting. A later turn only reads
-/// a file, so this is paid on the first turn at most. The run's own deadline
-/// bounds it further.
+/// folder and say so than to keep the person waiting. A turn after a checkout
+/// that worked only reads a file; one after a checkout that failed is given
+/// the same failure until `RETRY_AFTER` has passed, so this is paid at most
+/// once in that time. The run's own deadline bounds it further.
 pub const CHECKOUT_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// How long a failed checkout is answered from memory rather than tried again.
+///
+/// The cloud sandbox's figure (`_FAILED_TTL_SECONDS`), for its reason: long
+/// enough that the turns of one working stretch do not each wait out another
+/// clone that will fail the same way, short enough that connecting the right
+/// account and carrying on works without waiting long.
+const RETRY_AFTER: Duration = Duration::from_secs(300);
 
 /// How much of git's own error is passed on to the agent. Its last lines are
 /// the useful ones: they already tell a missing repository from a refused
@@ -195,7 +206,8 @@ impl Report {
                 notice: Some(notice(&format!(
                     "{name} could not be checked out in this directory with this \
                      computer's git, so the directory is empty for a reason: \
-                     {reason} Your native tools work here as usual."
+                     {reason} It will be tried again in a few minutes, on a \
+                     later turn. Your native tools work here as usual."
                 ))),
             },
         }
@@ -265,6 +277,12 @@ pub async fn ensure(request: &Request<'_>) -> Outcome {
     if let Some(outcome) = already_there(checkout) {
         return outcome;
     }
+    // Under the lock too, so a run that waited on one that failed is told
+    // that failure rather than making the same attempt straight after it.
+    let key = failure_key(request.target, checkout);
+    if let Some(reason) = failures().recent(&key, Instant::now()) {
+        return Outcome::Failed(reason);
+    }
     let git = Git {
         program: request.git,
         deadline: tokio::time::Instant::now() + request.timeout,
@@ -272,7 +290,10 @@ pub async fn ensure(request: &Request<'_>) -> Outcome {
     };
     let outcome = match make_worktree(request, &git).await {
         Ok(stale) => Outcome::Ready { made: true, stale },
-        Err(reason) => Outcome::Failed(reason),
+        Err(reason) => {
+            failures().record(key, reason.clone(), Instant::now());
+            Outcome::Failed(reason)
+        }
     };
     // A failed `worktree add` may take the folder with it, and the agent is
     // started in it regardless.
@@ -282,6 +303,45 @@ pub async fn ensure(request: &Request<'_>) -> Outcome {
         tracing::warn!(%error, "could not make the conversation folder again");
     }
     outcome
+}
+
+/// One conversation's checkout of one ref, for one paired workspace: another
+/// conversation in the same repository is an attempt of its own, as each
+/// conversation's marker is in the cloud sandbox.
+type FailureKey = (Uuid, PathBuf, Option<String>);
+
+fn failure_key(target: Uuid, checkout: &Checkout) -> FailureKey {
+    (
+        target,
+        checkout.worktree_dir.clone(),
+        checkout.reference.clone(),
+    )
+}
+
+/// Checkouts that failed recently, and why. In memory: the host process
+/// outlives the turns it runs, and a host that restarts trying once more is
+/// no harm.
+#[derive(Default)]
+struct Failures(HashMap<FailureKey, (Instant, String)>);
+
+impl Failures {
+    fn recent(&self, key: &FailureKey, now: Instant) -> Option<String> {
+        self.0
+            .get(key)
+            .filter(|(at, _)| now.saturating_duration_since(*at) < RETRY_AFTER)
+            .map(|(_, reason)| reason.clone())
+    }
+
+    fn record(&mut self, key: FailureKey, reason: String, now: Instant) {
+        self.0
+            .retain(|_, (at, _)| now.saturating_duration_since(*at) < RETRY_AFTER);
+        self.0.insert(key, (now, reason));
+    }
+}
+
+fn failures() -> std::sync::MutexGuard<'static, Failures> {
+    static FAILURES: LazyLock<Mutex<Failures>> = LazyLock::new(Mutex::default);
+    FAILURES.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn already_there(checkout: &Checkout) -> Option<Outcome> {
@@ -413,8 +473,17 @@ async fn start_point(clone: &Path, checkout: &Checkout, git: &Git<'_>) -> Result
             .await;
         match found {
             Ok(_) => return Ok(candidate),
-            Err(GitError::TimedOut) => return Err(GitError::TimedOut.describe(git)),
-            Err(_) => {}
+            // `--quiet` makes a name that is not there a failure git says
+            // nothing about; anything it does say is a clone it could not
+            // read, which is not a missing branch.
+            Err(GitError::Failed(detail)) if detail.is_empty() => {}
+            Err(error) => {
+                return Err(format!(
+                    "git could not resolve a start point in the clone at {}: {}",
+                    clone.display(),
+                    error.describe(git)
+                ));
+            }
         }
     }
     Err(match &checkout.reference {

@@ -550,3 +550,106 @@ async fn another_paired_workspaces_clone_is_not_used() {
     };
     assert!(reason.contains("another paired workspace"), "{reason}");
 }
+
+/// A checkout that failed is not tried again on every turn: within a few
+/// minutes the next turn gets the same reason without git being run, as the
+/// cloud sandbox's failure marker does. The second call here has a working git
+/// and remote, so only a remembered failure can still fail it.
+#[tokio::test]
+async fn a_failed_checkout_is_not_retried_on_the_next_turn() {
+    let fixture = fixture();
+    let target = Uuid::new_v4();
+    let remote = remote_of(&fixture);
+    let checkout = conversation(&fixture, target, None, "retry0");
+
+    let first = check_out(
+        &fixture,
+        target,
+        &checkout,
+        &remote,
+        Path::new("/nonexistent/git"),
+        Duration::from_secs(60),
+    )
+    .await;
+    let Outcome::Failed(reason) = &first else {
+        panic!("{first:?}");
+    };
+    assert!(reason.contains("git could not be started"), "{reason}");
+
+    let again = check_out(
+        &fixture,
+        target,
+        &checkout,
+        &remote,
+        &git_program(),
+        Duration::from_secs(60),
+    )
+    .await;
+
+    assert_eq!(again, first);
+    assert!(!checkout.clone_dir().join(".git").exists());
+    assert_eq!(
+        std::fs::read_dir(checkout.worktree_dir()).unwrap().count(),
+        0
+    );
+
+    // Another conversation in the same repository is its own attempt.
+    let other = conversation(&fixture, target, None, "retry1");
+    let outcome = check_out(
+        &fixture,
+        target,
+        &other,
+        &remote,
+        &git_program(),
+        Duration::from_secs(60),
+    )
+    .await;
+    assert!(
+        matches!(outcome, Outcome::Ready { made: true, .. }),
+        "{outcome:?}"
+    );
+}
+
+/// A clone git cannot read is not reported as a ref that does not exist: the
+/// agent is given git's own error, not told its branch is missing.
+#[tokio::test]
+async fn a_damaged_clone_is_not_mistaken_for_a_missing_ref() {
+    let fixture = fixture();
+    let target = Uuid::new_v4();
+    let remote = remote_of(&fixture);
+    let first = conversation(&fixture, target, None, "intact0");
+    check_out(
+        &fixture,
+        target,
+        &first,
+        &remote,
+        &git_program(),
+        Duration::from_secs(60),
+    )
+    .await;
+    std::fs::write(
+        first.clone_dir().join(".git").join("config"),
+        "this is not git configuration\n",
+    )
+    .unwrap();
+
+    let damaged = conversation(&fixture, target, Some("feature"), "damaged0");
+    let outcome = check_out(
+        &fixture,
+        target,
+        &damaged,
+        &remote,
+        &git_program(),
+        Duration::from_secs(60),
+    )
+    .await;
+
+    let Outcome::Failed(reason) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert!(
+        !reason.contains("is not a branch, tag or commit"),
+        "{reason}"
+    );
+    assert!(reason.contains("config"), "{reason}");
+}

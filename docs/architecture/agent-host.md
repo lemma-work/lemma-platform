@@ -396,10 +396,15 @@ ref?, slug}`, set only when `workspace_cwd` is that worktree
   sandbox's clone timeout -- or what is left of the run's deadline, and is given
   up when the person presses Stop. No git, no access, no network, a ref that is
   not there, or the timeout: the agent starts in the empty folder anyway. It is
-  told once, in a `<workspace-notice>` ahead of that turn's message (so it
-  arrives even on a turn that does not re-send the instructions), and the host
-  logs it. A fetch that failed is said the same way. A worktree that is there is
-  described in **Native Working Directory**.
+  told, in a `<workspace-notice>` ahead of that turn's message (so it arrives
+  even on a turn that does not re-send the instructions), and the host logs it.
+  git's own error is passed on as it is: a clone git cannot read is not
+  reported as a ref that does not exist. A failure is remembered in the host's
+  memory for 300 seconds -- the cloud sandbox's failure cache -- per paired
+  workspace, conversation folder and ref, so a later turn in that time is given
+  the same reason without running git again; the notice says it will be tried
+  again in a few minutes. A fetch that failed is said the same way. A worktree
+  that is there is described in **Native Working Directory**.
 
 `repository` is optional on both sides, so it needed no protocol bump: a host
 that predates it ignores the field and starts in the empty folder, as before,

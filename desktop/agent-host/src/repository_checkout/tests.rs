@@ -305,3 +305,56 @@ fn only_a_gitdir_inside_this_clones_worktrees_is_ours() {
     assert!(ours("gitdir: ../../clone/.git/worktrees/ab3f2k7q"));
     assert!(!ours("gitdir: ../../other/.git/worktrees/ab3f2k7q"));
 }
+
+/// A failure is remembered for one conversation and one ref, and for a few
+/// minutes only: long enough that turn after turn does not clone again, short
+/// enough that connecting the right account and carrying on works.
+#[test]
+fn a_failure_is_remembered_for_a_few_minutes_and_for_its_own_checkout_only() {
+    let target = Uuid::new_v4();
+    let main = plan(Some("main"));
+    let feature = plan(Some("feature"));
+    let mut failures = Failures::default();
+    let failed_at = Instant::now();
+    failures.record(
+        failure_key(target, &main),
+        "cloning it failed.".to_owned(),
+        failed_at,
+    );
+
+    let later = failed_at + Duration::from_secs(60);
+    assert_eq!(
+        failures.recent(&failure_key(target, &main), later),
+        Some("cloning it failed.".to_owned())
+    );
+    assert_eq!(failures.recent(&failure_key(target, &feature), later), None);
+    assert_eq!(
+        failures.recent(&failure_key(Uuid::new_v4(), &main), later),
+        None
+    );
+    assert_eq!(
+        failures.recent(&failure_key(target, &main), failed_at + RETRY_AFTER),
+        None
+    );
+    // An expired failure is dropped when the next one is recorded.
+    failures.record(
+        failure_key(target, &feature),
+        "git failed.".to_owned(),
+        failed_at + RETRY_AFTER,
+    );
+    assert_eq!(failures.0.len(), 1);
+}
+
+#[test]
+fn a_failure_notice_says_it_will_be_tried_again() {
+    let report = Report::of(
+        &plan(None),
+        &Outcome::Failed("cloning it failed.".to_owned()),
+    );
+    assert!(
+        report
+            .notice
+            .expect("a failure is said")
+            .contains("tried again in a few minutes")
+    );
+}
