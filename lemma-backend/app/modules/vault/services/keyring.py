@@ -90,8 +90,10 @@ class VaultKeyring:
         self._loaded_at = 0.0
         # Loads overlap (start, refresh, a rotation, a cache miss). They run one
         # at a time per event loop, from the read to the publish, so a load
-        # never publishes keys read before ones already published. The number
-        # guards a load on another loop (a script, a test) the same way.
+        # never publishes keys read before ones already published. That relies
+        # on one loop per process (API, worker, `vault_admin`); the number only
+        # drops a load that started before the last published one, which does
+        # not order reads made on two loops at once.
         self._load_locks: weakref.WeakKeyDictionary[
             asyncio.AbstractEventLoop, asyncio.Lock
         ] = weakref.WeakKeyDictionary()
@@ -171,6 +173,9 @@ class VaultKeyring:
         with self._lock:
             self._load_started += 1
             generation = self._load_started
+        # Freshness counts from the read, not the publish: a slow unwrap must
+        # not make keys read before a rotation look recently loaded.
+        read_at = time.monotonic()
         rows = await self._read_keys()
         for purpose in (ENCRYPT, SIGN):
             if not any(r.purpose == purpose and r.state == ACTIVE for r in rows):
@@ -200,7 +205,7 @@ class VaultKeyring:
             self._active = active
             self._signing = signing
             self._loaded = True
-            self._loaded_at = time.monotonic()
+            self._loaded_at = read_at
         if self._on_loaded is not None:
             self._on_loaded(self)
         logger.info(

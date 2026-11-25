@@ -88,7 +88,14 @@ class LocalKeyringRoot(RootKeyProvider):
             ) from exc
 
     def needs_rewrap(self, root_ref: str) -> bool:
-        return root_ref != REF_PREFIX + self.keyring().primary_kid
+        # Never loads: reading the keyset can block (Secret Manager, the OS
+        # keychain), and this is called on the event loop.
+        if self._keyring is None:
+            raise RootKeyError(
+                "needs_rewrap called before the root keyset was loaded; "
+                "wrap or unwrap with this root first"
+            )
+        return root_ref != REF_PREFIX + self._keyring.primary_kid
 
 
 def load_keychain_keyring(

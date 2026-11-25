@@ -432,3 +432,32 @@ async def test_a_write_reloads_keys_its_refresh_has_not_kept_fresh(db_session):
     assert keyring.cached_active_encryption_key() is not None
     revealed = await vault_for(db_session).reveal(ref.id, expect=scope, purpose=PURPOSE)
     assert revealed.text() == "after-a-stale-keyring"
+
+
+async def test_freshness_counts_from_reading_the_keys_not_from_publishing_them(
+    db_session,
+):
+    keyring = get_vault_keyring()
+    await keyring.load()
+    root = keyring._root
+
+    class _SlowRoot:
+        """The configured root, with an unwrap that takes a while."""
+
+        name = root.name
+
+        async def unwrap(self, *args, **kwargs):
+            await asyncio.sleep(0.3)
+            return await root.unwrap(*args, **kwargs)
+
+        def __getattr__(self, attribute):
+            return getattr(root, attribute)
+
+    keyring._root = _SlowRoot()
+    try:
+        before = time.monotonic()
+        await keyring.load()
+    finally:
+        keyring._root = root
+    # Published only after the slow unwraps, but dated from the read before them.
+    assert before <= keyring._loaded_at < before + 0.3
