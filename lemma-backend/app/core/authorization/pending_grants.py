@@ -53,6 +53,7 @@ __all__ = [
     "delete_grantee_pending_grants",
     "lock_grantee_pending_keys",
     "lock_pending_key",
+    "pending_lock_name",
     "replace_grantee_pending_grants",
     "settle_pending_grants",
 ]
@@ -104,8 +105,15 @@ async def lock_pending_key(
     """
     await session.execute(
         text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-        {"key": f"pending_grant:{pod_id}:{resource_type.value}:{resource_key}"},
+        {"key": pending_lock_name(pod_id, resource_type, resource_key)},
     )
+
+
+def pending_lock_name(
+    pod_id: UUID, resource_type: ResourceType, resource_key: str
+) -> str:
+    """The text a key's advisory lock is hashed from (``hashtextextended``)."""
+    return f"pending_grant:{pod_id}:{resource_type.value}:{resource_key}"
 
 
 async def lock_grantee_pending_keys(

@@ -239,12 +239,16 @@ class PodConnectorRepository:
     async def _stored_as(self, entity: PodConnectorEntity) -> bool:
         """Whether the row as stored, not as this session remembers it, has
         ``entity``'s mode and is POD-wide: an unchanged write emits no UPDATE,
-        and another transaction may have changed the mode meanwhile."""
+        and another transaction may have changed the mode meanwhile.
+
+        Read FOR UPDATE, after the waiting key (the order a hold takes them
+        in), so the row cannot change between this check and the settlement
+        that follows it."""
         stored = (
             await self.session.execute(
-                select(PodConnector.mode, PodConnector.visibility).where(
-                    PodConnector.id == entity.id
-                )
+                select(PodConnector.mode, PodConnector.visibility)
+                .where(PodConnector.id == entity.id)
+                .with_for_update()
             )
         ).first()
         return stored is not None and tuple(stored) == (

@@ -23,6 +23,10 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import status
 from lemma_pod_bundle import pack_bundle
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.authorization.context import ResourceType
+from app.core.authorization.pending_grants import pending_lock_name
 
 from app.modules.pod_bundle.tests.e2e.bundle_e2e_helpers import (
     start_and_plan_import,
@@ -67,36 +71,59 @@ def _bundle(tmp_path: Path, connector_id: str) -> bytes:
     return pack_bundle(root)
 
 
-async def _blocked_on_a_lock(task: asyncio.Task[object], label: str) -> None:
-    """Wait until Postgres shows a backend waiting on an advisory lock -- the
-    declaration ``task`` stuck behind the step -- failing at once if ``task``
-    finishes instead, which means nothing held it back."""
+async def _blocked_behind(
+    step: AsyncSession, task: asyncio.Task[object], *, lock_name: str, label: str
+) -> None:
+    """Wait until Postgres shows a backend waiting on exactly ``lock_name``'s
+    advisory lock and blocked by ``step``'s backend -- the declaration ``task``
+    stuck behind the step. Fails at once if ``task`` finishes instead, which
+    means nothing held it back, and then cancels and drains it."""
     from sqlalchemy import text
 
     from app.core.infrastructure.db.session import async_session_maker
     from app.modules.test_support.e2e.waiters import eventually
 
+    step_pid = await step.scalar(text("SELECT pg_backend_pid()"))
+    hashed = await step.scalar(
+        text("SELECT hashtextextended(:name, 0)"), {"name": lock_name}
+    )
+    unsigned = int(hashed) & 0xFFFF_FFFF_FFFF_FFFF
+
     async def waiting() -> int:
         async with async_session_maker() as probe:
             count = await probe.scalar(
                 text(
-                    "SELECT count(*) FROM pg_locks "
-                    "WHERE locktype = 'advisory' AND NOT granted"
-                )
+                    "SELECT count(*) FROM pg_locks l "
+                    "WHERE l.locktype = 'advisory' AND NOT l.granted "
+                    "AND l.classid::bigint = :high AND l.objid::bigint = :low "
+                    "AND :step = ANY(pg_blocking_pids(l.pid))"
+                ),
+                {
+                    "high": unsigned >> 32,
+                    "low": unsigned & 0xFFFF_FFFF,
+                    "step": step_pid,
+                },
             )
         return int(count or 0)
 
-    await eventually(
-        label=label,
-        probe=waiting,
-        done=lambda count: count > 0,
-        timeout_seconds=10,
-        fail_fast=lambda _count: (
-            "it finished without waiting: nothing held the lock"
-            if task.done()
-            else None
-        ),
-    )
+    blocked = False
+    try:
+        await eventually(
+            label=label,
+            probe=waiting,
+            done=lambda count: count > 0,
+            timeout_seconds=10,
+            fail_fast=lambda _count: (
+                "it finished without waiting: nothing held the lock"
+                if task.done()
+                else None
+            ),
+        )
+        blocked = True
+    finally:
+        if not blocked:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 async def _connector_grants(client, pod_id: str) -> list[dict[str, object]]:
@@ -324,7 +351,6 @@ async def test_a_declaration_racing_the_grant_step_settles_only_after_it(
     nothing."""
     from types import SimpleNamespace
 
-    from app.core.authorization.context import ResourceType
     from app.core.authorization.pending_grants import (
         PendingGrant,
         delete_grantee_pending_grants,
@@ -375,7 +401,12 @@ async def test_a_declaration_racing_the_grant_step_settles_only_after_it(
                 resource_id=connector_id,
             )
         )
-        await _blocked_on_a_lock(settling, "settlement waits for the step")
+        await _blocked_behind(
+            step,
+            settling,
+            lock_name=pending_lock_name(pod_id, ResourceType.CONNECTOR, key),
+            label="settlement waits for the step",
+        )
 
         await delete_grantee_pending_grants(
             step, pod_id=pod_id, grantee_type="FUNCTION", grantee_id=grantee
@@ -493,7 +524,16 @@ async def test_a_replayed_grant_step_leaves_no_removed_grant_active(
             # ...then the organization has the calendar now, so the replay
             # drops the grant, while somebody declares the connector elsewhere.
             declaring.append(asyncio.create_task(declare_elsewhere()))
-            await _blocked_on_a_lock(declaring[0], "the declaration waits")
+            await _blocked_behind(
+                step,
+                declaring[0],
+                lock_name=pending_lock_name(
+                    pod_id,
+                    ResourceType.CONNECTOR,
+                    f"{connector_id}:PER_MEMBER",
+                ),
+                label="the declaration waits for the step",
+            )
             return install_id
 
         monkeypatch.setattr(
