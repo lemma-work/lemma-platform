@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query
 
-from app.core.api.dependencies import CurrentUser
+from app.core.api.dependencies import CurrentUser, get_uow_factory
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.connectors.api.dependencies import ConnectorServiceDep
@@ -103,6 +103,18 @@ async def create_account(
     payload: AccountCreateSchema,
     connector_service: ConnectorServiceDep,
 ) -> AccountResponseSchema:
+    from app.modules.connectors.services.connect_into_pod import (
+        add_connected_to_pod,
+        require_member_of,
+    )
+
+    if payload.pod_id is not None:
+        await require_member_of(
+            connector_service.uow,
+            pod_id=payload.pod_id,
+            user_id=user.id,
+            organization_id=organization_id,
+        )
     account = await connector_service.create_account(
         user_id=user.id,
         organization_id=organization_id,
@@ -114,6 +126,11 @@ async def create_account(
         preferences=payload.preferences,
         allowed_scopes=payload.allowed_scopes,
     )
+    if payload.pod_id is not None:
+        # The account is committed already, and creating it may have handed
+        # the request's session through discovery: this is its own short write.
+        async with get_uow_factory()() as uow:
+            await add_connected_to_pod(uow, payload.pod_id, account)
     return await _account_response(connector_service, account)
 
 

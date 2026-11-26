@@ -19,6 +19,10 @@ export type ConnectRequestInitiateSchema = {
      */
     connector_id?: (string | null);
     /**
+     * The Lemma (pod) this connect is for. You must be a member. When the connect completes, the pod's per-member connector for the installation is reused or declared, and the new account becomes your default there. Either step failing never fails the connect.
+     */
+    pod_id?: (string | null);
+    /**
      * Path inside the app to come back to when the flow finishes. Only a rooted path is accepted; anything else is ignored.
      */
     return_to?: (string | null);

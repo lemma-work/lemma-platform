@@ -53,10 +53,11 @@ import {
     type PodConnector, type PodConnectorDraft, type PodConnectorPatch,
 } from "./pod-connectors";
 import {
-    accountPatchBody, readAccountUsage, readImpact, readPodAccounts, readShareRoles, shareAsBody,
+    accountPatchBody, readAccountUsage, readImpact, readPodAccounts, shareAsBody,
     type Grantee, type PodAccountPatch, type PodAccountVisibility as PodAccountShare,
 } from "./pod-accounts";
 import { readOrgActions } from "./org-actions";
+import { readPodConnections } from "./pod-connections";
 import { canInstallWithDefaults, freshInstallName, heldInstall, primaryKind, type CatalogEntry, type ConfigSource, type Install } from "@/connect/install";
 import {
     readChoice,
@@ -1312,9 +1313,13 @@ export const liveSource: PodSource = {
 
     async startAccount(
         orgId: string, connectorId: string, authConfigId?: string, returnTo?: string,
-        connectionFields?: Record<string, unknown>, configSource?: ConfigSource,
+        connectionFields?: Record<string, unknown>, configSource?: ConfigSource, podId?: string,
     ): Promise<AccountConnect> {
         const client = lemma();
+        /* The Lemma it was started from, which the server adds the app to
+           once the sign-in finishes. Not in the generated request type yet,
+           so added to the body rather than spelled in it. */
+        const fromPod = <T extends object>(body: T): T => (podId ? { ...body, pod_id: podId } : body);
         /* Read what is already usable first. The callback lands on the
            provider's side, not ours, so the only way to recognise the account
            this authorisation made is that it was not usable a moment ago —
@@ -1341,11 +1346,11 @@ export const liveSource: PodSource = {
                where it may, or says who can. */
             const listed = await client.connectors.authConfigs.list(orgId, { limit: 200 }).catch(() => null);
             if (!listed) {
-                const request = (await client.connectors.createConnectRequest(orgId, {
+                const request = (await client.connectors.createConnectRequest(orgId, fromPod({
                     connector_id: connectorId,
                     return_to: returnTo,
                     ...(connectionFields ? { connection_fields: connectionFields } : {}),
-                })) as { authorization_url?: string | null; auth_config_id?: string | null };
+                }))) as { authorization_url?: string | null; auth_config_id?: string | null };
                 return { authorizeUrl: request.authorization_url ?? "", before, authConfigId: request.auth_config_id ?? undefined };
             }
             const installs = (listed.items ?? []) as Install[];
@@ -1375,13 +1380,13 @@ export const liveSource: PodSource = {
         }
 
         try {
-            const request = (await client.connectors.createConnectRequest(orgId, {
+            const request = (await client.connectors.createConnectRequest(orgId, fromPod({
                 auth_config_id: installId,
                 /* Without it the callback ends on the app root, in the
                    provider's tab, with nothing to say what happened. */
                 return_to: returnTo,
                 ...(connectionFields ? { connection_fields: connectionFields } : {}),
-            })) as { authorization_url?: string | null };
+            }))) as { authorization_url?: string | null };
             return { authorizeUrl: request.authorization_url ?? "", before, authConfigId: installId };
         } catch (problem) {
             /* An install made moments ago with nobody on it has nothing to
@@ -1414,6 +1419,11 @@ export const liveSource: PodSource = {
 
     async listPodConnectors(podId: string) {
         return readPodConnectors(await lemma(podId).connectors.pod.list());
+    },
+
+    async podConnections(podId: string) {
+        /* By path: the SDK has no method for it yet. */
+        return readPodConnections(await lemma(podId).request("GET", `/pods/${encodeURIComponent(podId)}/connections`));
     },
 
     async connectPodConnector(podId: string, platform: string, podConnector: string): Promise<Surface> {
@@ -1455,10 +1465,6 @@ export const liveSource: PodSource = {
             "POST", `/pods/${encodeURIComponent(podId)}/connectors/${encodeURIComponent(slug)}/ask-members`,
             { body: userIds ? { user_ids: userIds } : {} },
         ));
-    },
-
-    async listShareRoles(podId: string) {
-        return readShareRoles(await lemma(podId).podRoles.list(podId));
     },
 
     async listPodAccounts(podId: string) {

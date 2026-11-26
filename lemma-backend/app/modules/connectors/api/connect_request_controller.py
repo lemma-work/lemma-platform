@@ -63,6 +63,17 @@ async def initiate_connect_request(
     data: ConnectRequestInitiateSchema,
     connector_service: ConnectorServiceDep,
 ) -> ConnectRequestResponseSchema:
+    if data.pod_id is not None:
+        from app.modules.connectors.services.connect_into_pod import (
+            require_member_of,
+        )
+
+        await require_member_of(
+            connector_service.uow,
+            pod_id=data.pod_id,
+            user_id=user.id,
+            organization_id=organization_id,
+        )
     connect_request = await connector_service.initiate_connect_request(
         user_id=user.id,
         organization_id=organization_id,
@@ -70,6 +81,7 @@ async def initiate_connect_request(
         auth_config_id=data.auth_config_id,
         return_to=data.return_to,
         connection_fields=data.connection_fields,
+        pod_id=data.pod_id,
     )
 
     return ConnectRequestResponseSchema.model_validate(connect_request)

@@ -56,6 +56,9 @@ from app.modules.connectors.services.connector_operation_service import (
 from app.modules.connectors.services.installation_execution import (
     resolve_installation_execution,
 )
+from app.modules.connectors.services.pod_connector_operations import (
+    is_app_connector,
+)
 from app.modules.connectors.services.reauth_recovery import (
     clear_reauth_mark,
     credential_is_renewable,
@@ -117,9 +120,15 @@ class ConnectorOperationUseCases:
         async with pod_context_scope(
             self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
         ) as scope:
-            if act_as == "app":
+            service = self._build(scope.uow)
+            # Only a function may *ask* to be the app (#1248) -- unless the
+            # connector is APP, where every call is the app whoever asks: its
+            # declaration is the consent, and `connector.use` is the gate.
+            if act_as == "app" and not await is_app_connector(
+                service.pod_connector_resolver, pod_id, slug
+            ):
                 require_function_run(scope.ctx)
-            resolved = await self._build(scope.uow).resolve_pod_connector_execution(
+            resolved = await service.resolve_pod_connector_execution(
                 scope.ctx,
                 pod_id=pod_id,
                 slug=slug,

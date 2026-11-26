@@ -1,144 +1,205 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { source, type Connector, type Pod, type PodConnector } from "@/data";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { askedLine, freshSlug, source, type Connector, type Pod, type PodConnectorMode } from "@/data";
 import {
-    askedLine, connectorName, coverageLine, freshSlug, mayUseOnceConnected, modeBadge, myStatus, slugProblem, statusNote, truncatedLine, waitingLine, wantsCoverage,
-    type PodConnectorMode, type PodConnectorPatch,
-} from "@/data/pod-connectors";
-import {
-    ownedBy, shareableFor, suggestedSlug, visibilityWord,
-    type Grantee, type PodAccount, type PodAccountPatch,
-} from "@/data/pod-accounts";
-import { connectorChanges } from "@/data/pod-connectors";
-import { CONNECTOR_USE } from "@/data/agents";
+    botLogins, botReach, botSlug, connectedCount, connectionSaid, hasBotMode, missingLine, someoneMissing, twiceOver,
+    type PodConnection, type PodConnections as Connections, type RowStatus,
+} from "@/data/pod-connections";
+import { isLandingPreview } from "@/marketing/preview-mode";
+import { Calm, Problem } from "@/outcomes/calm";
+import { PageActs } from "@/outcomes/page-acts";
+import { TryAgain, codeOf } from "@/outcomes/read-again";
 import { useMe } from "@/session/use-me";
+import { markTint } from "@/shell/mark-tint";
+import { ConfirmDialog } from "@/shell/confirm-dialog";
 import { Modal } from "@/shell/modal";
-import { CheckCircleIcon, PlusIcon, WarningIcon } from "@/ui/icons";
+import { AgentIcon, ChevronRightIcon, CloseIcon, PlusIcon, SearchIcon } from "@/ui/icons";
 import { LoadingIndicator } from "@/ui/loading";
-import { ProblemLine } from "./connection-problem";
-import { addChoices, focusTarget, type FocusTarget } from "./choices";
-import { useConnectFlow, useConnectionsData, usePodMay, type SignIn } from "./pod-connect";
+import { SkeletonRows } from "@/ui/skeleton";
+import { addChoices, focusTarget, type AddChoice } from "./choices";
+import { connectorProblem, type Install } from "./install";
+import { useConnectFlow, type ConnectTarget } from "./pod-connect";
+import { ServiceMark } from "./service-mark";
 import { SignInLink } from "./sign-in-link";
-import type { Install } from "./install";
 
 /** `pod.connector.manage`: add, change and remove the pod's connectors, and
  *  take any account out of the pod. Never sharing one — that is its owner's. */
 export const MANAGE_CONNECTORS = "pod.connector.manage";
 
-/** A teammate's connections: what it works through, and whose account each
- *  runs as.
+type Flow = ReturnType<typeof useConnectFlow>;
+
+/** Under the pod's connectors, so whatever reads those again — a connect, a
+ *  switch on the organization's Connectors page — reads this again too. */
+const connectionsKey = (podId: string) => ["pod-connectors", podId, "connections"] as const;
+
+/** A Lemma's Connections: one row per app it uses, each saying whether it
+ *  works for me and whose account it runs as, with the one button that
+ *  helps — Connect, Use it here, Reconnect, or nothing where the fix is
+ *  somebody else's (and then the row says whose). Everything else about an
+ *  app is in its sheet: whose account it runs as, the sandbox switch once an
+ *  account is shared, my account, who has connected, what it's for, and
+ *  taking it out.
  *
- *  This replaced the organization's Connectors page embedded under About,
- *  which said a teammate "can use" every account in the organization — never
- *  true, and less so now: a pod declares the connectors it uses, each by a
- *  slug, and the connector decides whose account a call runs as. So this is
- *  the pod's list, with my own standing on each one, and — for the people
- *  who may change it — the way to add, point and remove them. Below it, the
- *  accounts of mine in use here, which only I can share or withdraw.
+ *  Read from one answer (`GET /pods/{pod}/connections`), judged by the
+ *  server for whoever is asking, so the page cannot say "Connect" to someone
+ *  whose account is already in use here.
  *
- *  `focus` is the connector a link named (`?connector=gmail`), which is
- *  where every typed refusal's `connect_url` sends a person. */
+ *  `focus` is what a link named (`?connector=github`) — a slug, an
+ *  installation or a catalog app. It picks out that app's row; an app the
+ *  Lemma doesn't use yet gets a row of its own whose Connect adds it. */
 export function PodConnections({ pod, focus }: { pod: Pod; focus: string | null }) {
     const me = useMe() ?? "";
-    const data = useConnectionsData(pod);
-    const accounts = useQuery({ queryKey: ["pod-accounts", pod.id], queryFn: () => source.listPodAccounts(pod.id), staleTime: 30_000 });
-    const may = usePodMay(pod.id, MANAGE_CONNECTORS).allowed;
-    /* Asked only of a server that does not say `can_use` on each connector. */
-    const unsaid = (data.connectors.data ?? []).some((one) => one.canUse === null);
-    const podUse = usePodMay(pod.id, CONNECTOR_USE, unsaid);
-    const podMayUse = podUse.answered ? podUse.allowed : null;
-    const flow = useConnectFlow(pod, data.titles, data.installs.data);
-    const [editing, setEditing] = useState<PodConnector | "new" | null>(null);
-    /* The connector just added, drawn as if a link had named it: the row
-       its Connect is on, in view. */
+    const cache = useQueryClient();
+    const preview = isLandingPreview();
+    const read = useQuery({ queryKey: connectionsKey(pod.id), queryFn: () => source.podConnections(pod.id), staleTime: 30_000 });
+    const catalog = useQuery({ queryKey: ["connectors"], queryFn: () => source.listConnectors(), staleTime: 10 * 60_000 });
+    /* Under the key the organization's Connectors page keeps them by. A member
+       may be refused them, and still connects against what the row names. */
+    const installs = useQuery({ queryKey: ["installs", pod.orgId], queryFn: () => source.listInstallations(pod.orgId), staleTime: 60_000, retry: false });
+    const titles = useMemo(() => new Map((catalog.data ?? []).map((one) => [one.id, one])), [catalog.data]);
+    const flow = useConnectFlow(pod, titles, installs.data);
+    const [openSlug, setOpenSlug] = useState<string | null>(null);
+    const [adding, setAdding] = useState(false);
+    const [sharing, setSharing] = useState<PodConnection | null>(null);
+    /* The app just added, picked out as if a link had named it. */
     const [added, setAdded] = useState<string | null>(null);
 
-    const list = data.connectors.data ?? [];
-    const podAccounts = accounts.data ?? [];
-    const ownerName = (userId: string) =>
-        userId && userId === me ? "you" : pod.members.find((one) => one.userId === userId)?.name ?? "";
-    const titleOf = (connectorId: string) => data.titles.get(connectorId)?.title ?? connectorId;
-    const usableInstalls = (data.installs.data ?? []).filter((one) => one.status !== "DISABLED");
-    /* Read only once the lists it is judged against are in: until then a
-       catalog id reads as a name that matches nothing. The installations
-       may be refused to a member, which leaves the catalog to match. */
-    const settled = data.connectors.isSuccess && !data.catalog.isPending && !data.installs.isPending;
-    const target = settled ? focusTarget(focus, list, usableInstalls, data.catalog.data ?? []) : { kind: "none" as const };
-    const focusedSlug = target.kind === "connector" ? target.slug : added;
+    const connections = read.data;
+    const items = useMemo(() => connections?.items ?? [], [connections]);
+    const may = !preview && (connections?.mayManage ?? false);
+    const named = useMemo(() => twiceOver(items), [items]);
+    const usableInstalls = (installs.data ?? []).filter((one) => one.status !== "DISABLED");
+    /* Judged only once the lists it is judged against are in: until then a
+       catalog id reads as a name that matches nothing. */
+    const settled = read.isSuccess && !catalog.isPending && !installs.isPending;
+    const target = settled ? focusTarget(focus, items, usableInstalls, catalog.data ?? []) : { kind: "none" as const };
+    const focused = target.kind === "connector" ? target.slug : added;
+    const opened = openSlug ? items.find((one) => one.slug === openSlug) ?? null : null;
+
+    /* Who each per-member app still waits on, by name, for the band and the
+       rows: asked only of the apps an editor's count says someone is
+       missing from. */
+    const counted = may ? items.filter(someoneMissing) : [];
+    const coverages = useQueries({
+        queries: counted.map((item) => ({
+            queryKey: ["pod-connectors", pod.id, "coverage", item.slug],
+            queryFn: () => source.podConnectorCoverage(pod.id, item.slug),
+            staleTime: 30_000,
+            retry: false,
+        })),
+    });
+    const waitingOn = new Map(counted.map((item, index) => [
+        item.slug,
+        (coverages[index]?.data?.waitingOn ?? []).filter((one) => one.userId !== me),
+    ]));
+
+    const refresh = () => {
+        void cache.invalidateQueries({ queryKey: ["pod-connectors", pod.id] });
+        void cache.invalidateQueries({ queryKey: ["pod-accounts", pod.id] });
+        void cache.invalidateQueries({ queryKey: ["accounts", pod.orgId] });
+    };
+    const band = items.filter((item) => (waitingOn.get(item.slug) ?? []).length > 0);
 
     return (
-        <div className="podconn">
-            <section className="podconn__section" aria-labelledby="podconn-used">
-                <header className="podconn__head">
-                    <h2 id="podconn-used">What {pod.name} works through</h2>
-                    {may && (
-                        <button className="aboutpage__action" onClick={() => setEditing("new")}>
-                            <PlusIcon size={14} /> Add a connector
-                        </button>
+        <div className="kpc">
+            {may && (
+                <PageActs className="kpc-acts">
+                    <button type="button" className="b b--m b--primary" disabled={!read.isSuccess} onClick={() => setAdding(true)}>
+                        <PlusIcon size={16} /> Add an app
+                    </button>
+                </PageActs>
+            )}
+
+            {read.isPending && (
+                <SkeletonRows label={"Reading " + pod.name + "’s connections"} rows={4}
+                    slow={"Still reading " + pod.name + "’s connections. It’s slower than usual."} />
+            )}
+            {read.isError && (
+                <Calm tone="warn" title={"Couldn’t read " + pod.name + "’s connections"} note={codeOf(read.error)}
+                    actions={<TryAgain busy={read.isFetching} onClick={() => void read.refetch()} />}>
+                    Nothing in them changed. {pod.name} still works through the apps it was given.
+                </Calm>
+            )}
+
+            {connections && (
+                <>
+                    {band.length > 0 && (
+                        <div className="kneed" role="region" aria-label="Needs you">
+                            {band.map((item) => (
+                                <WaitingRow key={item.slug} pod={pod} item={item} people={waitingOn.get(item.slug) ?? []} />
+                            ))}
+                        </div>
                     )}
-                </header>
-                {data.connectors.isPending && <p className="aboutpage__quiet" role="status">Reading its connectors…</p>}
-                {data.connectors.isError && (
-                    <p className="aboutpage__quiet" role="alert">
-                        Couldn’t read {pod.name}’s connectors.{" "}
-                        <button className="linkish" onClick={() => void data.connectors.refetch()}>Try again</button>
-                    </p>
-                )}
-                {data.connectors.isSuccess && list.length === 0 && (
-                    <p className="aboutpage__quiet">
-                        None yet. {may ? "Add one, and say whose account it runs as." : "Someone who can change " + pod.name + " adds them."}
-                    </p>
-                )}
-                {list.length > 0 && (
-                    <ul className="podconn__list">
-                        {list.map((connector) => (
-                            <ConnectorRow
-                                key={connector.id}
-                                pod={pod}
-                                connector={connector}
-                                title={titleOf(connector.connectorId)}
-                                owner={ownerName(connector.sharedOwnerId)}
-                                status={myStatus(connector, data.mine, me, ownedBy(podAccounts, me).find((one) => one.authConfigId === connector.authConfigId && one.isMemberDefault)?.accountId)}
-                                focused={focusedSlug === connector.slug}
-                                may={may}
-                                usable={mayUseOnceConnected(connector, podMayUse)}
-                                busy={flow.busy === connector.slug}
-                                pending={flow.pending}
-                                waiting={flow.waiting === connector.slug}
-                                signIn={flow.link?.slug === connector.slug ? flow.link : null}
-                                problem={flow.problem?.slug === connector.slug ? flow.problem.text : ""}
-                                onConnect={(reconnect) => flow.connect(connector, reconnect)}
-                                onEdit={() => setEditing(connector)}
-                            />
-                        ))}
-                    </ul>
-                )}
-                {target.kind === "connect" && focus && (
-                    <ConnectOffer pod={pod} name={focus} target={target} flow={flow} />
-                )}
-                {target.kind === "unknown" && (
-                    <p className="aboutpage__quiet" role="alert">{pod.name} has no connector called {focus} any more.</p>
-                )}
-            </section>
 
-            <MyAccountsHere pod={pod} me={me} may={may} accounts={podAccounts} reading={accounts} connectors={list} titleOf={titleOf}
-                orgAccounts={data.accounts.data ?? []} installs={data.installs.data ?? []} />
+                    {target.kind === "connect" && focus && (
+                        <AddItRow pod={pod} name={focus} title={target.title} entry={titles.get(target.connectorId) ?? null}
+                            connect={{ slug: focus, connectorId: target.connectorId, authConfigId: target.installId }} flow={flow} />
+                    )}
+                    {target.kind === "unknown" && (
+                        <p className="kpc-quiet" role="status">{pod.name} doesn’t use anything called {focus}.</p>
+                    )}
 
-            {editing && (
-                <ConnectorForm
+                    {items.length > 0 ? (
+                        <div className="klist">
+                            {items.map((item) => (
+                                <ConnectionRow
+                                    key={item.slug}
+                                    pod={pod}
+                                    item={item}
+                                    me={me}
+                                    may={may}
+                                    named={named.has(item.connectorId)}
+                                    waiting={waitingOn.get(item.slug) ?? []}
+                                    focused={focused === item.slug}
+                                    flow={flow}
+                                    onOpen={() => setOpenSlug(item.slug)}
+                                    onShareMine={() => setSharing(item)}
+                                    onChanged={refresh}
+                                />
+                            ))}
+                        </div>
+                    ) : target.kind !== "connect" && (
+                        <Calm icon="plug" title={pod.name + " doesn’t use any apps yet"}
+                            actions={may ? <button type="button" className="b b--m b--primary" onClick={() => setAdding(true)}><PlusIcon size={16} /> Add an app</button> : undefined}>
+                            {may ? "Add one, and you’re signing in. Others connect theirs the first time " + pod.name + " needs it."
+                                : "Someone who can change " + pod.name + " adds them."}
+                        </Calm>
+                    )}
+                </>
+            )}
+
+            {opened && connections && (
+                <ConnectionSheet
                     pod={pod}
-                    editing={editing === "new" ? null : editing}
-                    connectors={list}
+                    item={opened}
+                    items={items}
+                    me={me}
+                    may={may}
+                    named={named.has(opened.connectorId)}
+                    bot={connections.githubBot}
+                    flow={flow}
+                    onShareMine={() => setSharing(opened)}
+                    onChanged={refresh}
+                    onClose={() => setOpenSlug(null)}
+                />
+            )}
+            {sharing && (
+                <ShareMine pod={pod} item={sharing} me={me} onClose={() => setSharing(null)}
+                    onDone={() => { setSharing(null); refresh(); }} />
+            )}
+            {adding && connections && (
+                <AddApp
+                    pod={pod}
+                    connections={connections}
+                    catalog={catalog.data ?? []}
                     installs={usableInstalls}
-                    catalog={data.catalog.data ?? []}
-                    accounts={podAccounts}
-                    titleOf={titleOf}
-                    ownerName={ownerName}
-                    onClose={() => setEditing(null)}
-                    onConnect={(made) => { setEditing(null); setAdded(made.slug); flow.connect(made); }}
-                    onAdded={(made) => setAdded(made.slug)}
+                    titleOf={(id) => titles.get(id)?.title ?? id}
+                    flow={flow}
+                    onClose={() => setAdding(false)}
+                    onAdded={(slug) => { setAdding(false); setAdded(slug); refresh(); }}
                 />
             )}
             {flow.element}
@@ -146,565 +207,748 @@ export function PodConnections({ pod, focus }: { pod: Pod; focus: string | null 
     );
 }
 
-/** What a link named that this pod has no connector for: an app from the
- *  catalog, or an installation of the organization's. Agents send people
- *  here for exactly that, so it is said as the thing to do, with the button
- *  that does it — connecting the person's own account, which the server
- *  installs the app for on the way where it may. */
-function ConnectOffer({ pod, name, target, flow }: {
-    pod: Pod;
-    name: string;
-    target: Extract<FocusTarget, { kind: "connect" }>;
-    flow: ReturnType<typeof useConnectFlow>;
-}) {
-    /* A connector in shape only, so the flow that connects the pod's own can
-       connect this one: keyed by the name the link used, which no pod
-       connector has. */
-    const stand: PodConnector = useMemo(() => ({
-        id: "", slug: name, connectorId: target.connectorId, authConfigId: target.installId, installationName: "",
-        mode: "PER_MEMBER", status: "READY", purpose: "", required: false, sharedAccount: "", sharedPodAccountId: "", sharedOwnerId: "",
-        visibility: "POD", canUse: null,
-    }), [name, target.connectorId, target.installId]);
-    const offer = useRef<HTMLDivElement>(null);
-    useEffect(() => { offer.current?.scrollIntoView({ block: "center" }); }, []);
-    return (
-        <div ref={offer} className="podconn__offer" role="region" aria-label={"Connect " + target.title}>
-            <span className="podconn__what">
-                <b>Connect {target.title} for {pod.name}</b>
-                <span>Sign in with your own {target.title} account, so {pod.name} can work with it for you.</span>
-                {flow.waiting === name && <span className="podconn__mine" role="status">Finish in the other tab…</span>}
-                {flow.link?.slug === name && <SignInLink url={flow.link.url} app={flow.link.app} opened={flow.link.opened} />}
-                {flow.problem?.slug === name && <span className="reachrow__error" role="alert">{flow.problem.text}</span>}
+/** A dot and a word. */
+function Status({ status }: { status: RowStatus }) {
+    const tone = status.tone === "ok" ? "" : " kstatus--" + status.tone;
+    return <span className={"kstatus" + tone}>{status.word}</span>;
+}
+
+/** An app's mark: its logo in the kit's circle, or for the bot, the Lemma's
+ *  own tint with a robot on it — the Lemma acting, not a person. */
+function AppMark({ pod, item, entry, large = false }: { pod: Pod; item: Pick<PodConnection, "mode" | "title" | "icon">; entry?: Connector | null; large?: boolean }) {
+    if (item.mode === "APP") {
+        return (
+            <span className={"kmark" + (large ? " kmark--lg" : "")} style={markTint(pod.id)} aria-hidden="true">
+                <AgentIcon size={large ? 26 : 20} />
             </span>
-            <button className="btn btn--primary" disabled={flow.pending} onClick={() => flow.connect(stand)}>
-                {flow.busy === name ? <LoadingIndicator inline label="Opening sign-in" /> : "Connect"}
-            </button>
+        );
+    }
+    return <ServiceMark entry={{ title: item.title, icon: item.icon || entry?.icon || "" }} large={large} />;
+}
+
+/** Where a sign-in for this app stands: being fetched, out in another tab,
+ *  a link where no tab opened, or why it didn't start. */
+function SignInState({ slug, app, flow, onDone }: { slug: string; app: string; flow: Flow; onDone: () => void }) {
+    return (
+        <>
+            {flow.waiting === slug && (
+                <span className="kpc-wait" role="status">
+                    Finish signing in to {app} in the other tab…
+                    <button type="button" className="b b--s b--secondary" onClick={onDone}>I’m done</button>
+                </span>
+            )}
+            {flow.link?.slug === slug && flow.waiting !== slug && <SignInLink url={flow.link.url} app={flow.link.app} opened={flow.link.opened} />}
+            {flow.problem?.slug === slug && <span className="kpc-problem" role="alert">{flow.problem.text}</span>}
+        </>
+    );
+}
+
+/** One app: its mark and name, what it runs as for me (or why it can't), and
+ *  the one thing I can do about it. The row opens its sheet. */
+function ConnectionRow({ pod, item, me, may, named, waiting, focused, flow, onOpen, onShareMine, onChanged }: {
+    pod: Pod;
+    item: PodConnection;
+    me: string;
+    may: boolean;
+    /** The Lemma has two of this app: its slug tells them apart. */
+    named: boolean;
+    /** Others it waits on, by an editor's count. */
+    waiting: { name: string }[];
+    focused: boolean;
+    flow: Flow;
+    onOpen: () => void;
+    onShareMine: () => void;
+    onChanged: () => void;
+}) {
+    const row = useRef<HTMLDivElement>(null);
+    useEffect(() => { if (focused) row.current?.scrollIntoView({ block: "center" }); }, [focused]);
+    const useHere = useUseHere(pod, item, onChanged);
+    const said = connectionSaid(item, pod.name, me);
+    const standing = item.me.standing;
+    const busy = flow.busy === item.slug;
+    const out = flow.waiting === item.slug;
+    /* My standing first: when it asks something of me, that is the row's
+       one thing. Otherwise an editor sees who it still waits on. */
+    const mine = standing === "connect" || standing === "reconnect" || standing === "use_existing";
+    const count = may && !mine && standing !== "not_allowed" && item.mode === "PER_MEMBER" && item.status === "READY" ? connectedCount(item.coverage) : "";
+    const status: RowStatus = !mine && waiting.length > 0
+        ? { word: "Waiting on " + (waiting.length === 1 ? waiting[0].name : waiting.length + " people"), tone: "warn" }
+        : said.status;
+    const ownable = Boolean(item.me.account || item.me.existing);
+    const sharedWaiting = item.mode === "SHARED" && (standing === "waiting" || item.status === "NEEDS_ACCOUNT") && item.status !== "UNAVAILABLE";
+
+    return (
+        <div ref={row} className="krow krow--open kpc-row" data-focused={focused || undefined}
+            onClick={(event) => { if (!(event.target as HTMLElement).closest("button, a, input")) onOpen(); }}>
+            <AppMark pod={pod} item={item} />
+            <span className="kpc-main">
+                <span className="kpc-name">
+                    <button type="button" className="kpc-open" aria-haspopup="dialog" onClick={onOpen}>{item.title}</button>
+                    {named && <span className="ktag kpc-slug">{item.slug}</span>}
+                </span>
+                <span className="kpc-line">{said.line}</span>
+                <SignInState slug={item.slug} app={item.title} flow={flow} onDone={flow.refresh} />
+                {useHere.isError && <span className="kpc-problem" role="alert">{connectorProblem(useHere.error, "It couldn’t be added here just now.")}</span>}
+            </span>
+            <span className="kpc-side">
+                {count && <span className="kpc-who">{count}</span>}
+                {standing === "use_existing" ? (
+                    <>
+                        <span className="kpc-offer">You’ve connected {item.title} already.</span>
+                        <button type="button" className="b b--s b--primary" disabled={useHere.isPending} onClick={() => useHere.mutate()}>
+                            {useHere.isPending ? "Adding…" : "Use it here"}
+                        </button>
+                    </>
+                ) : (standing === "connect" || standing === "reconnect") && !out ? (
+                    <>
+                        <Status status={said.status} />
+                        <button type="button" className="b b--s b--primary" disabled={flow.pending}
+                            onClick={() => flow.connect(target(item), standing === "reconnect")}>
+                            {busy ? <LoadingIndicator inline label="Opening sign-in" /> : standing === "reconnect" ? "Reconnect" : "Connect"}
+                        </button>
+                    </>
+                ) : sharedWaiting && may && ownable ? (
+                    <>
+                        <Status status={said.status} />
+                        <button type="button" className="b b--s b--primary" onClick={onShareMine}>Use mine</button>
+                    </>
+                ) : !out && <Status status={status} />}
+                <ChevronRightIcon size={16} className="kpc-chev" aria-hidden="true" />
+            </span>
         </div>
     );
 }
 
-function ConnectorRow({ pod, connector, title, owner, status, focused, may, usable, busy, pending, waiting, signIn, problem, onConnect, onEdit }: {
-    pod: Pod;
-    connector: PodConnector;
-    title: string;
-    owner: string;
-    status: ReturnType<typeof myStatus>;
-    focused: boolean;
-    may: boolean;
-    /** I could run calls through it once connected. A per-member one I
-     *  could not use offers no Connect: an account nothing would use. */
-    usable: boolean;
-    busy: boolean;
-    /** A sign-in is being fetched for some connector on this page. */
-    pending: boolean;
-    waiting: boolean;
-    signIn: SignIn | null;
-    problem: string;
-    onConnect: (reconnect: boolean) => void;
-    onEdit: () => void;
-}) {
-    const cache = useQueryClient();
-    const row = useRef<HTMLLIElement>(null);
-    const [confirming, setConfirming] = useState(false);
-    useEffect(() => { if (focused) row.current?.scrollIntoView({ block: "center" }); }, [focused]);
-    const remove = useMutation({
-        mutationFn: () => source.removePodConnector(pod.id, connector.slug),
-        onSuccess: () => {
-            void cache.invalidateQueries({ queryKey: ["pod-connectors", pod.id] });
-            void cache.invalidateQueries({ queryKey: ["pod-accounts", pod.id] });
-        },
+/** What a sign-in is started for, from a row. */
+function target(item: PodConnection): ConnectTarget {
+    return { slug: item.slug, connectorId: item.connectorId, authConfigId: item.authConfigId, installationName: item.installationName };
+}
+
+/** "Use it here": an account of mine the organization already has, put in
+ *  this Lemma — no sign-in. The server makes it my own here, and declares
+ *  the app if it has to. */
+function useUseHere(pod: Pod, item: PodConnection, onChanged: () => void) {
+    return useMutation({
+        mutationFn: () => source.addPodAccount(pod.id, item.me.existing?.accountId ?? ""),
+        onSuccess: onChanged,
     });
-    /* Asking is once a day per person on the server's side, so pressing it
-       again is harmless: it says who was asked already. */
-    const ask = useMutation({ mutationFn: () => source.askMembersToConnect(pod.id, connector.slug) });
-    /* Who it waits on is its own request, per connector and only an editor's
-       (it refuses anyone else), so it is asked for only where it is drawn.
-       Keyed under the pod's connectors: whatever reads those again — a
-       connect, a change — reads this again too. */
-    const counted = wantsCoverage(connector, may);
-    const covering = useQuery({
-        queryKey: ["pod-connectors", pod.id, "coverage", connector.slug],
-        queryFn: () => source.podConnectorCoverage(pod.id, connector.slug),
-        enabled: counted,
+}
+
+/** An app a link named that the Lemma doesn't use yet. Its Connect is the
+ *  ordinary sign-in, started for this Lemma, which the server adds the app
+ *  to when it finishes. */
+function AddItRow({ pod, name, title, entry, connect, flow }: {
+    pod: Pod;
+    name: string;
+    title: string;
+    entry: Connector | null;
+    connect: ConnectTarget;
+    flow: Flow;
+}) {
+    const row = useRef<HTMLDivElement>(null);
+    useEffect(() => { row.current?.scrollIntoView({ block: "center" }); }, []);
+    return (
+        <div className="klist">
+            <div ref={row} className="krow kpc-row" data-focused role="region" aria-label={"Connect " + title}>
+                <ServiceMark entry={{ title, icon: entry?.icon ?? "" }} />
+                <span className="kpc-main">
+                    <span className="kpc-name"><b>{title}</b></span>
+                    <span className="kpc-line">{pod.name} doesn’t use {title} yet. Connect your account and it will, as each person’s own.</span>
+                    <SignInState slug={name} app={title} flow={flow} onDone={flow.refresh} />
+                </span>
+                <span className="kpc-side">
+                    {flow.waiting !== name && (
+                        <button type="button" className="b b--s b--primary" disabled={flow.pending} onClick={() => flow.connect(connect)}>
+                            {flow.busy === name ? <LoadingIndicator inline label="Opening sign-in" /> : "Connect"}
+                        </button>
+                    )}
+                </span>
+            </div>
+        </div>
+    );
+}
+
+/** One line of the band: who hasn't connected an app the Lemma uses as each
+ *  person's own, and asking them. Asking is once a day per person on the
+ *  server's side, so asking again only says who was asked already. */
+function WaitingRow({ pod, item, people }: { pod: Pod; item: PodConnection; people: { userId: string; name: string }[] }) {
+    const ask = useMutation({ mutationFn: () => source.askMembersToConnect(pod.id, item.slug, people.map((one) => one.userId)) });
+    return (
+        <div className="krow kpc-need">
+            <span className="kpc-line kpc-line--ink">
+                {missingLine(people.map((one) => one.name), item.title, pod.name)}
+                {ask.data && <span className="kpc-said" role="status"> {askedLine(ask.data)}</span>}
+                {ask.isError && <span className="kpc-problem" role="alert"> {connectorProblem(ask.error, "They couldn’t be asked just now.")}</span>}
+            </span>
+            {!ask.data && (
+                <button type="button" className="b b--s b--secondary" disabled={ask.isPending} onClick={() => ask.mutate()}>
+                    {ask.isPending ? "Asking…" : people.length === 1 ? "Ask " + people[0].name : "Ask them"}
+                </button>
+            )}
+        </div>
+    );
+}
+
+/* ── the sheet ──────────────────────────────────────────────────────── */
+
+/** Focus moves in, the keyboard stays in while it is open, Escape closes it,
+ *  and focus goes back where it was. A dialog over it answers its own keys. */
+function useSheetKeys(panel: RefObject<HTMLElement | null>, onClose: () => void) {
+    const close = useRef(onClose);
+    close.current = onClose;
+    useEffect(() => {
+        const previous = document.activeElement as HTMLElement | null;
+        panel.current?.querySelector<HTMLElement>(".ksheet__x")?.focus();
+        const onKey = (event: KeyboardEvent) => {
+            if (event.defaultPrevented || document.querySelector(".modal")) return;
+            if (event.key === "Escape") { event.preventDefault(); close.current(); return; }
+            if (event.key !== "Tab" || !panel.current) return;
+            const focusable = Array.from(panel.current.querySelectorAll<HTMLElement>("button:not([disabled]), a[href], input:not([disabled]), textarea"))
+                .filter((el) => el.getClientRects().length > 0);
+            const first = focusable[0], last = focusable.at(-1);
+            if (!first) { event.preventDefault(); return; }
+            if (!panel.current.contains(document.activeElement)) { event.preventDefault(); first.focus(); return; }
+            if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+            else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+        };
+        document.addEventListener("keydown", onKey);
+        return () => {
+            document.removeEventListener("keydown", onKey);
+            if (previous?.isConnected) previous.focus();
+        };
+    }, [panel]);
+}
+
+/** One app in this Lemma, from the side, in the order people need it: whose
+ *  account it runs as, the sandbox switch once it's mine for everyone, my
+ *  account, who has connected, what it's for, and taking it out. */
+function ConnectionSheet({ pod, item, items, me, may, named, bot, flow, onShareMine, onChanged, onClose }: {
+    pod: Pod;
+    item: PodConnection;
+    items: PodConnection[];
+    me: string;
+    may: boolean;
+    named: boolean;
+    bot: Connections["githubBot"];
+    flow: Flow;
+    onShareMine: () => void;
+    onChanged: () => void;
+    onClose: () => void;
+}) {
+    const panel = useRef<HTMLElement>(null);
+    const titleId = useId();
+    useSheetKeys(panel, onClose);
+    const cache = useQueryClient();
+    const app = item.title;
+    const mineShared = item.mode === "SHARED" && item.runsAs.ownerUserId !== "" && item.runsAs.ownerUserId === me;
+    /* My pod account that runs it for everyone: the sandbox switch is on it,
+       and switching back to each person's own takes it back to mine alone. */
+    const podAccounts = useQuery({
+        queryKey: ["pod-accounts", pod.id],
+        queryFn: () => source.listPodAccounts(pod.id),
+        enabled: mineShared,
         staleTime: 30_000,
     });
-    const coverage = counted ? covering.data ?? null : null;
-    const ok = status.standing === "connected";
-    const asks = status.standing === "connect" || status.standing === "reconnect";
-    const shut = asks && connector.mode === "PER_MEMBER" && !usable;
-    return (
-        <li ref={row} className="podconn__row" data-focused={focused || undefined}>
-            <span className={"acct__dot" + (ok ? " acct__dot--ok" : "")} aria-hidden="true" />
-            <span className="podconn__what">
-                <span className="podconn__name">
-                    {/* "support-inbox (Gmail)": the slug apps and agents call it
-                        by, and its app when the slug does not already say it. */}
-                    <b>{connector.slug}</b>
-                    {connectorName(connector.slug, title) !== connector.slug && <span className="podconn__app">({title})</span>}
-                    <span className="pill">{modeBadge(connector, owner)}</span>
-                    {connector.required && <span className="pill">Everyone connects</span>}
-                </span>
-                {connector.purpose && <span className="podconn__purpose">{connector.purpose}</span>}
-                {coverage && (
-                    /* An editor's view: who of the people allowed to use it has
-                       connected. Names, never their accounts. */
-                    <span className="podconn__coverage">
-                        <b>{coverageLine(coverage)}</b>
-                        {waitingLine(coverage) && <span> · {waitingLine(coverage)}</span>}
-                        {truncatedLine(coverage) && <span> · {truncatedLine(coverage)}</span>}
-                        {coverage.waitingOn.length > 0 && (
-                            <button className="linkish" disabled={ask.isPending} onClick={() => ask.mutate()}>
-                                {ask.isPending ? "Asking…" : "Ask members to connect"}
-                            </button>
-                        )}
-                        {ask.data && <span role="status"> {askedLine(ask.data)}</span>}
-                        {ask.isError && <ProblemLine as="small" className="reachrow__error" error={ask.error} fallback="They could not be asked." />}
-                    </span>
-                )}
-                {counted && covering.isPending && <span className="podconn__coverage" role="status">Counting who has connected…</span>}
-                {counted && covering.isError && (
-                    <span className="podconn__coverage">
-                        <ProblemLine as="small" className="reachrow__error" error={covering.error} fallback="Couldn’t count who has connected." />
-                        <button className="linkish" onClick={() => void covering.refetch()}>Try again</button>
-                    </span>
-                )}
-                <span className={"podconn__mine" + (ok ? "" : " podconn__mine--needs")}>
-                    {ok ? <CheckCircleIcon size={13} /> : <WarningIcon size={13} />} {shut ? "Not one you can use in " + pod.name : status.note || statusNote(connector)}
-                </span>
-                {waiting && <span className="podconn__mine" role="status">Finish in the other tab…</span>}
-                {signIn && <SignInLink url={signIn.url} app={signIn.app} opened={signIn.opened} />}
-                {problem && <span className="reachrow__error" role="alert">{problem}</span>}
-                {remove.isError && <ProblemLine as="small" className="reachrow__error" error={remove.error} fallback="It could not be removed." />}
-            </span>
-            <span className="acct__acts">
-                {asks && !shut && (
-                    <button className="btn btn--primary" disabled={busy || pending} onClick={() => onConnect(status.standing === "reconnect")}>
-                        {busy ? <LoadingIndicator inline label="Opening sign-in" /> : status.standing === "reconnect" ? "Reconnect" : "Connect"}
-                    </button>
-                )}
-                {may && !confirming && <button className="linkish reachrow__quiet" onClick={onEdit}>Change</button>}
-                {may && (confirming ? (
-                    <span className="acct__confirm">
-                        <span>Agents, apps and bots using {connector.slug} stop working.</span>
-                        <button className="btn reachrow__drop" disabled={remove.isPending} onClick={() => remove.mutate()}>
-                            {remove.isPending ? "Removing…" : "Remove"}
-                        </button>
-                        <button className="linkish" onClick={() => setConfirming(false)}>Keep</button>
-                    </span>
-                ) : <button className="linkish reachrow__quiet" onClick={() => setConfirming(true)}>Remove</button>)}
-            </span>
-        </li>
-    );
-}
+    const sharedMine = mineShared
+        ? (podAccounts.data ?? []).find((one) => one.ownerId === me && one.usedBy.includes(item.slug))
+            ?? (podAccounts.data ?? []).find((one) => one.ownerId === me && one.id === item.me.account?.podAccountId)
+            ?? null
+        : null;
 
-/** Adding a connector, or changing one. The installation is fixed once it
- *  exists — a different installation is a different connector — and so is
- *  the slug, which apps and agents already call it by.
- *
- *  Adding picks from the organization's installations, and from the
- *  catalog's apps it has none of yet: in a new organization the first list
- *  is empty, and a picker of only that was a dead end. One from the catalog
- *  is added by its id, and the server installs Lemma's own app for it — or,
- *  for somebody who may not install, says who can. A connector that runs as
- *  each person's own account then offers to connect mine at once, so one
- *  sitting ends with something that works. */
-function ConnectorForm({ pod, editing, connectors, installs, catalog, accounts, titleOf, ownerName, onClose, onConnect, onAdded }: {
-    pod: Pod;
-    editing: PodConnector | null;
-    connectors: PodConnector[];
-    installs: Install[];
-    catalog: Connector[];
-    accounts: PodAccount[];
-    titleOf: (connectorId: string) => string;
-    ownerName: (userId: string) => string;
-    onClose: () => void;
-    /** Close, and start connecting my own account on the one just added. */
-    onConnect: (made: PodConnector) => void;
-    onAdded: (made: PodConnector) => void;
-}) {
-    const cache = useQueryClient();
-    const choices = addChoices(installs, catalog, titleOf);
-    const installed = choices.filter((one) => one.from === "install");
-    const fromCatalog = choices.filter((one) => one.from === "catalog");
-    /* Nothing picked until somebody picks: a slug suggested for an
-       installation nobody chose is one they have to notice and undo. */
-    const [choiceKey, setChoiceKey] = useState("");
-    const picked = choices.find((one) => one.key === choiceKey) ?? null;
-    const installId = editing?.authConfigId ?? picked?.installId ?? "";
-    const [slug, setSlug] = useState(editing?.slug ?? "");
-    const [slugTouched, setSlugTouched] = useState(Boolean(editing));
-    const [mode, setMode] = useState<PodConnectorMode>(editing?.mode ?? "PER_MEMBER");
-    const [purpose, setPurpose] = useState(editing?.purpose ?? "");
-    const [required, setRequired] = useState(editing?.required ?? false);
-    const [shared, setShared] = useState(editing?.sharedPodAccountId ?? "");
-    const [made, setMade] = useState<PodConnector | null>(null);
-    const taken = connectors.filter((one) => one.slug !== editing?.slug).map((one) => one.slug);
-    /* Named for its app until somebody names it -- and nothing to suggest
-       until there is an app to name it for. */
-    const shownSlug = slugTouched ? slug : picked ? freshSlug(picked.connectorId, taken) : "";
-    /* An app nobody installed has no accounts to share yet. */
-    const shareable = installId ? shareableFor(accounts, installId) : [];
-    const problem = editing || !picked ? "" : slugProblem(shownSlug, taken);
-    const ready = Boolean(editing || picked);
-
-    const save = useMutation({
-        mutationFn: async (): Promise<PodConnector | null> => {
-            if (editing) {
-                const patch: PodConnectorPatch = connectorChanges(editing, { mode, purpose, required: mode === "PER_MEMBER" && required, sharedPodAccountId: mode === "SHARED" ? shared : "" });
-                if (Object.keys(patch).length === 0) return null;
-                await source.changePodConnector(pod.id, editing.slug, patch);
-                return null;
-            }
-            if (!picked) return null;
-            const saved = await source.addPodConnector(pod.id, {
-                slug: shownSlug, authConfigId: picked.installId, connectorId: picked.connectorId, mode, sharedPodAccountId: shared, required, purpose,
-            });
-            return { ...saved, connectorId: saved.connectorId || picked.connectorId };
+    const change = useMutation({
+        mutationFn: async (mode: PodConnectorMode) => {
+            await source.changePodConnector(pod.id, item.slug, { mode, ...(mode !== "SHARED" ? { sharedPodAccountId: "" } : {}) });
+            /* An account shared with nothing using it is not left behind. */
+            if (sharedMine) await source.changePodAccount(pod.id, sharedMine.id, { visibility: "PERSONAL" }).catch(() => undefined);
         },
+        onSuccess: onChanged,
+    });
+    const sandbox = useMutation({
+        mutationFn: (on: boolean) => source.changePodAccount(pod.id, sharedMine?.id ?? "", { sandboxes: on }),
         onSuccess: (saved) => {
-            void cache.invalidateQueries({ queryKey: ["pod-connectors", pod.id] });
-            void cache.invalidateQueries({ queryKey: ["pod-accounts", pod.id] });
-            /* An app installed on the way is now one of the organization's. */
-            if (picked?.from === "catalog") void cache.invalidateQueries({ queryKey: ["installs", pod.orgId] });
-            if (saved) onAdded(saved);
-            if (saved && saved.mode === "PER_MEMBER") { setMade(saved); return; }
-            onClose();
+            /* Drawn as saved at once, so the switch does not spring back
+               until the list is read again. */
+            if (saved) cache.setQueryData<typeof podAccounts.data>(["pod-accounts", pod.id], (was) => was?.map((one) => (one.id === saved.id ? saved : one)));
+            onChanged();
+        },
+    });
+    const useHere = useUseHere(pod, item, onChanged);
+    const [removing, setRemoving] = useState<"app" | "mine" | null>(null);
+    const drop = useMutation({
+        mutationFn: () => removing === "app"
+            ? source.removePodConnector(pod.id, item.slug)
+            : source.removePodAccount(pod.id, item.me.account?.podAccountId ?? ""),
+        onSuccess: () => {
+            const gone = removing === "app";
+            setRemoving(null);
+            onChanged();
+            if (gone) onClose();
         },
     });
 
-    if (made) {
-        const app = titleOf(made.connectorId);
-        return (
-            <Modal title={"Added " + made.slug} narrow onClose={onClose}>
-                <div className="podconn__added">
-                    <p className="connect-result" role="status">
-                        <CheckCircleIcon size={18} /> {pod.name} can use {app} now, as each person’s own account.
-                    </p>
-                    <p>Connect your {app} account so it works for you. Everyone else connects theirs the first time {pod.name} needs it.</p>
-                    <div className="record-form__actions">
-                        <button className="btn btn--primary" onClick={() => onConnect(made)}>Connect yours</button>
-                        <button className="btn" onClick={onClose}>Later</button>
-                    </div>
-                </div>
-            </Modal>
-        );
-    }
+    const label = item.me.account?.label || item.me.existing?.label || "";
+    const botHere = hasBotMode(item.connectorId) && (bot !== null || item.mode === "APP");
+    const ownGithub = items.some((one) => one.connectorId === item.connectorId && one.mode === "PER_MEMBER");
+    const otherShared = item.mode === "SHARED" && !mineShared && item.runsAs.kind !== "nobody";
+    const ownerName = item.runsAs.ownerName || "Someone";
+    const pick = (mode: PodConnectorMode | "MINE") => {
+        if (change.isPending) return;
+        if (mode === "MINE") { onShareMine(); return; }
+        if (mode !== item.mode) change.mutate(mode);
+    };
+    const said = connectionSaid(item, pod.name, me);
 
-    return (
-        <Modal title={editing ? "Change " + editing.slug : "Add a connector to " + pod.name} narrow onClose={onClose}>
-            <form className="record-form podconn__form" onSubmit={(event) => { event.preventDefault(); if (!problem && ready) save.mutate(); }}>
-                <fieldset disabled={save.isPending} className="surface-setup__fieldset">
-                    <label className="record-form__field">
-                        <span>App</span>
-                        {editing ? (
-                            <select value={editing.authConfigId} disabled>
-                                <option value={editing.authConfigId}>
-                                    {installs.find((one) => one.id === editing.authConfigId)
-                                        ? choices.find((one) => one.installId === editing.authConfigId)?.label
-                                        : editing.installationName || titleOf(editing.connectorId)}
-                                </option>
-                            </select>
-                        ) : (
-                            <select value={choiceKey} onChange={(event) => { setChoiceKey(event.target.value); setShared(""); }}>
-                                <option value="">{choices.length ? "Choose one…" : "Nothing to add yet"}</option>
-                                {installed.length > 0 && (
-                                    <optgroup label="Set up in the organization">
-                                        {installed.map((one) => <option key={one.key} value={one.key}>{one.label}</option>)}
-                                    </optgroup>
-                                )}
-                                {fromCatalog.length > 0 && (
-                                    <optgroup label="More apps">
-                                        {fromCatalog.map((one) => <option key={one.key} value={one.key}>{one.label}</option>)}
-                                    </optgroup>
-                                )}
-                            </select>
-                        )}
-                        {!editing && (
-                            <small>
-                                {picked?.from === "catalog"
-                                    ? "Set up for the organization as it is added, signing in with Lemma’s own app."
-                                    : choices.length
-                                        ? "Not here? An organization owner or editor sets other apps up from the organization menu → Connectors."
-                                        : "An organization owner or editor sets apps up from the organization menu → Connectors."}
-                            </small>
-                        )}
-                    </label>
-                    <label className="record-form__field">
-                        <span>Name apps and agents call it by</span>
-                        <input value={shownSlug} disabled={Boolean(editing)} spellCheck={false}
-                            onChange={(event) => { setSlugTouched(true); setSlug(event.target.value.toLowerCase()); }} />
-                        {problem ? <small role="alert">{problem}</small> : <small>Fixed once it is made: apps, agents and bundles name it by this.</small>}
-                    </label>
-                    <div className="record-form__field" role="radiogroup" aria-label="Whose account it runs as">
-                        <span>Whose account it runs as</span>
-                        <label className="smanage__check">
-                            <input type="radio" name="podconn-mode" checked={mode === "PER_MEMBER"} onChange={() => setMode("PER_MEMBER")} />
-                            <span><span className="smanage__label">Each person’s own</span><small>Whoever is asking, or the person an agent works for.</small></span>
-                        </label>
-                        <label className="smanage__check">
-                            <input type="radio" name="podconn-mode" checked={mode === "SHARED"} onChange={() => setMode("SHARED")} />
-                            <span><span className="smanage__label">One shared account</span><small>The same account for everyone, an account its owner shared here.</small></span>
-                        </label>
-                    </div>
-                    {mode === "SHARED" && (
-                        <label className="record-form__field">
-                            <span>Shared account</span>
-                            <select value={shared} onChange={(event) => setShared(event.target.value)}>
-                                <option value="">None yet — it waits for one</option>
-                                {shareable.map((one) => (
-                                    <option key={one.id} value={one.id}>
-                                        {(one.label || titleOf(one.connectorId)) + (ownerName(one.ownerId) ? " · " + ownerName(one.ownerId) : "")}
-                                    </option>
-                                ))}
-                            </select>
-                            <small>
-                                {shareable.length
-                                    ? "Only accounts their owners shared with " + pod.name + " are here."
-                                    : "Nobody has shared an account on this connector with " + pod.name + " yet. Its owner shares it, under “Your accounts in " + pod.name + "” on this page."}
-                            </small>
-                        </label>
-                    )}
-                    {mode === "PER_MEMBER" && (
-                        <label className="smanage__check">
-                            <input type="checkbox" checked={required} onChange={(event) => setRequired(event.target.checked)} />
-                            <span><span className="smanage__label">Ask everyone to connect theirs</span><small>People without one see a line asking them, when they open {pod.name}.</small></span>
-                        </label>
-                    )}
-                    <label className="record-form__field">
-                        <span>What it is for</span>
-                        <textarea rows={2} maxLength={500} value={purpose} placeholder="Shown when someone is asked to connect"
-                            onChange={(event) => setPurpose(event.target.value)} />
-                    </label>
-                </fieldset>
-                {save.isError && <ProblemLine className="library-problem" error={save.error} fallback="That could not be saved." />}
-                <div className="record-form__actions">
-                    <button className="btn btn--primary" type="submit" disabled={save.isPending || Boolean(problem) || !ready}>
-                        {save.isPending ? "Saving…" : editing ? "Save" : "Add"}
+    /* Over the whole window, above the frame's sidebar, as every sheet is. */
+    return createPortal(
+        <>
+            <div className="ksheet-veil" aria-hidden="true" onMouseDown={() => { if (!document.querySelector(".modal")) onClose(); }} />
+            <aside className="ksheet kpc-sheet" role="dialog" aria-modal="true" aria-labelledby={titleId} ref={panel}>
+                <header className="ksheet__head">
+                    <AppMark pod={pod} item={item} large />
+                    <h2 id={titleId}>{app} in {pod.name}</h2>
+                    <p>{said.line}</p>
+                    {named && <p>Apps and agents call it <span className="kpc-fig">{item.slug}</span>.</p>}
+                    <button type="button" className="ksheet__x b b--m b--quiet b--icon" aria-label="Close" onClick={onClose}>
+                        <CloseIcon size={18} />
                     </button>
-                    <button className="btn" type="button" onClick={onClose}>Cancel</button>
+                </header>
+
+                <div className="ksheet__body">
+                    <SignInState slug={item.slug} app={app} flow={flow} onDone={flow.refresh} />
+
+                    <section className="kpc-part" aria-label="Runs as">
+                        <h3 className="kpc-part__h">Runs as</h3>
+                        {may ? (
+                            <div className="kopts" role="radiogroup" aria-label={"Whose account " + app + " runs as"}>
+                                <Choice name={item.slug} checked={item.mode === "PER_MEMBER"} disabled={change.isPending} onPick={() => pick("PER_MEMBER")}
+                                    title="Each person’s own account">
+                                    Whoever asks, or the person an agent works for. People connect their own the first time {pod.name} needs it.
+                                </Choice>
+                                {otherShared && (
+                                    <Choice name={item.slug} checked disabled={change.isPending} onPick={() => undefined} title={ownerName + "’s, for everyone"}>
+                                        Every call in {pod.name} runs as {item.runsAs.label ? <span className="kpc-fig">{item.runsAs.label}</span> : ownerName + "’s account"}. Only {ownerName} could turn this on.
+                                    </Choice>
+                                )}
+                                <Choice name={item.slug} checked={mineShared}
+                                    disabled={change.isPending || (!item.me.account && !item.me.existing)} onPick={() => pick("MINE")} title="Mine, for everyone">
+                                    {item.me.account || item.me.existing
+                                        ? <>Every call in {pod.name} runs as {label ? <span className="kpc-fig">{label}</span> : "your account"}, including schedules nobody is watching. Only you can turn this on.</>
+                                        : <>Connect your own {app} here first. Only you can put your account in front of everyone.</>}
+                                </Choice>
+                                {botHere && (
+                                    <Choice name={item.slug} checked={item.mode === "APP"} disabled={change.isPending || bot === null} onPick={() => pick("APP")} title={pod.name + "’s bot"}>
+                                        {bot
+                                            ? <>Every call runs as {botLogins(bot)}’s GitHub App, reads included. Nobody connects or shares an account, and it keeps working when people leave. {botReach(bot)}</>
+                                            : <>Waiting for someone who manages the organization’s apps to install the GitHub App.</>}
+                                    </Choice>
+                                )}
+                                {change.isError && <Problem onRetry={() => change.mutate(change.variables ?? item.mode)} retrying={change.isPending}>
+                                    {connectorProblem(change.error, "It couldn’t be changed just now.")}
+                                </Problem>}
+                            </div>
+                        ) : (
+                            <p className="kpc-quiet">
+                                {item.mode === "APP" ? pod.name + "’s bot, the organization’s GitHub App."
+                                    : item.mode === "SHARED" ? (mineShared ? "Your account" : ownerName + "’s account") + ", for everyone."
+                                        : "Each person’s own account."}{" "}
+                                Someone who manages {pod.name} can change that.
+                            </p>
+                        )}
+                        {mineShared && sharedMine && sharedMine.sandboxes !== null && (
+                            <div className="kpc-kv">
+                                <span className="kpc-kv__l">
+                                    <span>Allow it inside sandboxes<small>Agents can use your token for git and gh. Anything run in that sandbox afterwards can read it.</small></span>
+                                </span>
+                                <button type="button" role="switch" className="kswitch" aria-label="Allow inside sandboxes"
+                                    aria-checked={sandbox.isPending ? sandbox.variables : sharedMine.sandboxes} disabled={sandbox.isPending}
+                                    onClick={() => sandbox.mutate(!sharedMine.sandboxes)} />
+                            </div>
+                        )}
+                        {sandbox.data?.notice && <p className="kpc-quiet" role="status">{sandbox.data.notice}</p>}
+                        {sandbox.isError && <Problem>{connectorProblem(sandbox.error, "It couldn’t be changed just now.")}</Problem>}
+                    </section>
+
+                    {item.mode === "APP" ? (
+                        <>
+                            <section className="kpc-part" aria-label="The bot">
+                                <h3 className="kpc-part__h">The bot</h3>
+                                <div className="kpc-kv">
+                                    <span className="kpc-kv__l">
+                                        <AppMark pod={pod} item={item} />
+                                        <span>{bot ? botLogins(bot) + "’s GitHub App" : "The organization’s GitHub App"}
+                                            <small>{bot ? "Every call shows as the bot on GitHub, and as the person who asked in Lemma’s history. " + botReach(bot)
+                                                : "Not installed on a GitHub organization of yours yet."}</small>
+                                        </span>
+                                    </span>
+                                </div>
+                            </section>
+                            {!ownGithub && (
+                                <section className="kpc-part" aria-label="To act as yourself">
+                                    <h3 className="kpc-part__h">To act as yourself</h3>
+                                    <div className="kpc-kv">
+                                        <span className="kpc-kv__l">
+                                            <ServiceMark entry={{ title: app, icon: item.icon }} />
+                                            <span>Your own {app}<small>A few things only a person can do on {app}, like reading your gists. Connect yours for those.</small></span>
+                                        </span>
+                                        <button type="button" className="b b--s b--secondary" disabled={flow.pending}
+                                            onClick={() => flow.connect({ slug: freshSlug(item.connectorId, items.map((one) => one.slug)), connectorId: item.connectorId, authConfigId: item.authConfigId })}>
+                                            Connect mine
+                                        </button>
+                                    </div>
+                                </section>
+                            )}
+                        </>
+                    ) : (
+                        <section className="kpc-part" aria-label="Your account">
+                            <h3 className="kpc-part__h">Your account</h3>
+                            <div className="kpc-kv">
+                                <span className="kpc-kv__l">
+                                    <ServiceMark entry={{ title: app, icon: item.icon }} />
+                                    {item.me.account ? (
+                                        <span><span className="kpc-fig">{item.me.account.label || "Your " + app + " account"}</span>
+                                            <small>{item.me.standing === "reconnect" ? app + " signed you out." : mineShared ? "Runs " + app + " for everyone here." : item.mode === "SHARED" ? "Only your own calls use it while it runs as someone else’s." : "Used when you, or an agent working for you, use " + app + " here."}</small>
+                                        </span>
+                                    ) : item.me.existing ? (
+                                        <span><span className="kpc-fig">{item.me.existing.label || "Your " + app + " account"}</span><small>Connected in your organization, not used here yet.</small></span>
+                                    ) : (
+                                        <span>Not connected<small>{item.me.standing === "not_allowed" ? "You aren’t allowed to use " + app + " here." : "Connect yours to use " + app + " in " + pod.name + "."}</small></span>
+                                    )}
+                                </span>
+                                {item.me.standing === "use_existing" ? (
+                                    <button type="button" className="b b--s b--primary" disabled={useHere.isPending} onClick={() => useHere.mutate()}>{useHere.isPending ? "Adding…" : "Use it here"}</button>
+                                ) : item.me.standing === "connect" || item.me.standing === "reconnect" ? (
+                                    <button type="button" className="b b--s b--primary" disabled={flow.pending} onClick={() => flow.connect(target(item), item.me.standing === "reconnect")}>
+                                        {flow.busy === item.slug ? <LoadingIndicator inline label="Opening sign-in" /> : item.me.standing === "reconnect" ? "Reconnect" : "Connect"}
+                                    </button>
+                                ) : item.me.account && item.mode === "PER_MEMBER" ? (
+                                    <button type="button" className="b b--s b--quiet" disabled={flow.pending} onClick={() => flow.connect(target(item))}>Use another</button>
+                                ) : null}
+                            </div>
+                            {useHere.isError && <Problem>{connectorProblem(useHere.error, "It couldn’t be added here just now.")}</Problem>}
+                        </section>
+                    )}
+
+                    {may && item.mode === "PER_MEMBER" && item.coverage && item.coverage.total > 0 && (
+                        <WhoConnected pod={pod} item={item} me={me} />
+                    )}
+
+                    <Purpose pod={pod} item={item} may={may} onChanged={onChanged} />
                 </div>
-            </form>
-        </Modal>
+
+                {(item.me.account || may) && (
+                    <footer className="ksheet__foot kpc-foot">
+                        {item.me.account && (
+                            <button type="button" className="b b--s b--secondary b--red" onClick={() => { drop.reset(); setRemoving("mine"); }}>Disconnect my account</button>
+                        )}
+                        {may && (
+                            <button type="button" className="b b--s b--secondary b--red" onClick={() => { drop.reset(); setRemoving("app"); }}>Remove {app} from {pod.name}</button>
+                        )}
+                    </footer>
+                )}
+            </aside>
+
+            {removing && (
+                <ConfirmDialog
+                    title={removing === "app" ? "Remove " + app + " from " + pod.name + "?" : "Disconnect your " + app + " account from " + pod.name + "?"}
+                    line={removing === "app"
+                        ? "Agents, apps and schedules in " + pod.name + " that use " + app + (named ? " as " + item.slug : "") + " stop working. Everyone’s accounts stay connected to the organization."
+                        : mineShared
+                            ? "Nothing in " + app + " runs here until someone shares an account. Your account stays connected to the organization."
+                            : pod.name + " stops using your " + app + " until you connect it again. Your account stays connected to the organization."}
+                    confirm={removing === "app" ? "Remove" : "Disconnect"}
+                    working={removing === "app" ? "Removing…" : "Disconnecting…"}
+                    danger
+                    busy={drop.isPending}
+                    problem={drop.isError ? connectorProblem(drop.error, "It couldn’t be done just now.") : null}
+                    onConfirm={() => drop.mutate()}
+                    onClose={() => setRemoving(null)}
+                />
+            )}
+        </>,
+        document.body,
     );
 }
 
-/** The accounts of mine in use here, and what only I can do with them:
- *  share with everyone or some people, withdraw, share as a connector in one
- *  step, take one out — and bring one of my other accounts in. */
-function MyAccountsHere({ pod, me, may, accounts, reading, connectors, titleOf, orgAccounts, installs }: {
-    pod: Pod;
-    me: string;
-    /** `pod.connector.manage`: declaring or pointing a connector, which
-     *  using an account for everyone needs. */
-    may: boolean;
-    accounts: PodAccount[];
-    reading: { isPending: boolean; isError: boolean; refetch: () => unknown };
-    connectors: PodConnector[];
-    titleOf: (connectorId: string) => string;
-    orgAccounts: { id: string; connectorId: string; label: string; usable: boolean }[];
-    installs: Install[];
+/** One choice under "Runs as": the whole card is the target. */
+function Choice({ name, checked, disabled, title, children, onPick }: {
+    name: string; checked: boolean; disabled: boolean; title: string; children: ReactNode; onPick: () => void;
 }) {
-    const cache = useQueryClient();
-    const mine = ownedBy(accounts, me);
-    const [adding, setAdding] = useState("");
-    const outside = orgAccounts.filter((one) => !accounts.some((held) => held.accountId === one.id));
-    const add = useMutation({
-        mutationFn: (accountId: string) => source.addPodAccount(pod.id, accountId),
-        onSuccess: () => { setAdding(""); void cache.invalidateQueries({ queryKey: ["pod-accounts", pod.id] }); },
-    });
     return (
-        <section className="podconn__section" aria-labelledby="podconn-mine">
-            <header className="podconn__head">
-                <h2 id="podconn-mine">Your accounts in {pod.name}</h2>
-            </header>
-            <p className="aboutpage__quiet">
-                Only your own calls use them unless you share one. Sharing is yours alone: nobody else can put your account in front of {pod.name}.
-            </p>
-            {reading.isPending && <p className="aboutpage__quiet" role="status">Reading your accounts here…</p>}
-            {reading.isError && (
-                <p className="aboutpage__quiet" role="alert">
-                    Couldn’t read your accounts here. <button className="linkish" onClick={() => void reading.refetch()}>Try again</button>
-                </p>
-            )}
-            {!reading.isPending && !reading.isError && mine.length === 0 && (
-                <p className="aboutpage__quiet">None yet. One is added the first time {pod.name} uses your account for you.</p>
-            )}
-            {mine.length > 0 && (
-                <ul className="podconn__list">
-                    {mine.map((account) => (
-                        <MyAccountRow key={account.id} pod={pod} may={may} account={account} connectors={connectors} title={titleOf(account.connectorId)}
-                            installName={installs.find((one) => one.id === account.authConfigId)?.name ?? ""} />
-                    ))}
-                </ul>
-            )}
-            {outside.length > 0 && (
-                <form className="podconn__bring" onSubmit={(event) => { event.preventDefault(); if (adding) add.mutate(adding); }}>
-                    <label>
-                        <span>Bring another of yours in</span>
-                        <select value={adding} onChange={(event) => setAdding(event.target.value)}>
-                            <option value="">Choose an account…</option>
-                            {outside.map((one) => (
-                                <option key={one.id} value={one.id} disabled={!one.usable}>
-                                    {titleOf(one.connectorId)}{one.label ? " — " + one.label : ""}{one.usable ? "" : " (not usable yet)"}
-                                </option>
-                            ))}
-                        </select>
-                    </label>
-                    <button className="btn" type="submit" disabled={!adding || add.isPending}>{add.isPending ? "Adding…" : "Add"}</button>
-                    {add.isError && <ProblemLine as="small" className="reachrow__error" error={add.error} fallback="It could not be added." />}
-                </form>
+        <label className={"kopt kopt--compact" + (disabled && !checked ? " kpc-opt--off" : "")}>
+            <input type="radio" name={"runs-as-" + name} checked={checked} disabled={disabled && !checked} onChange={onPick} />
+            <span className="kopt__t">{title}</span>
+            <span className="kopt__d">{children}</span>
+            <span className="kopt__dot" aria-hidden="true" />
+        </label>
+    );
+}
+
+/** Who of the people here has connected a per-member app, and asking the
+ *  rest. Names, never their accounts. Everyone is listed only when the
+ *  people here are exactly the people counted; otherwise the count and the
+ *  people it waits on. */
+function WhoConnected({ pod, item, me }: { pod: Pod; item: PodConnection; me: string }) {
+    const coverage = useQuery({
+        queryKey: ["pod-connectors", pod.id, "coverage", item.slug],
+        queryFn: () => source.podConnectorCoverage(pod.id, item.slug),
+        staleTime: 30_000,
+        retry: false,
+    });
+    const [asked, setAsked] = useState<string[]>([]);
+    const ask = useMutation({
+        mutationFn: (userId: string) => source.askMembersToConnect(pod.id, item.slug, [userId]),
+        onSuccess: (_said, userId) => setAsked((was) => [...was, userId]),
+    });
+    const people = pod.members.filter((one) => one.kind === "person" && one.userId);
+    const data = coverage.data;
+    const waiting = new Map((data?.waitingOn ?? []).map((one) => [one.userId, one]));
+    const whole = data && !data.truncated && people.length === data.eligible;
+    const rows = whole ? people.map((one) => ({ userId: one.userId ?? "", name: one.userId === me ? "You" : one.name }))
+        : (data?.waitingOn ?? []).map((one) => ({ userId: one.userId, name: one.userId === me ? "You" : one.name }));
+
+    return (
+        <section className="kpc-part" aria-label="Who’s connected">
+            <h3 className="kpc-part__h">Who’s connected <span className="kpc-count">{connectedCount(item.coverage)}</span></h3>
+            {coverage.isPending && <p className="kpc-quiet"><LoadingIndicator inline label="Counting who has connected" /></p>}
+            {coverage.isError && <Problem onRetry={() => void coverage.refetch()} retrying={coverage.isFetching}>Couldn’t read who has connected.</Problem>}
+            {data && (
+                <div className="kpc-people">
+                    {rows.map((person) => {
+                        const held = waiting.get(person.userId);
+                        return (
+                            <div key={person.userId} className="kpc-kv">
+                                <span className="kpc-kv__l">
+                                    <span className="kpc-av" style={markTint("person:" + person.name)} aria-hidden="true">{person.name.slice(0, 1)}</span>
+                                    <span>{person.name}</span>
+                                </span>
+                                {!held ? <span className="kstatus">Connected</span>
+                                    : person.userId === me ? <span className={"kstatus " + (held.standing === "REAUTH_REQUIRED" ? "kstatus--bad" : "kstatus--off")}>{held.standing === "REAUTH_REQUIRED" ? "Signed out" : "Not connected"}</span>
+                                        : asked.includes(person.userId) ? <span className="kpc-said" role="status">Asked</span>
+                                            : (
+                                                <button type="button" className="b b--s b--secondary" disabled={ask.isPending} onClick={() => ask.mutate(person.userId)}>
+                                                    {held.standing === "REAUTH_REQUIRED" ? "Ask to reconnect" : "Ask"}
+                                                </button>
+                                            )}
+                            </div>
+                        );
+                    })}
+                    {!whole && data.connected > 0 && <p className="kpc-quiet">{data.connected === 1 ? "1 other person has" : data.connected + " others have"} connected theirs.</p>}
+                    {ask.isError && <Problem>{connectorProblem(ask.error, "They couldn’t be asked just now.")}</Problem>}
+                </div>
             )}
         </section>
     );
 }
 
-function MyAccountRow({ pod, may, account, connectors, title, installName }: {
-    pod: Pod; may: boolean; account: PodAccount; connectors: PodConnector[]; title: string;
-    /** Two accounts of one app are told apart by the installation each is on. */
-    installName: string;
+/** What it's for, in an editor's words: shown when someone is asked to
+ *  connect. */
+function Purpose({ pod, item, may, onChanged }: { pod: Pod; item: PodConnection; may: boolean; onChanged: () => void }) {
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState(item.purpose);
+    const save = useMutation({
+        mutationFn: () => source.changePodConnector(pod.id, item.slug, { purpose: draft }),
+        onSuccess: () => { setEditing(false); onChanged(); },
+    });
+    if (!may && !item.purpose) return null;
+    return (
+        <section className="kpc-part" aria-label="What it’s for">
+            <h3 className="kpc-part__h">What it’s for</h3>
+            {editing ? (
+                <form className="kpc-purpose" onSubmit={(event) => { event.preventDefault(); save.mutate(); }}>
+                    <textarea className="kinput" rows={3} maxLength={500} value={draft} autoFocus aria-label="What it’s for"
+                        placeholder={"What " + pod.name + " uses " + item.title + " for"} onChange={(event) => setDraft(event.target.value)} />
+                    <span className="kpc-purpose__acts">
+                        <button type="button" className="b b--s b--quiet" disabled={save.isPending} onClick={() => { setEditing(false); setDraft(item.purpose); }}>Cancel</button>
+                        <button type="submit" className="b b--s b--primary" disabled={save.isPending}>{save.isPending ? "Saving…" : "Save"}</button>
+                    </span>
+                    {save.isError && <Problem>{connectorProblem(save.error, "It couldn’t be saved just now.")}</Problem>}
+                </form>
+            ) : (
+                <p className="kpc-line">
+                    {item.purpose ? (/[.!?]$/.test(item.purpose) ? item.purpose : item.purpose + ".") : "Nothing written yet."}{" "}
+                    <span className="kpc-note">Shown when someone is asked to connect.</span>{" "}
+                    {may && <button type="button" className="b b--s b--quiet kpc-inline" onClick={() => { setDraft(item.purpose); setEditing(true); }}>{item.purpose ? "Edit" : "Write it"}</button>}
+                </p>
+            )}
+        </section>
+    );
+}
+
+/* ── mine, for everyone ─────────────────────────────────────────────── */
+
+/** Running the app for everyone as my account: one confirmation, saying
+ *  what it means for the others and for me. The account owner's own act,
+ *  done in their own name. */
+function ShareMine({ pod, item, me, onClose, onDone }: { pod: Pod; item: PodConnection; me: string; onClose: () => void; onDone: () => void }) {
+    const app = item.title;
+    const label = item.me.account?.label || item.me.existing?.label || "";
+    const others = pod.members.filter((one) => one.kind === "person" && one.userId && one.userId !== me).map((one) => one.name);
+    const share = useMutation({
+        mutationFn: async () => {
+            let podAccountId = item.me.account?.podAccountId ?? "";
+            /* An account of mine the organization has, not in this Lemma yet:
+               put in first, as mine alone, then shared. */
+            if (!podAccountId && item.me.existing) podAccountId = (await source.addPodAccount(pod.id, item.me.existing.accountId)).id;
+            if (!podAccountId) throw new Error("Connect your " + app + " account here first.");
+            /* One request, whatever the connector runs as now: the server
+               checks it all, then widens the account and switches the
+               connector to it together, or does neither. */
+            await source.shareAccountAs(pod.id, podAccountId, item.slug);
+        },
+        onSuccess: onDone,
+    });
+    const close = () => { if (!share.isPending) onClose(); };
+    return (
+        <Modal
+            title={"Run " + app + " for everyone as you?"}
+            narrow
+            onClose={close}
+            footer={<>
+                <button type="button" className="b b--l b--secondary" disabled={share.isPending} onClick={close}>Cancel</button>
+                <button type="button" className="b b--l b--primary" disabled={share.isPending} onClick={() => share.mutate()}>
+                    {share.isPending ? "Saving…" : "Run it as me"}
+                </button>
+            </>}
+        >
+            <div className="kpc-share">
+                <p className="kd-line">Every {app} call in {pod.name} will use {label ? <span className="kpc-fig">{label}</span> : "your account"}.</p>
+                <ul>
+                    {others.length > 0 && <li>{andList(others)} {others.length === 1 ? "stops" : "stop"} needing their own {app} to use {pod.name}.</li>}
+                    <li>Agents and schedules in {pod.name} act as you, even when you’re away.</li>
+                    <li>Only {pod.name}. Your {app} stays your own in every other Lemma.</li>
+                    <li>You can switch back to “each person’s own” any time. Nobody else can widen it.</li>
+                </ul>
+                {share.isError && <p className="kd-problem" role="alert">{connectorProblem(share.error, "It couldn’t be shared just now.")}</p>}
+            </div>
+        </Modal>
+    );
+}
+
+function andList(names: string[]): string {
+    return names.length < 2 ? names.join("") : names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+}
+
+/* ── adding an app ──────────────────────────────────────────────────── */
+
+/** Pick an app and you're signing in: it's added as each person's own, under
+ *  a name made for it, and nothing is asked. An account of mine the
+ *  organization already has is put in at once, with no sign-in. GitHub, where
+ *  the organization's App is installed, offers the bot first. */
+function AddApp({ pod, connections, catalog, installs, titleOf, flow, onClose, onAdded }: {
+    pod: Pod;
+    connections: Connections;
+    catalog: Connector[];
+    installs: Install[];
+    titleOf: (connectorId: string) => string;
+    flow: Flow;
+    onClose: () => void;
+    onAdded: (slug: string) => void;
 }) {
-    const cache = useQueryClient();
-    const me = useMe() ?? "";
-    const [mode, setMode] = useState<"idle" | "some" | "as" | "remove" | "withdraw">("idle");
-    /* Grantees, as `TYPE:id`: a member, or everyone holding one of the
-       pod's roles. */
-    const [picked, setPicked] = useState<string[]>([]);
-    const [slug, setSlug] = useState(() => suggestedSlug(account, connectors));
-    const people = useMemo(() => pod.members.filter((one) => one.kind === "person" && one.userId !== me), [pod.members, me]);
-    const roles = useQuery({
-        queryKey: ["share-roles", pod.id],
-        queryFn: () => source.listShareRoles(pod.id),
-        enabled: mode === "some",
-        staleTime: 5 * 60_000,
-    });
-    const toggle = (key: string, on: boolean) => setPicked((was) => (on ? [...was, key] : was.filter((one) => one !== key)));
-    const grantees = (): Grantee[] => picked.map((key) => {
-        const [type, ...rest] = key.split(":");
-        return { type: type === "ROLE" ? "ROLE" : "POD_MEMBER", id: rest.join(":") };
-    });
-    const refresh = () => {
-        void cache.invalidateQueries({ queryKey: ["pod-accounts", pod.id] });
-        void cache.invalidateQueries({ queryKey: ["pod-connectors", pod.id] });
-    };
-    const change = useMutation({
-        mutationFn: (patch: PodAccountPatch) => source.changePodAccount(pod.id, account.id, patch),
-        onSuccess: (saved) => {
-            setMode("idle");
-            /* The answer is the account as saved: drawn at once, so the
-               sandbox switch does not spring back until the list is read
-               again. */
-            if (saved) cache.setQueryData<PodAccount[]>(["pod-accounts", pod.id], (was) => was?.map((one) => (one.id === saved.id ? saved : one)));
-            refresh();
+    const [query, setQuery] = useState("");
+    const [botFor, setBotFor] = useState<AddChoice | null>(null);
+    const accounts = useQuery({ queryKey: ["accounts", pod.orgId], queryFn: () => source.listAccounts(pod.orgId), staleTime: 30_000 });
+    const items = connections.items;
+    const taken = items.map((one) => one.slug);
+    const choices = addChoices(installs, catalog, titleOf);
+    const term = query.trim().toLowerCase();
+    const shown = choices.filter((one) => !term || one.label.toLowerCase().includes(term) || one.connectorId.includes(term));
+    const mineOn = (choice: AddChoice) => (accounts.data ?? []).find((one) => one.usable && (choice.installId ? one.authConfigId === choice.installId : one.connectorId === choice.connectorId)) ?? null;
+    const here = (choice: AddChoice) => items.some((one) => (choice.installId && one.authConfigId ? one.authConfigId === choice.installId : one.connectorId === choice.connectorId) && one.mode !== "APP");
+    const botOffered = (choice: AddChoice) => hasBotMode(choice.connectorId) && connections.githubBot !== null && !items.some((one) => one.mode === "APP");
+    const entryOf = (id: string) => catalog.find((one) => one.id === id) ?? null;
+
+    const add = useMutation({
+        mutationFn: async ({ choice, bot }: { choice: AddChoice; bot: boolean }) => {
+            if (bot) {
+                const made = await source.addPodConnector(pod.id, {
+                    slug: botSlug(taken), authConfigId: "", connectorId: choice.connectorId, mode: "APP", sharedPodAccountId: "", required: false, purpose: "",
+                });
+                return { made, connected: true };
+            }
+            const made = await source.addPodConnector(pod.id, {
+                slug: freshSlug(choice.connectorId, taken), authConfigId: choice.installId, connectorId: choice.connectorId,
+                mode: "PER_MEMBER", sharedPodAccountId: "", required: false, purpose: "",
+            });
+            const mine = mineOn(choice);
+            if (mine) await source.addPodAccount(pod.id, mine.id);
+            return { made, connected: Boolean(mine) };
+        },
+        onSuccess: ({ made, connected }, { choice }) => {
+            onAdded(made.slug);
+            if (!connected) {
+                flow.connect({ slug: made.slug, connectorId: made.connectorId || choice.connectorId, authConfigId: made.authConfigId || choice.installId, installationName: made.installationName });
+            }
         },
     });
-    /* What the change could not do at once — turning sandbox use off leaves
-       a copy in the sandboxes already given one, until they are swept. Kept
-       from the answer, since a listing never carries it. */
-    const notice = change.data?.notice ?? "";
-    /* One request: the server checks it all before it changes anything, and
-       its refusals are typed, with a connect link when one helps. */
-    const shareAs = useMutation({
-        mutationFn: () => source.shareAccountAs(pod.id, account.id, slug.trim(), "Shared by its owner"),
-        onSuccess: () => { setMode("idle"); refresh(); },
-    });
-    const remove = useMutation({
-        mutationFn: () => source.removePodAccount(pod.id, account.id),
-        onSuccess: refresh,
-    });
-    /* Only the slug's spelling is checked here. Whether it is free, or a
-       SHARED connector on this installation, is the server's to say. */
-    const slugSaid = slugProblem(slug.trim(), []);
-    const busy = change.isPending || shareAs.isPending || remove.isPending;
-    const failed = change.error ?? remove.error;
 
+    const tile = (choice: AddChoice) => {
+        const inHere = here(choice) && !botOffered(choice);
+        const mine = mineOn(choice);
+        const sub = inHere ? "In " + pod.name + " already" : choice.from === "install" ? (mine ? "Connected for you" : "Not connected") : "";
+        return (
+            <button key={choice.key} type="button" className="kpc-tile" disabled={inHere || add.isPending}
+                onClick={() => { add.reset(); if (botOffered(choice)) setBotFor(choice); else add.mutate({ choice, bot: false }); }}>
+                <ServiceMark entry={{ title: titleOf(choice.connectorId), icon: entryOf(choice.connectorId)?.icon ?? "" }} />
+                <span>{choice.label}{sub && <small>{sub}</small>}</span>
+            </button>
+        );
+    };
+
+    if (botFor) {
+        const bot = connections.githubBot;
+        return (
+            <Modal title={"Add " + titleOf(botFor.connectorId) + " to " + pod.name} narrow onClose={() => { if (!add.isPending) onClose(); }}
+                footer={<>
+                    <button type="button" className="b b--l b--secondary" disabled={add.isPending} onClick={() => setBotFor(null)}>Back</button>
+                    <button type="button" className="b b--l b--primary" disabled={add.isPending} onClick={() => add.mutate({ choice: botFor, bot: true })}>
+                        {add.isPending && add.variables?.bot ? "Adding…" : "Use the bot"}
+                    </button>
+                </>}>
+                <div className="kpc-share">
+                    <p className="kd-line">
+                        {pod.name} can read and post as {botLogins(bot)}’s GitHub App. Nobody has to connect or share an account. {botReach(bot)}
+                    </p>
+                    <p className="kd-line">
+                        Or <button type="button" className="b b--s b--quiet kpc-inline" disabled={add.isPending} onClick={() => add.mutate({ choice: botFor, bot: false })}>sign in with your own GitHub</button> instead, as each person’s own.
+                    </p>
+                    {add.isError && <p className="kd-problem" role="alert">{connectorProblem(add.error, "It couldn’t be added just now.")}</p>}
+                </div>
+            </Modal>
+        );
+    }
+
+    /* What can be added first; the apps already here last, said as such. */
+    const order = (list: AddChoice[]) => [...list.filter((one) => !here(one) || botOffered(one)), ...list.filter((one) => here(one) && !botOffered(one))];
+    const installed = order(shown.filter((one) => one.from === "install"));
+    const more = order(shown.filter((one) => one.from === "catalog"));
     return (
-        <li className="podconn__row">
-            <span className={"acct__dot" + (account.visibility !== "PERSONAL" ? " acct__dot--ok" : "")} aria-hidden="true" />
-            <span className="podconn__what">
-                <span className="podconn__name">
-                    <b>{account.label || "Your " + title + " account"}</b>
-                    <span className="podconn__app">{installName ? title + " · " + installName : title}</span>
-                    <span className="pill">{visibilityWord(account.visibility)}</span>
-                    {account.isMemberDefault && <span className="pill">your default here</span>}
-                </span>
-                {account.usedBy.length > 0 && <span className="podconn__purpose">Runs {account.usedBy.join(", ")} for everyone here</span>}
-                {/* Only a shared account can be lent to a sandbox; the server
-                    refuses it on one only its owner uses. */}
-                {account.sandboxes !== null && account.visibility !== "PERSONAL" && (
-                    <label className="smanage__check podconn__sandbox">
-                        <input type="checkbox" role="switch" checked={account.sandboxes} disabled={busy}
-                            onChange={(event) => change.mutate({ sandboxes: event.target.checked })} />
-                        <span><span className="smanage__label">Allow use inside sandboxes</span>
-                            <small>Agents of other members can then use a copy of this account’s token inside their sandboxes, for git and gh. Off until you turn it on; withdrawing turns it off.</small></span>
-                    </label>
+        <Modal title={"Add an app to " + pod.name} subtitle={"You’ll sign in with your own account. Others connect theirs the first time " + pod.name + " needs it."}
+            onClose={() => { if (!add.isPending) onClose(); }}>
+            <div className="kpc-add">
+                <label className="ksearch kpc-find">
+                    <SearchIcon size={15} />
+                    <input value={query} autoFocus placeholder="Search apps" aria-label="Search apps" onChange={(event) => setQuery(event.target.value)} />
+                </label>
+                {add.isError && <Problem>{connectorProblem(add.error, "It couldn’t be added just now.")}</Problem>}
+                {installed.length > 0 && (
+                    <section aria-label="Already used in your organization">
+                        <h3 className="kpc-group">Already used in your organization</h3>
+                        <div className="kpc-tiles">{installed.map(tile)}</div>
+                    </section>
                 )}
-                {notice && <span className="podconn__purpose" role="status">{notice}</span>}
-                {mode === "some" && (
-                    <fieldset className="podconn__people">
-                        <legend>Who may use it</legend>
-                        {people.length === 0 && <small>Nobody else is in {pod.name} yet.</small>}
-                        {people.map((person) => (
-                            <label key={person.id} className="smanage__check">
-                                <input type="checkbox" checked={picked.includes("POD_MEMBER:" + person.id)}
-                                    onChange={(event) => toggle("POD_MEMBER:" + person.id, event.target.checked)} />
-                                <span>{person.name}</span>
-                            </label>
-                        ))}
-                        {(roles.data ?? []).length > 0 && <small>Or everyone who holds a role here, now and later:</small>}
-                        {(roles.data ?? []).map((role) => (
-                            <label key={role.id} className="smanage__check">
-                                <input type="checkbox" checked={picked.includes("ROLE:" + role.id)}
-                                    onChange={(event) => toggle("ROLE:" + role.id, event.target.checked)} />
-                                <span>{role.label}</span>
-                            </label>
-                        ))}
-                        {roles.isError && <small>The pod’s roles could not be read; you can still pick people.</small>}
-                        <span className="acct__confirm">
-                            <button className="btn btn--primary" disabled={busy || picked.length === 0}
-                                onClick={() => change.mutate({ visibility: "RESTRICTED", shareWith: grantees() })}>
-                                Share with {picked.length || "them"}
-                            </button>
-                            <button className="linkish" onClick={() => setMode("idle")}>Cancel</button>
-                        </span>
-                    </fieldset>
+                {more.length > 0 && (
+                    <section aria-label="More apps">
+                        <h3 className="kpc-group">More apps</h3>
+                        <div className="kpc-tiles">{more.map(tile)}</div>
+                    </section>
                 )}
-                {mode === "as" && (
-                    <form className="podconn__as" onSubmit={(event) => { event.preventDefault(); if (!slugSaid) shareAs.mutate(); }}>
-                        <label>
-                            <span>Use this for everyone in {pod.name} as</span>
-                            <input value={slug} spellCheck={false} onChange={(event) => setSlug(event.target.value.toLowerCase())} />
-                        </label>
-                        <button className="btn btn--primary" type="submit" disabled={busy || Boolean(slugSaid)}>{shareAs.isPending ? "Saving…" : "Use it"}</button>
-                        <button className="linkish" type="button" onClick={() => setMode("idle")}>Cancel</button>
-                        <small>{slugSaid || "Everyone in " + pod.name + " can use this account, and every call through " + slug.trim() + " runs as it."}</small>
-                        {shareAs.isError && <ProblemLine as="small" className="reachrow__error" error={shareAs.error} fallback="It could not be shared." />}
-                    </form>
+                {shown.length === 0 && (
+                    <p className="kpc-quiet">{term ? "Nothing matches “" + query + "”." : "There’s nothing to add yet."}</p>
                 )}
-                {mode === "withdraw" && (
-                    <span className="acct__confirm">
-                        <span>{account.usedBy.join(", ")} stop working until someone shares another account.</span>
-                        <button className="btn reachrow__drop" disabled={busy} onClick={() => change.mutate({ visibility: "PERSONAL" })}>{change.isPending ? "Withdrawing…" : "Withdraw"}</button>
-                        <button className="linkish" onClick={() => setMode("idle")}>Keep sharing</button>
-                    </span>
-                )}
-                {mode === "remove" && (
-                    <span className="acct__confirm">
-                        <span>{account.usedBy.length ? account.usedBy.join(", ") + " stop working until someone shares another. " : ""}Your own account stays connected to the organization.</span>
-                        <button className="btn reachrow__drop" disabled={busy} onClick={() => remove.mutate()}>{remove.isPending ? "Removing…" : "Take it out"}</button>
-                        <button className="linkish" onClick={() => setMode("idle")}>Keep</button>
-                    </span>
-                )}
-                {failed && <ProblemLine as="small" className="reachrow__error" error={failed} fallback="That could not be changed." />}
-            </span>
-            {mode === "idle" && (
-                <span className="acct__acts">
-                    {account.visibility !== "POD" && <button className="linkish reachrow__quiet" disabled={busy} onClick={() => change.mutate({ visibility: "POD" })}>Share with everyone</button>}
-                    {account.visibility !== "RESTRICTED" && <button className="linkish reachrow__quiet" disabled={busy} onClick={() => { setPicked([]); setMode("some"); }}>Share with some people</button>}
-                    {may && <button className="linkish reachrow__quiet" disabled={busy} onClick={() => setMode("as")}>Use for everyone as…</button>}
-                    {account.visibility !== "PERSONAL" && <button className="linkish reachrow__quiet" disabled={busy} onClick={() => account.usedBy.length ? setMode("withdraw") : change.mutate({ visibility: "PERSONAL" })}>Withdraw</button>}
-                    <button className="linkish reachrow__quiet" disabled={busy} onClick={() => setMode("remove")}>Remove</button>
-                </span>
-            )}
-        </li>
+                <p className="kpc-quiet">
+                    Your own server or database? <a className="kpc-link" href="/connectors">Add an MCP server, REST API or PostgreSQL</a>
+                </p>
+            </div>
+        </Modal>
     );
 }

@@ -11,10 +11,11 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 
 from app.core.api.actor_policy import require_person
-from app.core.api.dependencies import CurrentUser
+from app.core.api.dependencies import CurrentUser, get_uow_factory
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.authorization.context import ResourceRef
 from app.core.authorization.dependencies import PodContextDep
 from app.core.authorization.permissions import Permissions
@@ -32,6 +33,9 @@ from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationExecutionResponse,
 )
 from app.modules.connectors.services.install_on_connect import install_to_connect
+from app.modules.connectors.api.schemas.pod_connection_schemas import (
+    PodConnectionsResponse,
+)
 from app.modules.connectors.api.schemas.pod_connector_schemas import (
     AccountPodUsageResponse,
     AskMembersRequest,
@@ -71,6 +75,43 @@ async def list_pod_connectors(
     return PodConnectorListResponse(items=await service.list_connectors(ctx, pod_id))
 
 
+@router.get(
+    "/connections",
+    response_model=PodConnectionsResponse,
+    operation_id="pod.connection.list",
+    summary="My Connections Here",
+    description=(
+        "One row per pod connector, judged for the caller: whose account a "
+        "call by them runs as (`runs_as`), and what they can do about it "
+        "(`me.standing`: ready, connect, use_existing, reconnect, waiting or "
+        "not_allowed). `coverage` is filled for PER_MEMBER connectors when the "
+        "caller may manage the pod's connectors; `github_bot` names the "
+        "organization's GitHub App installations an APP connector can use. "
+        "Read-only: it declares and adds nothing."
+    ),
+)
+async def list_pod_connections(
+    pod_id: UUID,
+    request: Request,
+    user: CurrentUser,
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+) -> PodConnectionsResponse:
+    # No request-scoped context: the read may ask GitHub about the App's
+    # installations first, and holds no pooled connection while it does.
+    from app.modules.connectors.api.dependencies import build_pod_connections_reader
+    from app.modules.connectors.application.pod_connections import (
+        read_pod_connections,
+    )
+
+    return await read_pod_connections(
+        uow_factory,
+        request=request,
+        user_id=user.id,
+        pod_id=pod_id,
+        build_reader=build_pod_connections_reader,
+    )
+
+
 @router.post(
     "/connectors",
     response_model=PodConnectorResponse,
@@ -82,7 +123,11 @@ async def list_pod_connectors(
         "(`auth_config_id`) or by a catalog connector (`connector_id`): its "
         "organization default, or Lemma's own app for it installed now when the "
         "organization has none and the caller may install connectors. "
-        "`slug` defaults to the installation's name; `mode` to PER_MEMBER."
+        "`slug` defaults to the installation's name; `mode` to PER_MEMBER. "
+        "`mode: APP` (GitHub only, no shared account, POD visibility) acts as "
+        "the organization's GitHub App, nobody's account: it needs only "
+        "`pod.connector.manage`, from an app's page too, and its slug defaults "
+        "to `github`, else `github-bot`."
     ),
 )
 async def create_pod_connector(
@@ -242,11 +287,16 @@ async def get_pod_connector_operation(
     description=(
         "Run an operation through a pod connector. The account it runs as is "
         "decided by the connector: the caller's own for a PER_MEMBER connector, "
-        "the shared one for a SHARED connector. Typed refusals: "
+        "the shared one for a SHARED connector, the organization's GitHub App "
+        "for an APP connector (whatever `act_as` says; the installation is "
+        "picked by the payload's `owner`, `org`, or the owner half of "
+        "`repository`). Typed refusals: "
         "`CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), "
         "`CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`; with "
         "`act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and "
-        "`APP_IDENTITY_UNAVAILABLE`."
+        "`APP_IDENTITY_UNAVAILABLE`; on APP, `APP_NOT_INSTALLED`, "
+        "`APP_INSTALLATION_AMBIGUOUS` and `APP_IDENTITY_UNAVAILABLE` with "
+        "`details.reason: user_only_operation`."
     ),
 )
 async def execute_pod_connector_operation(
@@ -290,6 +340,11 @@ async def list_pod_accounts(
     status_code=status.HTTP_201_CREATED,
     operation_id="pod.connector_account.add",
     summary="Add One Of Your Accounts To The Pod",
+    description=(
+        "Use one of your organization accounts in this pod. The pod's "
+        "per-member connector for its installation is reused or declared, and "
+        "the account becomes your default here when you have none."
+    ),
     dependencies=[_PERSON_ONLY],
 )
 async def add_pod_account(
@@ -298,13 +353,18 @@ async def add_pod_account(
     ctx: PodContextDep,
     service: PodConnectorServiceDep,
 ) -> PodAccountResponse:
-    return await service.add_account(
+    from app.modules.connectors.services.connect_into_pod import (
+        use_added_account_here,
+    )
+
+    added = await service.add_account(
         ctx,
         pod_id,
         account_id=body.account_id,
         visibility=body.visibility,
         share_with=body.share_with,
     )
+    return await use_added_account_here(service.uow, ctx, pod_id=pod_id, added=added)
 
 
 @router.patch(
@@ -341,8 +401,10 @@ async def update_pod_account(
         "Owner only, and the caller must also manage the pod's connectors: "
         "share this pod account with the pod (if it is still yours alone) and "
         "run the SHARED connector `slug` as it -- pointing the existing one, "
-        "or declaring it. Checked in full before anything changes, and done in "
-        "one transaction: a refusal leaves the account as it was."
+        "switching the pod's PER_MEMBER or APP connector of that slug on the "
+        "same installation to SHARED, or declaring it. Checked in full before "
+        "anything changes, and done in one transaction: a refusal leaves the "
+        "account and the connector as they were."
     ),
     dependencies=[_PERSON_ONLY],
 )

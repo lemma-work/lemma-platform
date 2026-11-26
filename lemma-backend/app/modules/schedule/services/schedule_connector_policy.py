@@ -12,21 +12,29 @@ Asked at creation, and again of whoever takes a schedule over by changing what
 it does (`schedule_ownership.py`). What keeps it running afterwards is the
 connector's standing, re-read as the owner on every use (`resolve_as_owner`):
 subscribing, matching a delivery, reconciling a subscription.
+
+An APP connector (the organization's GitHub App) is the one with no account:
+binding asks ``connector.use`` and nothing more, and what keeps it running is
+the App still being installed -- nobody's membership, so the schedule outlives
+its owner's. Its standing is ``APP_IDENTITY`` rather than an account id.
 """
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import TypeVar
+from typing import Final, Literal, TypeVar
 from uuid import UUID
 
 from app.core.authorization.context import Context
 from app.core.log.log import get_logger
+from app.modules.connectors.contracts.app_connectors import (
+    PodConnectorApp,
+    resolve_pod_connector_or_app,
+    resolve_standing_pod_connector_or_app,
+)
 from app.modules.connectors.contracts.pod_connectors import (
     ConnectorDomainError,
     PodConnectorAccount,
-    resolve_pod_connector,
-    resolve_standing_pod_connector,
 )
 from app.modules.schedule.domain.errors import ScheduleValidationError
 from app.modules.schedule.domain.schedule import (
@@ -42,6 +50,10 @@ logger = get_logger(__name__)
 ConnectorResolve = Callable[..., Awaitable[object]]
 
 _Bindable = TypeVar("_Bindable", ScheduleCreateEntity, ScheduleEntity)
+
+#: What a schedule on an APP connector stands on instead of an account.
+APP_IDENTITY: Final = "app"
+StandingIdentity = UUID | Literal["app"]
 
 
 async def require_connector_use(
@@ -72,7 +84,7 @@ async def require_connector_use(
         )
     if ctx is None:
         raise RuntimeError("Context is required to bind a schedule to a connector")
-    resolved = await (resolve or resolve_pod_connector)(
+    resolved = await (resolve or resolve_pod_connector_or_app)(
         uow,
         ctx,
         pod_id=schedule.pod_id,
@@ -81,7 +93,7 @@ async def require_connector_use(
     )
     pinned = (
         resolved.pinned_pod_account_id
-        if isinstance(resolved, PodConnectorAccount)
+        if isinstance(resolved, PodConnectorAccount | PodConnectorApp)
         else schedule.pod_account_id
     )
     return schedule.model_copy(update={"pod_account_id": pinned})
@@ -89,9 +101,10 @@ async def require_connector_use(
 
 async def resolve_as_owner(
     uow: object, schedule: ScheduleEntity, *, record_use: bool = True
-) -> PodConnectorAccount:
+) -> PodConnectorAccount | PodConnectorApp:
     """What ``schedule``'s pod connector means right now, as its owner (§4.6),
-    on the account it pinned while that is still theirs.
+    on the account it pinned while that is still theirs -- or the App, for an
+    APP connector, whoever its owner is now.
 
     Raises the connector's typed refusal when it no longer resolves.
     """
@@ -99,7 +112,7 @@ async def resolve_as_owner(
         raise ScheduleValidationError(
             "A schedule listens through a pod connector of its own pod."
         )
-    return await resolve_standing_pod_connector(
+    return await resolve_standing_pod_connector_or_app(
         uow,
         pod_id=schedule.pod_id,
         slug=schedule.pod_connector_slug,
@@ -109,17 +122,21 @@ async def resolve_as_owner(
     )
 
 
-async def standing_account(uow: object, schedule: ScheduleEntity) -> UUID | None:
-    """The account ``schedule`` listens through now, or ``None`` if none.
+async def standing_identity(
+    uow: object, schedule: ScheduleEntity
+) -> StandingIdentity | None:
+    """What ``schedule`` listens as now -- an account id, or ``APP_IDENTITY``
+    for an APP connector whose App is still installed -- or ``None`` if it no
+    longer resolves.
 
-    For the paths that decide whether to act at all -- a delivery to match, a
-    subscription to keep -- where a connector that stopped resolving is an
-    answer, not an error. A read with no write: it runs for every matched
-    schedule of every delivery. Inside ``standing_resolutions_once`` each
-    (connector, owner, pinned account) is resolved once per delivery.
+    For the paths that decide whether to act at all -- a delivery to match --
+    where a connector that stopped resolving is an answer, not an error. A
+    read with no write: it runs for every matched schedule of every delivery.
+    Inside ``standing_resolutions_once`` each (connector, owner, pinned
+    account) is resolved once per delivery.
     """
     try:
-        return (await resolve_as_owner(uow, schedule, record_use=False)).account_id
+        resolved = await resolve_as_owner(uow, schedule, record_use=False)
     except ConnectorDomainError as exc:
         logger.info(
             "schedule.connector.unresolved",
@@ -127,10 +144,24 @@ async def standing_account(uow: object, schedule: ScheduleEntity) -> UUID | None
             code=getattr(exc, "code", type(exc).__name__),
         )
         return None
+    if isinstance(resolved, PodConnectorApp):
+        return APP_IDENTITY if resolved.installations else None
+    return resolved.account_id
+
+
+async def standing_account(uow: object, schedule: ScheduleEntity) -> UUID | None:
+    """The account ``schedule`` listens through now, or ``None`` if none --
+    an APP connector's included, which has none. For a subscription held on
+    an account (an MCP event), where the App is never what listens."""
+    identity = await standing_identity(uow, schedule)
+    return identity if isinstance(identity, UUID) else None
 
 
 __all__ = [
+    "APP_IDENTITY",
     "ConnectorResolve",
+    "StandingIdentity",
+    "standing_identity",
     "require_connector_use",
     "resolve_as_owner",
     "standing_account",

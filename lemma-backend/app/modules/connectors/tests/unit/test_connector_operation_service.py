@@ -481,9 +481,9 @@ def _resolver(account: SimpleNamespace) -> SimpleNamespace:
     return SimpleNamespace(
         connector=AsyncMock(return_value=SimpleNamespace()),
         pod_connectors=SimpleNamespace(
-            get_by_slug=AsyncMock(return_value=SimpleNamespace())
+            get_by_slug=AsyncMock(return_value=SimpleNamespace(slug="connector"))
         ),
-        resolve=AsyncMock(
+        resolve_any=AsyncMock(
             return_value=SimpleNamespace(auth_config=auth_config, account=account)
         ),
     )
@@ -892,12 +892,12 @@ async def test_a_marked_account_whose_grant_is_confirmed_gone_asks_for_a_reconne
     resolver.pod_connectors.get_by_slug = AsyncMock(
         return_value=SimpleNamespace(slug="bigquery", pod_id=pod_id)
     )
-    resolver.resolve.return_value.pod_account = SimpleNamespace(
+    resolver.resolve_any.return_value.pod_account = SimpleNamespace(
         owner_user_id=account.user_id
     )
     # An install whose token Lemma refreshes itself. A Composio call skips the
     # refresh -- Composio holds the token -- and is verified by the call.
-    resolver.resolve.return_value.auth_config.kind = ConnectorKind.HTTP
+    resolver.resolve_any.return_value.auth_config.kind = ConnectorKind.HTTP
     operation_repository = AsyncMock()
     operation_repository.get_by_connector_kind_and_name.return_value = (
         ConnectorOperationEntity(

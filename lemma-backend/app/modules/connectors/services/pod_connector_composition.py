@@ -13,6 +13,7 @@ from uuid import UUID
 from app.core.authorization.context import Context
 from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.connectors.domain.app_installation import AppInstallation
 from app.modules.connectors.infrastructure.adapters.organization_access import (
     SqlAlchemyOrganizationAccessAdapter,
 )
@@ -52,6 +53,15 @@ def build_pod_connector_resolver(uow: SqlAlchemyUnitOfWork) -> PodConnectorResol
             user_id=user_id, pod_id=pod_id
         )
 
+    async def app_installations(
+        organization_id: UUID,
+    ) -> tuple[AppInstallation, ...]:
+        from app.modules.connectors.services.auth.github_app_installations import (
+            bound_app_installations,
+        )
+
+        return await bound_app_installations(uow.session, organization_id)
+
     return PodConnectorResolver(
         pod_connectors=PodConnectorRepository(uow),
         pod_accounts=PodAccountRepository(uow),
@@ -59,6 +69,7 @@ def build_pod_connector_resolver(uow: SqlAlchemyUnitOfWork) -> PodConnectorResol
         accounts=AccountRepository(uow=uow, encryption=get_secret_cipher()),
         is_pod_member=is_pod_member,
         person_context=person_context,
+        app_installations=app_installations,
     )
 
 

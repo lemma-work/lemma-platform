@@ -18,6 +18,12 @@ Two ways to ask:
 
 Both raise the typed errors in `domain/pod_connector_errors.py`; callers pass
 them on as data rather than translating them.
+
+An APP connector (the organization's GitHub App, nobody's account) has no
+account to give, so both refuse it with ``APP_CONNECTOR_UNSUPPORTED``: a
+surface, the sandbox's git, bundle publishing and the rest need an account.
+Schedules can act as the App, and ask `contracts/app_connectors.py` instead,
+which hands back a ``PodConnectorApp`` for one.
 """
 
 from __future__ import annotations
@@ -40,6 +46,9 @@ from app.modules.connectors.domain.pod_connector import (
     PodConnectorSource,
 )
 from app.modules.connectors.domain.pod_connector_errors import (
+    AppConnectorUnsupportedError,
+    AppInstallationAmbiguousError,
+    AppNotInstalledError,
     ConnectionRequiredError,
     ConnectionRequiresPersonError,
     ConnectorNeedsAccountError,
@@ -472,6 +481,9 @@ async def shared_account_ids(
 PodConnectorRefusal = ConnectorDomainError
 
 __all__ = [
+    "AppConnectorUnsupportedError",
+    "AppInstallationAmbiguousError",
+    "AppNotInstalledError",
     "ConnectorDomainError",
     "ConnectorUseRefusedError",
     "PodConnectorBinding",

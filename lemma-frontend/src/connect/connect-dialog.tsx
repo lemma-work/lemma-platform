@@ -98,7 +98,9 @@ export function ConnectDialog({
      *  door somebody took when that is what they came to set up. */
     ownAppFirst?: boolean;
     onClose: () => void;
-    onDone: () => void;
+    /** Connected without a round trip, by a credential typed here: the new
+     *  account's id, when the server said it. */
+    onDone: (accountId?: string) => void;
     /** Hands the browser round trip back to the caller, which already owns it. */
     onAuthorize: (installId: string | null, connectionFields?: Record<string, unknown>) => void;
 }) {
@@ -213,8 +215,9 @@ export function ConnectDialog({
                 madeHere = await makeInstall.mutateAsync({ connectorId: entry.id, kind: kind?.kind });
                 installId = madeHere.id;
             }
+            let made: { id?: string };
             try {
-                await connectAccount.mutateAsync({ installId, credentials: body });
+                made = await connectAccount.mutateAsync({ installId, credentials: body });
             } catch (problem) {
                 /* Two calls, one act: an install made moments ago with nobody
                    on it would otherwise hold the connector's name, and every
@@ -223,7 +226,7 @@ export function ConnectDialog({
                 throw problem;
             }
             refresh();
-            onDone();
+            onDone(made.id || undefined);
         } catch (problem) { fail(problem); }
     };
 

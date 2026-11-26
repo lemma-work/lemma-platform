@@ -5,4 +5,5 @@
 export enum PodConnectorMode {
     PER_MEMBER = 'PER_MEMBER',
     SHARED = 'SHARED',
+    APP = 'APP',
 }

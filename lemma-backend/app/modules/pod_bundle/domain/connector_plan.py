@@ -8,6 +8,12 @@ The plan offers those choices (:class:`ConnectorPlan`); the apply request makes
 them (:class:`ConnectorChoice`); :func:`resolve_connector_choices` checks one
 against the other before anything is written.
 
+An APP connector (GitHub only) acts as the importing organization's GitHub
+App and runs as nobody's account, so it needs only the org's GitHub
+installation (its app registration) -- never an account choice. It is declared
+whether or not the org has installed the App on GitHub yet, and reads
+NEEDS_INSTALLATION until an org admin does.
+
 Three outcomes are not alike. A SHARED connector nobody shares an account for
 imports anyway, as NEEDS_ACCOUNT: the pod works, that connector waits for an
 account, and the plan says so as a warning. A connector with no installation to
@@ -88,6 +94,7 @@ def declared_conflict(
 _MODE_WORDS = {
     "PER_MEMBER": "per member (each person's own account)",
     "SHARED": "shared (one account for everyone)",
+    "APP": "the organization's GitHub App (nobody's account)",
 }
 
 
@@ -108,7 +115,7 @@ class AccountOption(BaseModel):
 class ConnectorPlan(BaseModel):
     slug: str
     connector: str
-    mode: Literal["PER_MEMBER", "SHARED"]
+    mode: Literal["PER_MEMBER", "SHARED", "APP"]
     required: bool = False
     purpose: str | None = None
     visibility: Literal["POD", "RESTRICTED"] = "POD"

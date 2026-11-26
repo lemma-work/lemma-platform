@@ -78,8 +78,9 @@ def sync_detailed(
 
      Owner only, and the caller must also manage the pod's connectors: share this pod account with the
     pod (if it is still yours alone) and run the SHARED connector `slug` as it -- pointing the existing
-    one, or declaring it. Checked in full before anything changes, and done in one transaction: a
-    refusal leaves the account as it was.
+    one, switching the pod's PER_MEMBER or APP connector of that slug on the same installation to
+    SHARED, or declaring it. Checked in full before anything changes, and done in one transaction: a
+    refusal leaves the account and the connector as they were.
 
     Args:
         pod_id (UUID):
@@ -119,8 +120,9 @@ def sync(
 
      Owner only, and the caller must also manage the pod's connectors: share this pod account with the
     pod (if it is still yours alone) and run the SHARED connector `slug` as it -- pointing the existing
-    one, or declaring it. Checked in full before anything changes, and done in one transaction: a
-    refusal leaves the account as it was.
+    one, switching the pod's PER_MEMBER or APP connector of that slug on the same installation to
+    SHARED, or declaring it. Checked in full before anything changes, and done in one transaction: a
+    refusal leaves the account and the connector as they were.
 
     Args:
         pod_id (UUID):
@@ -155,8 +157,9 @@ async def asyncio_detailed(
 
      Owner only, and the caller must also manage the pod's connectors: share this pod account with the
     pod (if it is still yours alone) and run the SHARED connector `slug` as it -- pointing the existing
-    one, or declaring it. Checked in full before anything changes, and done in one transaction: a
-    refusal leaves the account as it was.
+    one, switching the pod's PER_MEMBER or APP connector of that slug on the same installation to
+    SHARED, or declaring it. Checked in full before anything changes, and done in one transaction: a
+    refusal leaves the account and the connector as they were.
 
     Args:
         pod_id (UUID):
@@ -194,8 +197,9 @@ async def asyncio(
 
      Owner only, and the caller must also manage the pod's connectors: share this pod account with the
     pod (if it is still yours alone) and run the SHARED connector `slug` as it -- pointing the existing
-    one, or declaring it. Checked in full before anything changes, and done in one transaction: a
-    refusal leaves the account as it was.
+    one, switching the pod's PER_MEMBER or APP connector of that slug on the same installation to
+    SHARED, or declaring it. Checked in full before anything changes, and done in one transaction: a
+    refusal leaves the account and the connector as they were.
 
     Args:
         pod_id (UUID):

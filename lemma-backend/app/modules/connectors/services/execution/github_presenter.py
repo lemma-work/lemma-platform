@@ -32,6 +32,13 @@ nobody asked for (``domain/app_identity.py``).
 
 The sandbox's `git`/`gh` never reaches here at all: it resolves its credential
 straight from the account, for the same reason.
+
+An APP pod connector has no account and so no person's token: its calls always
+arrive as "app_only", with the installation the call's repository owner picked
+(``domain/app_installation.py``). The same strict path serves them.
+
+Whichever way it goes, what the call is presented as is noted
+(``note_presented``) for the operation's analytics record.
 """
 
 from __future__ import annotations
@@ -39,7 +46,13 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from app.core.log.log import get_logger
-from app.modules.connectors.domain.app_identity import AppIdentityUnavailableError
+from app.modules.connectors.domain.app_identity import (
+    NO_INSTALLATION,
+    TOKEN_REFUSED,
+    USER_ONLY_OPERATION,
+    AppIdentityUnavailableError,
+    note_presented,
+)
 from app.modules.connectors.domain.kinds import ExecutionRequest
 from app.modules.connectors.services.auth.github_app import (
     GitHubAppUnavailable,
@@ -73,14 +86,17 @@ class GitHubCredentialPresenter:
             # The caller did not ask to be the app. Publishing a pod, importing
             # one, or any path that has not thought about it: acting as the
             # person is both the safe answer and the one they had before.
+            note_presented("user")
             return request.credentials
 
         token_kind = (request.operation.execution or {}).get("github_token_kind")
         if token_kind == _USER_ONLY:
             if strict:
                 raise AppIdentityUnavailableError(
-                    "GitHub lets only a person make this call."
+                    "GitHub lets only a person make this call.",
+                    code=USER_ONLY_OPERATION,
                 )
+            note_presented("user")
             return request.credentials
 
         # The *account's* binding, not the install's. A GitHub App installed on
@@ -92,11 +108,13 @@ class GitHubCredentialPresenter:
             if strict:
                 raise AppIdentityUnavailableError(
                     "this GitHub account has no App installation. Reconnect it "
-                    "from the Lemma's connectors."
+                    "from the Lemma's connectors.",
+                    code=NO_INSTALLATION,
                 )
             # An install that has not been reconnected yet. It has a user token
             # and that token still works; going quiet here instead would break
             # every operation on it for the sake of an identity it never had.
+            note_presented("user")
             return request.credentials
 
         try:
@@ -104,7 +122,8 @@ class GitHubCredentialPresenter:
         except GitHubAppUnavailable as exc:
             if strict:
                 raise AppIdentityUnavailableError(
-                    "GitHub did not give the App a token for this installation."
+                    "GitHub did not give the App a token for this installation.",
+                    code=TOKEN_REFUSED,
                 ) from exc
             # No key configured, or GitHub refused -- most often the App was
             # uninstalled since the id was stored. The user token is a real
@@ -114,8 +133,10 @@ class GitHubCredentialPresenter:
                 "connectors.github_presenter.fell_back_to_user_token",
                 connector_id=request.connector_id,
             )
+            note_presented("user")
             return request.credentials
 
         # `token_type` matters: the executor reads it to build the header, and
         # GitHub's installation tokens are bearer tokens.
+        note_presented("app")
         return {**request.credentials, "access_token": token, "token_type": "Bearer"}

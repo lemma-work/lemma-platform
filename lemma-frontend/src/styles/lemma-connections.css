@@ -1,0 +1,384 @@
+/* lemma-connections.css: a Lemma's Connections page and its sheet. See
+   connect/pod-connections.tsx.
+
+   Built from the kit (kit.css): rows on hairlines, a dot and a word for
+   status, the warm band, cards for "Runs as", the sheet and its switch.
+   What is here is only what the kit does not say: a row with a mark, two
+   lines that wrap rather than lose their end, and one thing to do at the
+   right; the sheet's parts; and the add dialog's tiles. Nothing moves
+   here; the kit's sheet and switch already still themselves under reduced
+   motion. */
+
+.kpc {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 22px;
+    padding-bottom: 96px;
+}
+
+/* A page drawn with no header slot keeps its button in a row of its own. */
+.kpc-acts {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.kpc-quiet {
+    margin: 0;
+    color: var(--ink-3);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.kpc-fig {
+    font-family: var(--font-ui), system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+}
+
+.kpc-link {
+    color: var(--info);
+    text-decoration: none;
+}
+
+.kpc-link:hover {
+    text-decoration: underline;
+}
+
+/* ── a row ────────────────────────────────────────────────────────────── */
+
+.klist > .kpc-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 6px 14px;
+    min-height: 64px;
+}
+
+/* The row a link named: the kit's pick, a blue tint and edge. */
+.kpc-row[data-focused] {
+    margin-inline: -10px;
+    padding-inline: 10px;
+    border-radius: 12px;
+    background: var(--kit-pick);
+    box-shadow: inset 0 0 0 1.5px var(--info);
+}
+
+.kpc-main {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+}
+
+.kpc-name {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 8px;
+    min-width: 0;
+}
+
+.kpc-name > b,
+.kpc-open {
+    font-size: 15px;
+    font-weight: 500;
+}
+
+.kpc-open {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink);
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.kpc-open:focus-visible {
+    border-radius: 4px;
+    outline: 2px solid var(--info);
+    outline-offset: 2px;
+}
+
+.kpc-slug {
+    font-family: var(--font-ui), system-ui, sans-serif;
+}
+
+.kpc-line {
+    color: var(--ink-2);
+    font-size: 13.5px;
+    line-height: 1.45;
+}
+
+.kpc-note {
+    color: var(--ink-3);
+}
+
+.kpc-line--ink {
+    color: var(--ink);
+}
+
+.kpc-side {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px 12px;
+}
+
+.kpc-who {
+    color: var(--ink-2);
+    font-family: var(--font-ui), system-ui, sans-serif;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.kpc-offer {
+    color: var(--ink);
+    font-size: 13.5px;
+}
+
+.kpc-chev {
+    flex: none;
+    color: var(--ink-3);
+}
+
+.kpc-wait {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+.kpc-problem {
+    color: var(--bad);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.kpc-said {
+    color: var(--ink-2);
+    font-size: 13px;
+}
+
+/* A line of the warm band: who hasn't connected, and asking them. */
+.kpc-need {
+    grid-template-columns: minmax(0, 1fr) auto;
+}
+
+@media (max-width: 640px) {
+    .klist > .kpc-row {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .kpc-side {
+        grid-column: 2;
+        justify-content: flex-start;
+    }
+}
+
+/* ── the sheet ────────────────────────────────────────────────────────── */
+
+.kpc-sheet .ksheet__body {
+    gap: 26px;
+}
+
+.kpc-part {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    min-width: 0;
+}
+
+.kpc-part__h {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin: 0;
+    color: var(--ink);
+    font-size: 14.5px;
+    font-weight: 500;
+}
+
+.kpc-count {
+    color: var(--ink-3);
+    font-family: var(--font-ui), system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 400;
+}
+
+/* A choice that can't be made here: still shown, with why. */
+.kpc-opt--off {
+    cursor: default;
+}
+
+.kpc-opt--off .kopt__t {
+    color: var(--ink-3);
+}
+
+.kpc-kv {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
+}
+
+.kpc-part > .kpc-kv:first-of-type,
+.kpc-people > .kpc-kv:first-child {
+    border-top: 1px solid var(--line);
+}
+
+.kpc-kv__l {
+    display: flex;
+    flex: 1 1 220px;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    font-size: 14px;
+}
+
+.kpc-kv__l small {
+    display: block;
+    margin-top: 2px;
+    color: var(--ink-2);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.kpc-av {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    font-size: 12px;
+}
+
+.kpc-people {
+    display: grid;
+    gap: 0;
+}
+
+.kpc-purpose {
+    display: grid;
+    gap: 10px;
+}
+
+.kpc-purpose__acts {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+/* A quiet button inside a sentence. */
+.kpc-inline {
+    height: auto;
+    padding: 0 4px;
+    vertical-align: baseline;
+}
+
+.kpc-foot {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+/* ── mine, for everyone; the bot ──────────────────────────────────────── */
+
+.kpc-share {
+    display: grid;
+    gap: 12px;
+}
+
+.kpc-share ul {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 14px;
+    line-height: 1.45;
+}
+
+.kpc-share li {
+    display: flex;
+    gap: 10px;
+}
+
+.kpc-share li::before {
+    content: "";
+    flex: none;
+    width: 5px;
+    height: 5px;
+    margin-top: 8px;
+    border-radius: 50%;
+    background: var(--ink-3);
+}
+
+/* ── adding an app ────────────────────────────────────────────────────── */
+
+.kpc-add {
+    display: grid;
+    gap: 16px;
+}
+
+.kpc-find {
+    width: 100%;
+}
+
+.kpc-group {
+    margin: 0 0 8px;
+    color: var(--ink-3);
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.kpc-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 8px;
+}
+
+.kpc-tile {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.kpc-tile:not(:disabled):hover {
+    background: var(--wash-b);
+}
+
+.kpc-tile:disabled {
+    cursor: default;
+    opacity: 0.55;
+}
+
+.kpc-tile > span:last-child {
+    min-width: 0;
+}
+
+.kpc-tile small {
+    display: block;
+    color: var(--ink-3);
+    font-size: 12px;
+}
+
+@media (pointer: coarse) {
+    .kpc-tile {
+        min-height: 44px;
+    }
+}

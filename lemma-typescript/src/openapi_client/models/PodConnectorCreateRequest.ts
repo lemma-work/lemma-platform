@@ -14,7 +14,7 @@ export type PodConnectorCreateRequest = {
      */
     connector_id?: (string | null);
     /**
-     * PER_MEMBER (the default): each call uses the acting member's own account. SHARED: every call uses the one account set as `shared_pod_account_id`.
+     * PER_MEMBER (the default): each call uses the acting member's own account. SHARED: every call uses the one account set as `shared_pod_account_id`. APP (GitHub only): every call acts as the organization's GitHub App, on the installation the call's repository owner has it on -- nobody's account; anyone who may manage the pod's connectors may declare it.
      */
     mode?: PodConnectorMode;
     /**

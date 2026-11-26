@@ -20,6 +20,11 @@ Asking is not the same as being an agent, so two things differ:
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Literal
+
 from app.core.authorization.actor import WorkloadKind
 from app.core.authorization.context import Context
 from app.modules.connectors.domain.errors import ConnectorDomainError
@@ -39,15 +44,65 @@ class AppIdentityRefusedError(ConnectorDomainError):
         )
 
 
-class AppIdentityUnavailableError(ConnectorDomainError):
-    """The app cannot make this call, and acting as the person was not asked."""
+#: Why the app could not make a call, as ``details.reason`` says it.
+USER_ONLY_OPERATION = "user_only_operation"
+NO_INSTALLATION = "no_installation"
+TOKEN_REFUSED = "token_refused"
 
-    def __init__(self, reason: str) -> None:
+
+class AppIdentityUnavailableError(ConnectorDomainError):
+    """The app cannot make this call, and acting as the person was not asked.
+
+    ``code`` is one of the reasons above, so a caller -- an APP connector's
+    execution -- can tell "GitHub lets only a person do this" from "GitHub
+    would not mint a token" without reading the message.
+    """
+
+    def __init__(
+        self, reason: str, *, code: str | None = None, slug: str | None = None
+    ) -> None:
+        details: dict[str, str] = {}
+        if code:
+            details["reason"] = code
+        if slug:
+            details["pod_connector"] = slug
         super().__init__(
             message=f"This call cannot act as the connector's app: {reason}",
             code="APP_IDENTITY_UNAVAILABLE",
             status_code=409,
+            details=details or None,
         )
+        self.reason = code
+
+
+#: Who a call was presented as: the App, or the account's own credential.
+PresentedIdentity = Literal["app", "user"]
+
+#: Filled by the presenter while one call is presented, read by the analytics
+#: record around it. A list rather than the value: presenting runs inside the
+#: dispatcher's deadline task, which works on a copy of this context, so only a
+#: mutation of the object the record put here reaches back out.
+_PRESENTED: ContextVar[list[PresentedIdentity] | None] = ContextVar(
+    "connector_presented_identity", default=None
+)
+
+
+@contextmanager
+def presented_identity_observed() -> Iterator[list[PresentedIdentity]]:
+    """Collect what the call inside this block was presented as."""
+    seen: list[PresentedIdentity] = []
+    token = _PRESENTED.set(seen)
+    try:
+        yield seen
+    finally:
+        _PRESENTED.reset(token)
+
+
+def note_presented(identity: PresentedIdentity) -> None:
+    """Record what a call is about to go out as; nothing outside a record."""
+    seen = _PRESENTED.get()
+    if seen is not None:
+        seen.append(identity)
 
 
 def require_function_run(ctx: Context) -> None:
@@ -69,5 +124,11 @@ def require_function_run(ctx: Context) -> None:
 __all__ = [
     "AppIdentityRefusedError",
     "AppIdentityUnavailableError",
+    "NO_INSTALLATION",
+    "PresentedIdentity",
+    "TOKEN_REFUSED",
+    "USER_ONLY_OPERATION",
+    "note_presented",
+    "presented_identity_observed",
     "require_function_run",
 ]

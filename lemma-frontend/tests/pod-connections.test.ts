@@ -7,13 +7,15 @@ import { JSDOM } from "jsdom";
 import { act, createElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
-    askedLine, bannerLine, connectorCalled, connectorChanges, connectorCreateBody, connectorName, connectorPatchBody, coverageLine, failureOf, mayUseOnceConnected,
-    missingForMe, modeBadge, myStatus, readAskOutcome, readCoverage, readPodConnectors, slugProblem, truncatedLine, waitingLine, wantsCoverage, type MyAccount,
+    askedLine, bannerLine, connectorCalled, connectorCreateBody, connectorName, connectorPatchBody, failureOf, mayUseOnceConnected,
+    missingForMe, modeBadge, myStatus, readAskOutcome, readCoverage, readPodConnector, readPodConnectors, type MyAccount,
 } from "../src/data/pod-connectors.ts";
 import {
-    accountPatchBody, impactLines, ownedBy, readAccountUsage, readImpact, readPodAccounts, readShareRoles, shareAsBody, shareableFor, suggestedSlug,
-    usageLine, visibilityWord,
+    accountPatchBody, impactLines, readAccountUsage, readImpact, readPodAccounts, shareAsBody, usageLine,
 } from "../src/data/pod-accounts.ts";
+import {
+    botLogins, botReach, botSlug, connectedCount, connectionSaid, missingLine, readPodConnections, someoneMissing, twiceOver,
+} from "../src/data/pod-connections.ts";
 import { INSTALLATION_MANAGE, readOrgActions } from "../src/data/org-actions.ts";
 import { CONNECTOR_USE, connectorGrantSlugs, grantsBody, withConnectorGrants } from "../src/data/agents.ts";
 import { connectionLine, connectionTrouble, needsRebind, readConnection, rebindChoices, surfaceApp } from "../src/data/surface-settings.ts";
@@ -77,27 +79,13 @@ test("a pod connector reads its installation, its account and whether everyone i
     assert.equal(CONNECTORS[0].visibility, "POD");
 });
 
-test("an editor reads who a required connector is waiting on, by name and never by account", () => {
+test("an editor reads who a per-member connector is waiting on, by name and never by account", () => {
     const coverage = readCoverage(GMAIL_COVERAGE);
-    assert.equal(coverageLine(coverage), "5/7 connected");
+    assert.equal(coverage.connected, 5);
     assert.deepEqual(coverage.waitingOn.map((one) => [one.userId, one.name, one.standing]),
         [["bob", "Bob", "MISSING"], ["carol", "carol@acme.com", "REAUTH_REQUIRED"]], "a member with no name is said by their email");
-    assert.equal(waitingLine(coverage), "Waiting on Bob, and carol@acme.com to reconnect");
-    assert.equal(truncatedLine(coverage), "");
-    assert.equal(coverageLine({ eligible: 3, connected: 3, waitingOn: [], truncated: false }), "Everyone connected");
-    // Counted only part of the pod: never "Everyone", and said in words.
-    const part = readCoverage({ ...GMAIL_COVERAGE, eligible: 3, connected: 3, waiting_on: [], truncated: true });
-    assert.equal(coverageLine(part), "3/3 connected");
-    assert.match(truncatedLine(part), /Only some of the people here were counted/);
+    assert.equal(readCoverage({ ...GMAIL_COVERAGE, truncated: true }).truncated, true);
     assert.deepEqual(readCoverage(null), { eligible: 0, connected: 0, waitingOn: [], truncated: false });
-});
-
-test("coverage is asked for only by an editor, and only of a required per-member connector", () => {
-    assert.equal(wantsCoverage(CONNECTORS[1], true), true, "gmail: required, each person's own");
-    assert.equal(wantsCoverage(CONNECTORS[1], false), false, "it refuses anyone who may not manage connectors");
-    assert.equal(wantsCoverage(CONNECTORS[0], true), false, "a shared one waits on nobody");
-    assert.equal(wantsCoverage({ mode: "PER_MEMBER", required: false }, true), false, "nobody is asked to connect one not required");
-    assert.ok(!("coverage" in CONNECTORS[1]), "a listing's member_coverage is not read");
 });
 
 test("asking members to connect says who was asked and who was asked already today", () => {
@@ -173,31 +161,27 @@ test("a connector's name is its slug, with its app beside it when they differ", 
     assert.equal(connectorName("crm", ""), "crm");
 });
 
-test("a slug reads the same in a URL, a YAML key and a tool argument, and is free", () => {
-    assert.equal(slugProblem("support-inbox", []), "");
-    assert.match(slugProblem("Support Inbox", []), /Lowercase/);
-    assert.match(slugProblem("gmail", ["gmail"]), /already has/);
-    assert.match(slugProblem("", []), /name/);
-});
-
 test("declaring and changing a connector sends only what it means", () => {
     assert.deepEqual(connectorCreateBody({ slug: "gmail", authConfigId: "ac", mode: "PER_MEMBER", sharedPodAccountId: "pa", required: true, purpose: "  inbox " }),
         { slug: "gmail", auth_config_id: "ac", mode: "PER_MEMBER", required: true, purpose: "inbox" }, "no shared account on a per-member one");
     assert.deepEqual(connectorCreateBody({ slug: "s", authConfigId: "ac", mode: "SHARED", sharedPodAccountId: "pa", required: true, purpose: "" }),
         { slug: "s", auth_config_id: "ac", mode: "SHARED", shared_pod_account_id: "pa" }, "nobody is asked to connect a shared one");
     assert.deepEqual(connectorPatchBody({ sharedPodAccountId: "" }), { shared_pod_account_id: null });
-    assert.deepEqual(connectorChanges(CONNECTORS[0], { mode: "SHARED", purpose: "The support mailbox", sharedPodAccountId: "pa-alice" }), {}, "nothing touched, nothing sent");
-    assert.deepEqual(connectorChanges(CONNECTORS[0], { mode: "PER_MEMBER" }), { mode: "PER_MEMBER", sharedPodAccountId: "" });
+    assert.deepEqual(connectorCreateBody({ slug: "github-bot", authConfigId: "", connectorId: "github", mode: "APP", sharedPodAccountId: "", required: false, purpose: "" }),
+        { slug: "github-bot", connector_id: "github", mode: "APP" }, "the bot: no installation named, no account");
+    assert.deepEqual(connectorPatchBody({ mode: "APP", sharedPodAccountId: "" }), { mode: "APP", shared_pod_account_id: null });
+    const bot = readPodConnector({ slug: "github-bot", connector_id: "github", mode: "APP", status: "NEEDS_INSTALLATION" });
+    assert.equal(bot?.mode, "APP");
+    assert.equal(bot?.status, "NEEDS_INSTALLATION");
+    assert.equal(myStatus(bot!, MINE, "me").standing, "waiting", "a bot nobody installed runs for nobody");
 });
 
-test("pod accounts read their owner and visibility, and an editor picks only shared ones", () => {
+test("pod accounts read their owner, visibility and sandbox setting", () => {
     assert.equal(ACCOUNTS.length, 3, "a row with no id is not one");
     assert.equal(ACCOUNTS[1].label, "me@acme.com");
     assert.equal(ACCOUNTS[1].sandboxes, false);
     assert.equal(ACCOUNTS[0].sandboxes, null, "a server without the setting says nothing about it");
-    assert.deepEqual(shareableFor(ACCOUNTS, "ac-gmail").map((one) => one.id), ["pa-alice", "pa-bob"], "never one still personal to its owner");
-    assert.deepEqual(ownedBy(ACCOUNTS, "me").map((one) => one.id), ["pa-mine"]);
-    assert.equal(visibilityWord("RESTRICTED"), "Shared with some people here");
+    assert.equal(ACCOUNTS[1].ownerId, "me");
     assert.deepEqual(accountPatchBody({ visibility: "RESTRICTED", shareWith: [{ type: "POD_MEMBER", id: "m1" }], sandboxes: true }),
         { visibility: "RESTRICTED", share_with: [{ grantee_type: "POD_MEMBER", grantee_id: "m1" }], allow_sandbox_use: true });
 });
@@ -205,7 +189,6 @@ test("pod accounts read their owner and visibility, and an editor picks only sha
 test("using an account for everyone sends one slug and purpose, and leaves the checks to the server", () => {
     assert.deepEqual(shareAsBody("team-gmail", "  The team inbox "), { slug: "team-gmail", purpose: "The team inbox" });
     assert.deepEqual(shareAsBody("team-gmail"), { slug: "team-gmail" }, "no purpose, none sent");
-    assert.equal(suggestedSlug(ACCOUNTS[1], CONNECTORS), "gmail-shared");
 });
 
 test("a sandbox change reads the server's notice off its answer, and a listing carries none", () => {
@@ -274,14 +257,7 @@ test("I may install as the server says, not as a copy of its role table says", (
     assert.deepEqual(readOrgActions(null), [], "nothing readable holds nothing");
 });
 
-test("an owner can share with some of the pod's roles, not only some members", () => {
-    const roles = readShareRoles({ items: [
-        { id: "r-admin", name: "POD_ADMIN", is_system: true },
-        { id: "r-user", name: "POD_USER", is_system: true },
-        { id: "r-qa", name: "QA_REVIEWERS", is_system: false },
-        { name: "NO_ID" },
-    ] });
-    assert.deepEqual(roles.map((one) => [one.id, one.label]), [["r-admin", "Admins"], ["r-user", "Users"], ["r-qa", "Qa reviewers"]]);
+test("an account's grantees go out as roles and members", () => {
     assert.deepEqual(accountPatchBody({ visibility: "RESTRICTED", shareWith: [{ type: "ROLE", id: "r-qa" }, { type: "POD_MEMBER", id: "m2" }] }).share_with,
         [{ grantee_type: "ROLE", grantee_id: "r-qa" }, { grantee_type: "POD_MEMBER", grantee_id: "m2" }]);
 });
@@ -449,7 +425,6 @@ test("where-used, the impact preview, my org permissions and agent grants each a
         if (path.endsWith("/impact")) return { body: { auth_config_id: "ac", account_count: 1, pod_account_count: 0, pod_connectors: [] } };
         if (path.endsWith("/permissions/me")) return { body: { organization_id: "o1", actions: ["org.read"] } };
         if (path.endsWith("/ask-members")) return { body: { asked: [{ user_id: "bob", pod_member_id: "m-bob", name: "Bob", standing: "MISSING" }], asked_recently: [], connect_url: "u" } };
-        if (path.endsWith("/roles")) return { body: { items: [{ id: "r1", name: "POD_EDITOR", is_system: true }] } };
         return { body: { agent_id: "ag", agent_name: "researcher", grants: [{ resource_type: "connector", resource_name: "gmail", permission_ids: [CONNECTOR_USE] }] } };
     });
     assert.equal((await liveSource.accountUsage("acc"))[0].usedBy[0], "s");
@@ -458,16 +433,116 @@ test("where-used, the impact preview, my org permissions and agent grants each a
     const grants = await liveSource.setAgentGrants("p1", "researcher", withConnectorGrants([], ["gmail"]));
     assert.deepEqual(connectorGrantSlugs(grants), ["gmail"]);
     assert.equal((await liveSource.askMembersToConnect("p1", "gmail")).asked[0].name, "Bob");
-    assert.equal((await liveSource.listShareRoles("p1"))[0].label, "Editors");
     assert.deepEqual(requests.map((one) => [one.method, one.path]), [
         ["GET", "/me/connectors/accounts/acc/pods"],
         ["GET", "/organizations/o1/installations/ac/impact"],
         ["GET", "/organizations/o1/permissions/me"],
         ["PUT", "/pods/p1/agents/researcher/permissions"],
         ["POST", "/pods/p1/connectors/gmail/ask-members"],
-        ["GET", "/pods/p1/roles"],
     ]);
     assert.deepEqual(requests[3].body, { grants: [{ resource_type: "connector", resource_name: "gmail", permission_ids: [CONNECTOR_USE] }] });
+}));
+
+/* ── the page ──────────────────────────────────────────────────────── */
+
+/** `GET /pods/p1/connections`, one row for each way a row can stand. */
+const CONNECTIONS_RAW = {
+    may_manage: true,
+    github_bot: { installations: [{ login: "acme", repository_selection: "selected" }] },
+    items: [
+        { slug: "github", connector_id: "github", title: "GitHub", icon: "", mode: "PER_MEMBER", purpose: "", required: false, status: "READY", auth_config_id: "ac-github",
+            runs_as: { kind: "me", label: "me-gh" }, me: { standing: "ready", account: { id: "acc-gh", label: "me-gh", pod_account_id: "pa-gh" }, existing: null },
+            coverage: { connected: 1, total: 2 } },
+        { slug: "linear", connector_id: "linear", title: "Linear", mode: "PER_MEMBER", status: "READY", auth_config_id: "ac-linear",
+            runs_as: { kind: "nobody" }, me: { standing: "use_existing", account: null, existing: { account_id: "acc-lin", label: "me@linear" } }, coverage: { connected: 2, total: 2 } },
+        { slug: "notion", connector_id: "notion", title: "Notion", mode: "PER_MEMBER", status: "READY", auth_config_id: "ac-notion",
+            runs_as: { kind: "me", label: "me@notion" }, me: { standing: "reconnect", account: { id: "a-notion", label: "me@notion", pod_account_id: "pa-notion" } }, coverage: { connected: 1, total: 2 } },
+        { slug: "jira", connector_id: "jira", title: "Jira", mode: "PER_MEMBER", status: "READY", purpose: "Tracks the bugs", auth_config_id: "ac-jira",
+            runs_as: { kind: "nobody" }, me: { standing: "connect" }, coverage: { connected: 1, total: 2 } },
+        { slug: "support-inbox", connector_id: "gmail", title: "Gmail", mode: "SHARED", status: "READY", auth_config_id: "ac-gmail",
+            runs_as: { kind: "person", label: "support@acme.com", owner_user_id: "alice", owner_name: "Alice" }, me: { standing: "ready" }, coverage: null },
+        { slug: "teams-ops", connector_id: "teams", title: "Microsoft Teams", mode: "SHARED", status: "NEEDS_ACCOUNT", auth_config_id: "ac-teams",
+            runs_as: { kind: "nobody", owner_user_id: "alice", owner_name: "Alice" }, me: { standing: "waiting", existing: { account_id: "acc-teams", label: "me@teams" } }, coverage: null },
+        { slug: "github-bot", connector_id: "github", title: "GitHub", mode: "APP", status: "READY", runs_as: { kind: "app", label: "acme" }, me: { standing: "ready" }, coverage: null },
+        { slug: "hubspot", connector_id: "hubspot", title: "HubSpot", mode: "PER_MEMBER", status: "READY", runs_as: { kind: "nobody" }, me: { standing: "not_allowed" }, coverage: null },
+        { slug: "gmail", connector_id: "gmail", title: "Gmail", mode: "PER_MEMBER", status: "UNAVAILABLE", runs_as: { kind: "nobody" }, me: { standing: "waiting" }, coverage: null },
+    ],
+};
+const CONNECTIONS = readPodConnections(CONNECTIONS_RAW);
+
+test("the connections read says, per app, whose account it runs as and where I stand, and nothing it doesn't know reads as working", () => {
+    assert.equal(CONNECTIONS.mayManage, true);
+    assert.equal(CONNECTIONS.items.length, 9);
+    assert.equal(botLogins(CONNECTIONS.githubBot), "acme");
+    assert.equal(botReach(CONNECTIONS.githubBot), "Reaches the repositories the App was given.");
+    const [github, linear] = CONNECTIONS.items;
+    assert.equal(github.me.account?.podAccountId, "pa-gh");
+    assert.equal(github.authConfigId, "ac-github");
+    assert.deepEqual(linear.me.existing, { accountId: "acc-lin", label: "me@linear" });
+    const odd = readPodConnections({ items: [
+        { slug: "odd", mode: "LATER", status: "SOMETHING", me: { standing: "maybe" } },
+        { slug: "said-ready", mode: "APP", status: "NEEDS_INSTALLATION", me: { standing: "ready" } },
+        { slug: "" },
+        "nonsense",
+    ], github_bot: { installations: [] } });
+    assert.equal(odd.items.length, 2, "a row with no slug is not one");
+    assert.equal(odd.items[0].mode, "PER_MEMBER");
+    assert.equal(odd.items[0].status, "UNAVAILABLE", "an unknown status is not ready");
+    assert.equal(odd.items[0].me.standing, "unknown");
+    assert.equal(odd.items[0].runsAs.kind, "nobody");
+    assert.equal(odd.items[1].me.standing, "waiting", "ready on a row that can't run believes the row");
+    assert.equal(odd.githubBot, null, "a bot with no installation is no bot");
+    assert.equal(odd.mayManage, false);
+    assert.deepEqual(readPodConnections(null), { mayManage: false, githubBot: null, items: [] });
+});
+
+test("each row says whose account it runs as, or why it can't run and who can fix it", () => {
+    const said = (slug: string) => connectionSaid(CONNECTIONS.items.find((one) => one.slug === slug)!, "Kit", "me");
+    assert.deepEqual(said("github"), { line: "Runs as you · me-gh", status: { word: "Connected", tone: "ok" } });
+    assert.match(said("linear").line, /Yours is me@linear, no sign-in needed/);
+    assert.deepEqual(said("notion").status, { word: "Signed out", tone: "bad" });
+    assert.equal(said("notion").line, "Notion signed you out. Kit can't use it for you until you sign in again.");
+    assert.equal(said("jira").line, "Runs as each person's own account. Tracks the bugs.");
+    assert.equal(said("support-inbox").line, "Alice's account, for everyone · support@acme.com");
+    assert.deepEqual(said("teams-ops").status, { word: "Waiting on Alice", tone: "warn" });
+    assert.match(said("teams-ops").line, /Ran as Alice's account, which isn't shared any more/);
+    assert.equal(said("github-bot").line, "Runs as Kit's bot · acme's GitHub App. Nobody needs to connect.");
+    assert.deepEqual(said("hubspot").status, { word: "Not for you", tone: "off" });
+    assert.deepEqual(said("gmail").status, { word: "Switched off", tone: "off" });
+    const mine = { ...CONNECTIONS.items[4], runsAs: { ...CONNECTIONS.items[4].runsAs, ownerUserId: "me" } };
+    assert.equal(connectionSaid(mine, "Kit", "me").line, "Your account, for everyone · support@acme.com");
+    const uninstalled = readPodConnections({ items: [{ slug: "gh", connector_id: "github", title: "GitHub", mode: "APP", status: "NEEDS_INSTALLATION", me: { standing: "waiting" } }] }).items[0];
+    assert.deepEqual(connectionSaid(uninstalled, "Kit", "me").status, { word: "App not installed", tone: "bad" });
+});
+
+test("slugs show only where a Lemma has two of one app, and the band names who hasn't connected", () => {
+    assert.deepEqual([...twiceOver(CONNECTIONS.items)].sort(), ["github", "gmail"]);
+    assert.equal(connectedCount(CONNECTIONS.items[0].coverage), "1 of 2 connected");
+    assert.equal(connectedCount(null), "");
+    assert.equal(someoneMissing(CONNECTIONS.items[0]), true);
+    assert.equal(someoneMissing(CONNECTIONS.items[1]), false);
+    assert.equal(missingLine(["Alice"], "GitHub", "Kit"), "Alice hasn't connected GitHub, so Kit can't use it for Alice.");
+    assert.equal(missingLine(["Alice", "Bob"], "GitHub", "Kit"), "Alice and Bob haven't connected GitHub, so Kit can't use it for them.");
+    assert.equal(botSlug([]), "github");
+    assert.equal(botSlug(["github"]), "github-bot");
+    assert.equal(botSlug(["github", "github-bot"]), "github-bot-2");
+});
+
+test("the connections read and a connect started from a Lemma each ask their own route", (context) => withApi(async () => {
+    const requests = await recorded(context, (path) => {
+        if (path.endsWith("/connections")) return { body: CONNECTIONS_RAW };
+        if (path.endsWith("/connect-requests")) return { body: { authorization_url: "https://github.example.invalid/authorize", auth_config_id: "ac-github" } };
+        return { body: { items: [] } };
+    });
+    assert.equal((await liveSource.podConnections("p1")).items.length, 9);
+    const started = await liveSource.startAccount("o1", "github", "ac-github", "/l/p1/settings/connections", undefined, undefined, "p1");
+    assert.equal(started.authorizeUrl, "https://github.example.invalid/authorize");
+    assert.equal(requests[0].path, "/pods/p1/connections");
+    const asked = requests.find((one) => one.path.endsWith("/connect-requests"));
+    assert.deepEqual(asked?.body, { auth_config_id: "ac-github", return_to: "/l/p1/settings/connections", pod_id: "p1" }, "the Lemma rides along, so finishing adds the app there");
+    const elsewhere = await recorded(context, (path) => path.endsWith("/connect-requests") ? { body: { authorization_url: "u" } } : { body: { items: [] } });
+    await liveSource.startAccount("o1", "github", "ac-github", "/connectors");
+    assert.ok(!("pod_id" in (elsewhere.find((one) => one.path.endsWith("/connect-requests"))?.body ?? {})), "from the organization's page, no Lemma");
 }));
 
 /* ── drawn ─────────────────────────────────────────────────────────── */
@@ -478,7 +553,7 @@ const opened: { close(): void }[] = [];
 after(() => { for (const one of opened) one.close(); });
 
 function dom() {
-    const window = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { pretendToBeVisual: true, url: "https://app.example.invalid/t/p1/about/connections?connector=support-inbox" }).window;
+    const window = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { pretendToBeVisual: true, url: "https://app.example.invalid/l/p1/settings/connections" }).window;
     for (const [key, value] of Object.entries({
         window, document: window.document, navigator: window.navigator, HTMLElement: window.HTMLElement, Node: window.Node,
         IS_REACT_ACT_ENVIRONMENT: true, localStorage: window.localStorage,
@@ -496,212 +571,170 @@ const POD = {
     ],
 };
 
-function seeded(actions: string[], coverage = true) {
+/** What the banner reads (the pod's connectors) and what the page reads
+ *  (its connections), seeded so no request leaves a test. */
+function seeded(actions: string[], connections: unknown = CONNECTIONS_RAW) {
     const cache = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
     cache.setQueryData(["pod-connectors", "p1"], CONNECTORS);
-    /* Each required per-member connector's coverage, as an editor's page
-       asks for it: read, so no request leaves the test. */
-    if (coverage) {
-        cache.setQueryData(["pod-connectors", "p1", "coverage", "gmail"], readCoverage(GMAIL_COVERAGE));
-        for (const slug of ["notion", "github"]) cache.setQueryData(["pod-connectors", "p1", "coverage", slug], readCoverage({ eligible: 2, connected: 2, waiting_on: [], truncated: slug === "github" }));
+    cache.setQueryData(["pod-connectors", "p1", "connections"], readPodConnections(connections));
+    for (const slug of ["github", "notion", "jira"]) {
+        cache.setQueryData(["pod-connectors", "p1", "coverage", slug], readCoverage({ eligible: 2, connected: 1, truncated: false,
+            waiting_on: slug === "github" ? [{ user_id: "alice", pod_member_id: "m-alice", name: "Alice", standing: "MISSING" }]
+                : [{ user_id: "me", pod_member_id: "m-me", name: "Me", standing: "MISSING" }] }));
     }
     cache.setQueryData(["accounts", "o1"], MINE.map((one) => ({ ...one, ref: "", installState: "READY", createdAt: "" })));
     cache.setQueryData(["connectors"], [
         { id: "gmail", title: "Gmail", description: "", icon: "", active: true, kinds: [] },
+        { id: "github", title: "GitHub", description: "", icon: "", active: true, kinds: [] },
         { id: "notion", title: "Notion", description: "", icon: "", active: true, kinds: [] },
+        { id: "asana", title: "Asana", description: "", icon: "", active: true, kinds: [{ kind: "composio", auth_scheme: "OAUTH2", system_default_available: true }] },
     ]);
-    cache.setQueryData(["installs", "o1"], [{ id: "ac-gmail", connector_id: "gmail", kind: "composio", name: "gmail", status: "ACTIVE" }]);
+    cache.setQueryData(["installs", "o1"], [
+        { id: "ac-gmail", connector_id: "gmail", kind: "composio", name: "gmail", status: "ACTIVE" },
+        { id: "ac-github", connector_id: "github", kind: "composio", name: "github", status: "ACTIVE" },
+    ]);
     cache.setQueryData(["pod-accounts", "p1"], ACCOUNTS);
     cache.setQueryData(["pod-actions", "p1"], { actions });
-    cache.setQueryData(["share-roles", "p1"], [{ id: "r-editor", name: "POD_EDITOR", label: "Editors" }, { id: "r-qa", name: "QA_REVIEWERS", label: "Qa reviewers" }]);
     opened.push({ close: () => cache.clear() });
     return cache;
 }
 
-test("the Connections page draws each connector's badge and my standing, and editing only for editors", async (t) => {
-    const window = dom();
+async function drawPage(t: { after: (fn: () => unknown) => void }, window: ReturnType<typeof dom>, cache: QueryClient, focus: string | null = null) {
     const { PodConnections } = await import("../src/connect/pod-connections.tsx");
     const { createRoot } = await import("react-dom/client");
-    const draw = async (actions: string[], cache = seeded(actions)) => {
-        const holder = window.document.createElement("div");
-        window.document.body.append(holder);
-        const root = createRoot(holder);
-        // Unmounted however the test ends: a root left mounted after a failed
-        // assertion kept the process alive, and the whole suite never exited.
-        t.after(() => act(async () => root.unmount()));
-        await act(async () => {
-            root.render(createElement(QueryClientProvider, { client: cache }, createElement(PodConnections, { pod: POD, focus: "support-inbox" })));
-        });
-        return { holder, root };
-    };
-    const editor = await draw(["pod.read", "pod.connector.manage", "connector.use"]);
-    const text = editor.holder.textContent ?? "";
-    assert.match(text, /Shared · support@acme\.com · by Alice/);
-    assert.match(text, /Your account/);
-    assert.match(text, /Everyone connects/);
-    assert.match(text, /Nobody has shared an account for it yet/);
-    const buttons = [...editor.holder.querySelectorAll("button")].map((one) => one.textContent);
-    assert.ok(buttons.includes("Connect"), "gmail: no account of mine");
-    assert.ok(buttons.includes("Reconnect"), "notion: mine needs signing in");
-    assert.ok(buttons.some((one) => one?.includes("Add a connector")));
-    assert.ok(buttons.includes("Change"));
-    assert.match(text, /5\/7 connected/);
-    assert.match(text, /Waiting on Bob, and carol@acme\.com to reconnect/);
-    assert.ok(buttons.includes("Ask members to connect"));
-    assert.match(text, /Only some of the people here were counted/, "github's count stopped short, and says so");
-    assert.equal(editor.holder.querySelector("[data-focused] b")?.textContent ?? "", "support-inbox", "the linked connector is the one picked out");
-    /* My accounts here: only mine, with the owner's acts. */
-    assert.match(text, /Your accounts in Kit/);
-    assert.match(text, /me@acme\.com/);
-    assert.ok(buttons.includes("Share with everyone"));
-    assert.ok(buttons.includes("Use for everyone as…"), "said in plain words, not \"Share as\"");
-    assert.ok(!buttons.some((one) => one?.startsWith("Share as")));
-    // The slug, and its app beside it only when the slug does not say it.
-    const names = [...editor.holder.querySelectorAll(".podconn__name")].map((one) => one.textContent ?? "");
-    assert.ok(names.some((one) => one.startsWith("support-inbox(Gmail)")), "support-inbox (Gmail)");
-    assert.ok(names.some((one) => one.startsWith("gmailYour account")), "gmail, not gmail (Gmail)");
-    assert.ok(!text.includes("acc-bob"));
-    // Only a shared account can be lent to a sandbox (the server refuses it
-    // on one only its owner uses), so a personal account offers no switch.
-    assert.doesNotMatch(text, /Allow use inside sandboxes/, "my account here is personal");
-    const some = [...editor.holder.querySelectorAll("button")].find((one) => one.textContent === "Share with some people");
-    await act(async () => { some?.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
-    const picker = editor.holder.querySelector(".podconn__people")?.textContent ?? "";
-    assert.match(picker, /Alice/, "members");
-    assert.match(picker, /Editors/, "and the pod's roles");
-    assert.match(picker, /Qa reviewers/);
-
-    /* Adding one: no slug is suggested until an installation is picked. */
-    const add = [...editor.holder.querySelectorAll("button")].find((one) => one.textContent?.includes("Add a connector"));
-    await act(async () => { add?.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
-    const form = window.document.querySelector(".podconn__form")!;
-    const [install] = [...form.querySelectorAll("select")];
-    const slugInput = () => form.querySelector<HTMLInputElement>("input:not([type])")!;
-    assert.equal(install.value, "", "nothing picked for them");
-    assert.equal(slugInput().value, "");
-    assert.equal(form.querySelector<HTMLButtonElement>("button[type=submit]")?.disabled, true);
+    const holder = window.document.createElement("div");
+    window.document.body.append(holder);
+    const root = createRoot(holder);
+    // Unmounted however the test ends: a root left mounted after a failed
+    // assertion kept the process alive, and the whole suite never exited.
+    t.after(() => act(async () => root.unmount()));
     await act(async () => {
-        install.value = "install:ac-gmail";
-        install.dispatchEvent(new window.Event("change", { bubbles: true }));
+        root.render(createElement(QueryClientProvider, { client: cache }, createElement(PodConnections, { pod: POD, focus })));
     });
-    assert.equal(slugInput().value, "gmail-2", "named for its app once there is one");
+    return holder;
+}
 
-    // A member is never shown coverage, and never asks for it: it refuses them.
-    const memberCache = seeded(["pod.read", "connector.use"], false);
-    const member = await draw(["pod.read", "connector.use"], memberCache);
-    const asked = memberCache.getQueryCache().findAll({ queryKey: ["pod-connectors", "p1", "coverage"] });
-    assert.ok(asked.every((one) => one.state.fetchStatus === "idle" && one.state.data === undefined), "no coverage request for a member");
-    assert.doesNotMatch(member.holder.textContent ?? "", /connected ·|Waiting on|Counting who/);
-    const plain = [...member.holder.querySelectorAll("button")].map((one) => one.textContent);
-    assert.ok(!plain.some((one) => one?.includes("Add a connector")), "a member cannot add one");
-    assert.ok(!plain.includes("Change"));
-    assert.ok(!plain.includes("Ask members to connect"));
-    assert.ok(!plain.includes("Use for everyone as…"), "declaring a connector is an editor's");
+const click = async (window: ReturnType<typeof dom>, element: Element | null | undefined) => {
+    assert.ok(element, "there is something to click");
+    await act(async () => { element!.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+};
+const buttonNamed = (within: ParentNode, text: string) => [...within.querySelectorAll("button")].find((one) => one.textContent?.trim() === text);
+
+test("the Connections page draws one row per app with the one thing to do, and editing only for editors", async (t) => {
+    const window = dom();
+    const editor = await drawPage(t, window, seeded(["pod.read", "pod.connector.manage", "connector.use"]));
+    const text = editor.textContent ?? "";
+    assert.match(text, /Runs as you · me-gh/);
+    assert.match(text, /You’ve connected Linear already\./);
+    assert.match(text, /Alice's account, for everyone · support@acme\.com/);
+    assert.match(text, /Runs as Kit's bot · acme's GitHub App\. Nobody needs to connect\./);
+    assert.match(text, /Not for you/);
+    assert.match(text, /Switched off/);
+    assert.match(text, /1 of 2 connected/);
+    const buttons = [...editor.querySelectorAll("button")].map((one) => one.textContent?.trim());
+    for (const want of ["Use it here", "Reconnect", "Connect", "Use mine", "Add an app"]) assert.ok(buttons.includes(want), want);
+    /* Slugs only where they tell two apart. */
+    const slugs = [...editor.querySelectorAll(".kpc-slug")].map((one) => one.textContent);
+    assert.deepEqual(slugs.sort(), ["github", "github-bot", "gmail", "support-inbox"]);
+    /* The band: who else hasn't connected, never me (my own row asks me). */
+    const band = editor.querySelector(".kneed")?.textContent ?? "";
+    assert.match(band, /Alice hasn't connected GitHub, so Kit can't use it for Alice\./);
+    assert.ok(buttonNamed(editor, "Ask Alice"));
+    assert.doesNotMatch(band, /Me hasn't/);
+    assert.equal(editor.querySelector(".podconn__offer"), null, "no banner from the old page");
+    assert.doesNotMatch(text, /Your accounts in Kit|Bring another of yours in|Use for everyone as…/, "one list, not two");
+
+    const member = await drawPage(t, window, seeded(["pod.read", "connector.use"], { ...CONNECTIONS_RAW, may_manage: false }));
+    const plain = [...member.querySelectorAll("button")].map((one) => one.textContent?.trim());
+    assert.ok(!plain.includes("Add an app"), "a member cannot add one");
+    assert.ok(!plain.includes("Use mine"), "pointing an app at an account is an editor's");
     assert.ok(plain.includes("Connect"), "but still connects their own");
-
-    const viewer = await draw(["pod.read"]);
-    const seen = [...viewer.holder.querySelectorAll("button")].map((one) => one.textContent);
-    assert.ok(!seen.includes("Connect") && !seen.includes("Reconnect"), "a viewer is offered no account nothing would use");
-    assert.match(viewer.holder.textContent ?? "", /Not one you can use in Kit/);
+    assert.equal(member.querySelector(".kneed"), null, "nor counts who else has");
+    assert.doesNotMatch(member.textContent ?? "", /of 2 connected/);
 });
 
-test("a link naming an app the pod has no connector for offers to connect it, and the add picker offers the catalog", async (t) => {
+test("a link picks out its app's row, offers to add an app the Lemma doesn't use, and says when a name matches nothing", async (t) => {
     const window = dom();
-    const { PodConnections } = await import("../src/connect/pod-connections.tsx");
-    const { createRoot } = await import("react-dom/client");
-    const cache = seeded(["pod.read", "pod.connector.manage", "connector.use"]);
-    const signInReady = [{ kind: "composio", auth_scheme: "OAUTH2", system_default_available: true }];
-    cache.setQueryData(["connectors"], [
-        { id: "gmail", title: "Gmail", description: "", icon: "", active: true, kinds: signInReady },
-        { id: "notion", title: "Notion", description: "", icon: "", active: true, kinds: [] },
-        { id: "linear", title: "Linear", description: "", icon: "", active: true, kinds: signInReady },
-    ]);
-    const draw = async (focus: string) => {
-        const holder = window.document.createElement("div");
-        window.document.body.append(holder);
-        const root = createRoot(holder);
-        t.after(() => act(async () => root.unmount()));
-        await act(async () => {
-            root.render(createElement(QueryClientProvider, { client: cache }, createElement(PodConnections, { pod: POD, focus })));
-        });
-        return holder;
-    };
-
-    const offered = await draw("linear");
-    const offer = offered.querySelector(".podconn__offer");
-    assert.match(offer?.textContent ?? "", /Connect Linear for Kit/);
-    assert.ok([...(offer?.querySelectorAll("button") ?? [])].some((one) => one.textContent === "Connect"));
-    assert.doesNotMatch(offered.textContent ?? "", /no connector called/, "a catalog app is not a connector that is gone");
-
-    const gone = await draw("nothing-like-it");
-    assert.match(gone.textContent ?? "", /Kit has no connector called nothing-like-it any more/);
-    assert.equal(gone.querySelector(".podconn__offer"), null);
-
-    const add = [...offered.querySelectorAll("button")].find((one) => one.textContent?.includes("Add a connector"));
-    await act(async () => { add?.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
-    const form = window.document.querySelector(".podconn__form")!;
-    const values = [...form.querySelectorAll("option")].map((one) => one.value);
-    assert.deepEqual(values, ["", "install:ac-gmail", "catalog:linear"], "the installation, then the catalog's apps it has none of");
+    const linked = await drawPage(t, window, seeded(["pod.read", "pod.connector.manage", "connector.use"]), "support-inbox");
+    assert.match(linked.querySelector("[data-focused]")?.textContent ?? "", /Alice's account, for everyone/);
+    const offered = await drawPage(t, window, seeded(["pod.read", "connector.use"]), "asana");
+    const row = offered.querySelector("[data-focused]");
+    assert.match(row?.textContent ?? "", /Kit doesn’t use Asana yet\. Connect your account and it will/);
+    assert.ok(buttonNamed(row!, "Connect"));
+    const gone = await drawPage(t, window, seeded(["pod.read", "connector.use"]), "nothing-like-it");
+    assert.match(gone.textContent ?? "", /Kit doesn’t use anything called nothing-like-it\./);
 });
 
-test("a shared account of mine offers the sandbox switch, saying plainly who gets its token", async (t) => {
+test("an app's sheet says whose account it runs as, who has connected, and how to take it out", async (t) => {
     const window = dom();
-    const { PodConnections } = await import("../src/connect/pod-connections.tsx");
-    const { createRoot } = await import("react-dom/client");
-    const cache = seeded(["pod.read", "connector.use"]);
-    cache.setQueryData(["pod-accounts", "p1"], ACCOUNTS.map((one) => (one.id === "pa-mine" ? { ...one, visibility: "POD" as const } : one)));
-    const holder = window.document.createElement("div");
-    window.document.body.append(holder);
-    const root = createRoot(holder);
-    t.after(() => act(async () => root.unmount()));
-    await act(async () => { root.render(createElement(QueryClientProvider, { client: cache }, createElement(PodConnections, { pod: POD, focus: null }))); });
-    const text = holder.textContent ?? "";
-    assert.match(text, /Allow use inside sandboxes/);
-    assert.match(text, /Agents of other members can then use a copy of this account’s token inside their sandboxes/);
-    assert.match(text, /Gmail · gmail/, "my account row names its installation");
-});
-
-test("turning sandbox use off draws the account as saved, and the server's notice", async (t) => {
-    const window = dom();
-    const { PodConnections } = await import("../src/connect/pod-connections.tsx");
-    const { createRoot } = await import("react-dom/client");
-    const notice = "No sandbox is given this account's token from now on. A sandbox that already has a copy loses it on its next git command.";
-    /* The source's own PATCH is pinned above, against the recorded API; here
-       the page is handed its answer (the SDK sends by XHR under a window). */
+    t.mock.method(liveSource, "podConnections", async () => CONNECTIONS);
+    t.mock.method(liveSource, "podConnectorCoverage", async () => readCoverage({ eligible: 2, connected: 1, waiting_on: [{ user_id: "alice", name: "Alice", standing: "MISSING" }] }));
     const sent: unknown[] = [];
-    let saved: (typeof ACCOUNTS)[number] | undefined;
-    t.mock.method(liveSource, "changePodAccount", async (_podId: string, podAccountId: string, patch: { sandboxes?: boolean }) => {
-        sent.push([podAccountId, patch]);
-        saved = readPodAccounts({ items: [{ ...ACCOUNTS_RAW_MINE, visibility: "POD", allow_sandbox_use: patch.sandboxes, notice }] })[0];
-        return saved;
-    });
-    /* A save invalidates both lists, and the refetch went out over the real
-       source: it settled after this test had ended, against a window the next
-       test had replaced, and failed the run as an unhandled rejection. Read
-       back here, so no request leaves the test. */
-    t.mock.method(liveSource, "listPodAccounts", async () =>
-        ACCOUNTS.map((one) => (one.id === "pa-mine" ? (saved ?? { ...one, visibility: "POD" as const, sandboxes: true }) : one)));
-    t.mock.method(liveSource, "listPodConnectors", async () => CONNECTORS);
-    const cache = seeded(["pod.read", "connector.use"]);
-    cache.setQueryData(["pod-accounts", "p1"], ACCOUNTS.map((one) => (one.id === "pa-mine" ? { ...one, visibility: "POD" as const, sandboxes: true } : one)));
-    const holder = window.document.createElement("div");
-    window.document.body.append(holder);
-    const root = createRoot(holder);
-    t.after(() => act(async () => root.unmount()));
-    await act(async () => { root.render(createElement(QueryClientProvider, { client: cache }, createElement(PodConnections, { pod: POD, focus: null }))); });
-    const toggle = holder.querySelector<HTMLInputElement>("input[role=switch]")!;
-    assert.equal(toggle.checked, true);
+    t.mock.method(liveSource, "changePodAccount", async (...args: unknown[]) => { sent.push(["changePodAccount", ...args]); return ACCOUNTS[1]; });
+    t.mock.method(liveSource, "changePodConnector", async (...args: unknown[]) => { sent.push(["changePodConnector", ...args]); return CONNECTORS[1]; });
+    t.mock.method(liveSource, "shareAccountAs", async (...args: unknown[]) => { sent.push(["shareAccountAs", ...args]); return CONNECTORS[1]; });
+    const holder = await drawPage(t, window, seeded(["pod.read", "pod.connector.manage", "connector.use"]));
+    await click(window, buttonNamed(holder, "GitHub"));
+    const sheet = window.document.querySelector(".ksheet");
+    const said = sheet?.textContent ?? "";
+    assert.match(said, /GitHub in Kit/);
+    assert.match(said, /Each person’s own account/);
+    assert.match(said, /Mine, for everyone/);
+    assert.match(said, /Kit’s bot/, "the organization's App is offered where it's installed");
+    assert.match(said, /Who’s connected/);
+    assert.ok(buttonNamed(sheet!, "Ask"), "Alice, asked by name");
+    assert.ok(buttonNamed(sheet!, "Disconnect my account"));
+    assert.ok(buttonNamed(sheet!, "Remove GitHub from Kit"));
+    assert.doesNotMatch(said, /Allow it inside sandboxes/, "only once it is shared");
+
+    /* Mine, for everyone: one confirmation, then one request that shares my
+       account and switches the app to it together. */
+    const mine = [...sheet!.querySelectorAll("label.kopt")].find((one) => one.textContent?.startsWith("Mine, for everyone"))?.querySelector("input");
+    await act(async () => { mine!.click(); });
+    const dialog = window.document.querySelector(".modal");
+    assert.match(dialog?.textContent ?? "", /Run GitHub for everyone as you\?/);
+    assert.match(dialog?.textContent ?? "", /Alice stops needing their own GitHub to use Kit\./);
     await act(async () => {
-        toggle.click();
+        buttonNamed(dialog!, "Run it as me")!.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
         await new Promise((done) => setTimeout(done, 20));
     });
-    assert.deepEqual(sent, [["pa-mine", { sandboxes: false }]]);
-    assert.equal(holder.querySelector<HTMLInputElement>("input[role=switch]")?.checked, false, "the answer is drawn, not the old row");
-    assert.match(holder.textContent ?? "", /loses it on its next git command/);
-    /* A save refreshes the pod's accounts and connectors. Left running, that
-       refetch outlived this test, reached for the window the next test had
-       replaced, and failed the whole file on another test's turn. */
-    await act(async () => { await cache.cancelQueries(); });
+    assert.deepEqual(sent, [["shareAccountAs", "p1", "pa-gh", "github"]]);
+    await act(async () => { await new Promise((done) => setTimeout(done, 20)); });
+});
+
+test("adding GitHub where the organization's App is installed offers the bot first", async (t) => {
+    const window = dom();
+    const added: unknown[] = [];
+    t.mock.method(liveSource, "addPodConnector", async (_podId: string, draft: unknown) => {
+        added.push(draft);
+        return readPodConnector({ slug: "github-bot", connector_id: "github", mode: "APP", status: "READY" })!;
+    });
+    t.mock.method(liveSource, "podConnections", async () => CONNECTIONS);
+    t.mock.method(liveSource, "podConnectorCoverage", async () => readCoverage({}));
+    const withoutBot = { ...CONNECTIONS_RAW, items: CONNECTIONS_RAW.items.filter((one) => one.mode !== "APP") };
+    const holder = await drawPage(t, window, seeded(["pod.read", "pod.connector.manage", "connector.use"], withoutBot));
+    await click(window, buttonNamed(holder, "Add an app"));
+    const picker = window.document.querySelector(".modal");
+    assert.match(picker?.textContent ?? "", /Add an app to Kit/);
+    assert.match(picker?.textContent ?? "", /Already used in your organization/);
+    assert.match(picker?.textContent ?? "", /More apps/);
+    const tiles = [...picker!.querySelectorAll(".kpc-tile")];
+    /* A tile's words, without the initial its mark stands in with. */
+    const named = (name: string) => tiles.find((one) => one.querySelector(":scope > span:last-child")?.textContent?.startsWith(name));
+    const gmail = named("Gmail");
+    assert.match(gmail?.textContent ?? "", /In Kit already/);
+    assert.equal((gmail as HTMLButtonElement).disabled, true);
+    assert.ok(named("Asana"), "the catalog's apps nobody installed");
+    await click(window, named("GitHub"));
+    const step = window.document.querySelector(".modal");
+    assert.match(step?.textContent ?? "", /Kit can read and post as acme’s GitHub App/);
+    await act(async () => {
+        buttonNamed(step!, "Use the bot")!.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+        await new Promise((done) => setTimeout(done, 20));
+    });
+    assert.deepEqual(added, [{ slug: "github-bot", authConfigId: "", connectorId: "github", mode: "APP", sharedPodAccountId: "", required: false, purpose: "" }],
+        "no slug asked for: github is taken, so github-bot");
+    await act(async () => { await new Promise((done) => setTimeout(done, 20)); });
 });
 
 test("the banner asks for the required connectors I have not connected, and nothing when I have", async (t) => {

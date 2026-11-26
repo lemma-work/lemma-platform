@@ -101,6 +101,12 @@ def test_reading_a_connector_normalizes_and_checks_it():
             {"connector": "gmail", "mode": "SHARED", "visibility": "PERSONAL"},
             "visibility",
         ),
+        ("bot", {"connector": "gmail", "mode": "APP"}, "github"),
+        (
+            "bot",
+            {"connector": "github", "mode": "APP", "visibility": "RESTRICTED"},
+            "whole pod",
+        ),
     ],
 )
 def test_a_malformed_connector_is_refused_with_its_reason(slug, payload, complaint):
@@ -185,3 +191,18 @@ def test_a_clean_connector_exports_unchanged(tmp_path: Path):
         "mode": "PER_MEMBER",
         "required": True,
     }
+
+
+def test_an_app_connector_is_the_organizations_github_bot():
+    """No installation and no account to choose: the importer's own org's App."""
+    connector = read_bundle_connector(
+        "github-bot", {"connector": "github", "mode": "app"}
+    )
+    assert connector.mode == "APP"
+    assert connector.is_app and not connector.is_shared
+
+
+def test_an_exported_app_connector_says_app():
+    assert _normalize_pod_connector_payload(
+        {"connector_id": "github", "mode": "APP", "slug": "github"}
+    ) == {"connector": "github", "mode": "APP", "required": False}

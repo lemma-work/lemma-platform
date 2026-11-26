@@ -39,6 +39,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `connector.status.get` | GET | `/organizations/{organization_id}/connectors/status` | Get Connector Status |
 | `connector.trigger.get` | GET | `/organizations/{organization_id}/connectors/{auth_config_name}/triggers/{trigger_name}` | Get Connector Trigger |
 | `connector.trigger.list` | GET | `/organizations/{organization_id}/connectors/{auth_config_name}/triggers` | List Connector Triggers |
+| `pod.connection.list` | GET | `/pods/{pod_id}/connections` | My Connections Here |
 | `pod.connector.ask_members` | POST | `/pods/{pod_id}/connectors/{slug}/ask-members` | Ask Members To Connect |
 | `pod.connector.coverage` | GET | `/pods/{pod_id}/connectors/{slug}/coverage` | Who A Per-Member Connector Is Waiting On |
 | `pod.connector.create` | POST | `/pods/{pod_id}/connectors` | Declare A Pod Connector |

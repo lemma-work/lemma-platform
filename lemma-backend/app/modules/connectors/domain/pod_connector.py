@@ -11,7 +11,9 @@ Two pod rows replace all of that, and both are ordinary pod resources:
 
 - a **pod connector** is the pod's declaration, under a stable pod-local slug,
   of one org installation it uses, and whether each member brings their own
-  account (``PER_MEMBER``) or one shared account serves everyone (``SHARED``);
+  account (``PER_MEMBER``), one shared account serves everyone (``SHARED``),
+  or the organization's GitHub App acts with no person's account behind it
+  (``APP``);
 - a **pod account** records that one org account is in use in the pod. Its
   owner is the account's owner, and only they may widen its visibility --
   PERSONAL (only their own calls), POD, or RESTRICTED to some members.
@@ -32,6 +34,11 @@ class PodConnectorMode(str, enum.Enum):
     PER_MEMBER = "PER_MEMBER"
     #: Each call uses the one pod account the connector names, whoever acts.
     SHARED = "SHARED"
+    #: Each call acts as the organization's GitHub App on the installation the
+    #: call's repository owner has it on. Nobody's account: an org admin
+    #: installing the App on GitHub is the whole set-up, and the repositories
+    #: they gave it there are its reach (``domain/app_installation.py``).
+    APP = "APP"
 
 
 class PodConnectorVisibility(str, enum.Enum):
@@ -75,6 +82,9 @@ class PodConnectorStatus(str, enum.Enum):
     NEEDS_ACCOUNT = "NEEDS_ACCOUNT"
     #: The installation behind it is disabled.
     UNAVAILABLE = "UNAVAILABLE"
+    #: APP with no GitHub App installation that counts for the organization:
+    #: an org admin has to install the App on a GitHub organization.
+    NEEDS_INSTALLATION = "NEEDS_INSTALLATION"
 
 
 #: A slug is what apps, agents and bundles address a pod connector by, so it is
@@ -122,10 +132,21 @@ def connector_status(
     *,
     installation_active: bool,
     shared_account: PodAccountEntity | None,
+    app_installed: bool = False,
 ) -> PodConnectorStatus:
-    """Whether the connector can run at all, independent of who asks."""
+    """Whether the connector can run at all, independent of who asks.
+
+    ``app_installed`` is read for APP alone: whether the organization has a
+    GitHub App installation that counts (``AppInstallation.counts``).
+    """
     if not installation_active:
         return PodConnectorStatus.UNAVAILABLE
+    if connector.mode is PodConnectorMode.APP:
+        return (
+            PodConnectorStatus.READY
+            if app_installed
+            else PodConnectorStatus.NEEDS_INSTALLATION
+        )
     if connector.mode is PodConnectorMode.SHARED and (
         shared_account is None or not shared_account.is_shared
     ):

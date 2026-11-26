@@ -37,10 +37,8 @@ from app.modules.connectors.api.schemas.pod_connector_schemas import (
     PodConnectorCreateRequest,
     PodConnectorResponse,
     PodConnectorUpdateRequest,
-    SharedAccountSummary,
 )
 from app.modules.connectors.domain.account import AccountEntity
-from app.modules.connectors.domain.auth_config import AuthConfigStatus
 from app.modules.connectors.domain.errors import (
     AccountNotFoundError,
     ConnectorNotFoundError,
@@ -53,7 +51,6 @@ from app.modules.connectors.domain.pod_connector import (
     PodAccountVisibility,
     PodConnectorEntity,
     PodConnectorMode,
-    connector_status,
 )
 from app.modules.connectors.domain.pod_connector_errors import (
     PodAccountNotFoundError,
@@ -78,8 +75,11 @@ from app.modules.connectors.services.pod_connector_notices import (
     tell_editors_connectors_lost_their_account,
 )
 from app.modules.connectors.services.pod_connector_resolution import acting_person
+from app.modules.connectors.services.pod_connector_presenting import (
+    present_connector,
+)
 from app.modules.connectors.services.pod_connector_use import (
-    can_use,
+    require_valid_mode,
     slug_to_declare,
 )
 
@@ -155,9 +155,7 @@ class PodConnectorService:
         )
         if auth_config is None or auth_config.organization_id != ctx.organization_id:
             raise InstallationNotFoundError(str(data.auth_config_id))
-        slug = await slug_to_declare(
-            self.pod_connectors, pod_id, auth_config, requested=data.slug
-        )
+        slug = await slug_to_declare(self.pod_connectors, pod_id, auth_config, data)
         connector = PodConnectorEntity(
             pod_id=pod_id,
             slug=slug,
@@ -187,8 +185,18 @@ class PodConnectorService:
             if field in data.model_fields_set and getattr(data, field) is not None
         }
         connector = connector.model_copy(update=changes)
-        if connector.mode is PodConnectorMode.PER_MEMBER:
+        if connector.mode is not PodConnectorMode.SHARED:
             connector = connector.model_copy(update={"shared_pod_account_id": None})
+        if connector.mode is PodConnectorMode.APP:
+            auth_config = await self.auth_configs.get(connector.auth_config_id)
+            if auth_config is None:
+                raise InstallationNotFoundError(str(connector.auth_config_id))
+            require_valid_mode(
+                connector.mode,
+                auth_config,
+                shared_pod_account_id=data.shared_pod_account_id,
+                visibility=connector.visibility,
+            )
         if "shared_pod_account_id" in data.model_fields_set:
             if data.shared_pod_account_id is None:
                 connector = connector.model_copy(update={"shared_pod_account_id": None})
@@ -262,37 +270,7 @@ class PodConnectorService:
     async def _present_connector(
         self, connector: PodConnectorEntity, ctx: Context
     ) -> PodConnectorResponse:
-        """The connector as ``ctx`` sees it, ``can_use`` included: the one
-        check the "connect yours" banner needs, asked of the caller alone."""
-        auth_config = await self.auth_configs.get(connector.auth_config_id)
-        shared = (
-            await self.pod_accounts.get(connector.shared_pod_account_id)
-            if connector.shared_pod_account_id
-            else None
-        )
-        summary = None
-        if shared is not None:
-            account = await self.accounts.get(shared.account_id)
-            summary = SharedAccountSummary(
-                pod_account_id=shared.id,
-                owner_user_id=shared.owner_user_id,
-                display_name=account.display_name if account else None,
-                email=account.email if account else None,
-            )
-        status = connector_status(
-            connector,
-            installation_active=auth_config is not None
-            and auth_config.status is AuthConfigStatus.ACTIVE,
-            shared_account=shared,
-        )
-        return PodConnectorResponse(
-            **connector.model_dump(),
-            installation_name=auth_config.name if auth_config else None,
-            connector_id=auth_config.connector_id if auth_config else None,
-            shared_account=summary,
-            can_use=await can_use(ctx, connector, status, shared),
-            status=status,
-        )
+        return await present_connector(self, connector, ctx)
 
     # -- pod accounts ---------------------------------------------------------
 

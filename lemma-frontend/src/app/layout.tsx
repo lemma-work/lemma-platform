@@ -30,6 +30,7 @@ import "@/styles/space-mobile.css";
 import "@/styles/arrival.css";
 import "@/styles/kit.css";
 import "@/styles/dialogs.css";
+import "@/styles/lemma-connections.css";
 import "@/styles/settings.css";
 import "@/styles/billing.css";
 import "@/styles/start.css";

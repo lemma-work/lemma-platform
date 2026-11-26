@@ -18,6 +18,9 @@ The three entry points -- ``resolve`` (somebody acting now),
 says who is asking and how its account half is checked, and the account and
 the rule on it are ``PodAccountPicker``'s (``pod_account_rule.py``), once.
 
+An APP connector resolves to no account (``resolve_any``); the account-only
+entry points refuse it with ``APP_CONNECTOR_UNSUPPORTED``.
+
 It replaced ``AccountResolutionService``, whose account was an ``account_id``
 argument any caller -- the model included -- could type, with authorization on
 it inferred per calling pod from whether some grant happened to exist.
@@ -34,10 +37,8 @@ from app.core.authorization.context import (
     Context,
     Person,
     ResourceRef,
-    Workload,
 )
 from app.core.authorization.permissions import Permissions
-from app.core.authorization.workload_authority import invoking_person_context
 from app.core.config import settings
 from app.core.domain.errors import DomainError
 from app.modules.connectors.domain.account import AccountEntity
@@ -55,6 +56,7 @@ from app.modules.connectors.domain.pod_connector import (
     PodConnectorSource,
 )
 from app.modules.connectors.domain.pod_connector_errors import (
+    AppConnectorUnsupportedError,
     ConnectorNeedsAccountError,
     ConnectorUnavailableError,
     ConnectorUseRefusedError,
@@ -72,13 +74,20 @@ from app.modules.connectors.infrastructure.repositories.pod_connector_repository
 )
 from app.modules.connectors.services.pod_account_rule import (
     AccountAsk,
+    AppInstallationsReader,
     PodAccountPicker,
     PodMembership,
+    ResolvedAppConnector,
     ResolvedPodConnector,
     connect_url,
     needs_account,
 )
 from app.modules.connectors.services.reauth_recovery import reauth_blocks_use
+from app.modules.connectors.services.shared_account_use import (
+    NOT_A_REFUSAL as _NOT_A_REFUSAL,
+    may_use_shared_account,
+    require_account_use,
+)
 
 #: ``(user_id, pod_id) -> Context``: a person, as themselves, in a pod. For the
 #: account half of a standing binding, whose person is not the one asking.
@@ -93,8 +102,6 @@ _UNSERVED = (
     ConnectorAccessDeniedError,
     ConnectorNeedsAccountError,
 )
-#: Authorization answers that are not a refusal of this connector.
-_NOT_A_REFUSAL = frozenset({"AUTH_REQUIRED", "NOT_FOUND"})
 
 
 def acting_person(ctx: Context) -> UUID | None:
@@ -119,6 +126,7 @@ class PodConnectorResolver:
         accounts: AccountRepositoryPort,
         is_pod_member: PodMembership,
         person_context: PersonContext,
+        app_installations: AppInstallationsReader | None = None,
     ):
         self.pod_connectors = pod_connectors
         self.pod_accounts = pod_accounts
@@ -128,6 +136,8 @@ class PodConnectorResolver:
         self.picker = PodAccountPicker(
             pod_accounts=pod_accounts, accounts=accounts, is_pod_member=is_pod_member
         )
+        if app_installations is not None:
+            self.picker.app_installations = app_installations
 
     async def connector(self, pod_id: UUID, slug: str) -> PodConnectorEntity:
         found = await self.pod_connectors.get_by_slug(pod_id, slug)
@@ -149,14 +159,29 @@ class PodConnectorResolver:
         ``pod_account_id`` pins one of the acting person's own accounts on a
         PER_MEMBER connector -- what a binding they are making will keep.
         """
+        resolved = await self.resolve_any(
+            ctx, pod_connector, pod_account_id=pod_account_id
+        )
+        if isinstance(resolved, ResolvedAppConnector):
+            raise AppConnectorUnsupportedError(slug=pod_connector.slug)
+        return resolved
+
+    async def resolve_any(
+        self,
+        ctx: Context,
+        pod_connector: PodConnectorEntity,
+        *,
+        pod_account_id: UUID | None = None,
+    ) -> ResolvedPodConnector | ResolvedAppConnector:
+        """``resolve``, or the App for an APP connector: operations, schedules."""
         auth_config = await self._installation(pod_connector)
         await self.require_use(ctx, pod_connector, auth_config)
-        return await self.picker.pick(
+        return await self.picker.pick_any(
             pod_connector,
             auth_config,
             AccountAsk(
                 person=acting_person(ctx),
-                shared_check=partial(_require_account_use, ctx),
+                shared_check=partial(require_account_use, ctx),
                 pinned_pod_account_id=pod_account_id,
                 auto_add=True,
             ),
@@ -171,6 +196,9 @@ class PodConnectorResolver:
         record_use: bool = True,
     ) -> ResolvedPodConnector:
         """The account behind a binding that runs with nobody at the keyboard.
+
+        An APP connector is refused (``APP_CONNECTOR_UNSUPPORTED``); a binding
+        that can act as the App asks ``resolve_standing_any``.
 
         A surface answering a message and a schedule's trigger subscription
         were bound by a person, through ``resolve`` with that person's own
@@ -188,8 +216,28 @@ class PodConnectorResolver:
         still theirs. Nothing is auto-added here: a pod account appears on a
         person's own call, never on a background one.
         """
+        resolved = await self.resolve_standing_any(
+            pod_connector,
+            on_behalf_of=on_behalf_of,
+            pod_account_id=pod_account_id,
+            record_use=record_use,
+        )
+        if isinstance(resolved, ResolvedAppConnector):
+            raise AppConnectorUnsupportedError(slug=pod_connector.slug)
+        return resolved
+
+    async def resolve_standing_any(
+        self,
+        pod_connector: PodConnectorEntity,
+        *,
+        on_behalf_of: UUID | None,
+        pod_account_id: UUID | None = None,
+        record_use: bool = True,
+    ) -> ResolvedPodConnector | ResolvedAppConnector:
+        """``resolve_standing``, or the App for an APP connector. The App needs
+        nobody behind it, so a schedule on it outlives its owner's membership."""
         auth_config = await self._installation(pod_connector)
-        return await self.picker.pick(
+        return await self.picker.pick_any(
             pod_connector,
             auth_config,
             AccountAsk(
@@ -493,53 +541,6 @@ def _not_served(declared: list[PodConnectorEntity]) -> ConnectorAccessDeniedErro
     )
 
 
-async def _require_account_use(ctx: Context, pod_account: PodAccountEntity) -> None:
-    """The account half of a SHARED call made now.
-
-    A named agent or function is checked as the person behind it, not as the
-    intersection: its grant is on the pod connector, never on an account (an
-    agent is granted ``support-inbox``, and which account that means was
-    decided by its owner). Asking the workload for a grant on the account too
-    would bring back exactly the pinning this replaced.
-
-    A run with no person behind it may use what its owner shared with the
-    whole pod, and nothing narrower: there is nobody to check a RESTRICTED
-    grant against.
-    """
-    ref = ResourceRef.connector_account(pod_account.pod_id, pod_account.id)
-    asking = ctx
-    if ctx.is_named_workload:
-        asking = invoking_person_context(ctx.authorizer, ctx)
-        if asking is None:
-            raise _restricted_without_person()
-    elif isinstance(ctx.actor, Workload):
-        if pod_account.visibility is PodAccountVisibility.POD:
-            return
-        raise _restricted_without_person()
-    try:
-        await asking.require(Permissions.CONNECTOR_ACCOUNT_USE, ref)
-    except DomainError as refusal:
-        if refusal.code in _NOT_A_REFUSAL:
-            raise
-        # Typed, so the deprecated route can step past it by kind; the
-        # permission it names is kept for whoever renders the refusal.
-        details = refusal.details if isinstance(refusal.details, dict) else {}
-        raise ConnectorAccessDeniedError(
-            refusal.message,
-            details={**details, "reason": "account_not_shared_with_you"},
-        ) from refusal
-
-
-async def may_use_shared_account(ctx: Context, pod_account: PodAccountEntity) -> bool:
-    """Whether a call made now by ``ctx`` could run as this shared account --
-    the same question ``_require_account_use`` asks, answered as a bool."""
-    try:
-        await _require_account_use(ctx, pod_account)
-    except ConnectorAccessDeniedError:
-        return False
-    return True
-
-
 def reauth_required_for(
     ctx: Context, pod_connector: PodConnectorEntity, resolved: ResolvedPodConnector
 ) -> ReauthRequiredError:
@@ -556,17 +557,10 @@ def reauth_required_for(
     )
 
 
-def _restricted_without_person() -> ConnectorAccessDeniedError:
-    return ConnectorAccessDeniedError(
-        "This shared account is restricted to some members, and this run "
-        "has no member behind it.",
-        details={"reason": "restricted_account_without_person"},
-    )
-
-
 __all__ = [
     "PersonContext",
     "PodConnectorResolver",
+    "ResolvedAppConnector",
     "ResolvedPodConnector",
     "acting_person",
     "connect_url",
