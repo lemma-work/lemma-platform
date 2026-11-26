@@ -114,6 +114,7 @@ from ..openapi_client.api.connectors import (
     pod_connector_account_share_as,
     pod_connector_ask_members,
     pod_connector_coverage,
+    pod_connection_list,
 )
 from ..openapi_client.models.installation_operation_execution_request import (
     InstallationOperationExecutionRequest,
@@ -137,6 +138,7 @@ from ..openapi_client.models.pod_account_share_as_request import (
     PodAccountShareAsRequest,
 )
 from ..openapi_client.models.pod_connector_coverage import PodConnectorCoverage
+from ..openapi_client.models.pod_connections_response import PodConnectionsResponse
 from ..openapi_client.models.pod_connector_response import PodConnectorResponse
 from ..openapi_client.models.pod_connector_update_request import (
     PodConnectorUpdateRequest,
@@ -500,6 +502,13 @@ class BoundConnectors(BoundResource):
     def pod_connectors(self) -> PodConnectorListResponse:
         """The connectors this pod declares, with their mode and status."""
         return self._call(pod_connector_list, self._pod_uuid())
+
+    def connections(self) -> PodConnectionsResponse:
+        """The pod's connections as they stand for the caller: one row per
+        connector, whose account it runs as, and what the caller can do next
+        (connect, use an account they have, reconnect, wait, or nothing).
+        Also whether the organization's GitHub App can serve as the pod's bot."""
+        return self._call(pod_connection_list, self._pod_uuid())
 
     def pod_connector(self, connector: str) -> PodConnectorResponse:
         """One pod connector, by slug."""

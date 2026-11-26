@@ -443,6 +443,51 @@ def test_pod_connector_listing_and_discovery_are_pod_scoped() -> None:
     assert dict(seen[1].url.params) == {"query": "send email", "limit": "5"}
 
 
+def test_connections_reads_the_pods_rows_for_the_caller() -> None:
+    seen: list[httpx.Request] = []
+    body = {
+        "may_manage": True,
+        "github_bot": {
+            "installations": [
+                {"login": "acme", "repository_selection": "selected"}
+            ]
+        },
+        "items": [
+            {
+                "slug": "github",
+                "auth_config_id": "00000000-0000-0000-0000-000000000001",
+                "installation_name": "github",
+                "connector_id": "github",
+                "title": "GitHub",
+                "icon": None,
+                "mode": "APP",
+                "purpose": None,
+                "required": False,
+                "status": "READY",
+                "runs_as": {
+                    "kind": "app",
+                    "label": "acme",
+                    "owner_user_id": None,
+                    "owner_name": None,
+                },
+                "me": {"standing": "ready", "account": None, "existing": None},
+                "coverage": None,
+            }
+        ],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=body)
+
+    read = _pod_connectors_over(handler).connections()
+
+    assert [r.url.path for r in seen] == [f"/pods/{POD_ID}/connections"]
+    assert read.may_manage is True
+    assert read.items[0].mode == "APP"
+    assert read.items[0].me.standing == "ready"
+
+
 def test_declaring_a_connector_and_sharing_an_account_are_pod_requests() -> None:
     seen: list[httpx.Request] = []
 
