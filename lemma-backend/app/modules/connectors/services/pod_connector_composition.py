@@ -57,10 +57,10 @@ def build_pod_connector_resolver(uow: SqlAlchemyUnitOfWork) -> PodConnectorResol
         organization_id: UUID,
     ) -> tuple[AppInstallation, ...]:
         from app.modules.connectors.services.auth.github_app_installations import (
-            bound_app_installations,
+            checked_bound_app_installations,
         )
 
-        return await bound_app_installations(uow.session, organization_id)
+        return await checked_bound_app_installations(uow.session, organization_id)
 
     return PodConnectorResolver(
         pod_connectors=PodConnectorRepository(uow),

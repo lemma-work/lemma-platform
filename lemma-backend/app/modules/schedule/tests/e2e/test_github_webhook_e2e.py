@@ -748,16 +748,24 @@ async def test_picking_a_trigger_and_a_connector_binds_the_routing_key(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("checked", [True, False], ids=["checked", "fresh"])
 async def test_a_schedule_on_the_bot_runs_on_its_installations_delivery(
     authenticated_client: AsyncClient,
     fixed_test_user,
     fixed_test_org,
     db_session: AsyncSession,
     worker,
+    monkeypatch,
+    checked: bool,
 ):
     """An APP connector: nobody's account. The schedule is routed by the
     App's installation the organization holds, and a signed delivery for it
-    runs the schedule -- with no person's account anywhere in the chain."""
+    runs the schedule -- with no person's account anywhere in the chain.
+
+    ``fresh``: a binding GitHub was never asked about, as an install leaves
+    it. Setting up the schedule asks GitHub then, rather than refusing
+    APP_NOT_INSTALLED until somebody happens to open the Connections page."""
+    from app.modules.connectors.domain.app_installation import AppInstallation
     from datetime import UTC, datetime
 
     from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
@@ -766,7 +774,16 @@ async def test_a_schedule_on_the_bot_runs_on_its_installations_delivery(
     )
 
     _ = worker
-    installation_id = str(int(INSTALLATION_ID) + 7)
+    installation_id = str(int(INSTALLATION_ID) + (7 if checked else 8))
+
+    async def github_says_octo(installation: str):
+        return AppInstallation(installation, "octo", "Organization", "all", True)
+
+    monkeypatch.setattr(
+        "app.modules.connectors.services.auth.github_app_installations"
+        ".fetch_app_installation",
+        github_says_octo,
+    )
     await _seed_connector_trigger(
         db_session,
         connector_id="github",
@@ -795,14 +812,18 @@ async def test_a_schedule_on_the_bot_runs_on_its_installations_delivery(
                 external_id=installation_id,
                 organization_id=UUID(str(fixed_test_org["id"])),
                 proven_at=datetime.now(UTC),
-                details={
-                    "account": {
-                        "login": "octo",
-                        "type": "Organization",
-                        "repository_selection": "all",
-                        "checked_at": datetime.now(UTC).isoformat(),
+                details=(
+                    {
+                        "account": {
+                            "login": "octo",
+                            "type": "Organization",
+                            "repository_selection": "all",
+                            "checked_at": datetime.now(UTC).isoformat(),
+                        }
                     }
-                },
+                    if checked
+                    else {}
+                ),
             )
         )
     await db_session.commit()

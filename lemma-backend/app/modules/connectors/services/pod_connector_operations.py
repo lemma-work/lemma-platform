@@ -50,7 +50,6 @@ from app.modules.connectors.domain.pod_connector_errors import (
 from app.modules.connectors.services.auth.github_app_installations import (
     InstallationFetcher,
     checked_app_installations,
-    fetch_app_installation,
 )
 from app.modules.connectors.services.auth.github_installation import install_url
 from app.modules.connectors.services.installation_reach import (
@@ -266,7 +265,7 @@ async def _app_plan(
 async def with_app_installation(
     plan: ResolvedConnectorExecution,
     *,
-    fetch: InstallationFetcher = fetch_app_installation,
+    fetch: InstallationFetcher | None = None,
 ) -> ResolvedConnectorExecution:
     """An APP plan with the installation its payload's owner picks; any other
     plan unchanged. Holds no connection: it may ask GitHub which account an

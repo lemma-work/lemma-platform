@@ -22,10 +22,12 @@ from uuid import UUID, uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from starlette import status
 
 from app.core.config import settings
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.connectors.domain.app_installation import AppInstallation
 from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 from app.modules.connectors.infrastructure.models.connector import Connector
@@ -166,8 +168,10 @@ async def _bound(
     login: str,
     account_type: str = "Organization",
     proven: bool = True,
+    checked: bool = True,
 ) -> str:
-    """An App installation bound to the world's organization, already checked."""
+    """An App installation bound to the world's organization: already checked,
+    or (``checked=False``) as a fresh install leaves it, GitHub not yet asked."""
     installation_id = _installation_id()
     db_session.add(
         ConnectorInstallation(
@@ -175,14 +179,18 @@ async def _bound(
             external_id=installation_id,
             organization_id=world.org_id,
             proven_at=datetime.now(UTC) if proven else None,
-            details={
-                "account": {
-                    "login": login,
-                    "type": account_type,
-                    "repository_selection": "selected",
-                    "checked_at": datetime.now(UTC).isoformat(),
+            details=(
+                {
+                    "account": {
+                        "login": login,
+                        "type": account_type,
+                        "repository_selection": "selected",
+                        "checked_at": datetime.now(UTC).isoformat(),
+                    }
                 }
-            },
+                if checked
+                else {}
+            ),
         )
     )
     await db_session.commit()
@@ -344,6 +352,59 @@ async def test_unproven_and_personal_installations_do_not_count(scenario, db_ses
         world.alice, world.app_operation, {"owner": "ada-lovelace"}
     )
     assert refused.json()["code"] == "APP_NOT_INSTALLED", refused.text
+
+
+_FETCHER = (
+    "app.modules.connectors.services.auth.github_app_installations"
+    ".fetch_app_installation"
+)
+
+
+async def test_a_fresh_installation_is_asked_about_before_the_bot_reads_ready(
+    scenario, db_session
+):
+    """A binding GitHub was never asked about is asked the first time anything
+    decides about the bot, and the answer kept: "Working" only when GitHub
+    said it is on an organization."""
+    world = await _github_world(scenario, db_session)
+    installation_id = await _bound(db_session, world, login="acme", checked=False)
+    asked: list[str] = []
+
+    async def github_says_organization(installation: str):
+        asked.append(installation)
+        return AppInstallation(installation, "acme", "Organization", "all", True)
+
+    with patch(_FETCHER, new=github_says_organization):
+        declared = await world.declare_bot()
+
+    assert declared.status_code == status.HTTP_201_CREATED, declared.text
+    assert declared.json()["status"] == "READY"
+    assert installation_id in asked
+    db_session.expire_all()
+    row = await db_session.scalar(
+        select(ConnectorInstallation).where(
+            ConnectorInstallation.external_id == installation_id
+        )
+    )
+    assert row.details["account"]["login"] == "acme"
+
+
+async def test_a_fresh_installation_github_will_not_describe_is_not_ready(
+    scenario, db_session
+):
+    """Before, an unchecked binding read READY while every call refused
+    APP_NOT_INSTALLED. Unknown is now said as not installed yet."""
+    world = await _github_world(scenario, db_session)
+    await _bound(db_session, world, login="acme", checked=False)
+
+    async def github_says_nothing(installation: str):
+        return None
+
+    with patch(_FETCHER, new=github_says_nothing):
+        declared = await world.declare_bot()
+
+    assert declared.status_code == status.HTTP_201_CREATED, declared.text
+    assert declared.json()["status"] == "NEEDS_INSTALLATION"
 
 
 # -- nothing that needs an account gets the bot --------------------------------

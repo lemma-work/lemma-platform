@@ -448,9 +448,7 @@ def test_connections_reads_the_pods_rows_for_the_caller() -> None:
     body = {
         "may_manage": True,
         "github_bot": {
-            "installations": [
-                {"login": "acme", "repository_selection": "selected"}
-            ]
+            "installations": [{"login": "acme", "repository_selection": "selected"}]
         },
         "items": [
             {

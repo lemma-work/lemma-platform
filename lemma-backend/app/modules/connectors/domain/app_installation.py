@@ -55,9 +55,12 @@ class AppInstallation:
 
 
 def app_is_installed(installations: tuple[AppInstallation, ...]) -> bool:
-    """Whether an APP connector over these could run: one counts, or one has
-    not been checked yet and a call will ask GitHub."""
-    return any(one.may_count for one in installations)
+    """Whether an APP connector over these can run: one is known to be on a
+    GitHub organization. The same rule a call picks by, so a connector never
+    reads "Working" while its calls refuse. Callers read the installations
+    through ``checked_bound_app_installations``, so one GitHub was never asked
+    about is asked first rather than guessed at."""
+    return any(one.counts for one in installations)
 
 
 #: Payload keys a GitHub operation names its repository owner by, in the

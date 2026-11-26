@@ -9,7 +9,8 @@ itself (``GET /app/installations/{id}`` with the App's JWT), and kept in the
 binding's ``details`` under ``account`` once read, refreshed when a day old.
 
 Asking GitHub never happens with a connection held. The reads and the write
-here each take a session; the network half takes none, and the two halves are
+here each take a session; the network half takes none (one exception,
+``checked_bound_app_installations``, says why), and the two halves are
 put together by a caller that opens its own short scopes
 (``refresh_app_installations``) or holds no session at all (an operation's
 execute phase, ``checked_app_installations``).
@@ -241,7 +242,7 @@ def _from_payload(installation_id: str, payload: dict[str, object]) -> AppInstal
 async def ask_github(
     installation_ids: Sequence[str],
     *,
-    fetch: InstallationFetcher = fetch_app_installation,
+    fetch: InstallationFetcher | None = None,
     budget: timedelta = ASK_BUDGET,
 ) -> dict[str, AppInstallation]:
     """What GitHub said of each installation within ``budget``, by id.
@@ -252,12 +253,14 @@ async def ask_github(
     """
     if not installation_ids:
         return {}
+    # Resolved at call time, so a test patching the module's fetcher reaches it.
+    ask = fetch or fetch_app_installation
     gate = asyncio.Semaphore(_ASK_AT_ONCE)
     answers: dict[str, AppInstallation] = {}
 
     async def one(installation_id: str) -> None:
         async with gate:
-            found = await fetch(installation_id)
+            found = await ask(installation_id)
         if found is not None:
             answers[installation_id] = found
 
@@ -276,10 +279,40 @@ async def ask_github(
     return answers
 
 
+async def checked_bound_app_installations(
+    session: AsyncSession,
+    organization_id: UUID,
+    *,
+    fetch: InstallationFetcher | None = None,
+    budget: timedelta = ASK_BUDGET,
+) -> tuple[AppInstallation, ...]:
+    """``bound_app_installations``, with any never checked asked about now.
+
+    For whatever has to decide about the bot without the Connections page
+    having been opened first: a connector's status, a schedule's routing key,
+    a call. An installation GitHub was never asked about is neither known to
+    count nor known not to, and either guess is wrong somewhere -- "Working"
+    over calls that refuse, or "the App is not installed" to an admin who
+    installed it. So it is asked, within the same budget, and the answer is
+    kept, which makes this a one-off per installation. It is the one place
+    GitHub is asked with a connection held: only for never-checked bindings,
+    and never longer than ``budget``. Day-old answers are left to the
+    Connections read to refresh.
+    """
+    found = await bound_app_installations(session, organization_id)
+    unchecked = [one.installation_id for one in found if not one.checked]
+    if not unchecked:
+        return found
+    answers = await ask_github(unchecked, fetch=fetch, budget=budget)
+    if answers:
+        await record_app_installations(session, list(answers.values()))
+    return tuple(answers.get(one.installation_id, one) for one in found)
+
+
 async def checked_app_installations(
     candidates: tuple[AppInstallation, ...],
     *,
-    fetch: InstallationFetcher = fetch_app_installation,
+    fetch: InstallationFetcher | None = None,
     budget: timedelta = ASK_BUDGET,
 ) -> tuple[AppInstallation, ...]:
     """``candidates`` with every unchecked one asked about now, no session held.
@@ -300,7 +333,7 @@ async def refresh_app_installations(
     uow_factory: UnitOfWorkFactory,
     organization_id: UUID,
     *,
-    fetch: InstallationFetcher = fetch_app_installation,
+    fetch: InstallationFetcher | None = None,
 ) -> None:
     """Ask GitHub about the organization's unchecked or day-old bindings.
 
@@ -324,6 +357,7 @@ __all__ = [
     "ask_github",
     "STALE_AFTER",
     "bound_app_installations",
+    "checked_bound_app_installations",
     "checked_app_installations",
     "fetch_app_installation",
     "installations_to_check",

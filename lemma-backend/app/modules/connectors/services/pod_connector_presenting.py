@@ -35,7 +35,7 @@ from app.modules.connectors.infrastructure.repositories.pod_connector_repository
     PodAccountRepository,
 )
 from app.modules.connectors.services.auth.github_app_installations import (
-    bound_app_installations,
+    checked_bound_app_installations,
 )
 from app.modules.connectors.services.pod_connector_use import can_use
 
@@ -59,7 +59,7 @@ async def status_of(
     app_installed = False
     if connector.mode is PodConnectorMode.APP and auth_config is not None:
         app_installed = app_is_installed(
-            await bound_app_installations(
+            await checked_bound_app_installations(
                 parts.uow.session, auth_config.organization_id
             )
         )
