@@ -268,11 +268,22 @@ async def test_an_installation_github_fails_on_is_left_out_quietly() -> None:
 
 
 class _Declared:
-    def __init__(self, *slugs: str) -> None:
-        self.slugs = set(slugs)
+    """The pod's connectors: per-member ones by slug, and ``bots`` in APP."""
+
+    def __init__(self, *slugs: str, bots: tuple[str, ...] = ()) -> None:
+        self.slugs = set(slugs) | set(bots)
+        self.bots = set(bots)
 
     async def list_by_pod(self, _pod_id: UUID) -> list[SimpleNamespace]:
-        return [SimpleNamespace(slug=slug) for slug in self.slugs]
+        return [
+            SimpleNamespace(
+                slug=slug,
+                mode=PodConnectorMode.APP
+                if slug in self.bots
+                else PodConnectorMode.PER_MEMBER,
+            )
+            for slug in self.slugs
+        ]
 
     async def get_by_slug(self, _pod_id: UUID, slug: str) -> object | None:
         return SimpleNamespace(slug=slug) if slug in self.slugs else None
@@ -295,6 +306,13 @@ async def test_an_app_connector_beside_a_per_member_github_is_github_bot() -> No
     declared = _Declared("github", "github-bot")
     slug = await slug_to_declare(declared, POD, _github(), _app_request())  # type: ignore[arg-type]
     assert slug == "github-bot-2"
+
+
+async def test_a_second_app_connector_is_refused() -> None:
+    declared = _Declared("github", bots=("github-bot",))
+    with pytest.raises(PodConnectorValidationError) as refused:
+        await slug_to_declare(declared, POD, _github(), _app_request())  # type: ignore[arg-type]
+    assert refused.value.details["reason"] == "app_mode_one_per_pod"
 
 
 @pytest.mark.parametrize(
