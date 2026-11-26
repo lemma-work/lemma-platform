@@ -2200,7 +2200,8 @@ async def test_a_webhook_source_nothing_delivers_is_refused_at_create_and_update
     accepted names are read out of the registry rather than spelled out: a
     deployment that adds a third source should not need this test edited.
     """
-    accepted = default_webhook_sources().sources
+    registry = default_webhook_sources()
+    accepted = registry.schedulable_sources
     pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
     agent = await _create_agent(authenticated_client, pod_id)
     connector_id = f"unheard_{uuid4().hex[:8]}"
@@ -2223,8 +2224,12 @@ async def test_a_webhook_source_nothing_delivers_is_refused_at_create_and_update
     )
     assert rejected["code"] == "SCHEDULE_VALIDATION_ERROR"
     assert "no_such_webhook_source" in rejected["message"]
+    listed = rejected["message"].split("Accepted sources:")[1]
     for source in accepted:
-        assert source in rejected["message"], rejected["message"]
+        assert source in listed, rejected["message"]
+    # A hook's deliveries become rows, so no WEBHOOK schedule may name it.
+    assert "hook" in registry.sources
+    assert "hook" not in [name.strip(" .") for name in listed.split(",")]
 
     schedule = await _create_schedule(
         authenticated_client,

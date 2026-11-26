@@ -461,13 +461,15 @@ async def _keep(
             hook_name=hook.name,
             received_at=received_at,
         )
-        by_name = {column.name: column for column in columns}
         opened = OpenTable(
             pod_id=hook.pod_id,
             name=table.table_name,
             audience=PublicAudience.ANYONE,
             contact_owned=table.contact_owned,
-            columns=tuple(public_column(by_name[name]) for name in row),
+            # Every column, not only the ones this row writes: a required one
+            # the body had nothing for is the refusal most worth naming, and
+            # the validator's finding is only put in words for a column here.
+            columns=tuple(public_column(column) for column in columns),
         )
         duplicate = False
         try:

@@ -171,6 +171,12 @@ async def test_fields_map_paths_into_columns_and_a_duplicate_is_received(
     assert seen["last_received_at"] == received_at
     assert "added no row" in seen["last_error"]
 
+    # A body without a value every row needs is refused naming that column,
+    # so whoever set up the form knows which field to send.
+    unanswered = await _post(async_client, hook["url"], json={"form_response": {}})
+    assert unanswered.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert "Response id is required" in unanswered.json()["message"]
+
 
 async def test_a_wrong_or_rotated_secret_is_refused_with_nothing_said(
     pod_api: DatastoreApi, async_client: AsyncClient
@@ -326,3 +332,39 @@ async def test_a_hook_whose_table_closed_can_still_be_switched_off_and_deleted(
     assert remapped.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
     assert switched_off.status_code == status.HTTP_200_OK, switched_off.text
     assert deleted.status_code == status.HTTP_204_NO_CONTENT, deleted.text
+
+
+async def test_a_hook_stops_when_its_maker_can_no_longer_change_the_table(
+    pod_api: DatastoreApi, async_client: AsyncClient, member_users
+):
+    """A hook writes as the member who made it, and never more than they may."""
+    table = await _table(pod_api, *_INBOX)
+    editor = member_users["editor"]
+    as_editor = DatastoreApi(async_client, pod_api.pod_id, user=editor)
+    made = await as_editor.request(
+        "POST",
+        f"/pods/{pod_api.pod_id}/datastore/hooks",
+        json={"name": "editors-hook", "table": table},
+    )
+    assert made.status_code == status.HTTP_201_CREATED, made.text
+    url = made.json()["url"]
+    assert (await _post(async_client, url, json={"a": 1})).status_code == 200
+
+    member = await pod_api.request(
+        "GET", f"/pods/{pod_api.pod_id}/members/lookup/by-user-id/{editor['id']}"
+    )
+    demoted = await pod_api.request(
+        "PATCH",
+        f"/pods/{pod_api.pod_id}/members/{member.json()['pod_member_id']}/roles",
+        json={"roles": ["POD_VIEWER"]},
+    )
+    assert demoted.status_code == status.HTTP_200_OK, demoted.text
+
+    refused = await _post(async_client, url, json={"a": 2})
+
+    assert refused.status_code == status.HTTP_409_CONFLICT, refused.text
+    assert (
+        "can no longer change the table"
+        in (await _get(pod_api, "editors-hook"))["last_error"]
+    )
+    assert len((await pod_api.list_records(table))["items"]) == 1
