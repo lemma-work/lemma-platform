@@ -227,7 +227,6 @@ async def create_hook(
         "datastore.hooks.created",
         pod_id=str(pod_id),
         hook_id=str(hook.id),
-        table_id=str(table.id),
         user_id=str(ctx.user_id),
         mapped=fields is not None,
     )

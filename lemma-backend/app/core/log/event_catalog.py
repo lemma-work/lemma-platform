@@ -872,7 +872,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'datastore.file_processing_service.dependency_unavailable.degraded': EventSpec('warning', frozenset({'evidence', 'file_id'})),
     'datastore.file_processing_service.document_failed.observed': EventSpec('info', frozenset({'error_type', 'file_id'})),
     'datastore.file_processing_service.search_index_purge.degraded': EventSpec('warning', frozenset({'file_id'})),
-    'datastore.hooks.created': EventSpec('info', frozenset({'hook_id', 'mapped', 'pod_id', 'table_id', 'user_id'})),
+    'datastore.hooks.created': EventSpec('info', frozenset({'hook_id', 'mapped', 'pod_id', 'user_id'})),
     'datastore.hooks.deleted': EventSpec('info', frozenset({'hook_id', 'pod_id', 'user_id'})),
     'datastore.hooks.delivery_refused.observed': EventSpec('info', frozenset({'hook_id', 'reason'})),
     'datastore.hooks.limit_exceeded.observed': EventSpec('info', frozenset({'hook_id', 'window'})),
