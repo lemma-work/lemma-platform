@@ -443,6 +443,9 @@ export interface PodConnectorDraft {
  *  `sharedPodAccountId` takes the account off it. */
 export interface PodConnectorPatch {
     mode?: PodConnectorMode;
+    /** Who in the pod may use it. The bot is always the whole pod's: who may
+     *  run it is decided by grants, and the server refuses APP otherwise. */
+    visibility?: PodConnectorVisibility;
     sharedPodAccountId?: string;
     required?: boolean;
     purpose?: string;
@@ -467,6 +470,7 @@ export function connectorCreateBody(draft: PodConnectorDraft): Record<string, un
 export function connectorPatchBody(patch: PodConnectorPatch): Record<string, unknown> {
     const body: Record<string, unknown> = {};
     if (patch.mode) body.mode = patch.mode;
+    if (patch.visibility) body.visibility = patch.visibility;
     if (patch.sharedPodAccountId !== undefined) body.shared_pod_account_id = patch.sharedPodAccountId || null;
     if (patch.required !== undefined) body.required = patch.required;
     if (patch.purpose !== undefined) body.purpose = patch.purpose.trim();

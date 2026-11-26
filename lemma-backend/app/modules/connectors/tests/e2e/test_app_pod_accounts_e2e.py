@@ -319,8 +319,9 @@ async def test_an_app_connecting_into_another_pod_is_refused(
     scenario, db_session, browser, monkeypatch
 ):
     """A connect request names the pod it lands in, in the body: an app's page
-    may name only its own."""
-    monkeypatch.setattr(settings, "app_pin_cross_pod_enforced", True)
+    may name only its own. Refused with the cross-pod switch off too: the
+    field is new, so there is no app relying on it to watch first."""
+    monkeypatch.setattr(settings, "app_pin_cross_pod_enforced", False)
     world = await _world(scenario, db_session)
     elsewhere = await _second_pod(world)
     origin = await _app(world, elsewhere, None)

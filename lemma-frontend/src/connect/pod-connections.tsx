@@ -457,7 +457,14 @@ function ConnectionSheet({ pod, item, items, me, may, named, bot, flow, onShareM
 
     const change = useMutation({
         mutationFn: async (mode: PodConnectorMode) => {
-            await source.changePodConnector(pod.id, item.slug, { mode, ...(mode !== "SHARED" ? { sharedPodAccountId: "" } : {}) });
+            await source.changePodConnector(pod.id, item.slug, {
+                mode,
+                ...(mode !== "SHARED" ? { sharedPodAccountId: "" } : {}),
+                /* A connection kept to some people (made before this page, or
+                   imported) becomes the whole Lemma's with the bot, in the
+                   same request: the server takes the bot only that way. */
+                ...(mode === "APP" ? { visibility: "POD" as const } : {}),
+            });
             /* An account shared with nothing using it is not left behind. */
             if (sharedMine) await source.changePodAccount(pod.id, sharedMine.id, { visibility: "PERSONAL" }).catch(() => undefined);
         },

@@ -170,6 +170,8 @@ test("declaring and changing a connector sends only what it means", () => {
     assert.deepEqual(connectorCreateBody({ slug: "github-bot", authConfigId: "", connectorId: "github", mode: "APP", sharedPodAccountId: "", required: false, purpose: "" }),
         { slug: "github-bot", connector_id: "github", mode: "APP" }, "the bot: no installation named, no account");
     assert.deepEqual(connectorPatchBody({ mode: "APP", sharedPodAccountId: "" }), { mode: "APP", shared_pod_account_id: null });
+    assert.deepEqual(connectorPatchBody({ mode: "APP", visibility: "POD", sharedPodAccountId: "" }), { mode: "APP", visibility: "POD", shared_pod_account_id: null },
+        "switching a connection kept to some people to the bot makes it the whole Lemma's in the same request");
     const bot = readPodConnector({ slug: "github-bot", connector_id: "github", mode: "APP", status: "NEEDS_INSTALLATION" });
     assert.equal(bot?.mode, "APP");
     assert.equal(bot?.status, "NEEDS_INSTALLATION");

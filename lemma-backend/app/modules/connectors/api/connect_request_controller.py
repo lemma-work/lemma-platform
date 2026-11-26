@@ -67,7 +67,7 @@ async def initiate_connect_request(
 ) -> ConnectRequestResponseSchema:
     # An app's page connects into its own pod only: the pin reads the path,
     # and this pod comes in the body.
-    refuse_other_pod(request, data.pod_id)
+    refuse_other_pod(request, data.pod_id, always=True)
     if data.pod_id is not None:
         from app.modules.connectors.services.connect_into_pod import (
             require_member_of,

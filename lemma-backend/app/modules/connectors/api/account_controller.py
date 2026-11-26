@@ -106,7 +106,7 @@ async def create_account(
     connector_service: ConnectorServiceDep,
 ) -> AccountResponseSchema:
     # An app's page connects into its own pod only (see the connect request).
-    refuse_other_pod(request, payload.pod_id)
+    refuse_other_pod(request, payload.pod_id, always=True)
     from app.modules.connectors.services.connect_into_pod import (
         add_connected_to_pod,
         require_member_of,
