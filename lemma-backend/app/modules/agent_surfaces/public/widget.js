@@ -1189,6 +1189,10 @@
         });
         return call("/rows/with-files?table=" + encodeURIComponent(table), { form: form });
       });
+    }).then(function (data) {
+      if (data && data.session) adopt(data.session);
+      else if (data && (data.secret || data.access_token)) adopt(data);
+      return data;
     });
   }
 

@@ -22231,6 +22231,19 @@
       },
       "RowRequest": {
         "properties": {
+          "altcha": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The solved challenge, when starting an anonymous session.",
+            "title": "Altcha"
+          },
           "table": {
             "maxLength": 255,
             "title": "Table",
@@ -22246,6 +22259,40 @@
           "table"
         ],
         "title": "RowRequest",
+        "type": "object"
+      },
+      "RowResponse": {
+        "properties": {
+          "ok": {
+            "default": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only when new: keep it to come back. Null means keep the one you have.",
+            "title": "Secret"
+          },
+          "session": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only when new: credentials to continue chatting."
+          }
+        },
+        "title": "RowResponse",
         "type": "object"
       },
       "RunTokenUsage": {
@@ -59628,7 +59675,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Accepted"
+                  "$ref": "#/components/schemas/RowResponse"
                 }
               }
             },

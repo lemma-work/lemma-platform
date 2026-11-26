@@ -105,3 +105,49 @@ def test_a_widget_answers_only_the_pages_it_names():
 
 def test_a_widget_naming_no_pages_may_be_embedded_anywhere():
     assert _widget(()).allows_origin("https://anywhere.example")
+
+
+@pytest.mark.asyncio
+async def test_anonymous_row_session_respects_rate_limit(monkeypatch):
+    from unittest.mock import AsyncMock
+    from app.core.public_web import public_web_settings
+    from app.modules.agent_surfaces.services.web_visitors import WebVisitors
+    from app.modules.agent_surfaces.domain.web_widgets import WebChatRefused
+
+    monkeypatch.setattr(public_web_settings, "public_web_altcha_enabled", False)
+
+    limiter = AsyncMock()
+    limiter.allow_session.return_value = False
+
+    visitors = WebVisitors(AsyncMock(), limiter=limiter)
+    widget = _widget(())
+
+    with pytest.raises(WebChatRefused) as exc:
+        await visitors.open_anonymous_row_session(
+            widget, altcha=None, address="1.2.3.4"
+        )
+    assert exc.value.status_code == 429
+    assert exc.value.code == "rate_limited"
+
+
+@pytest.mark.asyncio
+async def test_anonymous_row_session_respects_altcha_failure(monkeypatch):
+    from unittest.mock import AsyncMock
+    from app.core.public_web import public_web_settings
+    from app.modules.agent_surfaces.services.web_visitors import WebVisitors
+    from app.modules.agent_surfaces.domain.web_widgets import WebChatRefused
+
+    monkeypatch.setattr(public_web_settings, "public_web_altcha_enabled", True)
+
+    limiter = AsyncMock()
+    limiter.allow_session.return_value = True
+
+    visitors = WebVisitors(AsyncMock(), limiter=limiter)
+    widget = _widget(())
+
+    with pytest.raises(WebChatRefused) as exc:
+        await visitors.open_anonymous_row_session(
+            widget, altcha=None, address="1.2.3.4"
+        )
+    assert exc.value.status_code == 400
+    assert exc.value.code == "altcha_failed"
