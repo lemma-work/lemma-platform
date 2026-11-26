@@ -15,7 +15,8 @@ map to cannot be declared at all, and everything naming its slug would be bound
 to nothing -- that blocks the apply until the importer picks or creates one.
 Unless the bundle marks it optional (``required: false``) and nothing runs
 through it -- only grants name it: then it is SKIPPED, left out, and the grants
-on it are dropped with a warning, so the rest imports and works without it. An
+on it wait, with a warning, until the pod has such a connector (declared on
+somebody's first use, or by hand), so the rest imports and works without it. An
 importer may still create an installation for it, and may leave out any other
 optional connector on purpose (``ConnectorChoice.skip``).
 """
@@ -48,9 +49,21 @@ class ConnectorPlanStatus(str, Enum):
     #: or the reverse).
     CONFLICT = "CONFLICT"
     #: Optional, no installation of the catalog connector in the org, and only
-    #: grants name it: imported without it, and those grants are dropped. The
+    #: grants name it: imported without it, and those grants wait for it. The
     #: importer may still create an installation (``can_create_installation``).
     SKIPPED = "SKIPPED"
+
+
+def waiting_for(connector: str, mode: str) -> str:
+    """The connector a grant left out waits for, as the importer is told it:
+    pod-wide and in the bundle's mode, since only that one settles it (a
+    RESTRICTED one, or one in the other mode, leaves it waiting)."""
+    accounts = (
+        "running as one shared account"
+        if mode == "SHARED"
+        else "with each member using their own account"
+    )
+    return f"a {connector} connector the whole pod can use, {accounts}"
 
 
 class DeclaredConnector(BaseModel):
@@ -182,10 +195,13 @@ class ConnectorChoice(BaseModel):
     skip: bool = Field(
         default=False,
         description=(
-            "Leave this connector out: it is not declared, and grants on it are "
-            "dropped. Only for one the bundle marks optional (`required: "
-            "false`); one the plan says SKIPPED is left out unless you choose "
-            "an installation or to create one."
+            "Leave this connector out: it is not declared. Grants on it are "
+            "dropped when your organization has an installation of it; when it "
+            "has none, they wait, and are granted once the pod has a connector "
+            "of that kind the whole pod can use, in the bundle's mode. Only for "
+            "one the bundle marks optional (`required: false`); one the plan "
+            "says SKIPPED is left out unless you choose an installation or to "
+            "create one."
         ),
     )
 
@@ -330,4 +346,5 @@ __all__ = [
     "declared_conflict",
     "resolve_connector_choices",
     "skipped_connectors",
+    "waiting_for",
 ]

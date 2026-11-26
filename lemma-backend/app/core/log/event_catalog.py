@@ -693,6 +693,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'authorization.agent_grant_generation.bump_failed.degraded': EventSpec('warning', frozenset({'agent_id'})),
     'authorization.agent_grant_generation.read_failed.degraded': EventSpec('warning', frozenset({'agent_id'})),
     'authorization.epoch_bump_failed.degraded': EventSpec('warning', frozenset({'error_type', 'pod_id'})),
+    'authorization.pending_grants.not_migrated.degraded': EventSpec('warning', frozenset({'grantee_type', 'pod_id'})),
     'authorization.resource_names.dangling_grants_skipped': EventSpec('debug', frozenset({'pod_id'})),
     'background_task.failed': EventSpec('error', frozenset({'error_type', 'task_name'})),
     'calls.agents.catch_up.failed': EventSpec('warning', frozenset({'attempt', 'conversation_id'})),

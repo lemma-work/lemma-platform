@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.authorization.context import ResourceType
+from app.modules.connectors.contracts.bundles import WaitingConnectorGrant
 from app.modules.pod_bundle.domain.connector_plan import ConnectorChoice
 from app.modules.pod_bundle.domain.errors import BundleInvalidError
 from app.modules.pod_bundle.domain.state import StepKind
@@ -234,3 +235,139 @@ async def test_grants_with_no_connector_are_returned_untouched():
     )
 
     assert resolved == [table]
+
+
+async def test_a_left_out_grant_waits_only_while_the_org_has_nothing_to_map_it_to(
+    monkeypatch, tmp_path
+):
+    """Left out because the organization has no installation of it: the grant
+    waits for the pod to declare one. Left out while it has one: that was the
+    importer's choice, and the grant is dropped as they were told."""
+    installed: dict[str, UUID] = {}
+
+    async def get_pod_connector(_uow, *, pod_id, slug):
+        return None
+
+    async def installation_for_bundle_name(_uow, *, organization_id, name):
+        return installed.get(name)
+
+    monkeypatch.setattr(
+        "app.modules.connectors.contracts.pod_connectors.get_pod_connector",
+        get_pod_connector,
+    )
+    monkeypatch.setattr(
+        "app.modules.connectors.contracts.provisioning.installation_for_bundle_name",
+        installation_for_bundle_name,
+    )
+    root = tmp_path / "bundle"
+    _write(
+        root / "connectors" / "calendar" / "calendar.json",
+        {"connector": "google_calendar", "mode": "PER_MEMBER", "required": False},
+    )
+
+    async def resolve() -> tuple[
+        list[GrantInput], list[WaitingConnectorGrant], list[str]
+    ]:
+        waiting: list[WaitingConnectorGrant] = []
+        warnings: list[str] = []
+        kept = await resolve_connector_grants(
+            object(),
+            SimpleNamespace(organization_id=_ORG),
+            pod_id=_POD,
+            grants=[_connector_grant("calendar")],
+            choices={"calendar": ConnectorChoice(skip=True)},
+            warnings=warnings,
+            bundle_root=root,
+            waiting=waiting,
+        )
+        return kept, waiting, warnings
+
+    kept, waiting, warnings = await resolve()
+    assert kept == []
+    assert [(w.connector, w.mode, w.permission_ids) for w in waiting] == [
+        ("google_calendar", "PER_MEMBER", ("connector.use",))
+    ]
+    waits = (
+        "A grant on connector 'calendar' waits for it: it was left out, and is "
+        "granted once this pod has a google_calendar connector the whole pod "
+        "can use, with each member using their own account."
+    )
+    assert warnings == [waits]
+
+    installed["google_calendar"] = uuid4()
+    kept, waiting, warnings = await resolve()
+    assert (kept, waiting) == ([], [])
+    assert warnings == ["A grant on connector 'calendar' was dropped: it was left out."]
+
+
+async def test_the_importer_is_told_a_grant_was_dropped_when_none_can_wait():
+    """Before migration 0078 nothing can be held: the warning resolving wrote
+    ("waits for it") is replaced by the one that is true ("was dropped")."""
+    from app.modules.pod_bundle.infrastructure.connector_grants import (
+        hold_waiting_grants,
+    )
+
+    async def nothing_held(*_args: object, **_kwargs: object) -> bool:
+        return False
+
+    promised = (
+        "A grant on connector 'calendar' waits for it: it was left out, and is "
+        "granted once this pod has a google_calendar connector the whole pod "
+        "can use, with each member using their own account."
+    )
+    warnings = [promised, "Something else."]
+
+    await hold_waiting_grants(
+        SimpleNamespace(session=None),  # type: ignore[arg-type]
+        SimpleNamespace(),  # type: ignore[arg-type]
+        pod_id=_POD,
+        grantee_type="FUNCTION",
+        grantee_id=uuid4(),
+        waiting=[
+            WaitingConnectorGrant(
+                connector="google_calendar",
+                mode="PER_MEMBER",
+                permission_ids=("connector.use",),
+                slug="calendar",
+            )
+        ],
+        created_by_user_id=None,
+        warnings=warnings,
+        hold=nothing_held,
+    )
+
+    assert warnings == [
+        "Something else.",
+        "A grant on connector 'calendar' was dropped: it was left out.",
+    ]
+
+
+async def test_the_grant_step_keeps_its_locks_until_it_commits(monkeypatch):
+    """An authorization check releases a clean session by committing it,
+    which would let the waiting-grant locks go before the grants are
+    replaced. The step marks its session so that cannot happen."""
+    from app.core.infrastructure.db.transaction_locks import (
+        holds_transaction_scoped_lock,
+        safe_to_release,
+    )
+    from app.modules.pod_bundle.infrastructure.connector_grants import (
+        lock_waiting_grants,
+    )
+
+    async def locked(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "app.core.authorization.pending_grants.lock_grantee_pending_keys", locked
+    )
+    session = SimpleNamespace(info={}, new=(), dirty=(), deleted=())
+
+    await lock_waiting_grants(
+        SimpleNamespace(session=session),  # type: ignore[arg-type]
+        pod_id=_POD,
+        grantee_type="FUNCTION",
+        grantee_id=uuid4(),
+    )
+
+    assert holds_transaction_scoped_lock(session)
+    assert not safe_to_release(session)

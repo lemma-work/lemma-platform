@@ -34,6 +34,16 @@ class PodConnectorMode(str, enum.Enum):
     SHARED = "SHARED"
 
 
+def pending_grant_key(connector_id: str, mode: PodConnectorMode) -> str:
+    """What a grant waiting for a pod connector is held under
+    (`core/authorization/pending_grants.py`): the catalog connector and the
+    mode, the two things a bundle says of its connector. Not the slug -- a
+    connector declared on first use is named after its installation -- and
+    not the mode alone: a grant made for each member's own account does not
+    land on a connector running as one shared account, or the reverse."""
+    return f"{connector_id}:{mode.value}"
+
+
 class PodConnectorVisibility(str, enum.Enum):
     POD = "POD"
     RESTRICTED = "RESTRICTED"

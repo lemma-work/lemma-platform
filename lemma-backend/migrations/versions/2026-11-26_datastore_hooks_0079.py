@@ -14,8 +14,8 @@ writes the hook's last-received time -- which on the table's row would move
 the pod's inventory on every form submission. Nothing exists yet, so nothing
 changes.
 
-Revision ID: 0078_datastore_hooks
-Revises: 0077_public_rows_answers_per_day
+Revision ID: 0079_datastore_hooks
+Revises: 0078_pending_resource_grants
 Create Date: 2026-11-26
 """
 
@@ -25,8 +25,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0078_datastore_hooks"
-down_revision = "0077_public_rows_answers_per_day"
+revision = "0079_datastore_hooks"
+down_revision = "0078_pending_resource_grants"
 branch_labels = None
 depends_on = None
 

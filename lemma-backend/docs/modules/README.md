@@ -78,6 +78,7 @@ of repeating them in each row.
 | `roles`, `role_permissions` | Organization- or pod-scoped roles and the permission bundle each one carries. Built-in pod roles are normalized by the pod module; custom roles are rows here |
 | `role_assignments` | Which principal — user or workload — holds which role, unique per role and principal |
 | `resource_permission_grants` | Named grants on one resource to one grantee inside one pod. This is what a delegated workload's context is built from, and what a bundle carries by name rather than by id |
+| `pending_resource_grants` | A grant on a resource the pod does not have yet, held under a key the resource's own module chooses (for a connector, the catalog connector and mode). An import writes one for a connector it left out; the connectors module turns it into a `resource_permission_grants` row when the pod declares that connector. A table because the grant row needs an id that does not exist yet |
 | `domain_event_outbox` | Legacy. Events the old transport published to Redis Streams. Nothing writes or reads it any more; `0059` drops it |
 | `domain_event_inbox` | Legacy. The old per-consumer delivery record. Nothing writes or reads it any more; `0059` drops it |
 | `work_items` | The work runtime's live work: one row per queued or running item, written in the transaction that caused it and deleted in the one that completes it, plus dead items kept for inspection and retry. Its lease columns are what let a crashed or deployed process's work be reclaimed |

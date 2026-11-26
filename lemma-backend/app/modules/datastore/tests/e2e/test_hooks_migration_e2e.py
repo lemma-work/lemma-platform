@@ -15,8 +15,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 BACKEND = Path(__file__).resolve().parents[5]
-BEFORE = "0077_public_rows_answers_per_day"
-AFTER = "0078_datastore_hooks"
+BEFORE = "0078_pending_resource_grants"
+AFTER = "0079_datastore_hooks"
 
 
 def test_the_hooks_table_upgrades_and_rolls_back_cleanly() -> None:

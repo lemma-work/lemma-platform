@@ -9,11 +9,19 @@ from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 
+from app.core.authorization.context import ResourceType
+from app.core.authorization.pending_grants import (
+    lock_pending_key,
+    settle_pending_grants,
+)
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.domain.pod_connector import (
     PodAccountEntity,
     PodAccountVisibility,
     PodConnectorEntity,
+    PodConnectorMode,
+    PodConnectorVisibility,
+    pending_grant_key,
 )
 from app.modules.connectors.domain.errors import ConnectorConflictError
 from app.modules.connectors.domain.pod_connector_errors import (
@@ -21,6 +29,7 @@ from app.modules.connectors.domain.pod_connector_errors import (
     PodConnectorConflictError,
     PodConnectorNotFoundError,
 )
+from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 from app.modules.connectors.infrastructure.models.pod_connector import (
     PodAccount,
     PodConnector,
@@ -133,20 +142,119 @@ class PodConnectorRepository:
             if "uq_pod_connectors_pod_slug" not in str(exc.orig):
                 raise
             raise PodConnectorConflictError(entity.slug) from exc
-        return row.to_entity()
+        created = row.to_entity()
+        await self._settle_waiting_grants(created)
+        return created
+
+    async def _settle_waiting_grants(self, connector: PodConnectorEntity) -> None:
+        """Grant on a new or changed connector what was waiting for one like it.
+
+        Here, where every declaration and change ends, so a connector declared on first
+        use, by hand or by an import settles them alike -- in the transaction
+        that declares it, so a first use refused after it takes both back.
+        Only onto one the whole pod may use: a held grant was bounded by what
+        its holder could use, and a RESTRICTED connector is not that.
+        """
+        key = await self._waiting_key(connector)
+        if key is not None:
+            await self._settle_key(connector, key)
+
+    async def _waiting_key(self, connector: PodConnectorEntity) -> str | None:
+        """The key grants waiting for this connector are held under, or
+        ``None`` when nothing may settle onto it (not POD-wide)."""
+        if connector.visibility is not PodConnectorVisibility.POD:
+            return None
+        catalog_id = await self.session.scalar(
+            select(AuthConfig.connector_id).where(
+                AuthConfig.id == connector.auth_config_id
+            )
+        )
+        return pending_grant_key(catalog_id, connector.mode) if catalog_id else None
+
+    async def _settle_key(self, connector: PodConnectorEntity, key: str) -> None:
+        await settle_pending_grants(
+            self.session,
+            pod_id=connector.pod_id,
+            resource_type=ResourceType.CONNECTOR,
+            resource_key=key,
+            resource_id=connector.id,
+        )
+
+    async def settle_waiting_grants(
+        self, connector: PodConnectorEntity, catalog_id: str
+    ) -> None:
+        await self._settle_key(connector, pending_grant_key(catalog_id, connector.mode))
+
+    async def first_settleable(
+        self, pod_id: UUID, catalog_id: str, mode: PodConnectorMode
+    ) -> PodConnectorEntity | None:
+        """The pod's oldest POD-wide connector of a catalog connector and
+        mode: the one a grant held after its declaration settles onto."""
+        stmt = (
+            select(PodConnector)
+            .join(AuthConfig, AuthConfig.id == PodConnector.auth_config_id)
+            .where(
+                PodConnector.pod_id == pod_id,
+                PodConnector.mode == mode.value,
+                PodConnector.visibility == PodConnectorVisibility.POD.value,
+                AuthConfig.connector_id == catalog_id,
+            )
+            .order_by(PodConnector.created_at, PodConnector.id)
+            .limit(1)
+            # Held until commit, so a change to RESTRICTED waits for the
+            # grant rather than landing between this read and it.
+            .with_for_update(read=True, of=PodConnector)
+        )
+        row = (await self.session.execute(stmt)).scalars().first()
+        return row.to_entity() if row else None
 
     async def update(self, entity: PodConnectorEntity) -> PodConnectorEntity:
         row = await self.session.get(PodConnector, entity.id)
         if row is None:
             # Removed between the read that found it and this write.
             raise PodConnectorNotFoundError(entity.slug)
+        # Made pod-wide, or switched mode, it may be what a grant waits for.
+        # The key is locked before the row is written -- the order a hold
+        # takes them in (key, then the row FOR SHARE) -- so the two cannot
+        # each hold one and wait for the other.
+        key = await self._waiting_key(entity)
+        if key is not None:
+            await lock_pending_key(
+                self.session,
+                pod_id=entity.pod_id,
+                resource_type=ResourceType.CONNECTOR,
+                resource_key=key,
+            )
         row.mode = entity.mode.value
         row.shared_pod_account_id = entity.shared_pod_account_id
         row.required = entity.required
         row.purpose = entity.purpose
         row.visibility = entity.visibility.value
         await self.session.flush()
-        return row.to_entity()
+        updated = row.to_entity()
+        if key is not None and await self._stored_as(entity):
+            await self._settle_key(updated, key)
+        return updated
+
+    async def _stored_as(self, entity: PodConnectorEntity) -> bool:
+        """Whether the row as stored, not as this session remembers it, has
+        ``entity``'s mode and is POD-wide: an unchanged write emits no UPDATE,
+        and another transaction may have changed the mode meanwhile.
+
+        Read FOR UPDATE, after the waiting key (the order a hold takes them
+        in), so the row cannot change between this check and the settlement
+        that follows it."""
+        stored = (
+            await self.session.execute(
+                select(PodConnector.mode, PodConnector.visibility)
+                .where(PodConnector.id == entity.id)
+                .with_for_update()
+            )
+        ).first()
+        return stored is not None and tuple(stored) == (
+            entity.mode.value,
+            PodConnectorVisibility.POD.value,
+        )
 
     async def delete(self, pod_connector_id: UUID) -> None:
         await self.session.execute(

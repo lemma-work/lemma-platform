@@ -209,3 +209,212 @@ async def test_a_named_agent_is_refused_with_what_a_grant_card_needs(
     assert details["connector_id"] == install.connector_id
     assert details["workload_id"] == agent["id"]
     assert "connector.use" in details["permission_ids"]
+
+
+async def test_a_grant_waiting_for_the_connector_lands_on_its_first_use(
+    own_installation, db_session, connector_test_pod, authenticated_client
+):
+    """A bundle import left this connector out -- the organization had none
+    then -- and kept the agent's grant on it waiting. The agent's first run
+    declares the connector, the waiting grant lands in the same transaction,
+    and the run goes through rather than being refused ``connector.use``."""
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.agent.infrastructure.tools.authority import (
+        tool_authorization_context,
+    )
+    from app.modules.agent.infrastructure.tools.connectors.models import (
+        RunConnectorOperationRequest,
+    )
+    from app.modules.agent.infrastructure.tools.connectors.tools import (
+        run_connector_operation,
+    )
+    from app.modules.connectors.contracts.bundles import (
+        WaitingConnectorGrant,
+        hold_grants_until_declared,
+    )
+
+    install, _org, user_id, pod_id = own_installation
+    agent = await _create_agent(authenticated_client, connector_test_pod)
+    uow = SqlAlchemyUnitOfWork(db_session)
+    importer = await tool_authorization_context(uow, _deps(own_installation))
+    await hold_grants_until_declared(
+        uow,
+        importer,
+        pod_id=pod_id,
+        grantee_type="AGENT",
+        grantee_id=UUID(agent["id"]),
+        grants=[
+            WaitingConnectorGrant(
+                connector=install.connector_id,
+                mode="PER_MEMBER",
+                permission_ids=("connector.use",),
+            )
+        ],
+        created_by_user_id=user_id,
+    )
+    await db_session.commit()
+
+    deps = _deps(own_installation, agent_id=UUID(agent["id"]), agent_name=agent["name"])
+    result = await run_connector_operation(
+        deps,
+        RunConnectorOperationRequest(
+            connector=install.name,
+            operation="convert_currency",
+            payload={"amount": 21, "to_currency": "EUR"},
+        ),
+    )
+
+    assert "42" in str(result), result
+    declared = await _declared(db_session, pod_id, install.id)
+    assert [(c.mode, c.source) for c in declared] == [("PER_MEMBER", "AUTO")]
+    grants = await authenticated_client.get(
+        f"/pods/{pod_id}/agents/{agent['name']}/permissions"
+    )
+    assert grants.status_code == 200, grants.text
+    assert [
+        (g["resource_name"], g["permission_ids"])
+        for g in grants.json()["grants"]
+        if g["resource_type"] == "connector"
+    ] == [(declared[0].slug, ["connector.use"])]
+
+
+async def test_a_grant_held_after_its_connector_was_declared_is_granted_at_once(
+    own_installation, db_session, connector_test_pod, authenticated_client
+):
+    """An import that checked before a concurrent declaration committed holds
+    its grant after it: the hold sees the connector under the key's lock and
+    grants it then, rather than waiting for a second declaration."""
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.agent.infrastructure.tools.authority import (
+        tool_authorization_context,
+    )
+    from app.modules.agent.infrastructure.tools.connectors.models import (
+        RunConnectorOperationRequest,
+    )
+    from app.modules.agent.infrastructure.tools.connectors.tools import (
+        run_connector_operation,
+    )
+    from app.modules.connectors.contracts.bundles import (
+        WaitingConnectorGrant,
+        hold_grants_until_declared,
+    )
+
+    install, _org, user_id, pod_id = own_installation
+    ran = await run_connector_operation(
+        _deps(own_installation),
+        RunConnectorOperationRequest(
+            connector=install.name,
+            operation="convert_currency",
+            payload={"amount": 1, "to_currency": "EUR"},
+        ),
+    )
+    assert "error" not in ran, ran
+    [declared] = await _declared(db_session, pod_id, install.id)
+    agent = await _create_agent(authenticated_client, connector_test_pod)
+
+    uow = SqlAlchemyUnitOfWork(db_session)
+    importer = await tool_authorization_context(uow, _deps(own_installation))
+    await hold_grants_until_declared(
+        uow,
+        importer,
+        pod_id=pod_id,
+        grantee_type="AGENT",
+        grantee_id=UUID(agent["id"]),
+        grants=[
+            WaitingConnectorGrant(
+                connector=install.connector_id,
+                mode="PER_MEMBER",
+                permission_ids=("connector.use",),
+            )
+        ],
+        created_by_user_id=user_id,
+    )
+    await db_session.commit()
+
+    grants = await authenticated_client.get(
+        f"/pods/{pod_id}/agents/{agent['name']}/permissions"
+    )
+    assert grants.status_code == 200, grants.text
+    assert [
+        (g["resource_name"], g["permission_ids"])
+        for g in grants.json()["grants"]
+        if g["resource_type"] == "connector"
+    ] == [(declared.slug, ["connector.use"])]
+
+
+async def test_an_update_holds_the_connector_until_its_settlement_commits(
+    own_installation,
+):
+    """An update of a pod-wide connector that changes nothing emits no
+    UPDATE, so nothing would hold the row between the check that it may
+    settle and the settlement -- a change to RESTRICTED could land between.
+    The check reads the row FOR UPDATE: a concurrent restriction waits for
+    the update's transaction."""
+    import asyncio
+
+    from sqlalchemy import text
+
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.connectors.domain.pod_connector import (
+        PodConnectorEntity,
+        PodConnectorMode,
+        PodConnectorVisibility,
+    )
+    from app.modules.connectors.infrastructure.repositories.pod_connector_repository import (
+        PodConnectorRepository,
+    )
+    from app.modules.test_support.e2e.waiters import eventually
+
+    install, _org, _user, pod_id = own_installation
+    async with async_session_maker() as first, async_session_maker() as second:
+        updating = PodConnectorRepository(SqlAlchemyUnitOfWork(first))
+        connector = await updating.create(
+            PodConnectorEntity(
+                pod_id=pod_id,
+                slug=f"locked-{uuid4().hex[:6]}",
+                auth_config_id=install.id,
+                mode=PodConnectorMode.PER_MEMBER,
+            )
+        )
+        await first.commit()
+        await updating.update(connector)  # changes nothing; left open
+        holder = await first.scalar(text("SELECT pg_backend_pid()"))
+        waiter = await second.scalar(text("SELECT pg_backend_pid()"))
+        restricting = asyncio.create_task(
+            PodConnectorRepository(SqlAlchemyUnitOfWork(second)).update(
+                connector.model_copy(
+                    update={"visibility": PodConnectorVisibility.RESTRICTED}
+                )
+            )
+        )
+
+        async def blocked_by_holder() -> bool:
+            async with async_session_maker() as probe:
+                return bool(
+                    await probe.scalar(
+                        text("SELECT :holder = ANY(pg_blocking_pids(:waiter))"),
+                        {"holder": holder, "waiter": waiter},
+                    )
+                )
+
+        settled = False
+        try:
+            await eventually(
+                label="the restriction waits for the update",
+                probe=blocked_by_holder,
+                done=bool,
+                timeout_seconds=10,
+                fail_fast=lambda _blocked: (
+                    "the restriction landed while the update held nothing"
+                    if restricting.done()
+                    else None
+                ),
+            )
+            settled = True
+        finally:
+            await first.commit()
+            if not settled:
+                restricting.cancel()
+            await asyncio.gather(restricting, return_exceptions=True)
+            await second.commit()

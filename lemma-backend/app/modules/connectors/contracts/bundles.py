@@ -452,17 +452,94 @@ async def ensure_lemma_app_installation(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class WaitingConnectorGrant:
+    """A bundled grant on a connector the import could not declare: the
+    catalog connector and mode the bundle gave it, and what was granted."""
+
+    connector: str
+    mode: str
+    permission_ids: tuple[str, ...]
+    #: What the bundle called the connector, for what the importer is told.
+    slug: str = ""
+
+
+async def hold_grants_until_declared(
+    uow: SqlAlchemyUnitOfWork,
+    ctx: Context,
+    *,
+    pod_id: UUID,
+    grantee_type: str,
+    grantee_id: UUID,
+    grants: Sequence[WaitingConnectorGrant],
+    created_by_user_id: UUID | None,
+) -> bool:
+    """Keep ``grantee_id``'s grants on connectors the pod lacks until it has
+    one; whether they are kept (not before migration 0078, when they are not).
+
+    The pod connector's repository grants them when a POD-wide connector of
+    that catalog connector and mode is declared here -- on somebody's first
+    use, by hand, or by a later import -- whatever its slug. Replaces what
+    the grantee was waiting for before; bounded by what ``ctx`` holds.
+
+    Held under each key's lock, so a connector declared while this import ran
+    is seen once the lock is held, and granted now rather than waited for.
+    """
+    from app.core.authorization.context import ResourceType
+    from app.core.authorization.pending_grants import (
+        PendingGrant,
+        replace_grantee_pending_grants,
+    )
+    from app.modules.connectors.domain.pod_connector import pending_grant_key
+    from app.modules.connectors.infrastructure.repositories.pod_connector_repository import (
+        PodConnectorRepository,
+    )
+
+    held = await replace_grantee_pending_grants(
+        uow.session,
+        ctx=ctx,
+        pod_id=pod_id,
+        grantee_type=grantee_type,
+        grantee_id=grantee_id,
+        resource_type=ResourceType.CONNECTOR,
+        grants=[
+            PendingGrant(
+                resource_type=ResourceType.CONNECTOR,
+                resource_key=pending_grant_key(
+                    grant.connector, PodConnectorMode(grant.mode)
+                ),
+                permission_ids=grant.permission_ids,
+            )
+            for grant in grants
+        ],
+        created_by_user_id=created_by_user_id,
+        action="let an imported workload wait for a connector you could not use",
+    )
+    if not held:
+        return False
+    connectors = PodConnectorRepository(uow)
+    for grant in grants:
+        declared = await connectors.first_settleable(
+            pod_id, grant.connector, PodConnectorMode(grant.mode)
+        )
+        if declared is not None:
+            await connectors.settle_waiting_grants(declared, grant.connector)
+    return True
+
+
 __all__ = [
     "ACCOUNT_SHARED_WITH_SOME",
     "AccountSharedWithSomeError",
     "DeclaredPodConnector",
     "InstallationChoice",
     "OwnAccountChoice",
+    "WaitingConnectorGrant",
     "declare_bundled_pod_connector",
     "declared_pod_connectors",
     "deprecated_account_refusal",
     "ensure_lemma_app_installation",
     "exported_pod_connectors",
+    "hold_grants_until_declared",
     "installations_of",
     "lemma_app_installable",
     "own_accounts_on",
