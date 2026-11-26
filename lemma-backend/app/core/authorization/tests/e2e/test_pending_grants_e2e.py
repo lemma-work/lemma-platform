@@ -284,3 +284,43 @@ async def _grants_held_by(pod_id: UUID, grantee: UUID) -> int:
             )
         )
     return int(count or 0)
+
+
+async def test_settling_adds_to_what_the_grantee_already_holds(scenario, db_session):
+    """A grant made by hand on the connector -- while it was RESTRICTED, and
+    nothing could settle onto it -- stays when the waiting grant lands."""
+    from app.core.authorization.grants import replace_resource_grantee_grant
+
+    await scenario.create_org_with_pod(name_prefix="Kept")
+    pod_id = UUID(scenario.pod_id)
+    grantee, resource_id = uuid4(), uuid4()
+    await _hold(db_session, pod_id, grantee, "connector.use")
+    await replace_resource_grantee_grant(
+        db_session,
+        pod_id=pod_id,
+        resource_type=ResourceType.CONNECTOR,
+        resource_id=resource_id,
+        grantee_type="AGENT",
+        grantee_id=grantee,
+        permission_ids=["datastore.table.read"],
+        created_by_user_id=None,
+    )
+    await db_session.commit()
+
+    await settle_pending_grants(
+        db_session,
+        pod_id=pod_id,
+        resource_type=ResourceType.CONNECTOR,
+        resource_key=_KEY,
+        resource_id=resource_id,
+    )
+    await db_session.commit()
+
+    held = await db_session.execute(
+        select(ResourcePermissionGrantModel.permission_id).where(
+            ResourcePermissionGrantModel.pod_id == pod_id,
+            ResourcePermissionGrantModel.resource_id == resource_id,
+            ResourcePermissionGrantModel.grantee_id == grantee,
+        )
+    )
+    assert sorted(held.scalars().all()) == ["connector.use", "datastore.table.read"]

@@ -40,7 +40,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.conferral import CONFERRAL_EXCEEDS_HOLDER, assert_can_confer
 from app.core.authorization.context import Context, ResourceType
-from app.core.authorization.models import PendingResourceGrantModel
+from app.core.authorization.authz_epoch import bump_after_commit
+from app.core.authorization.grant_generation import (
+    AGENT_GRANTEE,
+    bump_agent_grant_generations,
+)
+from app.core.authorization.models import (
+    PendingResourceGrantModel,
+    ResourcePermissionGrantModel,
+)
 from app.core.authorization.permission_rows import ensure_permission_rows
 from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger
@@ -332,23 +340,67 @@ async def settle_pending_grants(
         await _delete_rows(session, (row[0] for row in batch))
         if len(batch) < _SETTLE_BATCH:
             break
-    # Imported here: `grants` imports this module.
-    from app.core.authorization.grants import replace_resource_grantee_grant
-
     for grantee_type, grantee_id in sorted(
         permissions, key=lambda g: (g[0], str(g[1]))
     ):
-        await replace_resource_grantee_grant(
+        await _add_missing_grants(
             session,
             pod_id=pod_id,
             resource_type=resource_type,
             resource_id=resource_id,
-            grantee_type=grantee_type,
-            grantee_id=grantee_id,
-            permission_ids=sorted(permissions[(grantee_type, grantee_id)]),
+            grantee=(grantee_type, grantee_id),
+            permission_ids=permissions[(grantee_type, grantee_id)],
             created_by_user_id=granted_by[(grantee_type, grantee_id)],
         )
+    if permissions:
+        await session.flush()
+        await bump_agent_grant_generations(
+            session, {g_id for g_type, g_id in permissions if g_type == AGENT_GRANTEE}
+        )
+        bump_after_commit(session, pod_id)
     return len(permissions)
+
+
+async def _add_missing_grants(
+    session: AsyncSession,
+    *,
+    pod_id: UUID,
+    resource_type: ResourceType,
+    resource_id: UUID,
+    grantee: tuple[str, UUID],
+    permission_ids: set[str],
+    created_by_user_id: UUID | None,
+) -> None:
+    """Add what waited to what the grantee already holds on the resource.
+
+    Adds, never replaces: a grant somebody made on the resource by hand --
+    while it was RESTRICTED, say, and nothing could settle onto it -- stays,
+    and keeps who made it."""
+    grantee_type, grantee_id = grantee
+    held = await session.execute(
+        select(ResourcePermissionGrantModel.permission_id).where(
+            ResourcePermissionGrantModel.pod_id == pod_id,
+            ResourcePermissionGrantModel.resource_type == resource_type.value,
+            ResourcePermissionGrantModel.resource_id == resource_id,
+            ResourcePermissionGrantModel.grantee_type == grantee_type,
+            ResourcePermissionGrantModel.grantee_id == grantee_id,
+            ResourcePermissionGrantModel.permission_id.in_(permission_ids),
+        )
+    )
+    missing = sorted(permission_ids - set(held.scalars().all()))
+    await ensure_permission_rows(session, set(missing))
+    for permission_id in missing:
+        session.add(
+            ResourcePermissionGrantModel(
+                pod_id=pod_id,
+                resource_type=resource_type.value,
+                resource_id=resource_id,
+                grantee_type=grantee_type,
+                grantee_id=grantee_id,
+                permission_id=permission_id,
+                created_by_user_id=created_by_user_id,
+            )
+        )
 
 
 async def _next_batch(
