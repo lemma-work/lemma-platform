@@ -11,7 +11,7 @@ nothing.
 
 from __future__ import annotations
 
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import AsyncClient
@@ -31,6 +31,7 @@ from app.modules.agent_surfaces.tests.e2e.test_web_widgets_e2e import (
     _page,
     _say,
     _session,
+    _solved,
     _widget,
 )
 from app.modules.datastore.contracts.contact_rows import rows_for_contact
@@ -171,6 +172,149 @@ async def test_an_open_table_takes_one_row_per_answer_and_nothing_more(
     )
     assert after.status_code == 404
     assert len(await _rows(authenticated_client, pod_id, table)) == 1
+
+
+async def test_with_bot_protection_on_each_unconfirmed_answer_takes_its_own_proof(
+    authenticated_client: AsyncClient, test_pod, monkeypatch
+):
+    """The key is on the page for anybody to copy, so a script could post rows
+    with nothing else. With protection on -- the default -- every answer from
+    somebody the pod has not confirmed carries a proof solved for an answer:
+    none, a reused one or a chat's one is refused and adds nothing, and the
+    proof is asked before the send is counted -- the form takes two a day, so
+    three refused tries counted first would leave the real answers nothing. A
+    confirmed contact sends none."""
+    from app.core.config import settings
+    from app.core.public_web import public_web_settings
+    from app.modules.identity.config import identity_settings
+
+    pod_id = test_pod["id"]
+    table = await _signups(authenticated_client, pod_id, "guarded_signups")
+    opened = await _open(authenticated_client, pod_id, table, answers_per_day=2)
+    assert opened.status_code == 200, opened.text
+    widget = await _widget(authenticated_client, pod_id, name="Guarded form")
+    key = widget["public_key"]
+    # Confirmed while protection is off: asking for a code is its own proof's
+    # business, covered where codes are.
+    contact = await _confirm(
+        authenticated_client,
+        key,
+        await _session(authenticated_client, key),
+        f"guarded-{widget['id'][:8]}@client.example",
+    )
+    anonymous = await _session(authenticated_client, key)
+
+    monkeypatch.setattr(public_web_settings, "public_web_altcha_enabled", True)
+    monkeypatch.setattr(settings, "auth_altcha_enabled", False)
+    monkeypatch.setattr(identity_settings, "auth_altcha_hmac_key", None)
+    monkeypatch.setattr(identity_settings, "auth_altcha_max_number", 10_000)
+
+    async def proof(purpose: str) -> str:
+        challenge = await authenticated_client.get(
+            f"/public/web/{key}/challenge", params={"purpose": purpose}
+        )
+        assert challenge.status_code == 200, challenge.text
+        return _solved(challenge.json())
+
+    def answer(name: str, altcha: str | None = None) -> dict[str, object]:
+        body: dict[str, object] = {"table": table, "values": {"full_name": name}}
+        if altcha is not None:
+            body["altcha"] = altcha
+        return body
+
+    for headers in (_page(), _as(anonymous)):
+        bare = await authenticated_client.post(
+            f"/public/web/{key}/rows", json=answer("Script"), headers=headers
+        )
+        assert bare.status_code == 400, bare.text
+        assert bare.json()["code"] == "altcha_failed"
+    wrong_purpose = await authenticated_client.post(
+        f"/public/web/{key}/rows",
+        json=answer("Script", await proof("session")),
+        headers=_as(anonymous),
+    )
+    assert wrong_purpose.status_code == 400
+    assert await _rows(authenticated_client, pod_id, table) == []
+
+    solved = await proof("row")
+    added = await authenticated_client.post(
+        f"/public/web/{key}/rows", json=answer("Ana", solved), headers=_page()
+    )
+    assert added.status_code == 201, added.text
+    reused = await authenticated_client.post(
+        f"/public/web/{key}/rows", json=answer("Ana again", solved), headers=_page()
+    )
+    assert reused.status_code == 400
+
+    confirmed = await authenticated_client.post(
+        f"/public/web/{key}/rows", json=answer("Bo"), headers=_as(contact)
+    )
+    assert confirmed.status_code == 201, confirmed.text
+    names = sorted(
+        row["full_name"] for row in await _rows(authenticated_client, pod_id, table)
+    )
+    assert names == ["Ana", "Bo"]
+
+
+async def test_each_form_takes_its_own_answers_a_day(
+    authenticated_client: AsyncClient, test_pod, monkeypatch
+):
+    """A form's day is its own: counted per open table, whichever widget's page
+    an answer comes through, at what the member set -- up to the deployment's
+    ceiling -- else the default. One form filling up refuses nobody else's."""
+    from app.core.public_web import public_web_settings
+
+    monkeypatch.setattr(
+        public_web_settings, "public_web_answers_per_form_per_day_max", 50
+    )
+    pod_id = test_pod["id"]
+    small = await _signups(authenticated_client, pod_id, f"launch_{uuid4().hex[:8]}")
+    other = await _signups(authenticated_client, pod_id, f"waitlist_{uuid4().hex[:8]}")
+
+    too_many = await _open(authenticated_client, pod_id, small, answers_per_day=51)
+    assert too_many.status_code == 422, too_many.text
+    assert "between 1 and 50" in too_many.text
+
+    opened = await _open(authenticated_client, pod_id, small, answers_per_day=2)
+    assert opened.status_code == 200, opened.text
+    assert (opened.json()["answers_per_day"], opened.json()["answers_per_day_max"]) == (
+        2,
+        50,
+    )
+    default = await _open(authenticated_client, pod_id, other)
+    assert default.json()["answers_per_day"] is None
+
+    first = (await _widget(authenticated_client, pod_id, name="Launch page"))[
+        "public_key"
+    ]
+    second = (await _widget(authenticated_client, pod_id, name="Docs page"))[
+        "public_key"
+    ]
+
+    async def answer(key: str, table: str, name: str) -> int:
+        sent = await authenticated_client.post(
+            f"/public/web/{key}/rows",
+            json={"table": table, "values": {"full_name": name}},
+            headers=_page(),
+        )
+        return sent.status_code
+
+    assert await answer(first, small, "One") == 201
+    assert await answer(second, small, "Two") == 201
+    assert await answer(first, small, "Three") == 429
+    assert await answer(first, other, "Elsewhere") == 201
+    assert len(await _rows(authenticated_client, pod_id, small)) == 2
+
+    # Opening again without a word on the cap -- as the app's sheet does when
+    # it saves columns -- keeps it; only an explicit null goes back to default.
+    reopened = await _open(authenticated_client, pod_id, small, audience="anyone")
+    assert reopened.json()["answers_per_day"] == 2
+    reread = await authenticated_client.get(
+        f"/pods/{pod_id}/datastore/tables/{small}/public-rows"
+    )
+    assert reread.json()["answers_per_day"] == 2
+    cleared = await _open(authenticated_client, pod_id, small, answers_per_day=None)
+    assert cleared.json()["answers_per_day"] is None
 
 
 async def test_a_table_opens_only_in_a_way_that_can_work(

@@ -6,6 +6,14 @@ import type { PublicAudience } from './PublicAudience.js';
 import type { PublicColumnResponse } from './PublicColumnResponse.js';
 export type TableOpeningResponse = {
     /**
+     * How many answers a day it takes, when the member set it; null is the deployment's default.
+     */
+    answers_per_day: (number | null);
+    /**
+     * The most answers a day a form may be set to take here.
+     */
+    answers_per_day_max: number;
+    /**
      * Who outside may add rows; null when the table is closed.
      */
     audience: (PublicAudience | null);

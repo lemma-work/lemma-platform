@@ -55,6 +55,7 @@ from app.modules.agent_surfaces.services.outsider_limits import (
     WebWidgetLimiter,
 )
 from app.modules.agent_surfaces.services.visitor_access import Visitor
+from app.modules.agent_surfaces.services.visitor_proofs import ROW_PROOF, prove_human
 from app.modules.agent_surfaces.services.widget_directory import widget_by_key
 from app.modules.channels.contracts import ContactsHome, Source, source_for
 from app.modules.contacts.contracts import contact_by_id, open_anonymous_contact
@@ -434,18 +435,6 @@ class WebChat:
             raise refused("There is nothing to fill in here", 404, "table_closed")
         return opened, opened.audience is PublicAudience.CONTACTS
 
-    async def add_visitor_row(
-        self,
-        widget: WebWidget,
-        visitor: Visitor | None,
-        *,
-        table: str,
-        answers: dict[str, object],
-        address: str,
-    ) -> None:
-        await self.admit_row(widget, visitor, table=table, address=address)
-        await self.save_visitor_row(widget, visitor, table=table, answers=answers)
-
     async def admit_row(
         self,
         widget: WebWidget,
@@ -453,18 +442,27 @@ class WebChat:
         *,
         table: str,
         address: str,
+        altcha: str | None = None,
     ) -> OpenTable:
         """Whether this visitor may send a row to ``table`` now, counted as a
         send: everything asked before an answer is read, so a page attaching
-        files is turned away before a byte of them is taken."""
+        files is turned away before a byte of them is taken. Somebody not
+        confirmed sends each answer with its own proof, checked before the send
+        is counted, so a script without one spends nobody's answers.
+        """
         vouched = visitor is not None and visitor.session.is_vouched
         if widget.answer is WidgetAnswer.KNOWN and not vouched:
             raise refused("This is for existing customers only", 403, "not_a_contact")
         opened, contacts_only = await self.visitor_table(widget, table=table)
         if contacts_only and not vouched:
             raise refused("Confirm your email first", 403, "needs_contact")
+        if not vouched:
+            await prove_human(altcha, purpose=ROW_PROOF)
         if not await self.limiter.allow_submission(
-            widget_id=widget.id, address=address
+            pod_id=widget.pod_id,
+            table=opened.name,
+            address=address,
+            per_day=opened.answers_per_day,
         ):
             raise refused("Too many answers. Try again later.", 429, "rate_limited")
         return opened

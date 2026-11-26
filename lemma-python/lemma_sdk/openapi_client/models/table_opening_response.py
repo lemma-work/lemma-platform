@@ -19,6 +19,9 @@ T = TypeVar("T", bound="TableOpeningResponse")
 class TableOpeningResponse:
     """
     Attributes:
+        answers_per_day (int | None): How many answers a day it takes, when the member set it; null is the deployment's
+            default.
+        answers_per_day_max (int): The most answers a day a form may be set to take here.
         audience (None | PublicAudience): Who outside may add rows; null when the table is closed.
         columns (list[str]): The open columns, in order.
         contact_owned (bool): A confirmed contact's row names them in contact_id.
@@ -27,6 +30,8 @@ class TableOpeningResponse:
         table (str):
     """
 
+    answers_per_day: int | None
+    answers_per_day_max: int
     audience: None | PublicAudience
     columns: list[str]
     contact_owned: bool
@@ -36,6 +41,11 @@ class TableOpeningResponse:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        answers_per_day: int | None
+        answers_per_day = self.answers_per_day
+
+        answers_per_day_max = self.answers_per_day_max
+
         audience: None | str
         if isinstance(self.audience, PublicAudience):
             audience = self.audience.value
@@ -59,6 +69,8 @@ class TableOpeningResponse:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
+                "answers_per_day": answers_per_day,
+                "answers_per_day_max": answers_per_day_max,
                 "audience": audience,
                 "columns": columns,
                 "contact_owned": contact_owned,
@@ -75,6 +87,15 @@ class TableOpeningResponse:
         from ..models.public_column_response import PublicColumnResponse
 
         d = dict(src_dict)
+
+        def _parse_answers_per_day(data: object) -> int | None:
+            if data is None:
+                return data
+            return cast(int | None, data)
+
+        answers_per_day = _parse_answers_per_day(d.pop("answers_per_day"))
+
+        answers_per_day_max = d.pop("answers_per_day_max")
 
         def _parse_audience(data: object) -> None | PublicAudience:
             if data is None:
@@ -107,6 +128,8 @@ class TableOpeningResponse:
         table = d.pop("table")
 
         table_opening_response = cls(
+            answers_per_day=answers_per_day,
+            answers_per_day_max=answers_per_day_max,
             audience=audience,
             columns=columns,
             contact_owned=contact_owned,

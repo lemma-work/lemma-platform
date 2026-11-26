@@ -48,10 +48,12 @@ function namesOrg(word: string, org: { org?: string; name?: string; handle?: str
     return word === org.handle || word === slug(org.org ?? org.name ?? "");
 }
 
-/** The words that follow a Lemma's id in the app's own grammar. */
+/** The words that follow a Lemma's id in the app's own grammar. Every one
+ *  `readView` reads must be here: a word missing from it makes `/l/{id}/word`
+ *  read as names -- an organization called by the id -- and open nothing. */
 const SECTIONS: ReadonlySet<string> = new Set([
     "plan", "chats", "groups", "contacts", "apps", "pages", "about", "people", "files", "tables",
-    "automations", "workflows", "runs", "agents", "settings", "computer",
+    "automations", "workflows", "runs", "agents", "settings", "computer", "memory", "skills", "add",
 ]);
 
 /** The words the workspace put after a Lemma's id, which links written before

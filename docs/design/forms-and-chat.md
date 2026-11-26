@@ -38,9 +38,24 @@ anonymous visitors, web widgets with public keys, email codes.
 | Agent on a web visitor's run | Fill the visible form's open columns; the existing contact tools |
 | Member | Open a table they can change; the grant goes when they or the table do |
 
-Limits: `surface_web_submissions_per_widget_per_day` per widget and address
-(the address checked first, so one address cannot spend a widget's day), and
-the organization's contacts cap for any agent work a row starts.
+Limits (2026-11-25):
+
+- **A proof-of-work per answer** from anybody the pod has not confirmed: no
+  session, or an anonymous one. `GET /public/web/{key}/challenge?purpose=row`,
+  solved and sent as `altcha` (in the body, or in the query beside files, so it
+  is checked before a byte of them is read). Each proof answers once and only
+  as an answer. A confirmed contact sends none. `widget.js` does it in
+  `addRow`. Off with the rest of bot protection
+  (`PUBLIC_WEB_ALTCHA_ENABLED=false`).
+- **A day's answers per form**, counted per open table whichever widget's page
+  they come through: `answers_per_day` on the opening (`PUT .../public-rows`),
+  up to `PUBLIC_WEB_ANSWERS_PER_FORM_PER_DAY_MAX` (5000), else
+  `SURFACE_WEB_SUBMISSIONS_PER_WIDGET_PER_DAY` (500; the name is older than
+  counting per form). Before this it was one count per widget, shared by
+  every form behind one key.
+- **Per address**, 30 answers in ten minutes, checked after the proof and
+  before the form's day, so one address cannot spend a form's day.
+- The organization's contacts cap for any agent work a row starts.
 
 What a stranger's row may set off:
 

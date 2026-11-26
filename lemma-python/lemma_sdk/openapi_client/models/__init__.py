@@ -615,6 +615,7 @@ _NAME_TO_MODULE = {
     'PublicFileResponse': 'public_file_response',
     'PublicRowsResponse': 'public_rows_response',
     'PublicRowsResponseRowsItem': 'public_rows_response_rows_item',
+    'PublicWebChallengeReadPurpose': 'public_web_challenge_read_purpose',
     'PublicWebChallengeReadResponsePublicWebChallengeRead': 'public_web_challenge_read_response_public_web_challenge_read',
     'PublishMode': 'publish_mode',
     'PublishStartRequest': 'publish_start_request',
@@ -1512,6 +1513,7 @@ if TYPE_CHECKING:
     from .public_file_response import PublicFileResponse
     from .public_rows_response import PublicRowsResponse
     from .public_rows_response_rows_item import PublicRowsResponseRowsItem
+    from .public_web_challenge_read_purpose import PublicWebChallengeReadPurpose
     from .public_web_challenge_read_response_public_web_challenge_read import PublicWebChallengeReadResponsePublicWebChallengeRead
     from .publish_mode import PublishMode
     from .publish_start_request import PublishStartRequest
@@ -2422,6 +2424,7 @@ __all__ = [
     'PublicFileResponse',
     'PublicRowsResponse',
     'PublicRowsResponseRowsItem',
+    'PublicWebChallengeReadPurpose',
     'PublicWebChallengeReadResponsePublicWebChallengeRead',
     'PublishMode',
     'PublishStartRequest',
