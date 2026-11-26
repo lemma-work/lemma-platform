@@ -14601,7 +14601,7 @@ var LemmaClient = (() => {
     }
     /**
      * Add One Of Your Accounts To The Pod
-     * Use one of your organization accounts in this pod. The pod's per-member connector for its installation is reused or declared, and the account becomes your default here when you have none.
+     * Use one of your organization accounts in this pod. The pod's per-member connector for its installation is reused or declared, and the account becomes your default here when you have none. A pod app's page may add one only as PERSONAL, for your own calls: sharing it is yours to do in Lemma.
      * @param podId
      * @param requestBody
      * @returns PodAccountResponse Successful Response

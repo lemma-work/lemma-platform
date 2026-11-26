@@ -63,8 +63,14 @@ and rate limit, and the Lemma loses GitHub when that person leaves.
 - **Use it here** (an account they already have elsewhere in the org).
   `POST /pods/{pod_id}/connector-accounts` (which adds a pod account) also
   ensures a `PER_MEMBER` connector exists for that installation, and makes the
-  account their member default when they have none. This route stays
-  person-only: it puts the person's own account in play.
+  account their member default when they have none. A pod app's page may
+  call it too, but only to add the viewer's own account as `PERSONAL`, for
+  their own calls. That reaches nobody new, and it lets a plugin offer "Use
+  your GitHub here?" in-app. Sharing it (`POD`, `RESTRICTED`) stays the
+  person's own act in Lemma (`APP_PERSON_ONLY`).
+- **An app's page connects into its own pod only.** `pod_id` comes in the
+  body, where the app pin's path check cannot see it, so both connect routes
+  call `refuse_other_pod` with it.
 
 ## B. One read: my connections here
 

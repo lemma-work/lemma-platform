@@ -292,6 +292,9 @@ describes a pod connector that is the App for every call.
 - When a person uses an account they already have in the organization in a
   pod, the system shall give the pod a per-member connector for its
   installation, and shall make it their account there when they have none.
+- Where a pod app's page acts for its viewer, the system shall let it add the
+  viewer's own account to its pod for their own calls only, and shall refuse
+  it sharing that account with anyone, or connecting into any other pod.
 - The system shall answer, for each connector a pod uses and for whoever asks,
   whose account a call by them runs as and what they can do next — connect,
   use an account they already have, reconnect, wait for someone else, or

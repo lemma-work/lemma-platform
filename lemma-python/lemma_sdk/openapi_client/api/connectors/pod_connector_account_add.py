@@ -74,7 +74,8 @@ def sync_detailed(
     """Add One Of Your Accounts To The Pod
 
      Use one of your organization accounts in this pod. The pod's per-member connector for its
-    installation is reused or declared, and the account becomes your default here when you have none.
+    installation is reused or declared, and the account becomes your default here when you have none. A
+    pod app's page may add one only as PERSONAL, for your own calls: sharing it is yours to do in Lemma.
 
     Args:
         pod_id (UUID):
@@ -109,7 +110,8 @@ def sync(
     """Add One Of Your Accounts To The Pod
 
      Use one of your organization accounts in this pod. The pod's per-member connector for its
-    installation is reused or declared, and the account becomes your default here when you have none.
+    installation is reused or declared, and the account becomes your default here when you have none. A
+    pod app's page may add one only as PERSONAL, for your own calls: sharing it is yours to do in Lemma.
 
     Args:
         pod_id (UUID):
@@ -139,7 +141,8 @@ async def asyncio_detailed(
     """Add One Of Your Accounts To The Pod
 
      Use one of your organization accounts in this pod. The pod's per-member connector for its
-    installation is reused or declared, and the account becomes your default here when you have none.
+    installation is reused or declared, and the account becomes your default here when you have none. A
+    pod app's page may add one only as PERSONAL, for your own calls: sharing it is yours to do in Lemma.
 
     Args:
         pod_id (UUID):
@@ -172,7 +175,8 @@ async def asyncio(
     """Add One Of Your Accounts To The Pod
 
      Use one of your organization accounts in this pod. The pod's per-member connector for its
-    installation is reused or declared, and the account becomes your default here when you have none.
+    installation is reused or declared, and the account becomes your default here when you have none. A
+    pod app's page may add one only as PERSONAL, for your own calls: sharing it is yours to do in Lemma.
 
     Args:
         pod_id (UUID):

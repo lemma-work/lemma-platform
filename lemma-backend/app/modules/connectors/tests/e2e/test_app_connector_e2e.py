@@ -340,7 +340,9 @@ async def test_unproven_and_personal_installations_do_not_count(scenario, db_ses
     assert declared.status_code == status.HTTP_201_CREATED, declared.text
 
     assert declared.json()["status"] == "NEEDS_INSTALLATION"
-    refused = await world.run(world.alice, world.app_operation, {"owner": "ada-lovelace"})
+    refused = await world.run(
+        world.alice, world.app_operation, {"owner": "ada-lovelace"}
+    )
     assert refused.json()["code"] == "APP_NOT_INSTALLED", refused.text
 
 

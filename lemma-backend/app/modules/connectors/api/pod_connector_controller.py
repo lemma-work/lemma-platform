@@ -13,7 +13,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, status
 
-from app.core.api.actor_policy import require_person
+from app.core.api.actor_policy import (
+    refuse_app_for_person,
+    require_person,
+    require_person_or_own_app,
+)
+from app.core.app_pin import app_request_of
+from app.modules.connectors.domain.pod_connector import PodAccountVisibility
 from app.core.api.dependencies import CurrentUser, get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.authorization.context import ResourceRef
@@ -61,6 +67,8 @@ installation_router = APIRouter(
 
 #: Sharing a credential, or putting one in the pod, is a person's own act.
 _PERSON_ONLY = require_person("share or add a connected account")
+#: Adding one's own account, for one's own calls, from an app's page too.
+_OWN_FROM_APP = require_person_or_own_app("add a connected account")
 
 
 @router.get(
@@ -343,16 +351,26 @@ async def list_pod_accounts(
     description=(
         "Use one of your organization accounts in this pod. The pod's "
         "per-member connector for its installation is reused or declared, and "
-        "the account becomes your default here when you have none."
+        "the account becomes your default here when you have none. A pod app's "
+        "page may add one only as PERSONAL, for your own calls: sharing it is "
+        "yours to do in Lemma."
     ),
-    dependencies=[_PERSON_ONLY],
+    dependencies=[_OWN_FROM_APP],
 )
 async def add_pod_account(
+    request: Request,
     pod_id: UUID,
     body: PodAccountCreateRequest,
     ctx: PodContextDep,
     service: PodConnectorServiceDep,
 ) -> PodAccountResponse:
+    # "Use it here" from inside an app: the viewer's own account, for their
+    # own calls, reaches nobody new. Anything wider is a share, and an app's
+    # script must not share a person's account for them (#1059).
+    if app_request_of(request) is not None and (
+        body.visibility is not PodAccountVisibility.PERSONAL or body.share_with
+    ):
+        raise refuse_app_for_person("share a connected account")
     from app.modules.connectors.services.connect_into_pod import (
         use_added_account_here,
     )
