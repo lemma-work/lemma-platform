@@ -4,7 +4,8 @@ import type { Audience, TableOpening } from "./public-rows";
 import type { Connectable } from "./connectable";
 import type { Connector, ConnectorAccount } from "./accounts";
 import type { AskOutcome, Coverage, PodConnector, PodConnectorDraft, PodConnectorPatch } from "./pod-connectors";
-import type { AccountUsage, Grantee, InstallationImpact, PodAccount, PodAccountPatch, PodAccountVisibility, ShareRole } from "./pod-accounts";
+import type { PodConnections } from "./pod-connections";
+import type { AccountUsage, Grantee, InstallationImpact, PodAccount, PodAccountPatch, PodAccountVisibility } from "./pod-accounts";
 import type { Install } from "@/connect/install";
 import type { AgentDetail, AgentDraft, AgentGrant, AgentRow } from "./agents";
 import type { Choice, Computer, Runtime, RuntimeTest } from "./runtimes";
@@ -840,10 +841,13 @@ export interface PodSource {
      *  `connectionFields` carries what the sign-in cannot — Shopify's store
      *  `subdomain` — for the few connectors that declare any. `configSource`
      *  asks for an install of that kind when none is named: Lemma's own app,
-     *  where an organization's own app of the same connector would not do. */
+     *  where an organization's own app of the same connector would not do.
+     *  `podId` is the Lemma it was started from: when the sign-in finishes,
+     *  the server adds the app to that Lemma and the new account as the
+     *  person's own there (the connect request's `pod_id`). */
     startAccount(
         orgId: string, connectorId: string, authConfigId?: string, returnTo?: string,
-        connectionFields?: Record<string, unknown>, configSource?: "SYSTEM_DEFAULT" | "ORG_CUSTOM",
+        connectionFields?: Record<string, unknown>, configSource?: "SYSTEM_DEFAULT" | "ORG_CUSTOM", podId?: string,
     ): Promise<AccountConnect>;
     /** The account this authorisation produced, once it exists and is usable.
      *  Empty until then. */
@@ -851,6 +855,10 @@ export interface PodSource {
     /** The connectors this pod declares, by slug: whose account each runs as
      *  and whether it can run at all. */
     listPodConnectors(podId: string): Promise<PodConnector[]>;
+    /** The apps this Lemma uses, one row each, judged for whoever asks:
+     *  whose account a call runs as, and where they stand with it. Read-only;
+     *  `GET /pods/{pod_id}/connections`. */
+    podConnections(podId: string): Promise<PodConnections>;
     /** Put a surface on one of the pod's SHARED connectors, by slug — the one
      *  account it answers as, for everyone. */
     connectPodConnector(podId: string, platform: string, podConnector: string): Promise<Surface>;
@@ -872,8 +880,6 @@ export interface PodSource {
      *  connected, and who it is waiting on. `pod.connector.manage` only (it
      *  refuses anyone else); listings no longer carry it. */
     podConnectorCoverage(podId: string, slug: string): Promise<Coverage>;
-    /** The pod's roles an owner may share a RESTRICTED account with. */
-    listShareRoles(podId: string): Promise<ShareRole[]>;
     /** The accounts in use here that I may see: mine, and everyone's shared
      *  ones. */
     listPodAccounts(podId: string): Promise<PodAccount[]>;

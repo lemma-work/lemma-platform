@@ -13,6 +13,11 @@ An in-process ``emit`` needs no transaction: it appends to a bounded buffer and
 returns. The trade is that a connector call which succeeds and then crashes the
 process before the flush is unreported. For a volume metric that is the right
 trade; for anything billed it would not be, which is why nothing here is.
+
+``identity`` is what the call actually went out as -- the App, or an account's
+own credential -- as the credential presenter noted it while presenting
+(``app_identity.note_presented``), not what the caller asked for. The actor
+stays the person who asked, whichever it was.
 """
 
 from __future__ import annotations
@@ -22,7 +27,21 @@ from typing import Iterator
 
 from app.core.analytics import AnalyticsActor, emit
 from app.core.authorization.context import ActorType
+from app.modules.connectors.domain.app_identity import (
+    PresentedIdentity,
+    presented_identity_observed,
+)
 from app.modules.connectors.domain.execution_plan import ResolvedConnectorExecution
+
+
+def _identity(
+    resolved: ResolvedConnectorExecution, presented: list[PresentedIdentity]
+) -> PresentedIdentity:
+    if presented:
+        return presented[-1]
+    # Nothing was presented: refused, or failed, before the credential was.
+    # An APP connector has nothing but the App to be.
+    return "app" if resolved.acts_as_app_connector else "user"
 
 
 @contextmanager
@@ -31,12 +50,15 @@ def operation_execution_recorded(
 ) -> Iterator[None]:
     """Record one connector operation, whichever way it ends."""
     status = "succeeded"
+    presented: list[PresentedIdentity] = []
     try:
-        yield
+        with presented_identity_observed() as presented:
+            yield
     except Exception:
         status = "failed"
         raise
     finally:
+        identity = _identity(resolved, presented)
         emit(
             "connector.operation_executed",
             actor=(
@@ -53,5 +75,10 @@ def operation_execution_recorded(
                 "provider": resolved.provider,
                 "direction": "outbound",
                 "status": status,
+                "identity": identity,
+                "pod_connector": resolved.pod_connector,
+                "installation_id": (
+                    resolved.account_external_ref if identity == "app" else None
+                ),
             },
         )

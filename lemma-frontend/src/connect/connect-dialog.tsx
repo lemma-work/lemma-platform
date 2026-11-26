@@ -72,9 +72,12 @@ function useMachineApp(connectorId: string): { machine: string; open: () => void
  */
 export function ConnectDialog({
     orgId, connector, install, takenNames, mayInstall = null, authorizing = false, authorizeFailure = null,
-    ownAppFirst = false, onClose, onDone, onAuthorize,
+    ownAppFirst = false, podId, onClose, onDone, onAuthorize,
 }: {
     orgId: string;
+    /** The Lemma this is connected from: a typed credential is added to it
+     *  by the server, with the account, as a finished sign-in is. */
+    podId?: string;
     connector: CatalogEntry;
     /** Which install to connect against, when the organization has more than
      *  one. The API permits many installs of one connector deliberately.
@@ -98,7 +101,9 @@ export function ConnectDialog({
      *  door somebody took when that is what they came to set up. */
     ownAppFirst?: boolean;
     onClose: () => void;
-    onDone: () => void;
+    /** Connected without a round trip, by a credential typed here: the new
+     *  account's id, when the server said it. */
+    onDone: (accountId?: string) => void;
     /** Hands the browser round trip back to the caller, which already owns it. */
     onAuthorize: (installId: string | null, connectionFields?: Record<string, unknown>) => void;
 }) {
@@ -213,8 +218,9 @@ export function ConnectDialog({
                 madeHere = await makeInstall.mutateAsync({ connectorId: entry.id, kind: kind?.kind });
                 installId = madeHere.id;
             }
+            let made: { id?: string };
             try {
-                await connectAccount.mutateAsync({ installId, credentials: body });
+                made = await connectAccount.mutateAsync({ installId, credentials: body, podId });
             } catch (problem) {
                 /* Two calls, one act: an install made moments ago with nobody
                    on it would otherwise hold the connector's name, and every
@@ -223,7 +229,7 @@ export function ConnectDialog({
                 throw problem;
             }
             refresh();
-            onDone();
+            onDone(made.id || undefined);
         } catch (problem) { fail(problem); }
     };
 

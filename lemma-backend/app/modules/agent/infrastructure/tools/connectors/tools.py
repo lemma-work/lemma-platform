@@ -85,6 +85,11 @@ def _connector_line(connector: Any, standing: dict[UUID, str]) -> str:
                 _standing(connector.mode.value, connector.auth_config_id, standing)
             ]
         )
+    elif connector.mode.value == "APP":
+        mode = (
+            "the organization's GitHub App, nobody's account; name the "
+            "repository's owner when the App is on several"
+        )
     else:
         mode = "one shared account"
     purpose = f" -- {connector.purpose}" if connector.purpose else ""
@@ -190,7 +195,8 @@ async def list_connectors(ctx: ToolContext, request: NoArguments) -> dict[str, A
 
     Each is named by its `connector` slug, which is how every other connector
     tool addresses it. `mode` says whose account a call uses: PER_MEMBER is
-    the person you act for, SHARED is one account shared with the pod.
+    the person you act for, SHARED is one account shared with the pod, APP is
+    the organization's GitHub App -- every call is the bot, nobody's account.
     """
     deps = ctx
     if deps.pod_id is None:

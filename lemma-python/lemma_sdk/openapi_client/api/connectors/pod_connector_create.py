@@ -76,7 +76,9 @@ def sync_detailed(
      Declare a connector by an organization installation (`auth_config_id`) or by a catalog connector
     (`connector_id`): its organization default, or Lemma's own app for it installed now when the
     organization has none and the caller may install connectors. `slug` defaults to the installation's
-    name; `mode` to PER_MEMBER.
+    name; `mode` to PER_MEMBER. `mode: APP` (GitHub only, no shared account, POD visibility) acts as the
+    organization's GitHub App, nobody's account: it needs only `pod.connector.manage`, from an app's
+    page too, and its slug defaults to `github`, else `github-bot`.
 
     Args:
         pod_id (UUID):
@@ -113,7 +115,9 @@ def sync(
      Declare a connector by an organization installation (`auth_config_id`) or by a catalog connector
     (`connector_id`): its organization default, or Lemma's own app for it installed now when the
     organization has none and the caller may install connectors. `slug` defaults to the installation's
-    name; `mode` to PER_MEMBER.
+    name; `mode` to PER_MEMBER. `mode: APP` (GitHub only, no shared account, POD visibility) acts as the
+    organization's GitHub App, nobody's account: it needs only `pod.connector.manage`, from an app's
+    page too, and its slug defaults to `github`, else `github-bot`.
 
     Args:
         pod_id (UUID):
@@ -145,7 +149,9 @@ async def asyncio_detailed(
      Declare a connector by an organization installation (`auth_config_id`) or by a catalog connector
     (`connector_id`): its organization default, or Lemma's own app for it installed now when the
     organization has none and the caller may install connectors. `slug` defaults to the installation's
-    name; `mode` to PER_MEMBER.
+    name; `mode` to PER_MEMBER. `mode: APP` (GitHub only, no shared account, POD visibility) acts as the
+    organization's GitHub App, nobody's account: it needs only `pod.connector.manage`, from an app's
+    page too, and its slug defaults to `github`, else `github-bot`.
 
     Args:
         pod_id (UUID):
@@ -180,7 +186,9 @@ async def asyncio(
      Declare a connector by an organization installation (`auth_config_id`) or by a catalog connector
     (`connector_id`): its organization default, or Lemma's own app for it installed now when the
     organization has none and the caller may install connectors. `slug` defaults to the installation's
-    name; `mode` to PER_MEMBER.
+    name; `mode` to PER_MEMBER. `mode: APP` (GitHub only, no shared account, POD visibility) acts as the
+    organization's GitHub App, nobody's account: it needs only `pod.connector.manage`, from an app's
+    page too, and its slug defaults to `github`, else `github-bot`.
 
     Args:
         pod_id (UUID):

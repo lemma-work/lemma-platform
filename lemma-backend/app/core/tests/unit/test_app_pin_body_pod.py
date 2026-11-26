@@ -49,3 +49,13 @@ def test_until_enforced_another_pod_is_observed_and_served(monkeypatch) -> None:
 
     assert refuse_other_pod(_connection(_APP), other) is True
     assert app_pod_for(_connection(_APP), other) == other
+
+
+def test_a_new_field_is_refused_whatever_the_switch_says(monkeypatch) -> None:
+    """``always``: a body field no app has relied on yet is pinned at once."""
+    monkeypatch.setattr(settings, "app_pin_cross_pod_enforced", False)
+
+    with pytest.raises(DomainError) as refused:
+        refuse_other_pod(_connection(_APP), uuid4(), always=True)
+
+    assert refused.value.code == APP_ROUTE_NOT_ALLOWED

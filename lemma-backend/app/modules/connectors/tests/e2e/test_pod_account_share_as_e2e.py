@@ -79,24 +79,28 @@ async def test_a_refused_connector_step_leaves_the_account_unshared(
     assert await _visibility(world, world.alice, pod_account_id) == "PERSONAL"
 
 
-async def test_a_per_member_slug_is_refused_before_anything_is_shared(
+async def test_a_per_member_slug_is_switched_to_run_as_the_shared_account(
     scenario, db_session
 ):
+    """ "Mine, for everyone" on the connector the pod already uses is one call:
+    the account shared with the pod and the connector switched to it, in one
+    transaction."""
     world = await _world(scenario, db_session)
     declared = await world.declare("crm", "PER_MEMBER")
     assert declared.status_code == status.HTTP_201_CREATED, declared.text
     pod_account_id = await _mine_in_the_pod(world, db_session, world.editor)
 
-    refused = await world.call(
+    switched = await world.call(
         "POST",
         f"/pods/{world.pod_id}/connector-accounts/{pod_account_id}/share-as",
         world.editor,
         json={"slug": "crm"},
     )
 
-    assert refused.status_code in (400, 422), refused.text
-    assert "not_shared_mode" in refused.text
-    assert await _visibility(world, world.editor, pod_account_id) == "PERSONAL"
+    assert switched.status_code == status.HTTP_200_OK, switched.text
+    assert switched.json()["mode"] == "SHARED"
+    assert switched.json()["shared_pod_account_id"] == pod_account_id
+    assert await _visibility(world, world.editor, pod_account_id) == "POD"
 
 
 async def test_only_the_accounts_owner_shares_it(scenario, db_session):

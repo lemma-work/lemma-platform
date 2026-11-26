@@ -195,8 +195,20 @@ ANALYTICS_CATALOG: Final[dict[str, AnalyticEvent]] = {
         properties=frozenset({"connector_id"}),
         groups=_ORG_ONLY,
     ),
+    # `identity` is what the call went out as ("app" or "user"), not what was
+    # asked for; `installation_id` is set only for "app".
     "connector.operation_executed": AnalyticEvent(
-        properties=frozenset({"connector_id", "provider", "direction", "status"}),
+        properties=frozenset(
+            {
+                "connector_id",
+                "provider",
+                "direction",
+                "status",
+                "identity",
+                "pod_connector",
+                "installation_id",
+            }
+        ),
         groups=_ORG_ONLY,
     ),
     # -- The loop --------------------------------------------------------

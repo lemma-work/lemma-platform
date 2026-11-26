@@ -189,10 +189,14 @@ export function useRefreshOperations(orgId: string) {
 /** Connect an account by handing over a credential, rather than by a redirect. */
 export function useCreateAccount(orgId: string) {
     return useMutation({
-        mutationFn: async (input: { installId: string; credentials: Record<string, unknown> }) => {
+        mutationFn: async (input: { installId: string; credentials: Record<string, unknown>; podId?: string }) => {
+            /* With a Lemma, the server adds the new account to it -- the
+               app declared, the account the person's own there -- in the
+               same request, as a finished sign-in does. */
             const made = await lemma().connectors.accounts.create(orgId, {
                 auth_config_id: input.installId,
                 credentials: input.credentials,
+                ...(input.podId ? { pod_id: input.podId } : {}),
             });
             return made as unknown as { id?: string };
         },

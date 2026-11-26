@@ -206,6 +206,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/organizations/{organization_id}/connectors/{auth_config_name}/triggers` | `connector.trigger.list` | List Connector Triggers |
 | GET | `/organizations/{organization_id}/connectors/{auth_config_name}/triggers/{trigger_name}` | `connector.trigger.get` | Get Connector Trigger |
 | GET | `/organizations/{organization_id}/installations/{auth_config_id}/impact` | `connector.installation.impact` | What Removing An Installation Would Stop |
+| GET | `/pods/{pod_id}/connections` | `pod.connection.list` | My Connections Here |
 | GET | `/pods/{pod_id}/connector-accounts` | `pod.connector_account.list` | List Accounts In Use In The Pod |
 | GET | `/pods/{pod_id}/connectors` | `pod.connector.list` | List Pod Connectors |
 | GET | `/pods/{pod_id}/connectors/{slug}` | `pod.connector.get` | Get Pod Connector |

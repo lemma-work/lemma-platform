@@ -28,6 +28,9 @@ class ConnectRequestInitiateSchema:
             sign-in itself does not carry, such as Shopify's store `subdomain`. Validated against the connector kind's
             `config_schema`; omit for connectors that declare none.
         connector_id (None | str | Unset): Connector ID to connect
+        pod_id (None | Unset | UUID): The Lemma (pod) this connect is for. You must be a member. When the connect
+            completes, the pod's per-member connector for the installation is reused or declared, and the new account
+            becomes your default there. Either step failing never fails the connect.
         return_to (None | str | Unset): Path inside the app to come back to when the flow finishes. Only a rooted path
             is accepted; anything else is ignored.
     """
@@ -37,6 +40,7 @@ class ConnectRequestInitiateSchema:
         ConnectRequestInitiateSchemaConnectionFieldsType0 | None | Unset
     ) = UNSET
     connector_id: None | str | Unset = UNSET
+    pod_id: None | Unset | UUID = UNSET
     return_to: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -69,6 +73,14 @@ class ConnectRequestInitiateSchema:
         else:
             connector_id = self.connector_id
 
+        pod_id: None | str | Unset
+        if isinstance(self.pod_id, Unset):
+            pod_id = UNSET
+        elif isinstance(self.pod_id, UUID):
+            pod_id = str(self.pod_id)
+        else:
+            pod_id = self.pod_id
+
         return_to: None | str | Unset
         if isinstance(self.return_to, Unset):
             return_to = UNSET
@@ -84,6 +96,8 @@ class ConnectRequestInitiateSchema:
             field_dict["connection_fields"] = connection_fields
         if connector_id is not UNSET:
             field_dict["connector_id"] = connector_id
+        if pod_id is not UNSET:
+            field_dict["pod_id"] = pod_id
         if return_to is not UNSET:
             field_dict["return_to"] = return_to
 
@@ -146,6 +160,23 @@ class ConnectRequestInitiateSchema:
 
         connector_id = _parse_connector_id(d.pop("connector_id", UNSET))
 
+        def _parse_pod_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                pod_id_type_0 = UUID(data)
+
+                return pod_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        pod_id = _parse_pod_id(d.pop("pod_id", UNSET))
+
         def _parse_return_to(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -159,6 +190,7 @@ class ConnectRequestInitiateSchema:
             auth_config_id=auth_config_id,
             connection_fields=connection_fields,
             connector_id=connector_id,
+            pod_id=pod_id,
             return_to=return_to,
         )
 

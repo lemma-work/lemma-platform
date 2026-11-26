@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
 from app.modules.connectors.domain.connect_request import ConnectRequestEntity
@@ -39,6 +40,10 @@ _RETURN_TO_KEY = "return_to"
 _PURPOSE_KEY = "purpose"
 #: A purpose is a short identifier another module chose, never free text.
 _PURPOSE_MAX = 64
+
+# The pod the person connected from, whose connector and default the completed
+# connect fills in (``connect_into_pod``). Checked when the request is made.
+_POD_KEY = "pod_id"
 
 
 #: How long a started sign-in is handed back again rather than made anew.
@@ -243,19 +248,34 @@ def installation_needs_an_admin(connect_request: ConnectRequestEntity | None) ->
     return (connect_request.attributes or {}).get(_INSTALLATION_KEY) == _NEEDS_ADMIN
 
 
+def requested_pod(connect_request: ConnectRequestEntity) -> UUID | None:
+    """The pod the person connected from, if they connected from one."""
+    value = (connect_request.attributes or {}).get(_POD_KEY)
+    if not isinstance(value, str):
+        return None
+    try:
+        return UUID(value)
+    except ValueError:
+        return None
+
+
 def request_attributes(
     state: str,
     provider_state: str | None,
     code_verifier: str | None,
     return_to: object,
     purpose: str | None,
+    pod_id: UUID | None = None,
 ) -> dict[str, str]:
     """What a new connect request remembers until its callback: the flow's
-    secrets, where to put the person back, and what another module started it
-    for (``purpose``, carried to the ``ConnectorAccountConnected`` it emits)."""
+    secrets, where to put the person back, what another module started it
+    for (``purpose``, carried to the ``ConnectorAccountConnected`` it emits),
+    and the pod it was started from."""
     attributes = {"state": state}
     if provider_state is not None:
         attributes["provider_state"] = provider_state
     if code_verifier:
         attributes["code_verifier"] = code_verifier
+    if pod_id is not None:
+        attributes[_POD_KEY] = str(pod_id)
     return with_purpose(with_return_path(attributes, return_to), purpose)

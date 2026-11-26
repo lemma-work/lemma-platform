@@ -13,6 +13,11 @@ the shared one for a shared connector. The pod connector's typed refusals
 (CONNECTION_REQUIRED, CONNECTOR_NEEDS_ACCOUNT, ...) pass through untranslated:
 they name their own remedy, which a schedule error would lose.
 
+An APP connector (the organization's GitHub App) resolves to no account. Its
+GitHub trigger is bound to one of the App's installations instead, picked by
+the GitHub account the schedule's config names (`owner`, `org`, or the owner
+half of `repository` / `full_name`), or the only one there is.
+
 The connector errors are translated rather than allowed through. A caller
 creating a schedule gets told what is wrong with *its* schedule; a
 `CONNECTOR_VALIDATION_ERROR` surfacing from a `POST /schedules` says the fault
@@ -26,6 +31,11 @@ from typing import Protocol
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.connectors.contracts.app_connectors import (
+    PodConnectorApp,
+    pick_app_installation,
+    requested_owner,
+)
 from app.modules.connectors.contracts.triggers import (
     ConnectorInfrastructureError,
     ConnectorTriggerNotFoundError,
@@ -33,6 +43,7 @@ from app.modules.connectors.contracts.triggers import (
     TriggerBinding,
     create_trigger_subscription,
     delete_trigger_subscription,
+    resolve_app_trigger_binding,
     resolve_trigger_binding,
 )
 from app.modules.connectors.contracts.mcp_events import (
@@ -62,10 +73,14 @@ TriggerUnsubscriber = Callable[..., Awaitable[None]]
 #: Which organization owns a pod, read in a session of its own: provisioning
 #: runs with the request's connection handed back.
 PodOrganization = Callable[[UUID], Awaitable[UUID | None]]
-#: The account a schedule's pod connector means right now, for its owner.
+#: The account a schedule's pod connector means right now, for its owner --
+#: or the App, for an APP connector.
 ConnectorResolver = Callable[
-    [SqlAlchemyUnitOfWork, ScheduleEntity], Awaitable[PodConnectorAccount]
+    [SqlAlchemyUnitOfWork, ScheduleEntity],
+    Awaitable[PodConnectorAccount | PodConnectorApp],
 ]
+#: Binds a trigger to one of the App's installations.
+AppBindingResolver = Callable[..., Awaitable[TriggerBinding]]
 
 
 class PodHearsChannel(Protocol):
@@ -222,8 +237,10 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
         pod_organization: PodOrganization = _pod_organization,
         resolve_connector: ConnectorResolver = resolve_as_owner,
         pod_hears_channel: PodHearsChannel = _pod_hears_slack_channel,
+        resolve_app_binding: AppBindingResolver = resolve_app_trigger_binding,
     ) -> None:
         self.uow = uow
+        self._resolve_app_binding = resolve_app_binding
         self._pod_hears_channel = pod_hears_channel
         self._resolve_connector = resolve_connector
         self._resolve_binding = resolve_binding
@@ -243,6 +260,15 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
             return None
         resolved = await self._resolve_connector(self.uow, schedule)
         try:
+            if isinstance(resolved, PodConnectorApp):
+                return await self._resolve_app_binding(
+                    self.uow,
+                    trigger_id=schedule.connector_trigger_id,
+                    connector_id=resolved.connector_id,
+                    installation_id=pick_app_installation(
+                        resolved, owner=requested_owner(schedule.config)
+                    ),
+                )
             return await self._resolve_binding(
                 self.uow,
                 trigger_id=schedule.connector_trigger_id,
@@ -344,6 +370,11 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
         if schedule.pod_id and organization_id is None:
             raise ScheduleValidationError("This schedule's pod no longer exists.")
         resolved = await self._resolve_connector(self.uow, schedule)
+        if isinstance(resolved, PodConnectorApp):
+            raise ScheduleValidationError(
+                f"'{resolved.slug}' acts as the organization's GitHub App; an MCP "
+                "event is subscribed to on an account, and it has none."
+            )
         try:
             provider_id = await self._listen_to_mcp(
                 account_id=resolved.account_id,

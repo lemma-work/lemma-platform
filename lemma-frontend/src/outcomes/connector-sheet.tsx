@@ -423,7 +423,7 @@ function LemmaUse({ pod, service, read }: { pod: Pod; service: Service; read: Po
     const where = writeView({ name: "outcome", podId: pod.id, tab: "settings", section: "connections" });
     const how = on.map((one) => one.mode === "SHARED"
         ? one.sharedAccount ? "Runs as " + one.sharedAccount : "Waiting for a shared account"
-        : "Each person’s own account");
+        : one.mode === "APP" ? "Runs as the organization’s GitHub App" : "Each person’s own account");
     const readOnly = Boolean(read?.data) && may.answered && !may.allowed;
     const sub = add.isError ? connectorProblem(add.error, "It could not be turned on just now.")
         : read?.isError ? "Couldn’t read its connectors."

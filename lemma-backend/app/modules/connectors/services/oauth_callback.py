@@ -87,6 +87,7 @@ from app.modules.connectors.services.install_provisioning import (
     discover_operations_for_new_account,
 )
 from app.modules.connectors.services.install_service_seam import InstallServiceSeam
+from app.modules.connectors.services.connect_into_pod import add_to_requested_pod
 
 logger = get_logger(__name__)
 
@@ -592,5 +593,6 @@ async def _persist_account(
             renewed=renewed,
         ),
     )
+    await add_to_requested_pod(service.uow, pending_request, account)
     await service.uow.commit()
     return account

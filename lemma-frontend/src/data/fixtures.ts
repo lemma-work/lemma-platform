@@ -26,10 +26,11 @@ import {
     type PodConnectorDraft, type PodConnectorPatch,
 } from "./pod-connectors";
 import {
-    accountPatchBody, readAccountUsage, readImpact, readPodAccounts, readShareRoles,
+    accountPatchBody, readAccountUsage, readImpact, readPodAccounts,
     type Grantee, type PodAccountPatch, type PodAccountVisibility,
 } from "./pod-accounts";
 import type { Install } from "@/connect/install";
+import { readPodConnections } from "./pod-connections";
 import {
     readChoice,
     readComputer,
@@ -1570,6 +1571,11 @@ const ASKS: Conversation = {
 let guidedStartedAt = 0;
 let accountStartedAt = 0;
 let accountPending = "";
+/* The Lemma and installation a sign-in was started from: when it lands, the
+   app is added there and the account made the person's own, as the server
+   does with a connect request's `pod_id`. */
+let accountPendingPod = "";
+let accountPendingInstall = "";
 let slackAppWorkspaces: SlackAppWorkspace[] = [];
 let slackManagedWorkspaces: SlackManagedWorkspace[] = [];
 
@@ -1580,13 +1586,36 @@ let slackManagedWorkspaces: SlackManagedWorkspace[] = [];
 function settleAccount(): void {
     if (!accountPending || Date.now() - accountStartedAt <= 5_000) return;
     const id = "acc-" + accountPending;
+    const install = accountPendingInstall || "ac-" + accountPending;
     if (!ACCOUNTS.some((raw) => (raw as { id?: string }).id === id)) {
         ACCOUNTS = [...ACCOUNTS, {
-            id, connector_id: accountPending, auth_config_id: "ac-" + accountPending, display_name: "Acme workspace",
+            id, connector_id: accountPending, auth_config_id: install, display_name: "Acme workspace",
             status: "CONNECTED", install_state: "READY", created_at: new Date().toISOString(),
         }];
+    } else {
+        /* Signing in again brings the same account back to health. */
+        ACCOUNTS = ACCOUNTS.map((raw) => ((raw as { id?: string }).id === id ? { ...(raw as object), status: "CONNECTED" } : raw));
+    }
+    if (accountPendingPod) {
+        const held = ACCOUNTS.map(readAccount).find((one) => one?.id === id);
+        if (!POD_CONNECTORS.some((row) => row.auth_config_id === held?.authConfigId && row.mode === "PER_MEMBER")) {
+            const slug = freshSlug(accountPending, POD_CONNECTORS.map((one) => String(one.slug)));
+            POD_CONNECTORS = [...POD_CONNECTORS, {
+                id: "pc-" + slug, slug, connector_id: accountPending, auth_config_id: held?.authConfigId ?? install, installation_name: accountPending,
+                mode: "PER_MEMBER", status: "READY", purpose: "", required: false, visibility: "POD",
+            }];
+        }
+        if (held && !POD_ACCOUNTS.some((one) => one.account_id === id)) {
+            POD_ACCOUNTS = [...POD_ACCOUNTS, {
+                id: "pa-" + id, pod_id: accountPendingPod, account_id: id, auth_config_id: held.authConfigId, connector_id: held.connectorId,
+                owner_user_id: "sample-user", visibility: "PERSONAL", is_member_default: true, source: "AUTO", display_name: held.label,
+                used_by: [], created_at: new Date().toISOString(), allow_sandbox_use: false,
+            }];
+        }
     }
     accountPending = "";
+    accountPendingPod = "";
+    accountPendingInstall = "";
 }
 
 /* Shaped like the wire, so the sample exercises the real readers — including
@@ -1606,6 +1635,9 @@ const CONNECTORS: unknown[] = [
     { id: "github", title: "GitHub", description: "Repositories, issues and pull requests.", icon: "", is_active: true },
     { id: "notion", title: "Notion", description: "Pages and databases.", icon: "", is_active: true },
     { id: "gmail", title: "Gmail", description: "Read and send as a mailbox.", icon: "", is_active: true },
+    { id: "linear", title: "Linear", description: "Issues, projects and cycles.", icon: "", is_active: true },
+    { id: "jira", title: "Jira", description: "Issues and boards.", icon: "", is_active: true },
+    { id: "hubspot", title: "HubSpot", description: "Contacts, companies and deals.", icon: "", is_active: true },
 ];
 
 let ACCOUNTS: unknown[] = [
@@ -1615,11 +1647,14 @@ let ACCOUNTS: unknown[] = [
     /* No display_name, exactly as Slack returns it — so the sample shows the
        fallback rather than a raw `U077S2UCG4S` where a name belongs. */
     { id: "acc-slack", connector_id: "slack", auth_config_id: "ac-slack", provider_account_id: "U077S2UCG4S", status: "CONNECTED", install_state: "READY", created_at: "2026-08-14T10:00:00Z" },
-    { id: "acc-gmail", connector_id: "gmail", auth_config_id: "ac-gmail", display_name: "deepak@acme.com", status: "CONNECTED", install_state: "READY", is_default: true, created_at: "2026-08-01T10:00:00Z" },
+    { id: "acc-gmail", connector_id: "gmail", auth_config_id: "ac-gmail", display_name: "ada@acme.com", status: "CONNECTED", install_state: "READY", is_default: true, created_at: "2026-08-01T10:00:00Z" },
     /* The three unfinished states, because each needs a different sentence
        and a boolean would have hidden all of them. */
     { id: "acc-github", connector_id: "github", auth_config_id: "ac-github", display_name: "acme-eng", status: "CONNECTED", install_state: "INSTALL_REQUIRED", created_at: "2026-08-20T10:00:00Z" },
     { id: "acc-notion", connector_id: "notion", auth_config_id: "ac-notion", display_name: "Acme workspace", status: "REAUTH_REQUIRED", install_state: "READY", created_at: "2026-07-02T10:00:00Z" },
+    /* Connected in the organization and not yet in the sample Lemma: the
+       Connections page's "Use it here". */
+    { id: "acc-linear", connector_id: "linear", auth_config_id: "ac-linear", display_name: "ada@acme.com", status: "CONNECTED", install_state: "READY", created_at: "2026-10-02T10:00:00Z" },
 ];
 
 /* Shaped exactly like `podSurfaces.available()`, so the sample exercises the
@@ -1638,11 +1673,23 @@ let POD_CONNECTORS: Record<string, unknown>[] = [
         /* Listings never carry it; an editor asks `…/coverage` per connector. */
         member_coverage: null },
     { id: "pc-teams", slug: "teams-ops", connector_id: "teams", auth_config_id: "ac-teams", installation_name: "teams", mode: "SHARED", status: "NEEDS_ACCOUNT", purpose: "Ops in Teams", required: false, visibility: "POD" },
+    /* The sample person has Linear in the organization already, but not
+       here; Jira they have nowhere; HubSpot leaves them out. */
+    { id: "pc-linear", slug: "linear", connector_id: "linear", auth_config_id: "ac-linear", installation_name: "linear", mode: "PER_MEMBER", status: "READY", purpose: "Links reviews to their issues", required: false, visibility: "POD", can_use: true },
+    { id: "pc-jira", slug: "jira", connector_id: "jira", auth_config_id: "ac-jira", installation_name: "jira", mode: "PER_MEMBER", status: "READY", purpose: "", required: false, visibility: "POD", can_use: true },
+    { id: "pc-hubspot", slug: "hubspot", connector_id: "hubspot", auth_config_id: "ac-hubspot", installation_name: "hubspot", mode: "PER_MEMBER", status: "READY", purpose: "The sales pipeline", required: false, visibility: "RESTRICTED", can_use: false },
+    /* The organization's GitHub App, beside everyone's own GitHub: two of one
+       app, so the page names them by slug. */
+    { id: "pc-github-bot", slug: "github-bot", connector_id: "github", auth_config_id: "ac-github", installation_name: "github", mode: "APP", status: "READY", purpose: "Posts reviews as the bot", required: false, visibility: "POD", can_use: true },
 ];
+
+/** The organization's GitHub App installations a bot connector may act
+ *  through (`github_bot` on the connections read). */
+const GITHUB_BOT = { installations: [{ login: "acme", repository_selection: "selected" }] };
 
 /** The organization's installations, one per connector the sample has an
  *  account or a pod connector on. */
-const INSTALLS: Install[] = ["slack", "whatsapp", "github", "notion", "gmail", "teams"].map((id) => ({
+const INSTALLS: Install[] = ["slack", "whatsapp", "github", "notion", "gmail", "teams", "linear", "jira", "hubspot"].map((id) => ({
     id: "ac-" + id, connector_id: id, kind: "composio", name: id, status: "ACTIVE", is_default: true, config_source: "SYSTEM_DEFAULT",
 }));
 
@@ -1651,7 +1698,8 @@ const INSTALLS: Install[] = ["slack", "whatsapp", "github", "notion", "gmail", "
 let POD_ACCOUNTS: Record<string, unknown>[] = [
     { id: "pa-slack", pod_id: "r1", account_id: "acc-priya-slack", auth_config_id: "ac-slack", connector_id: "slack", owner_user_id: "priya-user", visibility: "POD", is_member_default: true, source: "MANUAL", display_name: "Acme Slack", used_by: ["slack"], created_at: "2026-08-02T10:00:00Z", last_used_at: "2026-10-22T09:00:00Z" },
     { id: "pa-whatsapp", pod_id: "r1", account_id: "acc-priya-whatsapp", auth_config_id: "ac-whatsapp", connector_id: "whatsapp", owner_user_id: "priya-user", visibility: "POD", is_member_default: true, source: "MANUAL", display_name: "+44 20 7946 0000", used_by: ["whatsapp-support"], created_at: "2026-08-02T10:00:00Z" },
-    { id: "pa-gmail", pod_id: "r1", account_id: "acc-gmail", auth_config_id: "ac-gmail", connector_id: "gmail", owner_user_id: "sample-user", visibility: "PERSONAL", is_member_default: true, source: "AUTO", display_name: "deepak@acme.com", used_by: [], created_at: "2026-09-01T10:00:00Z", last_used_at: "2026-10-21T15:00:00Z", allow_sandbox_use: false },
+    { id: "pa-github", pod_id: "r1", account_id: "acc-github", auth_config_id: "ac-github", connector_id: "github", owner_user_id: "sample-user", visibility: "PERSONAL", is_member_default: true, source: "AUTO", display_name: "acme-eng", used_by: [], created_at: "2026-09-03T10:00:00Z", last_used_at: "2026-11-25T15:00:00Z", allow_sandbox_use: false },
+    { id: "pa-gmail", pod_id: "r1", account_id: "acc-gmail", auth_config_id: "ac-gmail", connector_id: "gmail", owner_user_id: "sample-user", visibility: "PERSONAL", is_member_default: true, source: "AUTO", display_name: "ada@acme.com", used_by: [], created_at: "2026-09-01T10:00:00Z", last_used_at: "2026-10-21T15:00:00Z", allow_sandbox_use: false },
 ];
 
 /** Which pod connector each sample surface runs as, by surface name, and how
@@ -1690,6 +1738,93 @@ function settleConnector(row: Record<string, unknown>): Record<string, unknown> 
         status: account ? "READY" : "NEEDS_ACCOUNT",
         shared_account: account ? { display_name: account.display_name, owner_user_id: account.owner_user_id, pod_account_id: account.id } : null,
     };
+}
+
+/** Who a per-member connector waits on in the sample: the fixed answers
+ *  above where there is one, else the two people here -- the sample person
+ *  by their own standing, and Priya, who has connected everything but
+ *  GitHub. */
+function sampleCoverage(slug: string, mineReady: boolean) {
+    const fixed = POD_CONNECTOR_COVERAGE[slug];
+    if (fixed) return fixed;
+    const waiting_on = [
+        ...(mineReady ? [] : [{ user_id: "sample-user", pod_member_id: "you", name: "You", standing: "MISSING" }]),
+        ...(slug === "github" ? [{ user_id: "priya-user", pod_member_id: "priya", name: "Priya", standing: "MISSING" }] : []),
+    ];
+    return { eligible: 2, connected: 2 - waiting_on.length, truncated: false, waiting_on };
+}
+
+/** A Lemma where nothing runs, one row for each reason a row can't: signed
+ *  out, the GitHub App uninstalled, a shared account withdrawn, left out,
+ *  and switched off by the organization. Fixed, so it stays that way to be
+ *  looked at; changes made on it land on the sample's other connectors. */
+const STUCK_CONNECTIONS = {
+    may_manage: true,
+    github_bot: null,
+    items: [
+        { slug: "github", connector_id: "github", title: "GitHub", icon: "", mode: "PER_MEMBER", purpose: "", required: false, status: "READY", auth_config_id: "ac-github",
+            runs_as: { kind: "me", label: "acme-eng" }, me: { standing: "reconnect", account: { id: "acc-github", label: "acme-eng", pod_account_id: "pa-github" }, existing: null },
+            coverage: { connected: 1, total: 2 } },
+        { slug: "github-bot", connector_id: "github", title: "GitHub", icon: "", mode: "APP", purpose: "", required: false, status: "NEEDS_INSTALLATION", auth_config_id: "ac-github",
+            runs_as: { kind: "app", label: "" }, me: { standing: "waiting", account: null, existing: null }, coverage: null },
+        { slug: "slack", connector_id: "slack", title: "Slack", icon: "/connector-logos/slack.svg", mode: "SHARED", purpose: "", required: false, status: "NEEDS_ACCOUNT", auth_config_id: "ac-slack",
+            runs_as: { kind: "nobody", label: "", owner_user_id: "priya-user", owner_name: "Priya" }, me: { standing: "waiting", account: null, existing: { account_id: "acc-slack", label: "" } }, coverage: null },
+        { slug: "linear", connector_id: "linear", title: "Linear", icon: "", mode: "PER_MEMBER", purpose: "", required: false, status: "READY", auth_config_id: "ac-linear",
+            runs_as: { kind: "nobody", label: "" }, me: { standing: "not_allowed", account: null, existing: null }, coverage: { connected: 1, total: 1 } },
+        { slug: "gmail", connector_id: "gmail", title: "Gmail", icon: "", mode: "PER_MEMBER", purpose: "", required: false, status: "UNAVAILABLE", auth_config_id: "ac-gmail",
+            runs_as: { kind: "nobody", label: "" }, me: { standing: "waiting", account: null, existing: null }, coverage: null },
+    ],
+};
+
+/** `GET /pods/{pod}/connections`, worked out from the sample's connectors and
+ *  accounts as the server works it out, so every change the page makes shows
+ *  on its next read. */
+function sampleConnections(podId: string): Record<string, unknown> {
+    if (podId === "sidekick") return STUCK_CONNECTIONS;
+    const accounts = ACCOUNTS.map(readAccount).filter((one): one is ConnectorAccount => one !== null);
+    const memberName = (userId: string) => MEMBERS.find((one) => one.userId === userId)?.name ?? "";
+    const items = POD_CONNECTORS.map((row) => {
+        const entry = CONNECTORS.map(readConnector).find((one) => one?.id === row.connector_id);
+        const install = INSTALLS.find((one) => one.id === row.auth_config_id);
+        const status = install?.status === "DISABLED" ? "UNAVAILABLE" : String(row.status);
+        const podAccount = POD_ACCOUNTS.find((one) => one.owner_user_id === "sample-user" && one.auth_config_id === row.auth_config_id);
+        const org = accounts.find((one) => one.id === podAccount?.account_id) ?? null;
+        const elsewhere = podAccount ? null : accounts.find((one) => one.authConfigId === row.auth_config_id) ?? null;
+        const account = podAccount ? { id: podAccount.account_id, label: podAccount.display_name ?? "", pod_account_id: podAccount.id } : null;
+        const existing = elsewhere && elsewhere.status.toUpperCase() !== "REAUTH_REQUIRED" ? { account_id: elsewhere.id, label: elsewhere.label } : null;
+        let standing: string;
+        let runsAs: Record<string, unknown> = { kind: "nobody", label: "" };
+        if (row.can_use === false) standing = "not_allowed";
+        else if (status === "UNAVAILABLE") standing = "waiting";
+        else if (row.mode === "APP") {
+            standing = "ready";
+            runsAs = { kind: "app", label: GITHUB_BOT.installations.map((one) => one.login).join(", ") };
+        } else if (row.mode === "SHARED") {
+            const shared = POD_ACCOUNTS.find((one) => one.id === row.shared_pod_account_id && one.visibility !== "PERSONAL");
+            standing = shared ? "ready" : "waiting";
+            if (shared) {
+                const owner = String(shared.owner_user_id);
+                runsAs = { kind: owner === "sample-user" ? "me" : "person", label: shared.display_name, owner_user_id: owner, owner_name: memberName(owner) };
+            }
+        } else if (podAccount) {
+            standing = org?.status.toUpperCase() === "REAUTH_REQUIRED" ? "reconnect" : "ready";
+            runsAs = { kind: "me", label: podAccount.display_name };
+        } else if (elsewhere) {
+            standing = elsewhere.status.toUpperCase() === "REAUTH_REQUIRED" ? "reconnect" : "use_existing";
+        } else {
+            standing = "connect";
+        }
+        const coverage = row.mode === "PER_MEMBER" ? sampleCoverage(String(row.slug), standing === "ready") : null;
+        return {
+            slug: row.slug, connector_id: row.connector_id, title: entry?.title ?? row.connector_id, icon: entry?.icon ?? "",
+            mode: row.mode, purpose: row.purpose ?? "", required: row.required === true, status: row.mode === "SHARED" && standing === "waiting" ? "NEEDS_ACCOUNT" : status,
+            auth_config_id: row.auth_config_id, installation_name: row.installation_name,
+            runs_as: runsAs,
+            me: { standing, account, existing: standing === "use_existing" || row.mode === "SHARED" ? existing : null },
+            coverage: coverage ? { connected: coverage.connected, total: coverage.eligible } : null,
+        };
+    });
+    return { may_manage: true, github_bot: GITHUB_BOT, items };
 }
 
 function refreshUsedBy(): void {
@@ -3196,10 +3331,12 @@ export const fixtureSource: PodSource = {
         await wait(600);
         return "authcfg-sample";
     },
-    async startAccount(_orgId: string, connectorId: string) {
+    async startAccount(_orgId: string, connectorId: string, authConfigId?: string, _returnTo?: string, _fields?: Record<string, unknown>, _configSource?: string, podId?: string) {
         await wait(400);
         accountStartedAt = Date.now();
         accountPending = connectorId;
+        accountPendingPod = podId ?? "";
+        accountPendingInstall = authConfigId ?? "";
         /* A stand-in for the provider's consent page. Real enough to walk the
            flow; obviously not Slack. */
         return { authorizeUrl: "/sample-consent.html", before: [] as string[] };
@@ -3215,6 +3352,11 @@ export const fixtureSource: PodSource = {
     async listPodConnectors() {
         await wait(80);
         return readPodConnectors(POD_CONNECTORS);
+    },
+    async podConnections(podId: string) {
+        await wait(120);
+        settleAccount();
+        return readPodConnections(sampleConnections(podId));
     },
     async addPodConnector(podId: string, draft: PodConnectorDraft) {
         await wait(350);
@@ -3258,12 +3400,13 @@ export const fixtureSource: PodSource = {
         if (row.mode !== "PER_MEMBER") {
             throw Object.assign(new Error(slug + " runs as one shared account, so nobody connects their own."), { statusCode: 400, code: "POD_CONNECTOR_INVALID" });
         }
-        return readCoverage(POD_CONNECTOR_COVERAGE[slug] ?? { eligible: 0, connected: 0, truncated: false, waiting_on: [] });
+        const ready = POD_ACCOUNTS.some((one) => one.owner_user_id === "sample-user" && one.auth_config_id === row.auth_config_id);
+        return readCoverage(sampleCoverage(slug, ready));
     },
     async askMembersToConnect(_podId: string, slug: string, userIds?: string[]) {
         await wait(300);
-        samplePodConnector(slug);
-        const coverage = POD_CONNECTOR_COVERAGE[slug] ?? { waiting_on: [] };
+        const row = samplePodConnector(slug);
+        const coverage = sampleCoverage(slug, POD_ACCOUNTS.some((one) => one.owner_user_id === "sample-user" && one.auth_config_id === row.auth_config_id));
         const waiting = coverage.waiting_on.filter((one) => !userIds || userIds.includes(one.user_id));
         const fresh = waiting.filter((one) => !ASKED_TODAY.has(slug + ":" + one.user_id));
         for (const one of fresh) ASKED_TODAY.add(slug + ":" + one.user_id);
@@ -3271,10 +3414,6 @@ export const fixtureSource: PodSource = {
             asked: fresh, asked_recently: waiting.filter((one) => !fresh.includes(one)), not_asked: [],
             connect_url: "/pods/r1/connections?connector=" + slug,
         });
-    },
-    async listShareRoles() {
-        await wait(60);
-        return readShareRoles({ items: ["POD_ADMIN", "POD_EDITOR", "POD_USER", "POD_VIEWER"].map((name) => ({ id: "role-" + name.toLowerCase(), name, is_system: true })) });
     },
     async listPodAccounts() {
         await wait(80);
@@ -3320,17 +3459,15 @@ export const fixtureSource: PodSource = {
         if (!account) throw Object.assign(new Error("That account is not in use in this pod."), { statusCode: 404, code: "POD_ACCOUNT_NOT_FOUND" });
         if (account.owner_user_id !== "sample-user") throw Object.assign(new Error("Only its owner can share it."), { statusCode: 403 });
         const held = POD_CONNECTORS.find((one) => one.slug === slug);
-        if (held && held.mode !== "SHARED") {
-            throw Object.assign(new Error(slug + " uses each person's own account, so it cannot run as one shared account."),
-                { statusCode: 400, code: "POD_CONNECTOR_INVALID", details: { reason: "not_shared_mode" } });
-        }
+        /* A connector that runs as each person's own, or as the bot, is
+           switched to this account in the same request, as the server does. */
         if (held && held.auth_config_id !== account.auth_config_id) {
             throw Object.assign(new Error(slug + " is on a different installation."),
                 { statusCode: 400, code: "POD_CONNECTOR_INVALID", details: { reason: "installation_mismatch" } });
         }
         if (account.visibility === "PERSONAL") POD_ACCOUNTS = POD_ACCOUNTS.map((one) => (one === account ? { ...one, visibility: "POD" } : one));
         if (held) {
-            POD_CONNECTORS = POD_CONNECTORS.map((one) => (one === held ? { ...one, shared_pod_account_id: podAccountId } : one));
+            POD_CONNECTORS = POD_CONNECTORS.map((one) => (one === held ? { ...one, mode: "SHARED", shared_pod_account_id: podAccountId } : one));
         } else {
             const install = INSTALLS.find((one) => one.id === account.auth_config_id);
             POD_CONNECTORS = [...POD_CONNECTORS, {

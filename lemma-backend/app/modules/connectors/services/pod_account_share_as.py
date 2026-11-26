@@ -2,10 +2,16 @@
 
 Two acts that used to be two requests -- widen the account to the pod, then
 point a SHARED connector at it or declare one -- and so could stop halfway: the
-account shared with everyone, and the connector step refused (the slug was a
-per-member connector's, or the owner may not manage connectors). Here every
-check either step makes is asked first, and both steps run in the request's
-one unit of work, so a refusal anywhere leaves the account as it was.
+account shared with everyone, and the connector step refused (the owner may
+not manage connectors). Here every check either step makes is asked first, and
+both steps run in the request's one unit of work, so a refusal anywhere leaves
+the account as it was.
+
+A slug that is the pod's PER_MEMBER or APP connector on the same installation
+is switched to SHARED on this account, in the same transaction: "mine, for
+everyone" on the connector the pod already uses is one call. Changing the
+connector is an editor's act, which ``pod.connector.manage`` covers, and the
+account half stays the owner's alone.
 """
 
 from __future__ import annotations
@@ -50,12 +56,6 @@ async def share_account_as(
     await ctx.require(Permissions.POD_CONNECTOR_MANAGE, ResourceRef.pod(pod_id))
     held = await service.pod_connectors.get_by_slug(pod_id, slug)
     if held is not None:
-        if held.mode is not PodConnectorMode.SHARED:
-            raise PodConnectorValidationError(
-                f"{slug} uses each person's own account, so it cannot run as "
-                "one shared account.",
-                reason="not_shared_mode",
-            )
         if held.auth_config_id != pod_account.auth_config_id:
             raise PodConnectorValidationError(
                 f"{slug} is on a different installation.",
@@ -75,7 +75,9 @@ async def share_account_as(
             ctx,
             pod_id,
             slug,
-            PodConnectorUpdateRequest(shared_pod_account_id=pod_account.id),
+            PodConnectorUpdateRequest(
+                mode=PodConnectorMode.SHARED, shared_pod_account_id=pod_account.id
+            ),
         )
     return await service.create_connector(
         ctx,

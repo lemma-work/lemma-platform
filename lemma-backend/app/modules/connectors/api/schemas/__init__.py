@@ -133,6 +133,15 @@ class ConnectRequestInitiateSchema(BaseModel):
             "kind's `config_schema`; omit for connectors that declare none."
         ),
     )
+    pod_id: UUID | None = Field(
+        default=None,
+        description=(
+            "The Lemma (pod) this connect is for. You must be a member. When "
+            "the connect completes, the pod's per-member connector for the "
+            "installation is reused or declared, and the new account becomes "
+            "your default there. Either step failing never fails the connect."
+        ),
+    )
 
 
 class ConnectRequestResponseSchema(BaseSchema):
@@ -283,6 +292,15 @@ class AccountCreateSchema(BaseModel):
     email: Optional[str] = None
     preferences: Optional[Dict[str, Any]] = None
     allowed_scopes: Optional[List[str]] = None
+    pod_id: UUID | None = Field(
+        default=None,
+        description=(
+            "The Lemma (pod) this account is connected for. You must be a "
+            "member. The pod's per-member connector for the installation is "
+            "reused or declared, and the account becomes your default there; "
+            "either step failing never fails the connect."
+        ),
+    )
 
 
 class AccountCredentialsUpdateSchema(BaseModel):

@@ -24,6 +24,7 @@ export namespace ConnectorPlan {
     export enum mode {
         PER_MEMBER = 'PER_MEMBER',
         SHARED = 'SHARED',
+        APP = 'APP',
     }
     export enum visibility {
         POD = 'POD',

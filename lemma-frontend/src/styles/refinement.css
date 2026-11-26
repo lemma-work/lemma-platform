@@ -1151,14 +1151,7 @@ button svg, a svg { flex-shrink:0; }
     .reachrow__acts { width:100%;justify-content:flex-start;padding-left:47px; }
 }
 
-/* ── an account's dot ──────────────────────────────────────────────────
-   Beside each connector a Lemma works through (connect/pod-connections):
-   green when it is working for the reader, grey when it is not. */
-.acct__dot {
-    width:6px;height:6px;border-radius:999px;flex:none;
-    background:var(--ink-3);box-shadow:0 0 0 3px color-mix(in srgb,var(--ink-3) 14%,transparent);
-}
-.acct__dot--ok { background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft); }
+/* An inline "are you sure" beside a row's acts. */
 .acct__confirm { display:inline-flex;align-items:center;gap:8px;margin-left:auto; }
 
 /* Four steps, and the one you are on is the only one with controls. */

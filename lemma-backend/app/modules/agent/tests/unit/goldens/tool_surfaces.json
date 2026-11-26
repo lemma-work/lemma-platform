@@ -93,7 +93,7 @@
    "tool:lemma_list_pod_members@ec9cfa0a9d05",
    "tool:lemma_list_teammates@9e1e78fdd365",
    "tool:lemma_ask_teammate@25d51e5b7292",
-   "tool:lemma_list_connectors@03946d800507",
+   "tool:lemma_list_connectors@f403d1515053",
    "tool:lemma_search_connector_operations@50ca8ce42a86",
    "tool:lemma_describe_connector_operation@4741df273665",
    "tool:lemma_connect_connector@a62304f3c796",
@@ -277,7 +277,7 @@
    "tool:lemma_list_skills@eece34b30247",
    "tool:lemma_load_skill@7d76de13ed50",
    "tool:lemma_wait_for@06bf9a3e76bc",
-   "tool:lemma_list_connectors@03946d800507",
+   "tool:lemma_list_connectors@f403d1515053",
    "tool:lemma_search_connector_operations@50ca8ce42a86",
    "tool:lemma_describe_connector_operation@4741df273665",
    "tool:lemma_connect_connector@a62304f3c796",
@@ -464,7 +464,7 @@
     "tool:list_pod_members@c2c2b4fb356b",
     "tool:list_teammates@e377c7c87080",
     "tool:ask_teammate@759660a97f64",
-    "tool:list_connectors@1c2537fd1290",
+    "tool:list_connectors@aa99f0443123",
     "tool:search_connector_operations@620c79f1e60b",
     "tool:describe_connector_operation@375a49815a5c",
     "tool:connect_connector@e891a5f185d9",
@@ -876,7 +876,7 @@
     "tool:list_pod_members@c2c2b4fb356b",
     "tool:list_teammates@e377c7c87080",
     "tool:ask_teammate@759660a97f64",
-    "tool:list_connectors@1c2537fd1290",
+    "tool:list_connectors@aa99f0443123",
     "tool:search_connector_operations@620c79f1e60b",
     "tool:describe_connector_operation@375a49815a5c",
     "tool:connect_connector@e891a5f185d9",
@@ -4320,8 +4320,8 @@
    },
    "name": "lemma_interact_subagent"
   },
-  "tool:lemma_list_connectors@03946d800507": {
-   "description": "List the pod's connectors you may run operations through.\n\nEach is named by its `connector` slug, which is how every other connector\ntool addresses it. `mode` says whose account a call uses: PER_MEMBER is\nthe person you act for, SHARED is one account shared with the pod.",
+  "tool:lemma_list_connectors@f403d1515053": {
+   "description": "List the pod's connectors you may run operations through.\n\nEach is named by its `connector` slug, which is how every other connector\ntool addresses it. `mode` says whose account a call uses: PER_MEMBER is\nthe person you act for, SHARED is one account shared with the pod, APP is\nthe organization's GitHub App -- every call is the bot, nobody's account.",
    "input_schema": {
     "additionalProperties": false,
     "properties": {},
@@ -6731,9 +6731,9 @@
    },
    "name": "lemma_write_todos"
   },
-  "tool:list_connectors@1c2537fd1290": {
+  "tool:list_connectors@aa99f0443123": {
    "defer_loading": false,
-   "description": "List the pod's connectors you may run operations through.\n\nEach is named by its `connector` slug, which is how every other connector\ntool addresses it. `mode` says whose account a call uses: PER_MEMBER is\nthe person you act for, SHARED is one account shared with the pod.",
+   "description": "List the pod's connectors you may run operations through.\n\nEach is named by its `connector` slug, which is how every other connector\ntool addresses it. `mode` says whose account a call uses: PER_MEMBER is\nthe person you act for, SHARED is one account shared with the pod, APP is\nthe organization's GitHub App -- every call is the bot, nobody's account.",
    "include_return_schema": null,
    "kind": "function",
    "metadata": null,

@@ -51,7 +51,12 @@ SCHEDULE_APPLY_FIELDS = frozenset(
 POD_CONNECTOR_FIELDS = frozenset(
     {"connector", "mode", "required", "purpose", "visibility"}
 )
-POD_CONNECTOR_MODES = frozenset({"PER_MEMBER", "SHARED"})
+#: ``APP`` acts as the importing organization's GitHub App: nobody's account,
+#: so an importer chooses neither an installation's account nor a shared one.
+POD_CONNECTOR_MODES = frozenset({"PER_MEMBER", "SHARED", "APP"})
+#: The catalog connectors an APP connector may be: the one whose app Lemma
+#: acts as on an organization's behalf.
+APP_MODE_CONNECTORS = frozenset({"github"})
 POD_CONNECTOR_VISIBILITIES = frozenset({"POD", "RESTRICTED"})
 #: The backend's own slug rule (``connectors.domain.pod_connector``): what reads
 #: the same in a URL, a file name and a tool argument.
@@ -72,6 +77,10 @@ class BundleConnector:
     @property
     def is_shared(self) -> bool:
         return self.mode == "SHARED"
+
+    @property
+    def is_app(self) -> bool:
+        return self.mode == "APP"
 
 
 def read_bundle_connector(slug: str, payload: Mapping[str, Any]) -> BundleConnector:
@@ -103,14 +112,23 @@ def read_bundle_connector(slug: str, payload: Mapping[str, Any]) -> BundleConnec
     mode = str(payload.get("mode") or "").strip().upper()
     if mode not in POD_CONNECTOR_MODES:
         raise ValueError(
-            f"connector '{slug}': `mode` must be PER_MEMBER or SHARED, not "
+            f"connector '{slug}': `mode` must be PER_MEMBER, SHARED or APP, not "
             f"{payload.get('mode')!r}"
+        )
+    if mode == "APP" and connector.lower() not in APP_MODE_CONNECTORS:
+        raise ValueError(
+            f"connector '{slug}': `mode` APP acts as the organization's GitHub "
+            f"App, so its connector is github, not {connector!r}"
         )
     visibility = str(payload.get("visibility") or "POD").strip().upper()
     if visibility not in POD_CONNECTOR_VISIBILITIES:
         raise ValueError(
             f"connector '{slug}': `visibility` must be POD or RESTRICTED, not "
             f"{payload.get('visibility')!r}"
+        )
+    if mode == "APP" and visibility != "POD":
+        raise ValueError(
+            f"connector '{slug}': an APP connector is visible to the whole pod"
         )
     required = payload.get("required", False)
     if not isinstance(required, bool):

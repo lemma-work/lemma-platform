@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 
-from app.core.api.dependencies import CurrentUser
+from app.core.api.dependencies import CurrentUser, get_uow_factory
 from app.core.api.pagination import parse_uuid_page_token
+from app.core.app_pin import refuse_other_pod
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.connectors.api.dependencies import ConnectorServiceDep
 from app.modules.connectors.api.schemas import (
@@ -98,11 +99,26 @@ async def list_accounts(
     ),
 )
 async def create_account(
+    request: Request,
     user: CurrentUser,
     organization_id: UUID,
     payload: AccountCreateSchema,
     connector_service: ConnectorServiceDep,
 ) -> AccountResponseSchema:
+    # An app's page connects into its own pod only (see the connect request).
+    refuse_other_pod(request, payload.pod_id, always=True)
+    from app.modules.connectors.services.connect_into_pod import (
+        add_connected_to_pod,
+        require_member_of,
+    )
+
+    if payload.pod_id is not None:
+        await require_member_of(
+            connector_service.uow,
+            pod_id=payload.pod_id,
+            user_id=user.id,
+            organization_id=organization_id,
+        )
     account = await connector_service.create_account(
         user_id=user.id,
         organization_id=organization_id,
@@ -114,6 +130,11 @@ async def create_account(
         preferences=payload.preferences,
         allowed_scopes=payload.allowed_scopes,
     )
+    if payload.pod_id is not None:
+        # The account is committed already, and creating it may have handed
+        # the request's session through discovery: this is its own short write.
+        async with get_uow_factory()() as uow:
+            await add_connected_to_pod(uow, payload.pod_id, account)
     return await _account_response(connector_service, account)
 
 

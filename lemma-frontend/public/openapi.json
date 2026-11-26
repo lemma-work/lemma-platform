@@ -70,6 +70,19 @@
             ],
             "title": "Email"
           },
+          "pod_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Lemma (pod) this account is connected for. You must be a member. The pod's per-member connector for the installation is reused or declared, and the account becomes your default there; either step failing never fails the connect.",
+            "title": "Pod Id"
+          },
           "preferences": {
             "anyOf": [
               {
@@ -5637,6 +5650,19 @@
             "description": "Connector ID to connect",
             "title": "Connector Id"
           },
+          "pod_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Lemma (pod) this connect is for. You must be a member. When the connect completes, the pod's per-member connector for the installation is reused or declared, and the new account becomes your default there. Either step failing never fails the connect.",
+            "title": "Pod Id"
+          },
           "return_to": {
             "anyOf": [
               {
@@ -5863,6 +5889,159 @@
         ],
         "title": "ConnectedClientsResponse",
         "type": "object"
+      },
+      "ConnectionAccount": {
+        "description": "The caller's own account behind the connector here.",
+        "properties": {
+          "id": {
+            "description": "The organization account's id.",
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "pod_account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pod Account Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ConnectionAccount",
+        "type": "object"
+      },
+      "ConnectionCoverage": {
+        "description": "PER_MEMBER, for someone who may manage connectors: who has connected.",
+        "properties": {
+          "connected": {
+            "title": "Connected",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "connected",
+          "total"
+        ],
+        "title": "ConnectionCoverage",
+        "type": "object"
+      },
+      "ConnectionMe": {
+        "properties": {
+          "account": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConnectionAccount"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "existing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExistingAccount"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set with `use_existing`: the account to add."
+          },
+          "standing": {
+            "$ref": "#/components/schemas/ConnectionStanding"
+          }
+        },
+        "required": [
+          "standing"
+        ],
+        "title": "ConnectionMe",
+        "type": "object"
+      },
+      "ConnectionRunsAs": {
+        "description": "Who a call by the caller runs as, in words the page can show.",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/RunsAsKind"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The caller's account label (me), the shared account's (person), or the App's GitHub organization login(s), comma-separated (app).",
+            "title": "Label"
+          },
+          "owner_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Name"
+          },
+          "owner_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "SHARED: who shared the account.",
+            "title": "Owner User Id"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "ConnectionRunsAs",
+        "type": "object"
+      },
+      "ConnectionStanding": {
+        "description": "What the caller can do about a connector right now.\n\nBy mode: PER_MEMBER is ``ready``, ``connect`` (no account of theirs on the\ninstallation anywhere), ``use_existing`` (one in the organization, not in\nthis pod yet) or ``reconnect``; SHARED and APP are ``ready`` or ``waiting``\n(no account shared; the App not installed); any mode is ``waiting`` when\nits installation is disabled, and ``not_allowed`` without ``connector.use``.",
+        "enum": [
+          "ready",
+          "connect",
+          "reconnect",
+          "use_existing",
+          "waiting",
+          "not_allowed"
+        ],
+        "title": "ConnectionStanding",
+        "type": "string"
       },
       "ConnectorChoice": {
         "additionalProperties": false,
@@ -6188,7 +6367,8 @@
           "mode": {
             "enum": [
               "PER_MEMBER",
-              "SHARED"
+              "SHARED",
+              "APP"
             ],
             "title": "Mode",
             "type": "string"
@@ -10153,6 +10333,32 @@
         "title": "ExecuteFunctionRequest",
         "type": "object"
       },
+      "ExistingAccount": {
+        "description": "The caller's organization account on the installation, not in the pod.",
+        "properties": {
+          "account_id": {
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          }
+        },
+        "required": [
+          "account_id"
+        ],
+        "title": "ExistingAccount",
+        "type": "object"
+      },
       "ExportProgressResponse": {
         "properties": {
           "done": {
@@ -13023,6 +13229,51 @@
           }
         },
         "title": "GenerationSettings",
+        "type": "object"
+      },
+      "GithubBot": {
+        "description": "The organization's GitHub App installations an APP connector can use.",
+        "properties": {
+          "installations": {
+            "items": {
+              "$ref": "#/components/schemas/GithubBotInstallation"
+            },
+            "title": "Installations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "installations"
+        ],
+        "title": "GithubBot",
+        "type": "object"
+      },
+      "GithubBotInstallation": {
+        "properties": {
+          "login": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Login"
+          },
+          "repository_selection": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository Selection"
+          }
+        },
+        "title": "GithubBotInstallation",
         "type": "object"
       },
       "GoogleGenAIBackend": {
@@ -19460,6 +19711,145 @@
         "title": "PodConfig",
         "type": "object"
       },
+      "PodConnectionItem": {
+        "properties": {
+          "auth_config_id": {
+            "description": "The organization installation; what a connect request names.",
+            "format": "uuid",
+            "title": "Auth Config Id",
+            "type": "string"
+          },
+          "connector_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connector Id"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConnectionCoverage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon"
+          },
+          "installation_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Installation Name"
+          },
+          "me": {
+            "$ref": "#/components/schemas/ConnectionMe"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/PodConnectorMode"
+          },
+          "purpose": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purpose"
+          },
+          "required": {
+            "default": false,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "runs_as": {
+            "$ref": "#/components/schemas/ConnectionRunsAs"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PodConnectorStatus"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "slug",
+          "auth_config_id",
+          "mode",
+          "status",
+          "runs_as",
+          "me"
+        ],
+        "title": "PodConnectionItem",
+        "type": "object"
+      },
+      "PodConnectionsResponse": {
+        "properties": {
+          "github_bot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GithubBot"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the organization has no GitHub App installation an APP connector can use: proven, and on a GitHub organization."
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PodConnectionItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "may_manage": {
+            "description": "The caller holds pod.connector.manage.",
+            "title": "May Manage",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "may_manage",
+          "items"
+        ],
+        "title": "PodConnectionsResponse",
+        "type": "object"
+      },
       "PodConnectorCoverage": {
         "description": "How many of the members who may use a connector can run it as their own.",
         "properties": {
@@ -19525,7 +19915,7 @@
           "mode": {
             "$ref": "#/components/schemas/PodConnectorMode",
             "default": "PER_MEMBER",
-            "description": "PER_MEMBER (the default): each call uses the acting member's own account. SHARED: every call uses the one account set as `shared_pod_account_id`."
+            "description": "PER_MEMBER (the default): each call uses the acting member's own account. SHARED: every call uses the one account set as `shared_pod_account_id`. APP (GitHub only): every call acts as the organization's GitHub App, on the installation the call's repository owner has it on -- nobody's account; anyone who may manage the pod's connectors may declare it."
           },
           "purpose": {
             "anyOf": [
@@ -19598,7 +19988,8 @@
       "PodConnectorMode": {
         "enum": [
           "PER_MEMBER",
-          "SHARED"
+          "SHARED",
+          "APP"
         ],
         "title": "PodConnectorMode",
         "type": "string"
@@ -19765,7 +20156,8 @@
         "enum": [
           "READY",
           "NEEDS_ACCOUNT",
-          "UNAVAILABLE"
+          "UNAVAILABLE",
+          "NEEDS_INSTALLATION"
         ],
         "title": "PodConnectorStatus",
         "type": "string"
@@ -22619,6 +23011,16 @@
         ],
         "title": "RunUsageResponse",
         "type": "object"
+      },
+      "RunsAsKind": {
+        "enum": [
+          "me",
+          "person",
+          "app",
+          "nobody"
+        ],
+        "title": "RunsAsKind",
+        "type": "string"
       },
       "RuntimeModelCapability": {
         "enum": [
@@ -45604,6 +46006,57 @@
         }
       }
     },
+    "/pods/{pod_id}/connections": {
+      "get": {
+        "description": "One row per pod connector, judged for the caller: whose account a call by them runs as (`runs_as`), and what they can do about it (`me.standing`: ready, connect, use_existing, reconnect, waiting or not_allowed). `coverage` is filled for PER_MEMBER connectors when the caller may manage the pod's connectors; `github_bot` names the organization's GitHub App installations an APP connector can use. Read-only: it declares and adds nothing.",
+        "operationId": "pod.connection.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PodConnectionsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "My Connections Here",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "pod.connection",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
     "/pods/{pod_id}/connector-accounts": {
       "get": {
         "operationId": "pod.connector_account.list",
@@ -45654,6 +46107,7 @@
         }
       },
       "post": {
+        "description": "Use one of your organization accounts in this pod. The pod's per-member connector for its installation is reused or declared, and the account becomes your default here when you have none. A pod app's page may add one only as PERSONAL, for your own calls: sharing it is yours to do in Lemma.",
         "operationId": "pod.connector_account.add",
         "parameters": [
           {
@@ -45844,7 +46298,7 @@
     },
     "/pods/{pod_id}/connector-accounts/{pod_account_id}/share-as": {
       "post": {
-        "description": "Owner only, and the caller must also manage the pod's connectors: share this pod account with the pod (if it is still yours alone) and run the SHARED connector `slug` as it -- pointing the existing one, or declaring it. Checked in full before anything changes, and done in one transaction: a refusal leaves the account as it was.",
+        "description": "Owner only, and the caller must also manage the pod's connectors: share this pod account with the pod (if it is still yours alone) and run the SHARED connector `slug` as it -- pointing the existing one, switching the pod's PER_MEMBER or APP connector of that slug on the same installation to SHARED, or declaring it. Checked in full before anything changes, and done in one transaction: a refusal leaves the account and the connector as they were.",
         "operationId": "pod.connector_account.share_as",
         "parameters": [
           {
@@ -45966,7 +46420,7 @@
         }
       },
       "post": {
-        "description": "Declare a connector by an organization installation (`auth_config_id`) or by a catalog connector (`connector_id`): its organization default, or Lemma's own app for it installed now when the organization has none and the caller may install connectors. `slug` defaults to the installation's name; `mode` to PER_MEMBER.",
+        "description": "Declare a connector by an organization installation (`auth_config_id`) or by a catalog connector (`connector_id`): its organization default, or Lemma's own app for it installed now when the organization has none and the caller may install connectors. `slug` defaults to the installation's name; `mode` to PER_MEMBER. `mode: APP` (GitHub only, no shared account, POD visibility) acts as the organization's GitHub App, nobody's account: it needs only `pod.connector.manage`, from an app's page too, and its slug defaults to `github`, else `github-bot`.",
         "operationId": "pod.connector.create",
         "parameters": [
           {
@@ -46507,7 +46961,7 @@
     },
     "/pods/{pod_id}/connectors/{slug}/operations/{operation_name}/execute": {
       "post": {
-        "description": "Run an operation through a pod connector. The account it runs as is decided by the connector: the caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals: `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`; with `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and `APP_IDENTITY_UNAVAILABLE`.",
+        "description": "Run an operation through a pod connector. The account it runs as is decided by the connector: the caller's own for a PER_MEMBER connector, the shared one for a SHARED connector, the organization's GitHub App for an APP connector (whatever `act_as` says; the installation is picked by the payload's `owner`, `org`, or the owner half of `repository`). Typed refusals: `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`; with `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and `APP_IDENTITY_UNAVAILABLE`; on APP, `APP_NOT_INSTALLED`, `APP_INSTALLATION_AMBIGUOUS` and `APP_IDENTITY_UNAVAILABLE` with `details.reason: user_only_operation`.",
         "operationId": "pod.connector.operation.execute",
         "parameters": [
           {

@@ -59,7 +59,7 @@ export type FocusTarget =
 
 export function focusTarget(
     focus: string | null,
-    connectors: readonly PodConnector[],
+    connectors: readonly Pick<PodConnector, "slug" | "connectorId" | "authConfigId" | "installationName">[],
     installs: readonly Install[],
     catalog: readonly Pick<Connector, "id" | "title">[],
 ): FocusTarget {

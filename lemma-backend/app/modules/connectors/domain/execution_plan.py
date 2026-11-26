@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from app.modules.connectors.domain.app_installation import AppInstallation
+
 
 @dataclass(frozen=True, slots=True)
 class ResolvedConnectorExecution:
@@ -55,3 +57,13 @@ class ResolvedConnectorExecution:
     #: Where a file *result* should land in the pod. Lemma's argument, not the
     #: provider's, so it is split out of ``payload`` before dispatch.
     requested_output_path: str | None = None
+    #: The pod connector the call went through, when it went through one.
+    pod_connector: str | None = None
+    #: An APP connector's candidate installations; ``None`` for every other
+    #: plan. The execute phase picks one from the payload's repository owner
+    #: and sets ``account_external_ref`` to it before anything is sent.
+    app_installations: tuple[AppInstallation, ...] | None = None
+
+    @property
+    def acts_as_app_connector(self) -> bool:
+        return self.app_installations is not None

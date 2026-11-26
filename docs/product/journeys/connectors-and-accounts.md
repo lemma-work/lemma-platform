@@ -9,9 +9,10 @@ use Jira, and here is how we connect to it" — set up once, by an admin. An
 **account** is one person's own credential for that provider — their Jira
 login, connected by them, owned by them. A **pod connector** is a pod declaring
 that it uses an installation, under a name of its own, and saying whose account
-its calls run as: each member's own (*per member*), or one account its owner
-shared with the pod (*shared*). One installation, many personal accounts, and
-every operation runs through a pod connector.
+its calls run as: each member's own (*per member*), one account its owner
+shared with the pod (*shared*), or — for GitHub — the organization's own App,
+with nobody's account behind it (*app*). One installation, many personal
+accounts, and every operation runs through a pod connector.
 
 The promise: a person's credential is theirs. It is encrypted, it is never shown
 back to anyone including them, and nothing in the pod uses it except on their
@@ -26,7 +27,8 @@ instead of as a person, which is how work survives the person who set it up. It
 does not weaken the promise above: the App is not somebody's credential, its
 reach is whatever the organization granted the installation and no more, and
 which of the two identities a given operation uses is fixed by the connector
-rather than chosen per call. PS-CONN-031 says which is which.
+rather than chosen per call. PS-CONN-031 says which is which, and PS-CONN-036
+describes a pod connector that is the App for every call.
 
 ---
 
@@ -276,6 +278,69 @@ rather than chosen per call. PS-CONN-031 says which is which.
   with `CONNECTOR_NEEDS_ACCOUNT` until an account is shared again.
 
 **Contracts:** `pod.connector.create`, `pod.connector.list`, `pod.connector.get`, `pod.connector.update`, `pod.connector.delete`, `pod.connector_account.add`, `pod.connector_account.update`, `pod.connector_account.list`
+
+### PS-CONN-035 — Connecting from a pod adds the app to it, and the pod says where I stand
+**Status:** gap
+
+- When a person connects an account from a pod they are a member of, the
+  system shall, once the connection completes, give the pod a per-member
+  connector for that installation (reusing one it has) and make the new account
+  that person's own in the pod. If either step fails, the system shall still
+  complete the connection.
+- If a person starts a connection for a pod they are not a member of, then the
+  system shall refuse before sending them to the provider.
+- When a person uses an account they already have in the organization in a
+  pod, the system shall give the pod a per-member connector for its
+  installation, and shall make it their account there when they have none.
+- Where a pod app's page acts for its viewer, the system shall let it add the
+  viewer's own account to its pod for their own calls only, and shall refuse
+  it sharing that account with anyone, or connecting into any other pod.
+- The system shall answer, for each connector a pod uses and for whoever asks,
+  whose account a call by them runs as and what they can do next — connect,
+  use an account they already have, reconnect, wait for someone else, or
+  nothing because they may not use it — without declaring or adding anything.
+- The system shall tell people who may manage the pod's connectors how many
+  members have connected their own account for a per-member connector.
+
+> **Gap:** proven by module e2e tests
+> (`connectors/tests/e2e/test_pod_connections_e2e.py`), not yet by a product
+> scenario.
+
+**Contracts:** `connector.connect_request.create`, `connector.account.create`, `connector.oauth.callback`, `pod.connector_account.add`, `pod.connection.list`
+
+### PS-CONN-036 — A pod can act as the organization's GitHub App
+**Status:** gap
+
+- When someone who may manage a pod's connectors declares a GitHub pod
+  connector as the App, the system shall accept it without anyone's account,
+  including from an app's own page.
+- While the organization has no installation of the App on a GitHub
+  organization that it has proven is its own, the system shall show the
+  connector as needing installation and shall refuse its operations with
+  `APP_NOT_INSTALLED`.
+- When anyone allowed to use the connector runs an operation through it, the
+  system shall act as the App on the installation the call's repository owner
+  has it on, whatever identity the caller asked for, and shall never use a
+  person's account in its place.
+- If the App is on several GitHub organizations and the call names none, then
+  the system shall refuse with `APP_INSTALLATION_AMBIGUOUS` and the
+  organizations it could mean.
+- If GitHub lets only a person make a call, then the system shall refuse it
+  with `APP_IDENTITY_UNAVAILABLE` and say so, and shall leave such calls out of
+  what the connector offers.
+- The system shall not let anything that needs a person's account — a
+  surface, a sandbox's git, publishing a bundle — use the App, and shall refuse
+  it with `APP_CONNECTOR_UNSUPPORTED`.
+- When a provider event arrives for the App's installation, the system shall
+  run the schedules listening through the connector, whoever created them and
+  whether or not they are still in the pod.
+
+> **Gap:** proven by module e2e tests
+> (`connectors/tests/e2e/test_app_connector_e2e.py`, and the App schedule in
+> `schedule/tests/e2e/test_github_webhook_e2e.py`), not yet by a product
+> scenario.
+
+**Contracts:** `pod.connector.create`, `pod.connector.update`, `pod.connector.operation.execute`, `pod.connector.operation.list`, `pod.connection.list`
 
 ---
 

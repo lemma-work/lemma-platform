@@ -9,6 +9,7 @@ from app.core.authorization.context import Context
 from app.core.config import settings
 from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.cache.resilient_cache import ResilientJsonCache
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.connectors.application.connector_operation_use_cases import (
     ConnectorOperationUseCases,
@@ -66,6 +67,9 @@ from app.modules.connectors.services.connector_service import ConnectorService
 from app.modules.connectors.services.trigger_service import ConnectorTriggerService
 
 if TYPE_CHECKING:
+    from app.modules.connectors.services.pod_connections import (
+        PodConnectionsReader,
+    )
     from app.modules.connectors.services.pod_connector_coverage import (
         PodConnectorCoverageService,
     )
@@ -317,3 +321,25 @@ def get_pod_connector_coverage_service(
 PodConnectorCoverageServiceDep = Annotated[
     "PodConnectorCoverageService", Depends(get_pod_connector_coverage_service)
 ]
+
+
+def build_pod_connections_reader(uow: SqlAlchemyUnitOfWork) -> "PodConnectionsReader":
+    """The connections read (``GET /pods/{pod_id}/connections``) on ``uow``."""
+    from app.modules.connectors.infrastructure.adapters.member_coverage import (
+        people_through_contracts,
+    )
+    from app.modules.connectors.services.pod_connections import PodConnectionsReader
+    from app.modules.pod.contracts.people import MAX_POD_PEOPLE
+
+    coverage = get_pod_connector_coverage_service(uow)
+
+    async def names(pod_id: UUID, user_ids: set[UUID]) -> dict[UUID, str | None]:
+        people = await people_through_contracts(uow, pod_id, limit=MAX_POD_PEOPLE)
+        return {one.user_id: one.name for one in people if one.user_id in user_ids}
+
+    return PodConnectionsReader(
+        parts=pod_connector_composition.build_pod_connector_service(uow),
+        catalog=_connector_repository(uow),
+        coverage=coverage.coverage,
+        names=names,
+    )

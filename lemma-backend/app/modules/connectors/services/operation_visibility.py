@@ -24,6 +24,7 @@ from typing import Any
 from uuid import UUID
 
 from app.modules.connectors.domain.errors import OperationNotFoundError
+from app.modules.connectors.domain.pod_connector import PodConnectorMode
 from app.modules.connectors.services.operation_ranking import (
     normalized_operation_name,
 )
@@ -177,6 +178,30 @@ async def merge_install_and_catalog_operations(
     # `limit` was applied to each source separately, so it has to be applied
     # again to the union or a caller asking for 10 could receive 20.
     return merged[:limit] if limit is not None else merged
+
+
+#: ``github_token_kind`` of an operation GitHub takes only from a person.
+_USER_ONLY = "user_only"
+
+
+def offered_by_mode(operations: list[Any], mode: PodConnectorMode) -> list[Any]:
+    """The operations a pod connector in ``mode`` can actually make.
+
+    An APP connector acts as the organization's GitHub App and has no person's
+    token to fall back to, so a route GitHub opens only to a person
+    (``github_token_kind: user_only``, generated from GitHub's own
+    ``x-github.enabledForGitHubApps``) can only fail through it. Offering it to
+    an agent invites the failure; leaving it out of the listing does not stop a
+    caller who names it, whose call is refused with that reason.
+    """
+    if mode is not PodConnectorMode.APP:
+        return operations
+    return [
+        operation
+        for operation in operations
+        if (getattr(operation, "execution", None) or {}).get("github_token_kind")
+        != _USER_ONLY
+    ]
 
 
 async def find_install_or_catalog_operation(

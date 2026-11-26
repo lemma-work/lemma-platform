@@ -12,6 +12,7 @@ from app.core.api.callback_page import (
     sentence,
 )
 from app.core.api.dependencies import BrowserUserId, CurrentUser
+from app.core.app_pin import refuse_other_pod
 from app.core.config import settings
 from app.modules.connectors.contracts.github import (
     InstallState,
@@ -58,11 +59,26 @@ org_router = APIRouter(
     description="Initiate an OAuth connection request for a connector",
 )
 async def initiate_connect_request(
+    request: Request,
     user: CurrentUser,
     organization_id: UUID,
     data: ConnectRequestInitiateSchema,
     connector_service: ConnectorServiceDep,
 ) -> ConnectRequestResponseSchema:
+    # An app's page connects into its own pod only: the pin reads the path,
+    # and this pod comes in the body.
+    refuse_other_pod(request, data.pod_id, always=True)
+    if data.pod_id is not None:
+        from app.modules.connectors.services.connect_into_pod import (
+            require_member_of,
+        )
+
+        await require_member_of(
+            connector_service.uow,
+            pod_id=data.pod_id,
+            user_id=user.id,
+            organization_id=organization_id,
+        )
     connect_request = await connector_service.initiate_connect_request(
         user_id=user.id,
         organization_id=organization_id,
@@ -70,6 +86,7 @@ async def initiate_connect_request(
         auth_config_id=data.auth_config_id,
         return_to=data.return_to,
         connection_fields=data.connection_fields,
+        pod_id=data.pod_id,
     )
 
     return ConnectRequestResponseSchema.model_validate(connect_request)

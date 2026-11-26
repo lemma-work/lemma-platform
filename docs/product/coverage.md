@@ -12,11 +12,11 @@ only a promise marked `covered` with no test is.
 | Status | Scenarios |
 | --- | ---: |
 | `covered` | 181 |
-| `gap` | 5 |
+| `gap` | 7 |
 | `manual` | 37 |
 | `planned` | 38 |
 | `withdrawn` | 2 |
-| **total** | **263** |
+| **total** | **265** |
 
 Scenario tests declaring a promise: 462.
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 263 | 439 |
+| OpenAPI operations | 263 | 440 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -163,6 +163,8 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-CONN-032` A slow or failing provider does not damage the pod | `covered` | `test_a_failing_provider_is_reported_not_swallowed`, `test_a_failing_provider_does_not_take_the_pod_with_it`, `test_a_hanging_provider_is_given_up_on` |
 | `PS-CONN-033` An agent can only use the connectors it was granted | `covered` | `test_an_agent_uses_github_only_when_granted`, `test_an_agent_cannot_call_an_ungranted_connector`, `test_an_agent_granted_a_connector_reaches_it` |
 | `PS-CONN-034` A pod declares the connectors it runs, and whose account each uses | `covered` | `test_a_member_cannot_declare_a_connector`, `test_a_shared_connector_runs_as_the_shared_account` |
+| `PS-CONN-035` Connecting from a pod adds the app to it, and the pod says where I stand | `gap` | — |
+| `PS-CONN-036` A pod can act as the organization's GitHub App | `gap` | — |
 | `PS-CONN-040` A person sees what a provider can notify them about | `covered` | `test_a_trigger_reads_back`, `test_triggers_are_listable` |
 
 ## [Getting started](journeys/getting-started.md)

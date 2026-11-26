@@ -15,6 +15,7 @@ import { DocSpace, isDoc } from "@/docs/doc-space";
 import { AgentPage } from "@/space/agent-page";
 import { AboutPage, aboutHead } from "@/space/about-page";
 import { LemmaPageHead } from "./lemma-page";
+import { PageActsProvider } from "./page-acts";
 import { isAboutSection } from "@/space/about-sections";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Org } from "@/data";
@@ -51,8 +52,11 @@ export type Back = (fallback: View) => void;
  *  an app, a file or page, a table and its rows, an agent. The bar says
  *  which Lemma it is in and is the way back; the workspace's own view of it
  *  fills the rest. */
-export function Stage({ pod, title, here, head, go, fill, ownBar = false, actions, children }: {
+export function Stage({ pod, title, here, head, go, fill, ownBar = false, quietConnect = false, actions, children }: {
     pod: Pod;
+    /** Leave out the banner asking for connections: the page is the
+     *  Lemma's Connections, whose rows already ask, one per app. */
+    quietConnect?: boolean;
     /** Where in the Lemma this is. Left out, the Lemma itself is: its
      *  summary, where the crumb ends at its name. */
     title?: string;
@@ -81,7 +85,7 @@ export function Stage({ pod, title, here, head, go, fill, ownBar = false, action
             )}
             {/* Connections this Lemma needs that the reader has not made, as
                 the workspace asks for them over every page of a pod. */}
-            <ConnectBanner key={pod.id} pod={pod} />
+            {!quietConnect && <ConnectBanner key={pod.id} pod={pod} />}
             <div className="ox-stage">{children}</div>
         </div>
     );
@@ -534,29 +538,33 @@ export function SettingsView({ pod, org, section, go, actions }: { pod: Pod; org
     /* The page's header is every Lemma page's: the way back to it, the
        part's title and its one line. The overview is its Settings. */
     const head = part ? aboutHead(part, pod.name) : { title: "Settings", note: `${pod.name}’s name and job, and everything about how it works.` };
+    /* A part's own buttons (Connections' "Add an app") stand in this header,
+       through `PageActs`. */
     return (
-        <Stage pod={pod} go={go} head={<LemmaPageHead pod={pod} tab="settings" title={head.title} says={head.note} go={go} actions={actions} />}>
-            <div className="ox-page ox-section" data-section="settings">
-                <AboutPage
-                    framed
-                    bare
-                    pod={pod}
-                    orgId={org.id}
-                    orgName={org.name}
-                    section={part}
-                    onSection={(next) => go(outcomeView(pod.id, "settings", next))}
-                    onOpenSettings={(next) => actions.openSettings(next)}
-                    onAsk={() => go(outcomeView(pod.id))}
-                    onOpenAgent={(name) => go({ name: "agent", podId: pod.id, agent: name })}
-                    onOpenTeammate={(id) => go(outcomeView(id))}
-                    onAskFor={(text) => actions.prompt(pod.id, text)}
-                    onOpenRun={(runId) => go({ name: "run", podId: pod.id, runId })}
-                    onOpenConversation={(id) => go(chatView({ kind: "chat", podId: pod.id, id }))}
-                    onFile={(path) => go({ name: "file", podId: pod.id, path })}
-                    onDeleted={() => { void cache.invalidateQueries({ queryKey: ["pods"] }); go({ name: "outcomes" }); }}
-                />
-            </div>
-        </Stage>
+        <PageActsProvider>
+            <Stage pod={pod} go={go} quietConnect={part === "connections"} head={<LemmaPageHead pod={pod} tab="settings" title={head.title} says={head.note} go={go} actions={actions} />}>
+                <div className="ox-page ox-section" data-section="settings">
+                    <AboutPage
+                        framed
+                        bare
+                        pod={pod}
+                        orgId={org.id}
+                        orgName={org.name}
+                        section={part}
+                        onSection={(next) => go(outcomeView(pod.id, "settings", next))}
+                        onOpenSettings={(next) => actions.openSettings(next)}
+                        onAsk={() => go(outcomeView(pod.id))}
+                        onOpenAgent={(name) => go({ name: "agent", podId: pod.id, agent: name })}
+                        onOpenTeammate={(id) => go(outcomeView(id))}
+                        onAskFor={(text) => actions.prompt(pod.id, text)}
+                        onOpenRun={(runId) => go({ name: "run", podId: pod.id, runId })}
+                        onOpenConversation={(id) => go(chatView({ kind: "chat", podId: pod.id, id }))}
+                        onFile={(path) => go({ name: "file", podId: pod.id, path })}
+                        onDeleted={() => { void cache.invalidateQueries({ queryKey: ["pods"] }); go({ name: "outcomes" }); }}
+                    />
+                </div>
+            </Stage>
+        </PageActsProvider>
     );
 }
 

@@ -1977,7 +1977,7 @@
   {
     "tool_name": "list_connectors",
     "toolset": "CONNECTORS",
-    "description": "List the pod's connectors you may run operations through.\n\nEach is named by its `connector` slug, which is how every other connector\ntool addresses it. `mode` says whose account a call uses: PER_MEMBER is\nthe person you act for, SHARED is one account shared with the pod.",
+    "description": "List the pod's connectors you may run operations through.\n\nEach is named by its `connector` slug, which is how every other connector\ntool addresses it. `mode` says whose account a call uses: PER_MEMBER is\nthe person you act for, SHARED is one account shared with the pod, APP is\nthe organization's GitHub App -- every call is the bot, nobody's account.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {},

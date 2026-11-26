@@ -17,6 +17,10 @@ export type AccountCreateSchema = {
     auth_config_name?: (string | null);
     credentials?: Record<string, any>;
     email?: (string | null);
+    /**
+     * The Lemma (pod) this account is connected for. You must be a member. The pod's per-member connector for the installation is reused or declared, and the account becomes your default there; either step failing never fails the connect.
+     */
+    pod_id?: (string | null);
     preferences?: (Record<string, any> | null);
     provider_account_id?: (string | null);
 };
