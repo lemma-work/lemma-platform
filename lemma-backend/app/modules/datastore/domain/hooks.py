@@ -224,14 +224,21 @@ def fields_problem(
         written = set(fields.paths)
     written |= _stamped(by_name, fields)
     missing = [
-        column.name
+        column
         for column in columns
         if _needs_value(column, primary_key) and column.name not in written
     ]
+    unfillable = [column.name for column in missing if _unwritable_reason(column)]
+    if unfillable:
+        # Saying "map it" would send the member to a mapping that is refused.
+        return (
+            f"The table needs {', '.join(unfillable)} on every row, and a hook "
+            "can't write it, so a delivery could never add a row here"
+        )
     if missing:
         return (
-            f"The table needs {', '.join(missing)} on every row, so the hook "
-            "must map it"
+            f"The table needs {', '.join(c.name for c in missing)} on every "
+            "row, so the hook must map it"
         )
     return None
 

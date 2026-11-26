@@ -44,9 +44,9 @@ class HookLimiter:
     def __init__(self, *, redis=None) -> None:
         self._redis = redis
 
-    async def allow(self, hook_id: UUID) -> HookAllowance:
-        client = self._redis or get_redis()
-        windows = (
+    @staticmethod
+    def _windows(hook_id: UUID) -> tuple[tuple[str, int, int], ...]:
+        return (
             (
                 f"hook:deliveries:minute:{hook_id}",
                 _MINUTE,
@@ -58,9 +58,12 @@ class HookLimiter:
                 hook_settings.datastore_hook_deliveries_per_day,
             ),
         )
+
+    async def allow(self, hook_id: UUID) -> HookAllowance:
+        client = self._redis or get_redis()
         charged: list[str] = []
         try:
-            for key, ttl, limit in windows:
+            for key, ttl, limit in self._windows(hook_id):
                 count = await incr_with_ttl(client, key, ttl)
                 charged.append(key)
                 if count > limit:
@@ -81,3 +84,21 @@ class HookLimiter:
             )
             return HookAllowance.UNAVAILABLE
         return HookAllowance.ALLOWED
+
+    async def refund(self, hook_id: UUID) -> None:
+        """Give back what ``allow`` charged, for a delivery that added nothing.
+
+        A delivery the table refused -- a missing value, a table changed under
+        the hook -- is one the sender can fix, and charging for it would let a
+        stuck sender use up the day and turn that reason into "too fast".
+        Best effort: a refund Redis drops leaves the windows a little fuller.
+        """
+        client = self._redis or get_redis()
+        try:
+            for key, _ttl, _limit in self._windows(hook_id):
+                await client.decr(key)
+        except (RedisError, OSError) as exc:
+            logger.warning(
+                "datastore.hooks.limits_unavailable.degraded",
+                error_type=type(exc).__name__,
+            )

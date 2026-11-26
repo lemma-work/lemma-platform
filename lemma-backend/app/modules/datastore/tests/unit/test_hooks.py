@@ -30,7 +30,7 @@ from app.modules.datastore.domain.hooks import (
     value_at,
 )
 from app.modules.datastore.services.hook_limits import HookAllowance, HookLimiter
-from app.modules.datastore.services.hooks import admit_delivery
+from app.modules.datastore.services.hooks import admit_delivery, keep_delivery
 
 RECEIVED = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
 
@@ -396,3 +396,55 @@ async def test_a_body_that_cannot_be_kept_does_not_spend_the_allowance(
 
     assert refused.status_code == status
     assert limiter.asked == 0
+
+
+def test_a_required_column_a_hook_cannot_write_is_said_plainly():
+    columns = [
+        _column("id", "UUID"),
+        _column(PAYLOAD_COLUMN, "JSON", required=True),
+        _column("owner", "USER", required=True),
+    ]
+
+    problem = fields_problem(columns, "id", HookFields(None))
+
+    assert problem is not None
+    assert "owner" in problem and "can't write it" in problem
+    assert "must map" not in problem
+
+
+async def test_a_refund_gives_back_both_windows():
+    counters = _Counters()
+    limiter = HookLimiter(redis=counters)
+    hook_id = uuid4()
+
+    await limiter.allow(hook_id)
+    await limiter.refund(hook_id)
+
+    assert set(counters.values.values()) == {0}
+
+
+async def test_a_refund_while_redis_is_away_does_not_raise():
+    class _Gone:
+        async def decr(self, _key):
+            raise ConnectionError("redis is away")
+
+    await HookLimiter(redis=_Gone()).refund(uuid4())
+
+
+async def test_a_delivery_the_table_refuses_gives_its_allowance_back():
+    class _Refunds:
+        def __init__(self) -> None:
+            self.refunded = 0
+
+        async def refund(self, _hook_id) -> None:
+            self.refunded += 1
+
+    limiter = _Refunds()
+    uow = _Uow(None)  # the hook is gone by the time the row is written
+
+    with pytest.raises(HookDeliveryRefused):
+        await keep_delivery(
+            lambda: uow, hook_id=uuid4(), body={"a": 1}, limiter=limiter
+        )
+
+    assert limiter.refunded == 1

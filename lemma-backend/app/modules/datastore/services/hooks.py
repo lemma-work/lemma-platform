@@ -406,12 +406,21 @@ async def admit_delivery(
 
 
 async def keep_delivery(
-    uow_factory: UnitOfWorkFactory, *, hook_id: UUID, body: dict[str, object]
+    uow_factory: UnitOfWorkFactory,
+    *,
+    hook_id: UUID,
+    body: dict[str, object],
+    limiter: HookLimiter | None = None,
 ) -> HookReceipt:
-    """Add the row a delivery makes, as the member who made the hook."""
+    """Add the row a delivery makes, as the member who made the hook.
+
+    A delivery the table refuses gives back the allowance ``admit_delivery``
+    charged for it: only a row that arrives, or a duplicate, is counted.
+    """
     try:
         return await _keep(uow_factory, hook_id, body)
     except HookDeliveryRefused as refused:
+        await (limiter or HookLimiter()).refund(hook_id)
         await _record_refusal(uow_factory, hook_id, refused.reason)
         raise
 
