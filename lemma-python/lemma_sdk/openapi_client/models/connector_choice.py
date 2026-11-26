@@ -24,9 +24,11 @@ class ConnectorChoice:
                 Offered only where the plan says `can_create_installation`. Default: False.
             share_account_id (None | Unset | UUID): SHARED only: one of your own accounts (the plan's `account_options`) to
                 share with the pod for this connector to run as. Left out, the connector imports needing an account.
-            skip (bool | Unset): Leave this connector out: it is not declared, and grants on it are dropped. Only for one
-                the bundle marks optional (`required: false`); one the plan says SKIPPED is left out unless you choose an
-                installation or to create one. Default: False.
+            skip (bool | Unset): Leave this connector out: it is not declared. Grants on it are dropped when your
+                organization has an installation of it; when it has none, they wait, and are granted once the pod has a
+                connector of that kind the whole pod can use, in the bundle's mode. Only for one the bundle marks optional
+                (`required: false`); one the plan says SKIPPED is left out unless you choose an installation or to create one.
+                Default: False.
     """
 
     auth_config_id: None | Unset | UUID = UNSET
