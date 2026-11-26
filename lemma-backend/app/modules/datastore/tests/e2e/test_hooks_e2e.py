@@ -150,6 +150,7 @@ async def test_fields_map_paths_into_columns_and_a_duplicate_is_received(
     }
 
     first = await _post(async_client, hook["url"], json=body)
+    received_at = (await _get(pod_api, hook["name"]))["last_received_at"]
     again = await _post(async_client, hook["url"], json=body)
 
     assert first.json() == {"received": True}
@@ -164,6 +165,11 @@ async def test_fields_map_paths_into_columns_and_a_duplicate_is_received(
         7,
     )
     assert row["raw"] == body
+    # No row arrived the second time, and the hook says so rather than looking
+    # as if one did.
+    seen = await _get(pod_api, hook["name"])
+    assert seen["last_received_at"] == received_at
+    assert "added no row" in seen["last_error"]
 
 
 async def test_a_wrong_or_rotated_secret_is_refused_with_nothing_said(
@@ -213,6 +219,16 @@ async def test_a_refusal_is_told_to_the_sender_and_kept_on_the_hook(
     assert "switched off" in while_off.json()["message"]
     assert "switched off" in (await _get(pod_api, hook["name"]))["last_error"]
     assert (await pod_api.list_records(table))["items"] == []
+
+    await pod_api.request(
+        "PATCH",
+        f"/pods/{pod_api.pod_id}/datastore/hooks/{hook['name']}",
+        json={"enabled": True},
+    )
+    recovered = await _post(async_client, hook["url"], json={"a": 1})
+    assert recovered.status_code == status.HTTP_200_OK, recovered.text
+    # A row arrived, so the hook works: the old refusal is cleared.
+    assert (await _get(pod_api, hook["name"]))["last_error"] is None
 
 
 async def test_a_hook_needs_a_table_it_can_fill_and_a_member_who_can_change_it(

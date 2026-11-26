@@ -307,7 +307,9 @@ run is told the row is untrusted. A WEBHOOK schedule cannot name the `hook`
 source, since nothing would match it. A duplicate on a unique column is
 answered 200 with `duplicate: true`: that is what a provider's redelivery looks
 like, and a unique column (a response id) is how a table makes hook deliveries
-idempotent.
+idempotent. No row was added, so it does not move `last_received_at`, and it is
+noted as the hook's `last_error`, because a new submission that repeats a
+unique value looks the same. A row that does arrive clears `last_error`.
 
 Making, changing, rotating or deleting a hook takes changing its table; seeing
 one takes reading it. A pod keeps at most 50 hooks.

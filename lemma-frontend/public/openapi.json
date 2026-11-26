@@ -13422,7 +13422,7 @@
                 "type": "null"
               }
             ],
-            "description": "Why the last refused delivery was refused, as its sender was told.",
+            "description": "Why the last refused delivery was refused, as its sender was told, or that a duplicate added no row. Cleared when a row next arrives.",
             "title": "Last Error"
           },
           "last_error_at": {
@@ -14518,7 +14518,7 @@
                 "type": "null"
               }
             ],
-            "description": "Why the last refused delivery was refused, as its sender was told.",
+            "description": "Why the last refused delivery was refused, as its sender was told, or that a duplicate added no row. Cleared when a row next arrives.",
             "title": "Last Error"
           },
           "last_error_at": {

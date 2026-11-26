@@ -27,7 +27,8 @@ class HookResponse:
             `form_response.hidden.ref`, `answers.0.text`; `$` is the whole body). Leave it out to write the whole body to
             the table's `payload` JSON column. Either way `received_at` and `hook` are filled when the table has them.
         id (UUID):
-        last_error (None | str): Why the last refused delivery was refused, as its sender was told.
+        last_error (None | str): Why the last refused delivery was refused, as its sender was told, or that a duplicate
+            added no row. Cleared when a row next arrives.
         last_error_at (datetime.datetime | None):
         last_received_at (datetime.datetime | None): When a delivery last added a row.
         name (str):

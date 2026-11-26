@@ -15,7 +15,7 @@ export type IssuedHookResponse = {
     fields: (Record<string, string> | null);
     id: string;
     /**
-     * Why the last refused delivery was refused, as its sender was told.
+     * Why the last refused delivery was refused, as its sender was told, or that a duplicate added no row. Cleared when a row next arrives.
      */
     last_error: (string | null);
     last_error_at: (string | null);

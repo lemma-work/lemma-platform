@@ -70,6 +70,10 @@ logger = get_logger(__name__)
 _REFUSAL_REWRITE_AFTER = timedelta(minutes=1)
 
 _TURNED_OFF = "This hook is switched off. Switch it on to take deliveries again"
+_DUPLICATE = (
+    "A delivery added no row: the table already holds a row with the same "
+    "value in a unique column. The sender was told it was received"
+)
 _CLOSED = (
     "This hook can't add rows to its table any more: the member who made it "
     "can no longer change the table, or the table is gone"
@@ -442,19 +446,34 @@ async def _keep(
             raise HookDeliveryRefused(409, _CLOSED) from exc
         except PublicRowRefused as exc:
             raise HookDeliveryRefused(422, exc.message) from exc
-        await uow.session.execute(
-            update(DatastoreHookModel)
-            .where(DatastoreHookModel.id == hook_id)
-            .values(last_received_at=received_at)
-        )
-        await uow.commit()
+        if not duplicate:
+            # A row arrived: the hook works, so an older refusal is no longer
+            # what its members need to read.
+            await uow.session.execute(
+                update(DatastoreHookModel)
+                .where(DatastoreHookModel.id == hook_id)
+                .values(
+                    last_received_at=received_at, last_error=None, last_error_at=None
+                )
+            )
+            await uow.commit()
+    if duplicate:
+        # Answered as received, because a redelivery must not be retried, but
+        # no row was added -- and a new submission that repeats a unique value
+        # looks the same. Kept where the hook's members read, so neither goes
+        # unseen; ``last_received_at`` says only when a row last arrived.
+        await _record_refusal(uow_factory, hook_id, _DUPLICATE)
     return HookReceipt(duplicate=duplicate)
 
 
 async def _record_refusal(
     uow_factory: UnitOfWorkFactory, hook_id: UUID, reason: str
 ) -> None:
-    """Keep ``reason`` as the hook's last error, unless it was just kept."""
+    """Keep ``reason`` as the hook's last error, unless it was just kept.
+
+    Throttled because a sender stuck on one mistake would otherwise write the
+    hook's row on every attempt.
+    """
     now = datetime.now(UTC)
     async with uow_factory() as uow:
         await uow.session.execute(

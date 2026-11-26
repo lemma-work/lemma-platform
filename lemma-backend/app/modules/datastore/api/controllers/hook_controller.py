@@ -61,7 +61,10 @@ class HookResponse(BaseModel):
         description="When a delivery last added a row."
     )
     last_error: str | None = Field(
-        description="Why the last refused delivery was refused, as its sender was told."
+        description=(
+            "Why the last refused delivery was refused, as its sender was told, "
+            "or that a duplicate added no row. Cleared when a row next arrives."
+        )
     )
     last_error_at: datetime | None
 
