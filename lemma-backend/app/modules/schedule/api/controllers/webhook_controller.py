@@ -13,8 +13,10 @@ from app.modules.schedule.api.dependencies import (
     WebhookSourceRegistryDep,
 )
 from app.modules.schedule.contracts.webhook_source import (
+    KeepingWebhookSource,
     WebhookDelivery,
     WebhookNotVerified,
+    WebhookRefused,
 )
 
 logger = get_logger(__name__)
@@ -82,6 +84,10 @@ async def handle_webhook(
     )
     try:
         verified = await plugin.verify(delivery)
+    except WebhookRefused as refused:
+        # Verified, then refused: the sender holds the secret, and the reason
+        # is what it needs to fix its next attempt.
+        raise _refusal(refused) from None
     except Exception as exc:
         # Anything at all: a plugin that raises has not verified the delivery,
         # and saying that once here is why no plugin needs its own broad catch.
@@ -110,6 +116,14 @@ async def handle_webhook(
     # event this returns without touching anything and cannot fail.
     await plugin.observe(verified)
 
+    if isinstance(plugin, KeepingWebhookSource):
+        # A hook: the delivery becomes a row, and the row's own triggers are
+        # what start work. Nothing here matches a schedule.
+        try:
+            return await plugin.keep(verified)
+        except WebhookRefused as refused:
+            raise _refusal(refused) from None
+
     normalized = plugin.normalize(verified)
     if normalized is None:
         # An event nothing is subscribed to. Answered 2xx on purpose: a provider
@@ -131,6 +145,10 @@ async def handle_webhook(
     return {
         "message": "Webhook received",
     }
+
+
+def _refusal(refused: WebhookRefused) -> HTTPException:
+    return HTTPException(status_code=refused.status_code, detail=refused.reason)
 
 
 @router.get(

@@ -231,6 +231,8 @@ _NAME_TO_MODULE = {
     'CreateFunctionRequest': 'create_function_request',
     'CreateGoogleGenAIRuntimeProfileRequest': 'create_google_gen_ai_runtime_profile_request',
     'CreateGoogleGenAIRuntimeProfileRequestModelSettings': 'create_google_gen_ai_runtime_profile_request_model_settings',
+    'CreateHookRequest': 'create_hook_request',
+    'CreateHookRequestFieldsType0': 'create_hook_request_fields_type_0',
     'CreateOpenAICompatibleRuntimeProfileRequest': 'create_open_ai_compatible_runtime_profile_request',
     'CreateOpenAICompatibleRuntimeProfileRequestHeaders': 'create_open_ai_compatible_runtime_profile_request_headers',
     'CreateOpenAICompatibleRuntimeProfileRequestModelSettings': 'create_open_ai_compatible_runtime_profile_request_model_settings',
@@ -385,6 +387,9 @@ _NAME_TO_MODULE = {
     'HomePodResponse': 'home_pod_response',
     'HomeSeenRequest': 'home_seen_request',
     'HomeSeenResponse': 'home_seen_response',
+    'HookResponse': 'hook_response',
+    'HookResponseFieldsType0': 'hook_response_fields_type_0',
+    'HooksResponse': 'hooks_response',
     'IconUploadRequest': 'icon_upload_request',
     'IconUploadResponse': 'icon_upload_response',
     'IdentityKind': 'identity_kind',
@@ -412,6 +417,8 @@ _NAME_TO_MODULE = {
     'InstallationOperationExecutionRequestPayload': 'installation_operation_execution_request_payload',
     'InstallationOption': 'installation_option',
     'InstalledAppSummary': 'installed_app_summary',
+    'IssuedHookResponse': 'issued_hook_response',
+    'IssuedHookResponseFieldsType0': 'issued_hook_response_fields_type_0',
     'Job': 'job',
     'JoinablePodListResponse': 'joinable_pod_list_response',
     'JoinablePodResponse': 'joinable_pod_response',
@@ -821,6 +828,8 @@ _NAME_TO_MODULE = {
     'UpdateFunctionRequest': 'update_function_request',
     'UpdateGoogleGenAIRuntimeProfileRequest': 'update_google_gen_ai_runtime_profile_request',
     'UpdateGoogleGenAIRuntimeProfileRequestModelSettingsType0': 'update_google_gen_ai_runtime_profile_request_model_settings_type_0',
+    'UpdateHookRequest': 'update_hook_request',
+    'UpdateHookRequestFieldsType0': 'update_hook_request_fields_type_0',
     'UpdateMemberRoleRequest': 'update_member_role_request',
     'UpdateOpenAICompatibleRuntimeProfileRequest': 'update_open_ai_compatible_runtime_profile_request',
     'UpdateOpenAICompatibleRuntimeProfileRequestModelSettingsType0': 'update_open_ai_compatible_runtime_profile_request_model_settings_type_0',
@@ -1129,6 +1138,8 @@ if TYPE_CHECKING:
     from .create_function_request import CreateFunctionRequest
     from .create_google_gen_ai_runtime_profile_request import CreateGoogleGenAIRuntimeProfileRequest
     from .create_google_gen_ai_runtime_profile_request_model_settings import CreateGoogleGenAIRuntimeProfileRequestModelSettings
+    from .create_hook_request import CreateHookRequest
+    from .create_hook_request_fields_type_0 import CreateHookRequestFieldsType0
     from .create_open_ai_compatible_runtime_profile_request import CreateOpenAICompatibleRuntimeProfileRequest
     from .create_open_ai_compatible_runtime_profile_request_headers import CreateOpenAICompatibleRuntimeProfileRequestHeaders
     from .create_open_ai_compatible_runtime_profile_request_model_settings import CreateOpenAICompatibleRuntimeProfileRequestModelSettings
@@ -1283,6 +1294,9 @@ if TYPE_CHECKING:
     from .home_pod_response import HomePodResponse
     from .home_seen_request import HomeSeenRequest
     from .home_seen_response import HomeSeenResponse
+    from .hook_response import HookResponse
+    from .hook_response_fields_type_0 import HookResponseFieldsType0
+    from .hooks_response import HooksResponse
     from .icon_upload_request import IconUploadRequest
     from .icon_upload_response import IconUploadResponse
     from .identity_kind import IdentityKind
@@ -1310,6 +1324,8 @@ if TYPE_CHECKING:
     from .installation_operation_execution_request_payload import InstallationOperationExecutionRequestPayload
     from .installation_option import InstallationOption
     from .installed_app_summary import InstalledAppSummary
+    from .issued_hook_response import IssuedHookResponse
+    from .issued_hook_response_fields_type_0 import IssuedHookResponseFieldsType0
     from .job import Job
     from .joinable_pod_list_response import JoinablePodListResponse
     from .joinable_pod_response import JoinablePodResponse
@@ -1719,6 +1735,8 @@ if TYPE_CHECKING:
     from .update_function_request import UpdateFunctionRequest
     from .update_google_gen_ai_runtime_profile_request import UpdateGoogleGenAIRuntimeProfileRequest
     from .update_google_gen_ai_runtime_profile_request_model_settings_type_0 import UpdateGoogleGenAIRuntimeProfileRequestModelSettingsType0
+    from .update_hook_request import UpdateHookRequest
+    from .update_hook_request_fields_type_0 import UpdateHookRequestFieldsType0
     from .update_member_role_request import UpdateMemberRoleRequest
     from .update_open_ai_compatible_runtime_profile_request import UpdateOpenAICompatibleRuntimeProfileRequest
     from .update_open_ai_compatible_runtime_profile_request_model_settings_type_0 import UpdateOpenAICompatibleRuntimeProfileRequestModelSettingsType0
@@ -2040,6 +2058,8 @@ __all__ = [
     'CreateFunctionRequest',
     'CreateGoogleGenAIRuntimeProfileRequest',
     'CreateGoogleGenAIRuntimeProfileRequestModelSettings',
+    'CreateHookRequest',
+    'CreateHookRequestFieldsType0',
     'CreateOpenAICompatibleRuntimeProfileRequest',
     'CreateOpenAICompatibleRuntimeProfileRequestHeaders',
     'CreateOpenAICompatibleRuntimeProfileRequestModelSettings',
@@ -2194,6 +2214,9 @@ __all__ = [
     'HomePodResponse',
     'HomeSeenRequest',
     'HomeSeenResponse',
+    'HookResponse',
+    'HookResponseFieldsType0',
+    'HooksResponse',
     'IconUploadRequest',
     'IconUploadResponse',
     'IdentityKind',
@@ -2221,6 +2244,8 @@ __all__ = [
     'InstallationOperationExecutionRequestPayload',
     'InstallationOption',
     'InstalledAppSummary',
+    'IssuedHookResponse',
+    'IssuedHookResponseFieldsType0',
     'Job',
     'JoinablePodListResponse',
     'JoinablePodResponse',
@@ -2630,6 +2655,8 @@ __all__ = [
     'UpdateFunctionRequest',
     'UpdateGoogleGenAIRuntimeProfileRequest',
     'UpdateGoogleGenAIRuntimeProfileRequestModelSettingsType0',
+    'UpdateHookRequest',
+    'UpdateHookRequestFieldsType0',
     'UpdateMemberRoleRequest',
     'UpdateOpenAICompatibleRuntimeProfileRequest',
     'UpdateOpenAICompatibleRuntimeProfileRequestModelSettingsType0',

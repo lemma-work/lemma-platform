@@ -29,6 +29,12 @@ The table below is generated from the committed OpenAPI specification by `script
 | `file.update` | PATCH | `/pods/{pod_id}/datastore/files/by-path` | Update File |
 | `file.upload` | POST | `/pods/{pod_id}/datastore/files` | Upload File |
 | `file.url` | GET | `/pods/{pod_id}/datastore/files/url` | Get a short-lived URL for a file |
+| `hook.create` | POST | `/pods/{pod_id}/datastore/hooks` | Make A Hook |
+| `hook.delete` | DELETE | `/pods/{pod_id}/datastore/hooks/{name}` | Delete A Hook |
+| `hook.get` | GET | `/pods/{pod_id}/datastore/hooks/{name}` | Get A Hook |
+| `hook.list` | GET | `/pods/{pod_id}/datastore/hooks` | List Hooks |
+| `hook.rotate` | POST | `/pods/{pod_id}/datastore/hooks/{name}/rotate` | Give A Hook A New Secret |
+| `hook.update` | PATCH | `/pods/{pod_id}/datastore/hooks/{name}` | Change A Hook |
 | `outcome.history` | GET | `/pods/{pod_id}/outcome/history` | Where the pod has stood, week by week |
 | `outcome.standing` | GET | `/pods/{pod_id}/outcome/standing` | Where the pod stands |
 | `query.execute` | POST | `/pods/{pod_id}/datastore/query` | Execute Query |

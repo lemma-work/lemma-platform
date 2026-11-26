@@ -14,9 +14,9 @@ only a promise marked `covered` with no test is.
 | `covered` | 181 |
 | `gap` | 7 |
 | `manual` | 37 |
-| `planned` | 37 |
+| `planned` | 38 |
 | `withdrawn` | 2 |
-| **total** | **264** |
+| **total** | **265** |
 
 Scenario tests declaring a promise: 462.
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 263 | 434 |
+| OpenAPI operations | 263 | 440 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -259,6 +259,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SCHED-004` A person can run a timed schedule now, without waiting for it | `planned` | — |
 | `PS-SCHED-010` A pod reacts to a webhook from outside | `covered` | `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_a_delivery_to_an_unknown_surface_is_refused` |
 | `PS-SCHED-011` A pod reacts to its own data changing | `covered` | `test_a_change_meeting_the_condition_fires`, `test_a_record_change_fires_a_schedule`, `test_an_unwatched_operation_does_not_fire`, `test_another_table_does_not_fire` |
+| `PS-SCHED-014` A service that cannot sign posts to a pod's own address | `planned` | — |
 | `PS-SCHED-013` Work starts on an event from a server a person connected | `planned` | — |
 | `PS-SCHED-012` A person can narrow what actually triggers | `covered` | `test_a_change_below_the_condition_is_skipped`, `test_a_change_meeting_the_condition_fires`, `test_skipped_and_fired_are_distinguishable`, `test_an_unsatisfiable_condition_is_refused`, `test_a_judged_skip_keeps_the_answer_that_decided_it`, `test_a_time_schedule_refuses_a_condition` |
 | `PS-SCHED-020` Work fires once, however many times the trigger arrives | `covered` | `test_a_repeated_delivery_is_answered_once`, `test_a_raced_delivery_is_answered_once` |

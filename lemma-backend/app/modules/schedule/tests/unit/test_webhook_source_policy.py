@@ -96,14 +96,29 @@ def test_an_unknown_source_is_refused_and_the_message_names_the_accepted_ones():
 def test_every_source_this_deployment_accepts_may_be_named_by_a_schedule():
     registry = default_webhook_sources()
 
-    assert registry.sources, "a deployment that accepts no webhook source"
-    for accepted in registry.sources:
+    assert registry.schedulable_sources, "a deployment that accepts no webhook source"
+    for accepted in registry.schedulable_sources:
         # Named with a pod connector, which is how an MCP server's events are
         # listened to; the sources that need none do not mind one.
         validate_webhook_source(
             _webhook_create(config={"source": accepted}, pod_connector_slug="tracker"),
             registry,
         )
+
+
+def test_a_source_whose_deliveries_become_rows_is_refused_and_not_offered():
+    """A hook's delivery is a row; a DATASTORE schedule on its table is what
+    hears it, so a WEBHOOK schedule naming it would never fire."""
+    registry = default_webhook_sources()
+
+    with pytest.raises(ScheduleValidationError, match="DATASTORE"):
+        validate_webhook_source(_webhook_create(config={"source": "hook"}), registry)
+    assert "hook" in registry.sources
+    assert "hook" not in registry.schedulable_sources
+
+    with pytest.raises(ScheduleValidationError) as unknown:
+        validate_webhook_source(_webhook_create(config={"source": "nope"}), registry)
+    assert "hook" not in str(unknown.value).split("Accepted sources:")[1]
 
 
 def test_an_mcp_event_schedule_with_no_connector_is_refused():

@@ -196,6 +196,9 @@ def _routers():
     from app.modules.datastore.api.controllers.public_rows_controller import (
         router as public_rows,
     )
+    from app.modules.datastore.api.controllers.hook_controller import (
+        router as hooks,
+    )
     from app.modules.datastore.api.controllers.file_controller import router as file
     from app.modules.datastore.api.controllers.signed_link_controller import (
         router as signed_link,
@@ -224,6 +227,7 @@ def _routers():
         query,
         table,
         public_rows,
+        hooks,
         signed_link,
         processing,
         file,

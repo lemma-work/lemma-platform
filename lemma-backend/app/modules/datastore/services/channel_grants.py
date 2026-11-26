@@ -64,7 +64,7 @@ from app.modules.datastore.infrastructure.repositories.table_repository import (
 )
 from app.modules.datastore.services.public_rows import (
     OpeningRefused,
-    _insert_as,
+    insert_from_outside,
     _schemas,
 )
 from app.modules.datastore.services.table_context import TableContext
@@ -345,7 +345,7 @@ async def add_granted_row(
         if opened.contact_owned and contact_id is not None:
             row[CONTACT_COLUMN] = str(contact_id)
         actor = f"contact:{contact_id}" if contact_id else "visitor"
-        await _insert_as(uow, grant.granted_by, opened, row, actor)
+        await insert_from_outside(uow, grant.granted_by, opened, row, actor)
         await uow.commit()
 
 

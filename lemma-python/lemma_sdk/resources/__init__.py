@@ -30,6 +30,7 @@ _NAME_TO_MODULE = {
     "PodChannels": "channels",
     "PodContacts": "contacts",
     "PodWebWidgets": "web_widgets",
+    "PodHooks": "hooks",
     "BoundConnectors": "connectors",
     "PodMembers": "members",
     "PodLinks": "pod_links",
@@ -61,6 +62,7 @@ if TYPE_CHECKING:
     from .channels import PodChannels
     from .contacts import PodContacts
     from .web_widgets import PodWebWidgets
+    from .hooks import PodHooks
     from .connectors import BoundConnectors
     from .members import PodMembers
     from .pod_links import PodLinks
@@ -107,6 +109,7 @@ __all__ = [
     "PodChannels",
     "PodContacts",
     "PodWebWidgets",
+    "PodHooks",
     "PodMembers",
     "PodLinks",
     "PodQueries",

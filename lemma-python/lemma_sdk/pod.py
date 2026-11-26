@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         PodChannels,
         PodContacts,
         PodWebWidgets,
+        PodHooks,
         PodTables,
         PodWorkflows,
         Table,
@@ -191,6 +192,12 @@ class Pod:
         from .resources import PodWebWidgets
 
         return self._resource(PodWebWidgets)
+
+    @cached_property
+    def hooks(self) -> "PodHooks":
+        from .resources import PodHooks
+
+        return self._resource(PodHooks)
 
     @cached_property
     def connectors(self) -> "BoundConnectors":
