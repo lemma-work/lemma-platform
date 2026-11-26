@@ -377,6 +377,19 @@ async def admit_delivery(
     try:
         if not stored[1]:
             raise HookDeliveryRefused(403, _TURNED_OFF)
+        # The body is checked before the allowance is spent: a sender stuck
+        # on one mistake must not use up the day and leave the hook saying
+        # "too fast" where it should say what to fix. Bounded by the cap and
+        # by the secret, so checking first costs nothing a stranger can choose.
+        problem = content_type_problem(content_type)
+        if problem:
+            raise HookDeliveryRefused(415, problem)
+        cap = hook_settings.datastore_hook_body_max_bytes
+        if len(raw_body) > cap:
+            raise HookDeliveryRefused(
+                413, f"A delivery to a hook is at most {cap // 1024} KB"
+            )
+        body = parse_body(raw_body)
         allowance = await (limiter or HookLimiter()).allow(hook_id)
         if allowance is HookAllowance.LIMITED:
             raise HookDeliveryRefused(
@@ -386,15 +399,7 @@ async def admit_delivery(
             raise HookDeliveryRefused(
                 503, "This hook can't take deliveries right now. Try again shortly"
             )
-        problem = content_type_problem(content_type)
-        if problem:
-            raise HookDeliveryRefused(415, problem)
-        cap = hook_settings.datastore_hook_body_max_bytes
-        if len(raw_body) > cap:
-            raise HookDeliveryRefused(
-                413, f"A delivery to a hook is at most {cap // 1024} KB"
-            )
-        return parse_body(raw_body)
+        return body
     except HookDeliveryRefused as refused:
         await _record_refusal(uow_factory, hook_id, refused.reason)
         raise

@@ -286,10 +286,12 @@ a request, so the address is the credential, and it is shown only when the hook
 is made or rotated. The delivery goes through the `hook` plugin in the webhook
 source registry (`connectors/infrastructure/webhook_sources/hook.py`), which
 finds the hook and compares the secret's hash in constant time; then, in order,
-a switched-off hook (403), the per-hook rate limit (429, or 503 while Redis is
-away), a body that is not JSON (415 for another content type, 400 unparseable,
-422 not an object) and one over `DATASTORE_HOOK_BODY_MAX_BYTES` (413) are each
-refused with a reason the sender is told and the hook keeps as `last_error`.
+a switched-off hook (403), a body that is not JSON (415 for another content
+type, 400 unparseable, 422 not an object), one over
+`DATASTORE_HOOK_BODY_MAX_BYTES` (413) and the per-hook rate limit (429, or 503
+while Redis is away) are each refused with a reason the sender is told and the
+hook keeps as `last_error`. Only a body that could be kept spends the rate
+allowance, so a sender stuck on one mistake still sees that mistake.
 A wrong secret is 403 with nothing said, and is not kept.
 
 The row is written through `public_rows.insert_from_outside`, as the member

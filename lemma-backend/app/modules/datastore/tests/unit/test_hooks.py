@@ -377,11 +377,22 @@ async def test_a_body_over_the_hook_cap_is_refused_with_the_cap(monkeypatch):
     assert refused.status_code == 413 and "2 KB" in refused.reason
 
 
-async def test_a_form_post_is_refused_before_its_body_is_parsed():
-    refused, _, _ = await _admit(
-        (secret_hash(SECRET), True),
-        content_type="application/x-www-form-urlencoded",
-        body=b"a=1",
+@pytest.mark.parametrize(
+    ("content_type", "body", "status"),
+    [
+        ("application/x-www-form-urlencoded", b"a=1", 415),
+        ("application/json", b"{", 400),
+        ("application/json", b"[1]", 422),
+    ],
+)
+async def test_a_body_that_cannot_be_kept_does_not_spend_the_allowance(
+    content_type, body, status
+):
+    """A sender stuck on one mistake must not use up the hook's day, or the
+    hook would end up saying "too fast" where it should say what to fix."""
+    refused, _, limiter = await _admit(
+        (secret_hash(SECRET), True), content_type=content_type, body=body
     )
 
-    assert refused.status_code == 415
+    assert refused.status_code == status
+    assert limiter.asked == 0
