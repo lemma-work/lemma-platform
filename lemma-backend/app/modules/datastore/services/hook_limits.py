@@ -1,9 +1,11 @@
 """How fast a hook takes deliveries.
 
-The same fixed windows in Redis that bound a web form's submissions
-(``agent_surfaces/services/outsider_limits``), counted per hook: one a minute,
-which turns a burst into retries, and one a day, which stops a sender stuck in
-a loop from filling a table. It fails closed like that limiter does, because
+Fixed windows in Redis, the kind that bound a web form's submissions
+(``agent_surfaces/services/outsider_limits``), counted per hook:
+``DATASTORE_HOOK_DELIVERIES_PER_MINUTE`` deliveries a minute (60 by default),
+which turns a burst into retries, and ``DATASTORE_HOOK_DELIVERIES_PER_DAY`` a
+day (5,000), which stops a sender stuck in a loop from filling a table. It
+fails closed like that limiter does, because
 what it guards is reachable with nothing but an address: a refused delivery is
 answered with a status the sender retries on, so nothing is lost while Redis
 is away.
