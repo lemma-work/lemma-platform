@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.core.request_context import create_inherited_task
 from app.modules.connectors.domain.app_installation import AppInstallation
 from app.modules.connectors.infrastructure.models.connector_installation import (
     ConnectorInstallation,
@@ -264,7 +265,8 @@ async def ask_github(
         if found is not None:
             answers[installation_id] = found
 
-    tasks = [asyncio.create_task(one(i)) for i in dict.fromkeys(installation_ids)]
+    # Child work of this read, so it keeps the request's context.
+    tasks = [create_inherited_task(one(i)) for i in dict.fromkeys(installation_ids)]
     _done, late = await asyncio.wait(tasks, timeout=budget.total_seconds())
     for task in late:
         task.cancel()
