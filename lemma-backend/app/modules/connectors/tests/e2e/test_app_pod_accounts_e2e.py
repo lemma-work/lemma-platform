@@ -5,12 +5,15 @@ its own pod it has the viewer's access -- but what a person does with an
 account they connected, and which pod the deprecated execute runs in, are not
 the app author's to decide:
 
-- sharing or adding the viewer's account to the pod, and letting it into
-  sandboxes, is ``require_person``: an editor's app, opened by a member, would
-  otherwise move the member's credential in front of the pod without them ever
-  seeing the question;
-- the deprecated org-level execute takes its pod from the body, where the
-  pin's path check cannot see it, so an app's page runs in its own pod.
+- sharing the viewer's account with the pod, and letting it into sandboxes,
+  is the person's own act: an editor's app, opened by a member, would
+  otherwise move the member's credential in front of the pod without them
+  ever seeing the question;
+- adding it for the viewer's own calls only ("use it here", PERSONAL) reaches
+  nobody new, so an app's page may, and a plugin can set itself up in-app;
+- the deprecated org-level execute, and a connect request, take their pod
+  from the body, where the pin's path check cannot see it, so an app's page
+  acts in its own pod.
 
 The requests here are a browser's: a cookie, an ``Origin``, no bearer token.
 """
@@ -132,6 +135,55 @@ async def test_an_editors_app_cannot_share_a_members_account_into_the_pod(
         f"/pods/{world.pod_id}/connector-accounts",
         headers=_from_app(origin, world.bob),
         json={"account_id": bob_account, "visibility": "POD"},
+    )
+
+    assert refused.status_code == status.HTTP_403_FORBIDDEN, refused.text
+    assert _code(refused) == APP_PERSON_ONLY, refused.text
+    assert await _pod_accounts(db_session, world.pod_id) == []
+
+
+async def test_an_app_may_use_its_viewers_own_account_here_for_their_own_calls(
+    scenario, db_session, browser
+):
+    """ "Use it here" from inside a plugin: the viewer's own account, PERSONAL,
+    so only their own calls use it -- and the app is declared for them."""
+    world = await _world(scenario, db_session)
+    origin = await _app(world, world.pod_id, world.editor)
+    bob_account = await _connect(db_session, world, world.bob, "bob-key")
+
+    added = await browser.post(
+        f"/pods/{world.pod_id}/connector-accounts",
+        headers=_from_app(origin, world.bob),
+        json={"account_id": bob_account},
+    )
+
+    assert added.status_code == status.HTTP_201_CREATED, added.text
+    assert added.json()["visibility"] == "PERSONAL"
+    (row,) = await _pod_accounts(db_session, world.pod_id)
+    assert row.visibility == "PERSONAL"
+    assert row.is_member_default is True
+
+
+async def test_an_app_cannot_restrict_share_its_viewers_account_either(
+    scenario, db_session, browser
+):
+    world = await _world(scenario, db_session)
+    origin = await _app(world, world.pod_id, world.editor)
+    bob_account = await _connect(db_session, world, world.bob, "bob-key")
+
+    refused = await browser.post(
+        f"/pods/{world.pod_id}/connector-accounts",
+        headers=_from_app(origin, world.bob),
+        json={
+            "account_id": bob_account,
+            "visibility": "RESTRICTED",
+            "share_with": [
+                {
+                    "grantee_type": "POD_MEMBER",
+                    "grantee_id": world.seats["editor"]["pod_member_id"],
+                }
+            ],
+        },
     )
 
     assert refused.status_code == status.HTTP_403_FORBIDDEN, refused.text
@@ -261,3 +313,25 @@ async def test_another_pod_in_the_body_is_served_until_the_pin_is_enforced(
 
     assert served.status_code == status.HTTP_200_OK, served.text
     assert served.json()["result"] == {"ran_as": "alice-key"}
+
+
+async def test_an_app_connecting_into_another_pod_is_refused(
+    scenario, db_session, browser, monkeypatch
+):
+    """A connect request names the pod it lands in, in the body: an app's page
+    may name only its own. Refused with the cross-pod switch off too: the
+    field is new, so there is no app relying on it to watch first."""
+    monkeypatch.setattr(settings, "app_pin_cross_pod_enforced", False)
+    world = await _world(scenario, db_session)
+    elsewhere = await _second_pod(world)
+    origin = await _app(world, elsewhere, None)
+    org_id = world.scenario.org_id
+
+    refused = await browser.post(
+        f"/organizations/{org_id}/connectors/connect-requests",
+        headers=_from_app(origin, world.scenario.owner_user),
+        json={"connector_id": "github", "pod_id": world.pod_id},
+    )
+
+    assert refused.status_code == status.HTTP_403_FORBIDDEN, refused.text
+    assert _code(refused) == APP_ROUTE_NOT_ALLOWED, refused.text

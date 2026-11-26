@@ -597,6 +597,7 @@ class ConnectorService:
         connection_fields: dict[str, object] | None = None,
         purpose: str | None = None,
         omit_authorize_params: frozenset[str] = frozenset(),
+        pod_id: UUID | None = None,
     ) -> ConnectRequestEntity:
         await self._require_org_member(user_id=user_id, organization_id=organization_id)
         auth_config = await install_to_connect(
@@ -612,7 +613,8 @@ class ConnectorService:
             auth_config_id=auth_config.id,
             return_to=safe_return_path(return_to),
             purpose=purpose,
-            reusable=not connection_fields and not omit_authorize_params,
+            # One started from a pod remembers the pod; a reused one may not.
+            reusable=not connection_fields and not omit_authorize_params and not pod_id,
         )
         if reused is not None:
             return reused
@@ -691,7 +693,7 @@ class ConnectorService:
             authorization_url=authorization_url,
             status=ConnectRequestStatus.PENDING,
             attributes=request_attributes(
-                state, provider_state, code_verifier, return_to, purpose
+                state, provider_state, code_verifier, return_to, purpose, pod_id
             ),
         )
         connect_request = await self.connect_request_repository.create(connect_request)

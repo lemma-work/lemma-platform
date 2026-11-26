@@ -111,6 +111,34 @@ async def resolve_trigger_binding(
     )
 
 
+async def resolve_app_trigger_binding(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    trigger_id: str,
+    connector_id: str,
+    installation_id: str,
+) -> TriggerBinding:
+    """Bind one trigger to one of the organization's App installations.
+
+    For an APP pod connector, which has no account: the installation is the
+    routing key, picked from the organization's proven bindings by the caller
+    (``app_connectors.pick_app_installation``), never typed by anyone. The
+    App's webhooks are installation-wide, so nothing is subscribed.
+    """
+    trigger = await _trigger_repository(uow).get(trigger_id)
+    if trigger is None:
+        raise ConnectorTriggerNotFoundError(trigger_id)
+    if trigger.connector_id != connector_id:
+        raise ConnectorValidationError("Trigger does not belong to this connector")
+    return TriggerBinding(
+        connector_id=trigger.connector_id,
+        event_type=trigger.event_type,
+        config_defaults=_declared_defaults(trigger.config_schema),
+        installation_id=installation_id,
+        subscribable=False,
+    )
+
+
 def _declared_defaults(config_schema: dict[str, object] | None) -> dict[str, object]:
     """The `default` each property of a trigger's config schema declares.
 
@@ -138,6 +166,7 @@ __all__ = [
     "TriggerBinding",
     "create_trigger_subscription",
     "delete_trigger_subscription",
+    "resolve_app_trigger_binding",
     "resolve_trigger_binding",
     "verify_webhook",
 ]

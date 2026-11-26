@@ -176,21 +176,93 @@ class ConnectorUseRefusedError(ConnectorDomainError):
 
 
 class ConnectorUnavailableError(ConnectorDomainError):
-    """The installation behind a pod connector is disabled."""
+    """The installation behind a pod connector is disabled -- or, for an APP
+    connector, GitHub would not give the App a token for its installation."""
+
+    def __init__(self, *, slug: str, app_token_refused: bool = False):
+        super().__init__(
+            message=(
+                f"GitHub did not give the App a token for the installation "
+                f"behind '{slug}'. It may have been uninstalled or suspended; "
+                "an organization admin can check it on GitHub."
+                if app_token_refused
+                else f"The installation behind '{slug}' is disabled in this "
+                "organization. An organization admin can re-enable it."
+            ),
+            code="CONNECTOR_UNAVAILABLE",
+            status_code=409,
+            details=(
+                {"pod_connector": slug, "reason": "app_token_refused"}
+                if app_token_refused
+                else {"pod_connector": slug}
+            ),
+        )
+
+
+class AppConnectorUnsupportedError(ConnectorDomainError):
+    """An APP connector, asked for by something that needs an account.
+
+    An APP connector runs as the organization's GitHub App and has nobody's
+    account behind it. Operations and schedules know how to act as the App;
+    a surface's credential, a sandbox's ``git``, publishing a bundle and the
+    rest read an account, and there is none to give them.
+    """
 
     def __init__(self, *, slug: str):
         super().__init__(
             message=(
-                f"The installation behind '{slug}' is disabled in this "
-                "organization. An organization admin can re-enable it."
+                f"'{slug}' acts as the organization's GitHub App, with no "
+                "person's account behind it, and this needs an account. Use a "
+                "connector that runs as a person's account here."
             ),
-            code="CONNECTOR_UNAVAILABLE",
+            code="APP_CONNECTOR_UNSUPPORTED",
             status_code=409,
             details={"pod_connector": slug},
         )
 
 
+class AppNotInstalledError(ConnectorDomainError):
+    """No installation of the App that counts is on the account a call names."""
+
+    def __init__(self, *, slug: str, owner: str | None, install_url: str | None):
+        where = f" on '{owner}'" if owner else ""
+        details: dict[str, str] = {"pod_connector": slug}
+        if owner:
+            details["owner"] = owner
+        if install_url:
+            details["install_url"] = install_url
+        super().__init__(
+            message=(
+                f"'{slug}' acts as the organization's GitHub App, and the App is "
+                f"not installed{where} for this organization. A GitHub "
+                "organization admin has to install it."
+            ),
+            code="APP_NOT_INSTALLED",
+            status_code=409,
+            details=details,
+        )
+
+
+class AppInstallationAmbiguousError(ConnectorDomainError):
+    """The App is on several GitHub organizations and the call named none."""
+
+    def __init__(self, *, slug: str, logins: list[str]):
+        super().__init__(
+            message=(
+                f"'{slug}' acts as the organization's GitHub App, which is "
+                f"installed on {', '.join(logins)}. Name the owner (`owner`, or "
+                "`repository` as owner/name) so the call acts on the right one."
+            ),
+            code="APP_INSTALLATION_AMBIGUOUS",
+            status_code=409,
+            details={"pod_connector": slug, "logins": logins},
+        )
+
+
 __all__ = [
+    "AppConnectorUnsupportedError",
+    "AppInstallationAmbiguousError",
+    "AppNotInstalledError",
     "ConnectionRequiredError",
     "ConnectionRequiresPersonError",
     "ConnectorNeedsAccountError",

@@ -40,6 +40,7 @@ import type { PodAccountListResponse } from '../models/PodAccountListResponse.js
 import type { PodAccountResponse } from '../models/PodAccountResponse.js';
 import type { PodAccountShareAsRequest } from '../models/PodAccountShareAsRequest.js';
 import type { PodAccountUpdateRequest } from '../models/PodAccountUpdateRequest.js';
+import type { PodConnectionsResponse } from '../models/PodConnectionsResponse.js';
 import type { PodConnectorCoverage } from '../models/PodConnectorCoverage.js';
 import type { PodConnectorCreateRequest } from '../models/PodConnectorCreateRequest.js';
 import type { PodConnectorListResponse } from '../models/PodConnectorListResponse.js';
@@ -807,6 +808,27 @@ export class ConnectorsService {
         });
     }
     /**
+     * My Connections Here
+     * One row per pod connector, judged for the caller: whose account a call by them runs as (`runs_as`), and what they can do about it (`me.standing`: ready, connect, use_existing, reconnect, waiting or not_allowed). `coverage` is filled for PER_MEMBER connectors when the caller may manage the pod's connectors; `github_bot` names the organization's GitHub App installations an APP connector can use. Read-only: it declares and adds nothing.
+     * @param podId
+     * @returns PodConnectionsResponse Successful Response
+     * @throws ApiError
+     */
+    public static podConnectionList(
+        podId: string,
+    ): CancelablePromise<PodConnectionsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/connections',
+            path: {
+                'pod_id': podId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * List Accounts In Use In The Pod
      * @param podId
      * @returns PodAccountListResponse Successful Response
@@ -828,6 +850,7 @@ export class ConnectorsService {
     }
     /**
      * Add One Of Your Accounts To The Pod
+     * Use one of your organization accounts in this pod. The pod's per-member connector for its installation is reused or declared, and the account becomes your default here when you have none. A pod app's page may add one only as PERSONAL, for your own calls: sharing it is yours to do in Lemma.
      * @param podId
      * @param requestBody
      * @returns PodAccountResponse Successful Response
@@ -902,7 +925,7 @@ export class ConnectorsService {
     }
     /**
      * Share Your Account As A Pod Connector
-     * Owner only, and the caller must also manage the pod's connectors: share this pod account with the pod (if it is still yours alone) and run the SHARED connector `slug` as it -- pointing the existing one, or declaring it. Checked in full before anything changes, and done in one transaction: a refusal leaves the account as it was.
+     * Owner only, and the caller must also manage the pod's connectors: share this pod account with the pod (if it is still yours alone) and run the SHARED connector `slug` as it -- pointing the existing one, switching the pod's PER_MEMBER or APP connector of that slug on the same installation to SHARED, or declaring it. Checked in full before anything changes, and done in one transaction: a refusal leaves the account and the connector as they were.
      * @param podId
      * @param podAccountId
      * @param requestBody
@@ -950,7 +973,7 @@ export class ConnectorsService {
     }
     /**
      * Declare A Pod Connector
-     * Declare a connector by an organization installation (`auth_config_id`) or by a catalog connector (`connector_id`): its organization default, or Lemma's own app for it installed now when the organization has none and the caller may install connectors. `slug` defaults to the installation's name; `mode` to PER_MEMBER.
+     * Declare a connector by an organization installation (`auth_config_id`) or by a catalog connector (`connector_id`): its organization default, or Lemma's own app for it installed now when the organization has none and the caller may install connectors. `slug` defaults to the installation's name; `mode` to PER_MEMBER. `mode: APP` (GitHub only, no shared account, POD visibility) acts as the organization's GitHub App, nobody's account: it needs only `pod.connector.manage`, from an app's page too, and its slug defaults to `github`, else `github-bot`.
      * @param podId
      * @param requestBody
      * @returns PodConnectorResponse Successful Response
@@ -1157,7 +1180,7 @@ export class ConnectorsService {
     }
     /**
      * Execute Pod Connector Operation
-     * Run an operation through a pod connector. The account it runs as is decided by the connector: the caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals: `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`; with `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and `APP_IDENTITY_UNAVAILABLE`.
+     * Run an operation through a pod connector. The account it runs as is decided by the connector: the caller's own for a PER_MEMBER connector, the shared one for a SHARED connector, the organization's GitHub App for an APP connector (whatever `act_as` says; the installation is picked by the payload's `owner`, `org`, or the owner half of `repository`). Typed refusals: `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`; with `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and `APP_IDENTITY_UNAVAILABLE`; on APP, `APP_NOT_INSTALLED`, `APP_INSTALLATION_AMBIGUOUS` and `APP_IDENTITY_UNAVAILABLE` with `details.reason: user_only_operation`.
      * @param podId
      * @param slug
      * @param operationName

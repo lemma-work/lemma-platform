@@ -80,10 +80,13 @@ def sync_detailed(
     """Execute Pod Connector Operation
 
      Run an operation through a pod connector. The account it runs as is decided by the connector: the
-    caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals:
-    `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`,
-    `CONNECTOR_UNAVAILABLE`; with `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and
-    `APP_IDENTITY_UNAVAILABLE`.
+    caller's own for a PER_MEMBER connector, the shared one for a SHARED connector, the organization's
+    GitHub App for an APP connector (whatever `act_as` says; the installation is picked by the payload's
+    `owner`, `org`, or the owner half of `repository`). Typed refusals: `CONNECTION_REQUIRED` and
+    `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`; with
+    `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and `APP_IDENTITY_UNAVAILABLE`; on APP,
+    `APP_NOT_INSTALLED`, `APP_INSTALLATION_AMBIGUOUS` and `APP_IDENTITY_UNAVAILABLE` with
+    `details.reason: user_only_operation`.
 
     Args:
         pod_id (UUID):
@@ -125,10 +128,13 @@ def sync(
     """Execute Pod Connector Operation
 
      Run an operation through a pod connector. The account it runs as is decided by the connector: the
-    caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals:
-    `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`,
-    `CONNECTOR_UNAVAILABLE`; with `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and
-    `APP_IDENTITY_UNAVAILABLE`.
+    caller's own for a PER_MEMBER connector, the shared one for a SHARED connector, the organization's
+    GitHub App for an APP connector (whatever `act_as` says; the installation is picked by the payload's
+    `owner`, `org`, or the owner half of `repository`). Typed refusals: `CONNECTION_REQUIRED` and
+    `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`; with
+    `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and `APP_IDENTITY_UNAVAILABLE`; on APP,
+    `APP_NOT_INSTALLED`, `APP_INSTALLATION_AMBIGUOUS` and `APP_IDENTITY_UNAVAILABLE` with
+    `details.reason: user_only_operation`.
 
     Args:
         pod_id (UUID):
@@ -165,10 +171,13 @@ async def asyncio_detailed(
     """Execute Pod Connector Operation
 
      Run an operation through a pod connector. The account it runs as is decided by the connector: the
-    caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals:
-    `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`,
-    `CONNECTOR_UNAVAILABLE`; with `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and
-    `APP_IDENTITY_UNAVAILABLE`.
+    caller's own for a PER_MEMBER connector, the shared one for a SHARED connector, the organization's
+    GitHub App for an APP connector (whatever `act_as` says; the installation is picked by the payload's
+    `owner`, `org`, or the owner half of `repository`). Typed refusals: `CONNECTION_REQUIRED` and
+    `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`; with
+    `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and `APP_IDENTITY_UNAVAILABLE`; on APP,
+    `APP_NOT_INSTALLED`, `APP_INSTALLATION_AMBIGUOUS` and `APP_IDENTITY_UNAVAILABLE` with
+    `details.reason: user_only_operation`.
 
     Args:
         pod_id (UUID):
@@ -208,10 +217,13 @@ async def asyncio(
     """Execute Pod Connector Operation
 
      Run an operation through a pod connector. The account it runs as is decided by the connector: the
-    caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals:
-    `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`,
-    `CONNECTOR_UNAVAILABLE`; with `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and
-    `APP_IDENTITY_UNAVAILABLE`.
+    caller's own for a PER_MEMBER connector, the shared one for a SHARED connector, the organization's
+    GitHub App for an APP connector (whatever `act_as` says; the installation is picked by the payload's
+    `owner`, `org`, or the owner half of `repository`). Typed refusals: `CONNECTION_REQUIRED` and
+    `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`; with
+    `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and `APP_IDENTITY_UNAVAILABLE`; on APP,
+    `APP_NOT_INSTALLED`, `APP_INSTALLATION_AMBIGUOUS` and `APP_IDENTITY_UNAVAILABLE` with
+    `details.reason: user_only_operation`.
 
     Args:
         pod_id (UUID):

@@ -73,6 +73,10 @@ def sync_detailed(
 ) -> Response[ErrorResponse | PodAccountResponse]:
     """Add One Of Your Accounts To The Pod
 
+     Use one of your organization accounts in this pod. The pod's per-member connector for its
+    installation is reused or declared, and the account becomes your default here when you have none. A
+    pod app's page may add one only as PERSONAL, for your own calls: sharing it is yours to do in Lemma.
+
     Args:
         pod_id (UUID):
         body (PodAccountCreateRequest):
@@ -105,6 +109,10 @@ def sync(
 ) -> ErrorResponse | PodAccountResponse | None:
     """Add One Of Your Accounts To The Pod
 
+     Use one of your organization accounts in this pod. The pod's per-member connector for its
+    installation is reused or declared, and the account becomes your default here when you have none. A
+    pod app's page may add one only as PERSONAL, for your own calls: sharing it is yours to do in Lemma.
+
     Args:
         pod_id (UUID):
         body (PodAccountCreateRequest):
@@ -131,6 +139,10 @@ async def asyncio_detailed(
     body: PodAccountCreateRequest,
 ) -> Response[ErrorResponse | PodAccountResponse]:
     """Add One Of Your Accounts To The Pod
+
+     Use one of your organization accounts in this pod. The pod's per-member connector for its
+    installation is reused or declared, and the account becomes your default here when you have none. A
+    pod app's page may add one only as PERSONAL, for your own calls: sharing it is yours to do in Lemma.
 
     Args:
         pod_id (UUID):
@@ -161,6 +173,10 @@ async def asyncio(
     body: PodAccountCreateRequest,
 ) -> ErrorResponse | PodAccountResponse | None:
     """Add One Of Your Accounts To The Pod
+
+     Use one of your organization accounts in this pod. The pod's per-member connector for its
+    installation is reused or declared, and the account becomes your default here when you have none. A
+    pod app's page may add one only as PERSONAL, for your own calls: sharing it is yours to do in Lemma.
 
     Args:
         pod_id (UUID):

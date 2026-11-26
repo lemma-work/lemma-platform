@@ -166,6 +166,11 @@ _NAME_TO_MODULE = {
     'ConnectedAccountSummary': 'connected_account_summary',
     'ConnectedClientResponse': 'connected_client_response',
     'ConnectedClientsResponse': 'connected_clients_response',
+    'ConnectionAccount': 'connection_account',
+    'ConnectionCoverage': 'connection_coverage',
+    'ConnectionMe': 'connection_me',
+    'ConnectionRunsAs': 'connection_runs_as',
+    'ConnectionStanding': 'connection_standing',
     'ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete': 'connector_auth_config_delete_response_connector_auth_config_delete',
     'ConnectorChoice': 'connector_choice',
     'ConnectorDetailResponseSchema': 'connector_detail_response_schema',
@@ -300,6 +305,7 @@ _NAME_TO_MODULE = {
     'EventWorkflowStartInput': 'event_workflow_start_input',
     'EventWorkflowStartOutput': 'event_workflow_start_output',
     'ExecuteFunctionRequest': 'execute_function_request',
+    'ExistingAccount': 'existing_account',
     'ExportProgressResponse': 'export_progress_response',
     'ExportStartRequest': 'export_start_request',
     'ExportStatus': 'export_status',
@@ -363,6 +369,8 @@ _NAME_TO_MODULE = {
     'FunctionSummaryResponse': 'function_summary_response',
     'FunctionType': 'function_type',
     'GenerationSettings': 'generation_settings',
+    'GithubBot': 'github_bot',
+    'GithubBotInstallation': 'github_bot_installation',
     'GoogleGenAIBackend': 'google_gen_ai_backend',
     'GranteeRef': 'grantee_ref',
     'GranteeRefGranteeType': 'grantee_ref_grantee_type',
@@ -546,6 +554,8 @@ _NAME_TO_MODULE = {
     'PodAccountUpdateRequest': 'pod_account_update_request',
     'PodAccountVisibility': 'pod_account_visibility',
     'PodConfig': 'pod_config',
+    'PodConnectionItem': 'pod_connection_item',
+    'PodConnectionsResponse': 'pod_connections_response',
     'PodConnectorCoverage': 'pod_connector_coverage',
     'PodConnectorCreateRequest': 'pod_connector_create_request',
     'PodConnectorListResponse': 'pod_connector_list_response',
@@ -646,6 +656,7 @@ _NAME_TO_MODULE = {
     'RowRequestValues': 'row_request_values',
     'RunTokenUsage': 'run_token_usage',
     'RunUsageResponse': 'run_usage_response',
+    'RunsAsKind': 'runs_as_kind',
     'RuntimeModelCapability': 'runtime_model_capability',
     'RuntimeModelCatalogEntry': 'runtime_model_catalog_entry',
     'RuntimeModelCatalogEntryDefaultModelSettings': 'runtime_model_catalog_entry_default_model_settings',
@@ -1053,6 +1064,11 @@ if TYPE_CHECKING:
     from .connected_account_summary import ConnectedAccountSummary
     from .connected_client_response import ConnectedClientResponse
     from .connected_clients_response import ConnectedClientsResponse
+    from .connection_account import ConnectionAccount
+    from .connection_coverage import ConnectionCoverage
+    from .connection_me import ConnectionMe
+    from .connection_runs_as import ConnectionRunsAs
+    from .connection_standing import ConnectionStanding
     from .connector_auth_config_delete_response_connector_auth_config_delete import ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete
     from .connector_choice import ConnectorChoice
     from .connector_detail_response_schema import ConnectorDetailResponseSchema
@@ -1187,6 +1203,7 @@ if TYPE_CHECKING:
     from .event_workflow_start_input import EventWorkflowStartInput
     from .event_workflow_start_output import EventWorkflowStartOutput
     from .execute_function_request import ExecuteFunctionRequest
+    from .existing_account import ExistingAccount
     from .export_progress_response import ExportProgressResponse
     from .export_start_request import ExportStartRequest
     from .export_status import ExportStatus
@@ -1250,6 +1267,8 @@ if TYPE_CHECKING:
     from .function_summary_response import FunctionSummaryResponse
     from .function_type import FunctionType
     from .generation_settings import GenerationSettings
+    from .github_bot import GithubBot
+    from .github_bot_installation import GithubBotInstallation
     from .google_gen_ai_backend import GoogleGenAIBackend
     from .grantee_ref import GranteeRef
     from .grantee_ref_grantee_type import GranteeRefGranteeType
@@ -1433,6 +1452,8 @@ if TYPE_CHECKING:
     from .pod_account_update_request import PodAccountUpdateRequest
     from .pod_account_visibility import PodAccountVisibility
     from .pod_config import PodConfig
+    from .pod_connection_item import PodConnectionItem
+    from .pod_connections_response import PodConnectionsResponse
     from .pod_connector_coverage import PodConnectorCoverage
     from .pod_connector_create_request import PodConnectorCreateRequest
     from .pod_connector_list_response import PodConnectorListResponse
@@ -1533,6 +1554,7 @@ if TYPE_CHECKING:
     from .row_request_values import RowRequestValues
     from .run_token_usage import RunTokenUsage
     from .run_usage_response import RunUsageResponse
+    from .runs_as_kind import RunsAsKind
     from .runtime_model_capability import RuntimeModelCapability
     from .runtime_model_catalog_entry import RuntimeModelCatalogEntry
     from .runtime_model_catalog_entry_default_model_settings import RuntimeModelCatalogEntryDefaultModelSettings
@@ -1953,6 +1975,11 @@ __all__ = [
     'ConnectedAccountSummary',
     'ConnectedClientResponse',
     'ConnectedClientsResponse',
+    'ConnectionAccount',
+    'ConnectionCoverage',
+    'ConnectionMe',
+    'ConnectionRunsAs',
+    'ConnectionStanding',
     'ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete',
     'ConnectorChoice',
     'ConnectorDetailResponseSchema',
@@ -2087,6 +2114,7 @@ __all__ = [
     'EventWorkflowStartInput',
     'EventWorkflowStartOutput',
     'ExecuteFunctionRequest',
+    'ExistingAccount',
     'ExportProgressResponse',
     'ExportStartRequest',
     'ExportStatus',
@@ -2150,6 +2178,8 @@ __all__ = [
     'FunctionSummaryResponse',
     'FunctionType',
     'GenerationSettings',
+    'GithubBot',
+    'GithubBotInstallation',
     'GoogleGenAIBackend',
     'GranteeRef',
     'GranteeRefGranteeType',
@@ -2333,6 +2363,8 @@ __all__ = [
     'PodAccountUpdateRequest',
     'PodAccountVisibility',
     'PodConfig',
+    'PodConnectionItem',
+    'PodConnectionsResponse',
     'PodConnectorCoverage',
     'PodConnectorCreateRequest',
     'PodConnectorListResponse',
@@ -2433,6 +2465,7 @@ __all__ = [
     'RowRequestValues',
     'RunTokenUsage',
     'RunUsageResponse',
+    'RunsAsKind',
     'RuntimeModelCapability',
     'RuntimeModelCatalogEntry',
     'RuntimeModelCatalogEntryDefaultModelSettings',

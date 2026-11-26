@@ -6,4 +6,5 @@ export enum PodConnectorStatus {
     READY = 'READY',
     NEEDS_ACCOUNT = 'NEEDS_ACCOUNT',
     UNAVAILABLE = 'UNAVAILABLE',
+    NEEDS_INSTALLATION = 'NEEDS_INSTALLATION',
 }

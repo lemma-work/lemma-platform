@@ -59,7 +59,7 @@ const PARTS: readonly Part[] = [
     { id: "agents", label: "Agents", icon: AgentIcon,
         note: (name) => "Agents that take a piece of the job from " + name + " or from a workflow.", blurb: "Agents it hands work to" },
     { id: "connections", label: "Connections", icon: ConnectorIcon,
-        note: (name) => "The apps " + name + " works through — Gmail, Slack, GitHub and the rest — and whose account each one uses: each person’s own, or one somebody shared here.",
+        note: (name) => "The apps " + name + " uses, and whose account each one runs as.",
         blurb: "What it works through" },
     { id: "schedules", label: "Standing work", icon: ClockIcon,
         note: () => "What it does without being asked, on a time or an event.", blurb: "What it does unasked" },

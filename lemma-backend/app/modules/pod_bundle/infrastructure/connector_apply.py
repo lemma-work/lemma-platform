@@ -115,6 +115,12 @@ async def apply_connector(
         visibility=connector.visibility,
         share_account_id=choice.share_account_id,
     )
+    if status == "NEEDS_INSTALLATION":
+        warnings.append(
+            f"Connector '{connector.slug}' ({connector.connector}) acts as your "
+            "organization's GitHub App, which is not installed on a GitHub "
+            "organization yet. It works once an organization admin installs it."
+        )
     if status == "NEEDS_ACCOUNT":
         warnings.append(
             f"Connector '{connector.slug}' ({connector.connector}) was imported "

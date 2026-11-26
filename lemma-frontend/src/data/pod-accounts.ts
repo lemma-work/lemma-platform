@@ -11,9 +11,7 @@
  *  Pure, like `pod-connectors.ts`: every field is a wire field.
  */
 
-import type { PodConnector, PodConnectorMode } from "./pod-connectors";
-import { freshSlug } from "./pod-connectors";
-import { POD_ROLES } from "./pod-roles";
+import type { PodConnectorMode } from "./pod-connectors";
 
 export type PodAccountVisibility = "PERSONAL" | "POD" | "RESTRICTED";
 
@@ -106,25 +104,6 @@ export function readPodAccounts(raw: unknown): PodAccount[] {
     return items(raw).map(readPodAccount).filter((one): one is PodAccount => one !== null);
 }
 
-/** Who an account serves here, in a person's words. */
-export function visibilityWord(visibility: PodAccountVisibility): string {
-    if (visibility === "POD") return "Shared with everyone here";
-    if (visibility === "RESTRICTED") return "Shared with some people here";
-    return "Only your own calls";
-}
-
-/** The accounts a SHARED connector on this installation may run as: ones
- *  their owners already shared. An editor picks among these and nothing else
- *  — putting somebody's account in front of the pod is theirs to do. */
-export function shareableFor(accounts: PodAccount[], authConfigId: string): PodAccount[] {
-    return accounts.filter((one) => one.authConfigId === authConfigId && one.visibility !== "PERSONAL");
-}
-
-/** Mine, in this pod. */
-export function ownedBy(accounts: PodAccount[], me: string): PodAccount[] {
-    return me ? accounts.filter((one) => one.ownerId === me) : [];
-}
-
 /** "Use this account for everyone in the pod as <slug>" is one request now,
  *  `POST /pods/{pod}/connector-accounts/{id}/share-as`: the server checks
  *  everything — that I own it and may manage connectors, that `slug` is free
@@ -134,14 +113,6 @@ export function ownedBy(accounts: PodAccount[], me: string): PodAccount[] {
  *  holds no copy of those rules to drift from the server's. */
 export function shareAsBody(slug: string, purpose = ""): { slug: string; purpose?: string } {
     return { slug, ...(purpose.trim() ? { purpose: purpose.trim() } : {}) };
-}
-
-/** The slug offered for sharing an account: a SHARED connector on its
- *  installation that has none yet, else a fresh one named for the connector. */
-export function suggestedSlug(account: PodAccount, connectors: PodConnector[]): string {
-    const waiting = connectors.find((one) => one.mode === "SHARED" && one.authConfigId === account.authConfigId && !one.sharedPodAccountId);
-    if (waiting) return waiting.slug;
-    return freshSlug((account.connectorId || "account") + "-shared", connectors.map((one) => one.slug));
 }
 
 /* ── where one of my accounts is used ──────────────────────────────── */
@@ -244,7 +215,7 @@ export function readImpact(raw: unknown): InstallationImpact {
             return {
                 podId: text(one["pod_id"]),
                 slug: text(one["slug"]),
-                mode: (text(one["mode"]).toUpperCase() === "SHARED" ? "SHARED" : "PER_MEMBER") as PodConnectorMode,
+                mode: (["SHARED", "APP"].includes(text(one["mode"]).toUpperCase()) ? text(one["mode"]).toUpperCase() : "PER_MEMBER") as PodConnectorMode,
             };
         }).filter((one) => one.slug),
     };
@@ -318,33 +289,4 @@ export function accountPatchBody(patch: PodAccountPatch): Record<string, unknown
     if (patch.isMemberDefault !== undefined) body.is_member_default = patch.isMemberDefault;
     if (patch.sandboxes !== undefined) body[SANDBOX_FIELD] = patch.sandboxes;
     return body;
-}
-
-/* ── sharing with some of the pod's roles ──────────────────────────── */
-
-/** A pod role an owner can share a RESTRICTED account with: everyone who
- *  holds it may use the account. */
-export interface ShareRole {
-    id: string;
-    /** The role's wire name: `POD_EDITOR`, or a custom one. */
-    name: string;
-    /** What the picker calls everyone holding it: "Editors". */
-    label: string;
-}
-
-function roleLabel(name: string): string {
-    const known = POD_ROLES.find((one) => one.value === name);
-    if (known) return known.role + "s";
-    const tidy = name.replace(/^POD_/, "").replaceAll("_", " ").toLowerCase();
-    return tidy ? tidy.charAt(0).toUpperCase() + tidy.slice(1) : name;
-}
-
-/** The pod's roles, off `GET /pods/{pod}/roles`. A grant names a role by its
- *  id, so a row without one is not offered. */
-export function readShareRoles(raw: unknown): ShareRole[] {
-    return items(raw).map((entry) => {
-        const row = record(entry);
-        const name = text(row["name"]);
-        return { id: text(row["id"]), name, label: roleLabel(name) };
-    }).filter((one) => one.id && one.name);
 }

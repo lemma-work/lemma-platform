@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import UUID
 
 from lemma_pod_bundle import (
@@ -244,6 +244,26 @@ def _left_out_message(
     )
 
 
+#: What an importer is told of a connector that declares as it is.
+_READY_MESSAGES = {
+    "PER_MEMBER": (
+        "Each member uses their own account; members who have none are "
+        "asked to connect one."
+    ),
+    "APP": (
+        "Acts as your organization's GitHub App, as nobody's account. It works "
+        "once an organization admin has installed the App on a GitHub "
+        "organization."
+    ),
+}
+
+
+def _plan_mode(connector: BundleConnector) -> Literal["PER_MEMBER", "SHARED", "APP"]:
+    if connector.is_app:
+        return "APP"
+    return "SHARED" if connector.is_shared else "PER_MEMBER"
+
+
 async def _plan_one(
     connector: BundleConnector,
     *,
@@ -256,7 +276,7 @@ async def _plan_one(
     plan = ConnectorPlan(
         slug=connector.slug,
         connector=connector.connector,
-        mode="SHARED" if connector.is_shared else "PER_MEMBER",
+        mode=_plan_mode(connector),
         required=connector.required,
         purpose=connector.purpose,
         visibility="RESTRICTED" if connector.visibility == "RESTRICTED" else "POD",
@@ -309,11 +329,8 @@ async def _plan_one(
             "Runs as one account for everyone. Share one of your own accounts "
             "for it, or it imports needing someone to share one."
         )
-    elif connector.required:
-        update["message"] = (
-            "Each member uses their own account; members who have none are "
-            "asked to connect one."
-        )
+    elif connector.required or connector.is_app:
+        update["message"] = _READY_MESSAGES[connector.mode]
     return plan.model_copy(update=update)
 
 

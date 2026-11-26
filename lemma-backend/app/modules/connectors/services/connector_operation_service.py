@@ -17,7 +17,6 @@ from app.modules.connectors.api.schemas.connector_operation_schemas import (
 from app.modules.connectors.domain.connector import AuthProvider, kind_to_provider
 from app.modules.connectors.domain.errors import (
     ConnectorNotFoundError,
-    ConnectorReauthRequiredError,
     OperationNotFoundError,
 )
 from app.modules.connectors.domain.ports import (
@@ -36,7 +35,13 @@ from app.modules.connectors.services.operation_visibility import (
 )
 from app.modules.connectors.services.pod_connector_resolution import (
     PodConnectorResolver,
-    reauth_required_for,
+)
+from app.modules.connectors.services.pod_connector_operations import (
+    app_refusals_translated,
+    browse,
+    pod_connector_operations,
+    resolve_pod_connector_execution,
+    with_app_installation,
 )
 from app.modules.connectors.domain.account import AccountEntity, AccountStatus
 from app.modules.connectors.domain.auth_config import AuthConfigEntity
@@ -50,10 +55,6 @@ from app.modules.connectors.services.execution.plumbing import (
     build_dispatcher,
     execution_failures_translated,
     execution_request,
-)
-from app.modules.connectors.services.installation_reach import (
-    browsable,
-    connector_for_call,
 )
 from app.modules.connectors.services.credential_freshness import (
     is_oauth_account,
@@ -87,7 +88,7 @@ class ConnectorOperationService:
             raise ConnectorNotFoundError(connector_id)
         return connector
 
-    async def _list_operation_entities(
+    async def list_operation_entities(
         self,
         connector_id: str,
         *,
@@ -123,7 +124,7 @@ class ConnectorOperationService:
         )
         return auth_config, auth_config.connector_id, auth_config.kind.value
 
-    def _build_operation_summary(
+    def operation_summary(
         self,
         operation: Any,
         *,
@@ -223,12 +224,12 @@ class ConnectorOperationService:
         search_query: str | None = None,
         limit: int | None = None,
     ) -> list[OperationSummary]:
-        operations = await self._list_operation_entities(
+        operations = await self.list_operation_entities(
             connector_id,
             search_query=search_query,
             limit=limit,
         )
-        return [self._build_operation_summary(operation) for operation in operations]
+        return [self.operation_summary(operation) for operation in operations]
 
     async def discover_operations_for_auth_config(
         self,
@@ -260,7 +261,7 @@ class ConnectorOperationService:
         kind: str | None = None,
         auth_config_id: UUID | None = None,
     ) -> OperationDiscoverResponse:
-        selected_operations = await self._list_operation_entities(
+        selected_operations = await self.list_operation_entities(
             connector_id,
             kind=kind,
             search_query=query,
@@ -285,7 +286,7 @@ class ConnectorOperationService:
             )
 
         items = [
-            self._build_operation_summary(operation, query=query)
+            self.operation_summary(operation, query=query)
             for operation in selected_operations
         ]
         return OperationDiscoverResponse(
@@ -368,7 +369,7 @@ class ConnectorOperationService:
             # so reading the connector's catalog to return `limit` of them is
             # the cost this endpoint's own docstring warns about, paid anyway.
             selected_operations = list(
-                await self._list_operation_entities(
+                await self.list_operation_entities(
                     connector_id,
                     kind=kind,
                     auth_config_id=auth_config_id,
@@ -435,54 +436,22 @@ class ConnectorOperationService:
     ) -> OperationDiscoverResponse:
         """The operations a pod connector offers, to someone who may run them
         -- or, named by an installation or catalog id the pod has no connector
-        for, what it would offer: browsing declares nothing."""
-        connector_id, kind, auth_config_id = await self._browse(ctx, pod_id, slug)
-        return await self.discover_operations(
-            connector_id,
-            query=query,
-            limit=limit,
-            kind=kind,
-            auth_config_id=auth_config_id,
+        for, what it would offer: browsing declares nothing. An APP connector
+        leaves out what GitHub opens only to a person."""
+        return await pod_connector_operations(
+            self, ctx, pod_id=pod_id, slug=slug, query=query, limit=limit
         )
 
     async def pod_connector_operation(
         self, ctx: Context, *, pod_id: UUID, slug: str, operation_name: str
     ) -> OperationDetail:
-        connector_id, kind, auth_config_id = await self._browse(ctx, pod_id, slug)
+        target = await browse(self, ctx, pod_id, slug)
         return await self.get_operation_details(
-            connector_id, operation_name, kind=kind, auth_config_id=auth_config_id
+            target.connector_id,
+            operation_name,
+            kind=target.kind,
+            auth_config_id=target.auth_config_id,
         )
-
-    async def _browse(
-        self, ctx: Context, pod_id: UUID, name: str
-    ) -> tuple[str, str | None, UUID | None]:
-        """Connector, kind and install whose operations ``name`` shows: a pod
-        connector the caller may use, else an installation or catalog entry
-        the pod has none for (``browsable``)."""
-        if self.connector_service is not None:
-            found = await browsable(
-                self.pod_connector_resolver,
-                self.connector_service.connector_repository,
-                ctx,
-                pod_id,
-                name,
-            )
-            if found is not None:
-                return found.connector_id, found.kind, found.auth_config_id
-        _, auth_config = await self._usable_pod_connector(ctx, pod_id, name)
-        return auth_config.connector_id, auth_config.kind.value, auth_config.id
-
-    async def _usable_pod_connector(self, ctx: Context, pod_id: UUID, slug: str):
-        connector = await self.pod_connector_resolver.connector(pod_id, slug)
-        if self.connector_service is None:
-            raise ConnectorNotFoundError(slug)
-        auth_config = await self.connector_service.auth_config_repository.get(
-            connector.auth_config_id
-        )
-        if auth_config is None:
-            raise ConnectorNotFoundError(slug)
-        await self.pod_connector_resolver.require_use(ctx, connector, auth_config)
-        return connector, auth_config
 
     async def resolve_pod_connector_execution(
         self,
@@ -497,24 +466,37 @@ class ConnectorOperationService:
         """Authorize, pick the account, and load everything the call needs.
 
         The account is never an input. The pod connector's mode and the actor
-        decide it (``PodConnectorResolver.resolve``), so nothing a caller types
-        -- a model least of all -- chooses whose credential a call runs as.
+        decide it (``PodConnectorResolver.resolve_any``), so nothing a caller
+        types -- a model least of all -- chooses whose credential a call runs
+        as. An APP connector runs as nobody's: the organization's GitHub App.
         """
-        pod_connector = await connector_for_call(
-            self.pod_connector_resolver, ctx, pod_id, slug
+        return await resolve_pod_connector_execution(
+            self,
+            ctx,
+            pod_id=pod_id,
+            slug=slug,
+            operation_name=operation_name,
+            payload=payload,
+            act_as=act_as,
         )
-        resolved = await self.pod_connector_resolver.resolve(ctx, pod_connector)
-        try:
-            return await self.execution_for(
-                ctx,
-                auth_config=resolved.auth_config,
-                account=resolved.account,
-                operation_name=operation_name,
-                payload=payload,
-                act_as=act_as,
+
+    async def operation_for(self, auth_config: AuthConfigEntity, operation_name: str):
+        """An install's discovered operation, which wins over a catalog one of
+        the same name: the install describes the server actually being called."""
+        operation = None
+        if self.auth_config_operation_repository:
+            operation = (
+                await self.auth_config_operation_repository.get_by_auth_config_and_name(
+                    auth_config.id, operation_name
+                )
             )
-        except ConnectorReauthRequiredError as exc:
-            raise reauth_required_for(ctx, pod_connector, resolved) from exc
+        if operation is None:
+            operation = await self.operation_repository.get_by_connector_kind_and_name(
+                auth_config.connector_id, auth_config.kind.value, operation_name
+            )
+        if not operation:
+            raise OperationNotFoundError(operation_name)
+        return operation
 
     async def execution_for(
         self,
@@ -529,21 +511,7 @@ class ConnectorOperationService:
         connector_id = auth_config.connector_id
         kind = auth_config.kind.value
 
-        # An install's discovered operation wins over a catalog one of the same
-        # name: the install describes the server actually being called.
-        operation = None
-        if self.auth_config_operation_repository:
-            operation = (
-                await self.auth_config_operation_repository.get_by_auth_config_and_name(
-                    auth_config.id, operation_name
-                )
-            )
-        if operation is None:
-            operation = await self.operation_repository.get_by_connector_kind_and_name(
-                connector_id, kind, operation_name
-            )
-        if not operation:
-            raise OperationNotFoundError(operation_name)
+        operation = await self.operation_for(auth_config, operation_name)
 
         provider = kind_to_provider(kind)
         credentials = (
@@ -593,7 +561,12 @@ class ConnectorOperationService:
         connection: the gateway's connector-validation read is skipped because
         ``provider`` is supplied (the connector was validated in the resolve
         phase), and the concrete provider gateways are DB-free."""
-        with operation_execution_recorded(resolved), execution_failures_translated():
+        resolved = await with_app_installation(resolved)
+        with (
+            operation_execution_recorded(resolved),
+            execution_failures_translated(),
+            app_refusals_translated(resolved),
+        ):
             result = await self._dispatcher().execute(
                 execution_request(self._dispatcher(), resolved)
             )

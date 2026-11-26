@@ -219,7 +219,9 @@ def app_request_of(connection: HTTPConnection) -> AppOnHost | None:
     return getattr(connection.state, "app_request", None)
 
 
-def refuse_other_pod(connection: HTTPConnection, named: UUID | None) -> bool:
+def refuse_other_pod(
+    connection: HTTPConnection, named: UUID | None, *, always: bool = False
+) -> bool:
     """Refuse an app's page naming a pod other than its own in a body or query.
 
     The pin reads only path parameters; a route outside ``/pods/{pod_id}`` that
@@ -227,13 +229,18 @@ def refuse_other_pod(connection: HTTPConnection, named: UUID | None) -> bool:
     it does nothing. Under the same switch as a path's pod: until
     ``app_pin_cross_pod_enforced`` is on, another pod is recorded and served,
     and True says so.
+
+    ``always`` refuses whatever the switch says. For a body field that is
+    new, which no app has ever relied on: the switch exists so apps already
+    reaching across pods are watched before they are stopped, and a field
+    nobody sends yet has nothing to watch.
     """
     app = app_request_of(connection)
     if app is None or named is None or named == app.pod_id:
         return False
     method = str(connection.scope.get("method", "GET")).upper()
     template = route_template(connection)
-    if not settings.app_pin_cross_pod_enforced:
+    if not always and not settings.app_pin_cross_pod_enforced:
         logger.warning(
             "apps.pin.cross_pod_observed",
             app_id=str(app.app_id),

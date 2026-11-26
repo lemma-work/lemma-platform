@@ -38,19 +38,11 @@ export function usePodMay(podId: string, action: string, asked = true): { allowe
     return { allowed: (permissions.data?.actions ?? []).includes(action), answered: permissions.isSuccess };
 }
 
-/** Everything a pod's connections are read from, once, under shared keys. */
-export function useConnectionsData(pod: Pod) {
-    const connectors = useQuery({ queryKey: ["pod-connectors", pod.id], queryFn: () => source.listPodConnectors(pod.id), staleTime: 30_000 });
-    const accounts = useQuery({ queryKey: ["accounts", pod.orgId], queryFn: () => source.listAccounts(pod.orgId), staleTime: 30_000 });
-    const catalog = useQuery({ queryKey: ["connectors"], queryFn: () => source.listConnectors(), staleTime: 10 * 60_000 });
-    /* Under the key the organization's Connectors page keeps them by. A
-       member who may not list them still connects, against the installation
-       the connector names. */
-    const installs = useQuery({ queryKey: ["installs", pod.orgId], queryFn: () => source.listInstallations(pod.orgId), staleTime: 60_000, retry: false });
-    const titles = useMemo(() => new Map((catalog.data ?? []).map((one) => [one.id, one])), [catalog.data]);
-    const mine = useMemo(() => asMine(accounts.data ?? []), [accounts.data]);
-    return { connectors, accounts, catalog, installs, titles, mine };
-}
+/** What a sign-in is started for: one of the pod's connectors, or an app it
+ *  does not use yet, keyed by the name a link used for it. The installation
+ *  is the one it runs through; empty lets the server pick the organization's
+ *  default. */
+export type ConnectTarget = Pick<PodConnector, "slug" | "connectorId" | "authConfigId"> & { installationName?: string };
 
 /** Starting the connect flow for one pod connector, and coming back.
  *
@@ -59,10 +51,15 @@ export function useConnectionsData(pod: Pod) {
  *  the address the person is on now, so a banner over an app comes back to the
  *  app and the Connections page to the connector it was opened on. A
  *  connector whose installation takes a credential rather than a sign-in
- *  opens the same dialog the organization's page does. */
+ *  opens the same dialog the organization's page does.
+ *
+ *  Every request names the pod (`pod_id`), so finishing the sign-in adds the
+ *  app to it and makes the account the person's own there: connecting from a
+ *  Lemma is connecting for it. A credential typed in the dialog makes its
+ *  account without a round trip, and is put in the pod here instead. */
 export function useConnectFlow(pod: Pod, titles: Map<string, Connector>, installs: Install[] = []) {
     const cache = useQueryClient();
-    const [dialog, setDialog] = useState<{ connector: PodConnector; entry: CatalogEntry; install: Install | null } | null>(null);
+    const [dialog, setDialog] = useState<{ connector: ConnectTarget; entry: CatalogEntry; install: Install | null } | null>(null);
     const [waiting, setWaiting] = useState<string | null>(null);
     const [problem, setProblem] = useState<{ slug: string; text: string } | null>(null);
     const [link, setLink] = useState<SignIn | null>(null);
@@ -74,10 +71,10 @@ export function useConnectFlow(pod: Pod, titles: Map<string, Connector>, install
     }, [cache, pod.id]);
     useConnectOutcome(() => { setWaiting(null); setLink(null); ISSUED.clear(); refresh(); }, refresh);
 
-    const appOf = (connector: PodConnector) => titles.get(connector.connectorId)?.title ?? connector.slug;
+    const appOf = (connector: ConnectTarget) => titles.get(connector.connectorId)?.title ?? connector.slug;
     /* The tab where it opens, and the link beside it whether or not it did:
        an in-app browser that swallows the tab leaves the person the link. */
-    const send = (connector: PodConnector, url: string) => {
+    const send = (connector: ConnectTarget, url: string) => {
         const app = appOf(connector);
         const opened = openAuthorization(url, app);
         setWaiting(opened ? connector.slug : null);
@@ -85,8 +82,8 @@ export function useConnectFlow(pod: Pod, titles: Map<string, Connector>, install
     };
 
     const start = useMutation({
-        mutationFn: ({ connector, fields }: { connector: PodConnector; fields?: Record<string, unknown> }) =>
-            source.startAccount(pod.orgId, connector.connectorId, connector.authConfigId || undefined, completionPath(hereWith()), fields),
+        mutationFn: ({ connector, fields }: { connector: ConnectTarget; fields?: Record<string, unknown> }) =>
+            source.startAccount(pod.orgId, connector.connectorId, connector.authConfigId || undefined, completionPath(hereWith()), fields, undefined, pod.id),
         onSuccess: (started, { connector }) => {
             setDialog(null);
             if (!started.authorizeUrl) {
@@ -100,7 +97,7 @@ export function useConnectFlow(pod: Pod, titles: Map<string, Connector>, install
     });
 
     /** Connect, or with `reconnect` sign in again on the same installation. */
-    const connect = (connector: PodConnector, reconnect = false) => {
+    const connect = (connector: ConnectTarget, reconnect = false) => {
         /* One sign-in at a time: a second click while the first is being
            fetched would only leave a second request waiting on the server. */
         if (start.isPending) return;
@@ -136,6 +133,7 @@ export function useConnectFlow(pod: Pod, titles: Map<string, Connector>, install
             mayInstall={false}
             authorizing={start.isPending}
             authorizeFailure={problem?.slug === dialog.connector.slug ? problem.text : null}
+            podId={pod.id}
             onClose={() => setDialog(null)}
             onDone={() => { setDialog(null); refresh(); }}
             onAuthorize={(_installId, fields) => start.mutate({ connector: dialog.connector, fields })}

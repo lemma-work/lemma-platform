@@ -346,6 +346,24 @@ def require_person(action_label: str):
     return Depends(_dependency)
 
 
+def require_person_or_own_app(action_label: str):
+    """Like :func:`require_person`, but a pod app's page may pass.
+
+    For a route whose body says how far it reaches, where the narrowest
+    answer is harmless from an app: adding the viewer's own account to the
+    pod for their own calls only. The route then refuses the app's page
+    itself (:func:`refuse_app_for_person`) for anything wider -- sharing it
+    with anyone -- which stays the person's own act in Lemma. Workloads are
+    refused here as before.
+    """
+
+    async def _dependency(request: Request) -> None:
+        if getattr(request.state, "delegation_claims", None) is not None:
+            raise refuse_workload(action_label)
+
+    return Depends(_dependency)
+
+
 def refuse_named_workloads(action_label: str):
     """Close a pod route to named agents and functions, but not the assistant.
 
@@ -379,6 +397,7 @@ __all__ = [
     "WORKLOAD_ROUTES",
     "refuse_workload",
     "require_person",
+    "require_person_or_own_app",
     "route_template",
     "workload_may_call",
 ]

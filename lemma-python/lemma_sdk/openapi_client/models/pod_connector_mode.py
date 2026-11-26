@@ -2,6 +2,7 @@ from enum import Enum
 
 
 class PodConnectorMode(str, Enum):
+    APP = "APP"
     PER_MEMBER = "PER_MEMBER"
     SHARED = "SHARED"
 

@@ -17,7 +17,10 @@ from app.modules.schedule.services.trigger_fire import (
 from app.modules.connectors.contracts.pod_connectors import (
     standing_resolutions_once,
 )
-from app.modules.schedule.services.schedule_connector_policy import standing_account
+from app.modules.schedule.services.schedule_connector_policy import (
+    StandingIdentity,
+    standing_identity,
+)
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.modules.schedule.services.webhook_event_mapper import WebhookEventMapper
 from app.modules.schedule.services.webhook_schedule_matcher import (
@@ -28,9 +31,10 @@ from app.core.log.log import get_logger
 logger = get_logger(__name__)
 
 
-#: The account a schedule's pod connector resolves to right now, as its owner,
-#: or ``None`` when it no longer resolves at all.
-BoundAccount = Callable[[Any, ScheduleEntity], Awaitable[UUID | None]]
+#: The account a schedule's pod connector resolves to right now, as its owner
+#: -- or ``APP_IDENTITY`` for an APP connector -- or ``None`` when it no longer
+#: resolves at all.
+BoundAccount = Callable[[Any, ScheduleEntity], Awaitable[StandingIdentity | None]]
 
 
 def _narrowed(
@@ -58,7 +62,8 @@ async def _still_bound(
     whatever its routing key still says.
 
     ``verified_by`` is the account a source proved the delivery with its own
-    secret: only a schedule resolving to that very account may claim it.
+    secret: only a schedule resolving to that very account may claim it -- so
+    never one on an APP connector, which has no account.
     """
     kept: list[ScheduleEntity] = []
     # Several schedules on one connector and owner share one resolution.
@@ -164,7 +169,7 @@ async def fire_heard_event(
     *,
     matcher: WebhookScheduleMatcher | None = None,
     fire: FireTrigger = fire_trigger,
-    bound_account: BoundAccount = standing_account,
+    bound_account: BoundAccount = standing_identity,
 ) -> list[UUID]:
     """Fire the WEBHOOK schedules an event another module heard matches.
 
@@ -212,7 +217,7 @@ class WebhookHandler:
         uow_factory: Any = None,
         event_mapper: WebhookEventMapper | None = None,
         fire: FireTrigger = fire_trigger,
-        bound_account: BoundAccount = standing_account,
+        bound_account: BoundAccount = standing_identity,
     ):
         """Take a way to *open* a unit of work, not an open one.
 

@@ -745,3 +745,124 @@ async def test_picking_a_trigger_and_a_connector_binds_the_routing_key(
     )
     assert response.status_code == 200, response.text
     await _wait_for_run_count(db_session, schedule["id"], count=1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("checked", [True, False], ids=["checked", "fresh"])
+async def test_a_schedule_on_the_bot_runs_on_its_installations_delivery(
+    authenticated_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    db_session: AsyncSession,
+    worker,
+    monkeypatch,
+    checked: bool,
+):
+    """An APP connector: nobody's account. The schedule is routed by the
+    App's installation the organization holds, and a signed delivery for it
+    runs the schedule -- with no person's account anywhere in the chain.
+
+    ``fresh``: a binding GitHub was never asked about, as an install leaves
+    it. Setting up the schedule asks GitHub then, rather than refusing
+    APP_NOT_INSTALLED until somebody happens to open the Connections page."""
+    from app.modules.connectors.domain.app_installation import AppInstallation
+    from datetime import UTC, datetime
+
+    from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
+    from app.modules.connectors.infrastructure.models.connector_installation import (
+        ConnectorInstallation,
+    )
+
+    _ = worker
+    installation_id = str(int(INSTALLATION_ID) + (7 if checked else 8))
+
+    async def github_says_octo(installation: str):
+        return AppInstallation(installation, "octo", "Organization", "all", True)
+
+    monkeypatch.setattr(
+        "app.modules.connectors.services.auth.github_app_installations"
+        ".fetch_app_installation",
+        github_says_octo,
+    )
+    await _seed_connector_trigger(
+        db_session,
+        connector_id="github",
+        trigger_id=TRIGGER_ID,
+        event_type="pull_request",
+    )
+    auth_config = AuthConfig(
+        organization_id=fixed_test_org["id"],
+        connector_id="github",
+        kind="http",
+        name=f"github-bot-{uuid4().hex[:8]}",
+    )
+    db_session.add(auth_config)
+    if (
+        await db_session.scalar(
+            select(ConnectorInstallation).where(
+                ConnectorInstallation.connector_id == "github",
+                ConnectorInstallation.external_id == installation_id,
+            )
+        )
+        is None
+    ):
+        db_session.add(
+            ConnectorInstallation(
+                connector_id="github",
+                external_id=installation_id,
+                organization_id=UUID(str(fixed_test_org["id"])),
+                proven_at=datetime.now(UTC),
+                details=(
+                    {
+                        "account": {
+                            "login": "octo",
+                            "type": "Organization",
+                            "repository_selection": "all",
+                            "checked_at": datetime.now(UTC).isoformat(),
+                        }
+                    }
+                    if checked
+                    else {}
+                ),
+            )
+        )
+    await db_session.commit()
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    declared = await authenticated_client.post(
+        f"/pods/{pod_id}/connectors",
+        json={"auth_config_id": str(auth_config.id), "mode": "APP"},
+    )
+    assert declared.status_code == 201, declared.text
+    assert declared.json()["slug"] == "github"
+    workflow = await _create_workflow(
+        authenticated_client,
+        pod_id,
+        start={
+            "type": "EVENT",
+            "config": {
+                "connector_id": "github",
+                "connector_trigger_id": TRIGGER_ID,
+                "trigger_config": {"source": "github"},
+            },
+        },
+        name_prefix="github-bot-webhook",
+    )
+    schedule = await _create_schedule(
+        authenticated_client,
+        pod_id,
+        schedule_type=ScheduleType.WEBHOOK.value,
+        workflow_name=workflow["name"],
+        pod_connector="github",
+        config={"source": "github", "event": "pull_request", "owner": "octo"},
+    )
+    assert schedule["config"]["installation_id"] == installation_id
+
+    response = await _deliver(
+        authenticated_client,
+        _payload(installation_id=installation_id),
+        delivery_id=f"bot-{uuid4()}",
+    )
+    assert response.status_code == 200, response.text
+
+    runs = await _wait_for_run_count(db_session, schedule["id"], count=1)
+    assert runs[0].source_event_id

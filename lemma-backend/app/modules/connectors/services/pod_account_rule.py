@@ -27,6 +27,11 @@ it again:
   the pod as PERSONAL.
 - Either way the account must exist, and not need a reconnect that trying it
   again cannot rule out (``reauth_recovery``).
+- APP: no account at all. ``pick`` refuses it (``APP_CONNECTOR_UNSUPPORTED``),
+  so everything that reads an account -- a surface, the sandbox, publishing --
+  refuses it by construction; ``pick_any`` returns it as a
+  ``ResolvedAppConnector`` carrying the organization's App installations, for
+  the two that can act as the App: operations and schedules.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ from uuid import UUID
 
 from app.core.config import settings
 from app.modules.connectors.domain.account import AccountEntity
+from app.modules.connectors.domain.app_installation import AppInstallation
 from app.modules.connectors.domain.auth_config import AuthConfigEntity
 from app.modules.connectors.domain.pod_connector import (
     PodAccountEntity,
@@ -46,6 +52,7 @@ from app.modules.connectors.domain.pod_connector import (
     PodConnectorMode,
 )
 from app.modules.connectors.domain.pod_connector_errors import (
+    AppConnectorUnsupportedError,
     ConnectionRequiredError,
     ConnectionRequiresPersonError,
     ConnectorNeedsAccountError,
@@ -61,6 +68,13 @@ from app.modules.connectors.services.reauth_recovery import reauth_blocks_use
 SharedAccountCheck = Callable[[PodAccountEntity], Awaitable[None]]
 #: ``(pod_id, user_id) -> bool``: still a member of the pod right now.
 PodMembership = Callable[[UUID, UUID], Awaitable[bool]]
+#: ``(organization_id) -> installations``: the organization's proven GitHub App
+#: bindings (``github_app_installations.bound_app_installations``).
+AppInstallationsReader = Callable[[UUID], Awaitable[tuple[AppInstallation, ...]]]
+
+
+async def _no_app_installations(_organization_id: UUID) -> tuple[AppInstallation, ...]:
+    return ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +83,19 @@ class ResolvedPodConnector:
     pod_account: PodAccountEntity
     account: AccountEntity
     auth_config: AuthConfigEntity
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedAppConnector:
+    """An APP connector, resolved: nobody's account, the App's installations.
+
+    Which installation a call acts on is picked per call, from the repository
+    owner it names (``domain/app_installation.pick_installation``).
+    """
+
+    pod_connector: PodConnectorEntity
+    auth_config: AuthConfigEntity
+    app_installations: tuple[AppInstallation, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,10 +142,31 @@ class PodAccountPicker:
         pod_accounts: PodAccountRepository,
         accounts: AccountRepositoryPort,
         is_pod_member: PodMembership,
+        app_installations: AppInstallationsReader = _no_app_installations,
     ):
         self.pod_accounts = pod_accounts
         self.accounts = accounts
         self.is_pod_member = is_pod_member
+        self.app_installations = app_installations
+
+    async def pick_any(
+        self,
+        pod_connector: PodConnectorEntity,
+        auth_config: AuthConfigEntity,
+        ask: AccountAsk,
+    ) -> ResolvedPodConnector | ResolvedAppConnector:
+        """``pick``, or the App for an APP connector.
+
+        The ask's account half has nothing to check for APP: ``connector.use``
+        on the connector, asked by the caller before this, is the whole gate.
+        """
+        if pod_connector.mode is not PodConnectorMode.APP:
+            return await self.pick(pod_connector, auth_config, ask)
+        return ResolvedAppConnector(
+            pod_connector=pod_connector,
+            auth_config=auth_config,
+            app_installations=await self.app_installations(auth_config.organization_id),
+        )
 
     async def pick(
         self,
@@ -126,6 +174,8 @@ class PodAccountPicker:
         auth_config: AuthConfigEntity,
         ask: AccountAsk,
     ) -> ResolvedPodConnector:
+        if pod_connector.mode is PodConnectorMode.APP:
+            raise AppConnectorUnsupportedError(slug=pod_connector.slug)
         if pod_connector.mode is PodConnectorMode.SHARED:
             pod_account = await self.shared_account(pod_connector)
             await ask.shared_check(pod_account)
@@ -239,8 +289,10 @@ class PodAccountPicker:
 
 __all__ = [
     "AccountAsk",
+    "AppInstallationsReader",
     "PodAccountPicker",
     "PodMembership",
+    "ResolvedAppConnector",
     "ResolvedPodConnector",
     "SharedAccountCheck",
     "connect_url",
