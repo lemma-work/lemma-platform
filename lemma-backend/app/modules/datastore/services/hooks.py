@@ -153,6 +153,14 @@ async def _changeable_table(uow, pod_id: UUID, table_name: str, ctx: Context):
             "Each member sees only their own rows in this table, so a hook "
             "can't add rows to it"
         )
+    if table.contact_owned:
+        # A row there belongs to the contact it names, and a hook's sender is
+        # a service, not a contact: its rows would name nobody, and no contact
+        # could ever see them.
+        raise HookProblem(
+            "Each row in this table belongs to one contact, and a hook can't "
+            "say which, so it can't add rows to it"
+        )
     return table
 
 
@@ -406,7 +414,7 @@ async def _keep(
         hook, table = found[0], found[1]
         if not hook.enabled:
             raise HookDeliveryRefused(403, _TURNED_OFF)
-        if table.enable_rls:
+        if table.enable_rls or table.contact_owned:
             raise HookDeliveryRefused(409, _CLOSED)
         columns = _schemas(table)
         # The table may have changed since the hook was made: a column dropped,

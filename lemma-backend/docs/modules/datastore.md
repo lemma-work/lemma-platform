@@ -298,8 +298,9 @@ they can no longer change the table. With no `fields`, the whole body goes into
 the table's `payload` JSON column; with `fields`, each column takes the value at
 a dotted path into the body (`$` is the whole body). `received_at` and `hook`
 are filled when the table has them and no field maps them. A hook never writes
-a USER, FILE_PATH or VECTOR column, or one the table fills itself, and a table
-where each member sees only their own rows takes no hook.
+a USER, FILE_PATH or VECTOR column, or one the table fills itself. A table
+where each member sees only their own rows takes no hook, and nor does a
+contact-owned one: a hook cannot say which contact a row is for.
 
 The row is an **outside row**: its insert event names `hook:{name}`, so a
 DATASTORE schedule fires on it only when it sets `include_outside_rows`, and its

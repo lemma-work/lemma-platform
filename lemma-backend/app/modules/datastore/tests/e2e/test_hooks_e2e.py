@@ -243,6 +243,25 @@ async def test_a_hook_needs_a_table_it_can_fill_and_a_member_who_can_change_it(
     assert no_payload.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
     assert "payload" in no_payload.json()["message"]
 
+    per_contact = _name("tickets")
+    await pod_api.create_table(
+        {
+            "name": per_contact,
+            "enable_rls": False,
+            "contact_owned": True,
+            "contact_columns": ["payload"],
+            "columns": list(_INBOX),
+        }
+    )
+    on_contacts = await pod_api.request(
+        "POST",
+        f"/pods/{pod_api.pod_id}/datastore/hooks",
+        json={"name": "per-contact", "table": per_contact},
+    )
+    # Its rows would name no contact, so no contact could ever see them.
+    assert on_contacts.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert "contact" in on_contacts.json()["message"]
+
     table = await _table(pod_api, *_INBOX)
     viewer = DatastoreApi(async_client, pod_api.pod_id, user=member_users["viewer"])
     refused = await viewer.request(
