@@ -79,7 +79,7 @@ async def apply_connector(
     if choice is not None and choice.skip:
         raise StepNotApplicableError(
             f"Connector '{step.name}' ({connector.connector}) is optional and was "
-            "left out; grants on it were dropped."
+            "left out; the grants step says what became of grants on it."
         )
     if choice is None:
         raise PodBundleDomainError(

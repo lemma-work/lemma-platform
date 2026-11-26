@@ -16,7 +16,7 @@ from __future__ import annotations
 import csv
 import io
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from lemma_pod_bundle import load_resource_payload
@@ -30,6 +30,8 @@ from app.modules.pod_bundle.domain.errors import (
     StepNotApplicableError,
 )
 from app.modules.pod_bundle.infrastructure.connector_grants import (
+    hold_waiting_grants,
+    lock_waiting_grants,
     resolve_connector_grants,
 )
 from app.modules.pod_bundle.domain.connector_plan import ConnectorChoice
@@ -45,6 +47,9 @@ from app.modules.pod_bundle.infrastructure.grants import (
     grants_from_payload as _grants_from_payload,
     has_grants as _has_grants,
 )
+
+if TYPE_CHECKING:
+    from app.modules.connectors.contracts.bundles import WaitingConnectorGrant
 
 logger = get_logger(__name__)
 
@@ -404,7 +409,14 @@ class BundleApplier:
     ) -> None:
         """Replace the grantee's resource grants on the step's short UoW session,
         declaring first any connector they name that the pod does not, and
-        dropping those on one the import left out (see connector_grants.py)."""
+        holding those on one the import left out (see connector_grants.py)."""
+        waiting: list[WaitingConnectorGrant] = []
+        await lock_waiting_grants(
+            self._uow,
+            pod_id=self._pod_id,
+            grantee_type=grantee_type,
+            grantee_id=grantee_id,
+        )
         grants = await resolve_connector_grants(
             self._uow,
             self._ctx,
@@ -412,6 +424,8 @@ class BundleApplier:
             grants=grants,
             choices=self._connector_choices,
             warnings=self._warnings,
+            bundle_root=self._root,
+            waiting=waiting,
         )
         await apply_grants(
             self._uow.session,
@@ -421,6 +435,16 @@ class BundleApplier:
             grantee_id=grantee_id,
             grants=grants,
             created_by_user_id=self._user_id,
+        )
+        await hold_waiting_grants(
+            self._uow,
+            self._ctx,
+            pod_id=self._pod_id,
+            grantee_type=grantee_type,
+            grantee_id=grantee_id,
+            waiting=waiting,
+            created_by_user_id=self._user_id,
+            warnings=self._warnings,
         )
 
     # --- schedules -------------------------------------------------------

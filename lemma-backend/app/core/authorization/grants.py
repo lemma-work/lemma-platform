@@ -19,6 +19,7 @@ from app.core.authorization.grant_generation import (
 )
 from app.core.domain.errors import BadRequestError
 from app.core.authorization.models import ResourcePermissionGrantModel
+from app.core.authorization.pending_grants import forget_grantee_pending_grants
 from app.core.authorization.permission_rows import ensure_permission_rows
 from app.core.authorization.assistant_grants import split_assistant_grant
 from app.core.authorization.permissions import PERMISSION_BY_ID
@@ -212,6 +213,7 @@ async def replace_grantee_resource_grants(
         grantee_id=grantee_id,
         action=action,
     )
+    await forget_grantee_pending_grants(session, pod_id, grantee_type, grantee_id)
     await session.execute(
         delete(ResourcePermissionGrantModel).where(
             ResourcePermissionGrantModel.pod_id == pod_id,
@@ -374,7 +376,9 @@ async def delete_grantee_grants(
     grantee_type: str,
     grantee_id: UUID,
 ) -> None:
-    """Delete every grant held by a grantee. Use when the grantee is deleted."""
+    """Delete every grant held by a grantee, and every one it waits for
+    (`pending_grants.py`). Use when the grantee is deleted."""
+    await forget_grantee_pending_grants(session, pod_id, grantee_type, grantee_id)
     await session.execute(
         delete(ResourcePermissionGrantModel).where(
             ResourcePermissionGrantModel.pod_id == pod_id,
