@@ -148,12 +148,21 @@ async def _changeable_table(uow, pod_id: UUID, table_name: str, ctx: Context):
         table_name=table.table_name,
         ctx=ctx,
     )
-    if table.enable_rls:
+    return table
+
+
+def _require_open_to_hooks(*, enable_rls: bool, contact_owned: bool) -> None:
+    """Refuse a table whose rows each belong to one person.
+
+    Asked when a hook is made or its mapping changes -- never to switch one off,
+    rotate it or delete it, which must stay possible after its table closed.
+    """
+    if enable_rls:
         raise HookProblem(
             "Each member sees only their own rows in this table, so a hook "
             "can't add rows to it"
         )
-    if table.contact_owned:
+    if contact_owned:
         # A row there belongs to the contact it names, and a hook's sender is
         # a service, not a contact: its rows would name nobody, and no contact
         # could ever see them.
@@ -161,7 +170,6 @@ async def _changeable_table(uow, pod_id: UUID, table_name: str, ctx: Context):
             "Each row in this table belongs to one contact, and a hook can't "
             "say which, so it can't add rows to it"
         )
-    return table
 
 
 async def _named(
@@ -205,6 +213,9 @@ async def create_hook(
     if problem:
         raise HookProblem(problem)
     table = await _changeable_table(uow, pod_id, table_name, ctx)
+    _require_open_to_hooks(
+        enable_rls=table.enable_rls, contact_owned=table.contact_owned
+    )
     problem = fields_problem(
         table.columns, table.primary_key_column, HookFields(fields)
     )
@@ -298,6 +309,9 @@ async def update_hook(
     """
     hook, table = await _changeable_hook(uow, pod_id, name, ctx)
     if set_fields:
+        _require_open_to_hooks(
+            enable_rls=table.enable_rls, contact_owned=table.contact_owned
+        )
         problem = fields_problem(
             _schemas(table), table.primary_key_column, HookFields(fields)
         )

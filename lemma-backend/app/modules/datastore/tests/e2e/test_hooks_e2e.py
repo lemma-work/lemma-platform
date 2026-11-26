@@ -302,3 +302,27 @@ async def test_a_table_changed_under_its_hook_refuses_with_what_changed(
     assert refused.status_code == status.HTTP_409_CONFLICT, refused.text
     assert "changed since it was made" in refused.json()["message"]
     assert "payload" in (await _get(pod_api, hook["name"]))["last_error"]
+
+
+async def test_a_hook_whose_table_closed_can_still_be_switched_off_and_deleted(
+    pod_api: DatastoreApi, async_client: AsyncClient
+):
+    table = await _table(pod_api, *_INBOX)
+    hook = await _hook(pod_api, table)
+    closed = await pod_api.request(
+        "PATCH",
+        f"/pods/{pod_api.pod_id}/datastore/tables/{table}",
+        json={"contact_owned": True, "contact_columns": ["payload"]},
+    )
+    assert closed.status_code < 300, closed.text
+    path = f"/pods/{pod_api.pod_id}/datastore/hooks/{hook['name']}"
+
+    refused = await _post(async_client, hook["url"], json={"a": 1})
+    remapped = await pod_api.request("PATCH", path, json={"fields": {"payload": "$"}})
+    switched_off = await pod_api.request("PATCH", path, json={"enabled": False})
+    deleted = await pod_api.request("DELETE", path)
+
+    assert refused.status_code == status.HTTP_409_CONFLICT, refused.text
+    assert remapped.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert switched_off.status_code == status.HTTP_200_OK, switched_off.text
+    assert deleted.status_code == status.HTTP_204_NO_CONTENT, deleted.text
