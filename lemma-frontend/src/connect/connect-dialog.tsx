@@ -72,9 +72,12 @@ function useMachineApp(connectorId: string): { machine: string; open: () => void
  */
 export function ConnectDialog({
     orgId, connector, install, takenNames, mayInstall = null, authorizing = false, authorizeFailure = null,
-    ownAppFirst = false, onClose, onDone, onAuthorize,
+    ownAppFirst = false, podId, onClose, onDone, onAuthorize,
 }: {
     orgId: string;
+    /** The Lemma this is connected from: a typed credential is added to it
+     *  by the server, with the account, as a finished sign-in is. */
+    podId?: string;
     connector: CatalogEntry;
     /** Which install to connect against, when the organization has more than
      *  one. The API permits many installs of one connector deliberately.
@@ -217,7 +220,7 @@ export function ConnectDialog({
             }
             let made: { id?: string };
             try {
-                made = await connectAccount.mutateAsync({ installId, credentials: body });
+                made = await connectAccount.mutateAsync({ installId, credentials: body, podId });
             } catch (problem) {
                 /* Two calls, one act: an install made moments ago with nobody
                    on it would otherwise hold the connector's name, and every

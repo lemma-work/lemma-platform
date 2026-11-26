@@ -243,6 +243,38 @@ async def test_an_editor_adds_the_bot_from_an_apps_page(scenario, db_session, te
     assert declared["shared_pod_account_id"] is None
 
 
+async def test_a_lemma_has_one_bot(scenario, db_session):
+    """Two APP connectors would be the same bot under two names: a second is
+    refused, whether declared or changed to APP."""
+    world = await _github_world(scenario, db_session)
+    await _bound(db_session, world, login="acme")
+    first = await world.declare_bot()
+    assert first.status_code == status.HTTP_201_CREATED, first.text
+
+    second = await world.declare_bot(slug="github-bot-two")
+    per_member = await world.scenario.owner_client.post(
+        f"/pods/{world.pod_id}/connectors",
+        json={
+            "auth_config_id": world.auth_config_id,
+            "mode": "PER_MEMBER",
+            "slug": "github-mine",
+        },
+    )
+    assert per_member.status_code == status.HTTP_201_CREATED, per_member.text
+    switched = await world.scenario.owner_client.patch(
+        f"/pods/{world.pod_id}/connectors/github-mine", json={"mode": "APP"}
+    )
+    again = await world.scenario.owner_client.patch(
+        f"/pods/{world.pod_id}/connectors/{first.json()['slug']}",
+        json={"mode": "APP"},
+    )
+
+    for refused in (second, switched):
+        assert refused.status_code == status.HTTP_400_BAD_REQUEST, refused.text
+        assert refused.json()["details"]["reason"] == "app_mode_one_per_pod"
+    assert again.status_code == status.HTTP_200_OK, again.text
+
+
 async def test_only_github_can_be_the_bot(scenario, db_session):
     world = await _github_world(scenario, db_session)
     other = AuthConfig(

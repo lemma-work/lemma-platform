@@ -487,7 +487,11 @@ function ConnectionSheet({ pod, item, items, me, may, named, bot, flow, onShareM
     });
 
     const label = item.me.account?.label || item.me.existing?.label || "";
-    const botHere = hasBotMode(item.connectorId) && (bot !== null || item.mode === "APP");
+    /* Offered where it could be the Lemma's one bot: this connector already
+       is, or the organization has the App and no other connector here acts
+       as it (the server refuses a second, as the add dialog never offers one). */
+    const botHere = hasBotMode(item.connectorId)
+        && (item.mode === "APP" || (bot !== null && !items.some((one) => one.mode === "APP" && one.slug !== item.slug)));
     const ownGithub = items.some((one) => one.connectorId === item.connectorId && one.mode === "PER_MEMBER");
     const otherShared = item.mode === "SHARED" && !mineShared && item.runsAs.kind !== "nobody";
     const ownerName = item.runsAs.ownerName || "Someone";

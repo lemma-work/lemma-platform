@@ -680,7 +680,7 @@ test("an app's sheet says whose account it runs as, who has connected, and how t
     assert.match(said, /GitHub in Kit/);
     assert.match(said, /Each person’s own account/);
     assert.match(said, /Mine, for everyone/);
-    assert.match(said, /Kit’s bot/, "the organization's App is offered where it's installed");
+    assert.doesNotMatch(said, /Kit’s bot/, "Kit already has its bot (github-bot), so a second isn't offered");
     assert.match(said, /Who’s connected/);
     assert.ok(buttonNamed(sheet!, "Ask"), "Alice, asked by name");
     assert.ok(buttonNamed(sheet!, "Disconnect my account"));
@@ -735,6 +735,17 @@ test("adding GitHub where the organization's App is installed offers the bot fir
     assert.deepEqual(added, [{ slug: "github-bot", authConfigId: "", connectorId: "github", mode: "APP", sharedPodAccountId: "", required: false, purpose: "" }],
         "no slug asked for: github is taken, so github-bot");
     await act(async () => { await new Promise((done) => setTimeout(done, 20)); });
+});
+
+test("an app's sheet offers the bot only where it would be the Lemma's one bot", async (t) => {
+    const window = dom();
+    t.mock.method(liveSource, "podConnections", async () => CONNECTIONS);
+    t.mock.method(liveSource, "podConnectorCoverage", async () => readCoverage({}));
+    const withoutBot = { ...CONNECTIONS_RAW, items: CONNECTIONS_RAW.items.filter((one) => one.mode !== "APP") };
+    const holder = await drawPage(t, window, seeded(["pod.read", "pod.connector.manage", "connector.use"], withoutBot));
+    await click(window, buttonNamed(holder, "GitHub"));
+    const said = window.document.querySelector(".ksheet")?.textContent ?? "";
+    assert.match(said, /Kit’s bot/, "the organization's App, offered where no connector here acts as it yet");
 });
 
 test("the banner asks for the required connectors I have not connected, and nothing when I have", async (t) => {

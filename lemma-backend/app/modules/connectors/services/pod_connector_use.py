@@ -94,6 +94,28 @@ def require_valid_mode(
         )
 
 
+async def require_one_bot(
+    pod_connectors: PodConnectorRepository,
+    pod_id: UUID,
+    *,
+    slug: str | None = None,
+) -> None:
+    """A pod acts as the organization's GitHub App through one connector.
+
+    Two would be the same bot under two names, and an agent offered both has
+    nothing to choose between. Asked when declaring an APP connector and when
+    changing one to APP; ``slug`` is the connector being changed, which may
+    already be the one.
+    """
+    for one in await pod_connectors.list_by_pod(pod_id):
+        if one.mode is PodConnectorMode.APP and one.slug != slug:
+            raise PodConnectorValidationError(
+                f"'{one.slug}' already acts as the organization's app in this "
+                "pod; use it, or change it back first.",
+                reason="app_mode_one_per_pod",
+            )
+
+
 #: The slug an APP connector gets when the request names none and ``github``
 #: is taken -- by the pod's own per-member GitHub, usually.
 _APP_SLUG_FALLBACK = f"{GITHUB}-bot"
@@ -109,13 +131,16 @@ async def slug_to_declare(
     made free in this pod -- so declaring one needs no name invented. An APP
     connector defaults to ``github`` when free, else ``github-bot``.
 
-    The request's mode is checked first (``require_valid_mode``)."""
+    The request's mode is checked first (``require_valid_mode``, and
+    ``require_one_bot`` for APP)."""
     require_valid_mode(
         request.mode,
         auth_config,
         shared_pod_account_id=request.shared_pod_account_id,
         visibility=request.visibility,
     )
+    if request.mode is PodConnectorMode.APP:
+        await require_one_bot(pod_connectors, pod_id)
     requested = request.slug
     if requested is None:
         taken = {one.slug for one in await pod_connectors.list_by_pod(pod_id)}
@@ -132,4 +157,4 @@ async def slug_to_declare(
     return requested
 
 
-__all__ = ["can_use", "require_valid_mode", "slug_to_declare"]
+__all__ = ["can_use", "require_one_bot", "require_valid_mode", "slug_to_declare"]

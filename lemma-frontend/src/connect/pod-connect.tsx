@@ -133,14 +133,9 @@ export function useConnectFlow(pod: Pod, titles: Map<string, Connector>, install
             mayInstall={false}
             authorizing={start.isPending}
             authorizeFailure={problem?.slug === dialog.connector.slug ? problem.text : null}
+            podId={pod.id}
             onClose={() => setDialog(null)}
-            onDone={(accountId) => {
-                setDialog(null);
-                /* What a finished sign-in does on the server, done here for
-                   an account made from a typed credential. */
-                if (accountId) void source.addPodAccount(pod.id, accountId).catch(() => undefined).finally(refresh);
-                else refresh();
-            }}
+            onDone={() => { setDialog(null); refresh(); }}
             onAuthorize={(_installId, fields) => start.mutate({ connector: dialog.connector, fields })}
         />
     );

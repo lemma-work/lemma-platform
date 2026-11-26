@@ -79,6 +79,7 @@ from app.modules.connectors.services.pod_connector_presenting import (
     present_connector,
 )
 from app.modules.connectors.services.pod_connector_use import (
+    require_one_bot,
     require_valid_mode,
     slug_to_declare,
 )
@@ -197,6 +198,7 @@ class PodConnectorService:
                 shared_pod_account_id=data.shared_pod_account_id,
                 visibility=connector.visibility,
             )
+            await require_one_bot(self.pod_connectors, pod_id, slug=slug)
         if "shared_pod_account_id" in data.model_fields_set:
             if data.shared_pod_account_id is None:
                 connector = connector.model_copy(update={"shared_pod_account_id": None})
