@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import Enum
 from uuid import UUID
 
 from sqlalchemy import delete, select
@@ -87,6 +88,17 @@ def attachments_folder(table_name: str) -> str:
     return f"{FORM_FILES_ROOT}/{table_name}"
 
 
+class KeepAnswersPerDay(Enum):
+    """``open_table`` told nothing about the day's answers: keep what is set.
+
+    Opening again is how a page's columns or audience change, and most callers
+    -- the app's Collect responses sheet among them -- never mention the cap.
+    Only an explicit value, or an explicit ``None`` for the default, changes it.
+    """
+
+    KEEP = "keep"
+
+
 class OpeningRefused(ValueError):
     """Why a member cannot open this table, in words they can act on."""
 
@@ -147,13 +159,13 @@ async def open_table(
     audience: PublicAudience,
     columns: list[str],
     ctx: Context,
-    answers_per_day: int | None = None,
+    answers_per_day: int | None | KeepAnswersPerDay = KeepAnswersPerDay.KEEP,
 ) -> TableOpening:
     """Let people outside add rows to a table, as the member asking.
 
     ``answers_per_day`` is how many answers a day it takes, up to the
-    deployment's ceiling; ``None`` leaves it at the deployment's default.
-    Opening again replaces the whole setting, this included.
+    deployment's ceiling; ``None`` is the deployment's default, and leaving it
+    out keeps whatever was set (``KeepAnswersPerDay``).
     """
     tables = build_table_service(uow)
     table = await tables.get_table(pod_id, table_name, ctx)
@@ -180,11 +192,13 @@ async def open_table(
     if problem:
         raise OpeningRefused(problem)
     ceiling = public_web_answers_per_form_per_day_max()
-    if answers_per_day is not None and not 1 <= answers_per_day <= ceiling:
+    if isinstance(answers_per_day, int) and not 1 <= answers_per_day <= ceiling:
         raise OpeningRefused(
             f"A form can take between 1 and {ceiling} answers a day here"
         )
     grant = await _grant(uow, table.id)
+    if isinstance(answers_per_day, KeepAnswersPerDay):
+        answers_per_day = grant.answers_per_day if grant else None
     if grant is None:
         uow.session.add(
             DatastorePublicRowsModel(

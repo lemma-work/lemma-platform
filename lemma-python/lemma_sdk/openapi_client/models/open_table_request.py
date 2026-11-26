@@ -19,8 +19,8 @@ class OpenTableRequest:
         audience (PublicAudience): Who outside the pod may add rows.
         columns (list[str]): The columns people outside may fill, in the order to ask them. Checked against the table
             when it is opened.
-        answers_per_day (int | None | Unset): How many answers a day it takes, up to `answers_per_day_max`. Omitted, the
-            deployment's default. Opening again replaces it.
+        answers_per_day (int | None | Unset): How many answers a day it takes, up to `answers_per_day_max`; null is the
+            deployment's default. Omitted, it stays as it is.
     """
 
     audience: PublicAudience

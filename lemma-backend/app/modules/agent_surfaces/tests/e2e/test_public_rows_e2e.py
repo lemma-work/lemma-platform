@@ -181,14 +181,16 @@ async def test_with_bot_protection_on_each_unconfirmed_answer_takes_its_own_proo
     with nothing else. With protection on -- the default -- every answer from
     somebody the pod has not confirmed carries a proof solved for an answer:
     none, a reused one or a chat's one is refused and adds nothing, and the
-    proof is asked before the send is counted. A confirmed contact sends none."""
+    proof is asked before the send is counted -- the form takes two a day, so
+    three refused tries counted first would leave the real answers nothing. A
+    confirmed contact sends none."""
     from app.core.config import settings
     from app.core.public_web import public_web_settings
     from app.modules.identity.config import identity_settings
 
     pod_id = test_pod["id"]
     table = await _signups(authenticated_client, pod_id, "guarded_signups")
-    opened = await _open(authenticated_client, pod_id, table)
+    opened = await _open(authenticated_client, pod_id, table, answers_per_day=2)
     assert opened.status_code == 200, opened.text
     widget = await _widget(authenticated_client, pod_id, name="Guarded form")
     key = widget["public_key"]
@@ -303,10 +305,16 @@ async def test_each_form_takes_its_own_answers_a_day(
     assert await answer(first, other, "Elsewhere") == 201
     assert len(await _rows(authenticated_client, pod_id, small)) == 2
 
+    # Opening again without a word on the cap -- as the app's sheet does when
+    # it saves columns -- keeps it; only an explicit null goes back to default.
+    reopened = await _open(authenticated_client, pod_id, small, audience="anyone")
+    assert reopened.json()["answers_per_day"] == 2
     reread = await authenticated_client.get(
         f"/pods/{pod_id}/datastore/tables/{small}/public-rows"
     )
     assert reread.json()["answers_per_day"] == 2
+    cleared = await _open(authenticated_client, pod_id, small, answers_per_day=None)
+    assert cleared.json()["answers_per_day"] is None
 
 
 async def test_a_table_opens_only_in_a_way_that_can_work(

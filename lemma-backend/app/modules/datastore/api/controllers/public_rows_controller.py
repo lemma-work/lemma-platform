@@ -22,6 +22,7 @@ from app.core.public_web import (
 )
 from app.modules.datastore.domain.public_rows import PublicAudience, PublicColumn
 from app.modules.datastore.services.public_rows import (
+    KeepAnswersPerDay,
     OpeningRefused,
     TableOpening,
     close_table,
@@ -84,8 +85,8 @@ class OpenTableRequest(BaseModel):
         default=None,
         ge=1,
         description=(
-            "How many answers a day it takes, up to `answers_per_day_max`. "
-            "Omitted, the deployment's default. Opening again replaces it."
+            "How many answers a day it takes, up to `answers_per_day_max`; "
+            "null is the deployment's default. Omitted, it stays as it is."
         ),
     )
 
@@ -173,7 +174,11 @@ async def put_public_rows(
             audience=request.audience,
             columns=request.columns,
             ctx=ctx,
-            answers_per_day=request.answers_per_day,
+            answers_per_day=(
+                request.answers_per_day
+                if "answers_per_day" in request.model_fields_set
+                else KeepAnswersPerDay.KEEP
+            ),
         )
     except OpeningRefused as exc:
         # A code, so a client can tell "this table can't be opened like that"
