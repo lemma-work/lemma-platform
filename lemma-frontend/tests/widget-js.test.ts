@@ -501,6 +501,53 @@ test("a page's own form is never submitted by the browser, and is sent as a row"
     assert.equal(page.window.document.querySelector("div"), null);
 });
 
+test("an unconfirmed visitor's every answer carries its own proof, and a contact's none", async () => {
+    // A challenge the solver meets at its first number, so the test waits on nothing.
+    const { createHash } = await import("node:crypto");
+    const salt = "s1?expires=9999999999";
+    const challenge = { enabled: true, algorithm: "SHA-256", salt, maxnumber: 10, signature: "sig", challenge: createHash("sha256").update(salt + "0").digest("hex") };
+    const asked: string[] = [];
+    const routes = {
+        "GET /challenge": (call: Call) => {
+            asked.push(call.path);
+            return json(challenge);
+        },
+        "POST /rows": () => json({ ok: true }, 201),
+        "POST /rows/with-files": () => json({ ok: true }, 201),
+        "GET /table": () => json({ table: "jobs", contacts_only: false, columns: [{ name: "cv", type: "FILE_PATH", required: false, options: [], description: null, input: "file" }] }),
+    };
+    // jsdom has no SubtleCrypto; the browser's solver needs one.
+    const solving = (page: ReturnType<typeof load>) => {
+        Object.defineProperty(page.window, "crypto", { value: globalThis.crypto, configurable: true });
+        page.window.TextEncoder = TextEncoder;
+        return page;
+    };
+    const page = solving(load({ script: QUIET, routes }));
+    const lemma = page.window.Lemma as { addRow(table: string, values: Record<string, unknown>): Promise<unknown> };
+
+    await lemma.addRow("signups", { full_name: "Ana" });
+    await lemma.addRow("signups", { full_name: "Bo" });
+    assert.deepEqual(asked, ["/challenge?purpose=session", "/challenge?purpose=row", "/challenge?purpose=row"]);
+    const rows = page.calls.filter((call) => call.path === "/rows");
+    assert.equal(rows.length, 2);
+    for (const row of rows) {
+        const proof = JSON.parse(Buffer.from(String(row.body?.altcha), "base64url").toString());
+        assert.equal(proof.number, 0);
+    }
+
+    // With files, the proof is in the query: the server checks it before the body.
+    await lemma.addRow("jobs", { cv: new page.window.File(["%PDF"], "cv.pdf") });
+    const withFiles = page.calls.find((call) => call.path.startsWith("/rows/with-files"));
+    assert.match(withFiles?.path ?? "", /^\/rows\/with-files\?table=jobs&altcha=[\w-]+$/);
+
+    const contact = solving(load({ script: QUIET, routes: { ...routes, "POST /session": () => json({ ...SESSION, is_contact: true }) } }));
+    const theirs = contact.window.Lemma as typeof lemma;
+    await theirs.addRow("signups", { full_name: "Cy" });
+    const row = contact.calls.find((call) => call.path === "/rows");
+    assert.deepEqual(row?.body, { table: "signups", values: { full_name: "Cy" } });
+    assert.deepEqual(contact.calls.filter((call) => call.path.startsWith("/challenge")).map((call) => call.path), ["/challenge?purpose=session"]);
+});
+
 test("the hosted form is drawn when no session starts, and says why", async () => {
     const page = load({
         script: 'data-lemma-page data-lemma-table="signups" data-lemma-chat="off"',

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, Index, String
+from sqlalchemy import ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -40,3 +40,6 @@ class DatastorePublicRowsModel(UUIDAuditBase):
     opened_by: Mapped[UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
+    #: How many answers a day the table takes from outside; ``None`` is the
+    #: deployment's default. Never above ``public_web_answers_per_form_per_day_max``.
+    answers_per_day: Mapped[int | None] = mapped_column(Integer, nullable=True)

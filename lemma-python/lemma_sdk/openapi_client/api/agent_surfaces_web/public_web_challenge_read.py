@@ -7,6 +7,7 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
+from ...models.public_web_challenge_read_purpose import PublicWebChallengeReadPurpose
 from ...models.public_web_challenge_read_response_public_web_challenge_read import (
     PublicWebChallengeReadResponsePublicWebChallengeRead,
 )
@@ -16,12 +17,17 @@ from ...types import UNSET, Response, Unset
 def _get_kwargs(
     public_key: str,
     *,
-    purpose: str | Unset = "session",
+    purpose: PublicWebChallengeReadPurpose
+    | Unset = PublicWebChallengeReadPurpose.SESSION,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
 
-    params["purpose"] = purpose
+    json_purpose: str | Unset = UNSET
+    if not isinstance(purpose, Unset):
+        json_purpose = purpose.value
+
+    params["purpose"] = json_purpose
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -72,17 +78,20 @@ def sync_detailed(
     public_key: str,
     *,
     client: AuthenticatedClient | Client,
-    purpose: str | Unset = "session",
+    purpose: PublicWebChallengeReadPurpose
+    | Unset = PublicWebChallengeReadPurpose.SESSION,
 ) -> Response[ErrorResponse | PublicWebChallengeReadResponsePublicWebChallengeRead]:
     r"""Web Challenge
 
-     A proof-of-work to solve before starting a session or asking for a code.
+     A proof-of-work to solve before starting a session, asking for a code,
+    or sending an answer from somebody the pod has not confirmed (``row``).
 
     ``{\"enabled\": false}`` when the deployment has bot protection off.
 
     Args:
         public_key (str):
-        purpose (str | Unset):  Default: 'session'.
+        purpose (PublicWebChallengeReadPurpose | Unset):  Default:
+            PublicWebChallengeReadPurpose.SESSION.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -108,17 +117,20 @@ def sync(
     public_key: str,
     *,
     client: AuthenticatedClient | Client,
-    purpose: str | Unset = "session",
+    purpose: PublicWebChallengeReadPurpose
+    | Unset = PublicWebChallengeReadPurpose.SESSION,
 ) -> ErrorResponse | PublicWebChallengeReadResponsePublicWebChallengeRead | None:
     r"""Web Challenge
 
-     A proof-of-work to solve before starting a session or asking for a code.
+     A proof-of-work to solve before starting a session, asking for a code,
+    or sending an answer from somebody the pod has not confirmed (``row``).
 
     ``{\"enabled\": false}`` when the deployment has bot protection off.
 
     Args:
         public_key (str):
-        purpose (str | Unset):  Default: 'session'.
+        purpose (PublicWebChallengeReadPurpose | Unset):  Default:
+            PublicWebChallengeReadPurpose.SESSION.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -139,17 +151,20 @@ async def asyncio_detailed(
     public_key: str,
     *,
     client: AuthenticatedClient | Client,
-    purpose: str | Unset = "session",
+    purpose: PublicWebChallengeReadPurpose
+    | Unset = PublicWebChallengeReadPurpose.SESSION,
 ) -> Response[ErrorResponse | PublicWebChallengeReadResponsePublicWebChallengeRead]:
     r"""Web Challenge
 
-     A proof-of-work to solve before starting a session or asking for a code.
+     A proof-of-work to solve before starting a session, asking for a code,
+    or sending an answer from somebody the pod has not confirmed (``row``).
 
     ``{\"enabled\": false}`` when the deployment has bot protection off.
 
     Args:
         public_key (str):
-        purpose (str | Unset):  Default: 'session'.
+        purpose (PublicWebChallengeReadPurpose | Unset):  Default:
+            PublicWebChallengeReadPurpose.SESSION.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -173,17 +188,20 @@ async def asyncio(
     public_key: str,
     *,
     client: AuthenticatedClient | Client,
-    purpose: str | Unset = "session",
+    purpose: PublicWebChallengeReadPurpose
+    | Unset = PublicWebChallengeReadPurpose.SESSION,
 ) -> ErrorResponse | PublicWebChallengeReadResponsePublicWebChallengeRead | None:
     r"""Web Challenge
 
-     A proof-of-work to solve before starting a session or asking for a code.
+     A proof-of-work to solve before starting a session, asking for a code,
+    or sending an answer from somebody the pod has not confirmed (``row``).
 
     ``{\"enabled\": false}`` when the deployment has bot protection off.
 
     Args:
         public_key (str):
-        purpose (str | Unset):  Default: 'session'.
+        purpose (PublicWebChallengeReadPurpose | Unset):  Default:
+            PublicWebChallengeReadPurpose.SESSION.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

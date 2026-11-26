@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { idAddress, looksNamed, named, namedTail, readNamed, slug, unnamed, type Names } from "../src/outcomes/named-address.ts";
-import { readView, writeView, type View } from "../src/outcomes/address.ts";
+import { OUTCOME_TABS, outcomeView, readView, writeView, type View } from "../src/outcomes/address.ts";
 import { toRouteTemplate } from "../src/site/analytics/route-template.ts";
 
 /** An address in names is a second spelling of a place the app's own grammar
@@ -60,6 +60,18 @@ test("somewhere in a Lemma is spelled in names, and reads back to the same place
         const own = unnamed(spelled, ACME);
         assert.ok(own, spelled + " reads back");
         assert.deepEqual(readView(own), view, spelled);
+    }
+});
+
+test("every section of a Lemma follows its id, and is spelled in names too", () => {
+    for (const tab of OUTCOME_TABS) {
+        const view = outcomeView(SALES, tab);
+        const own = writeView(view);
+        assert.equal(looksNamed(own), false, own + " is not taken for names");
+        assert.deepEqual(readNamed(own, { orgs: [], orgId: null, names: null }), { kind: "plain", path: own, asked: false }, own);
+        const spelled = named(own, ACME);
+        assert.notEqual(spelled, own, own + " is spelled in names");
+        assert.deepEqual(readView(unnamed(spelled, ACME) ?? ""), view, spelled + " reads back");
     }
 });
 

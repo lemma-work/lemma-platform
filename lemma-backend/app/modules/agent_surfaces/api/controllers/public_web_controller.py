@@ -21,7 +21,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, Field, JsonValue
+from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import get_uow_factory
 from app.core.api.schemas import ErrorResponse
@@ -38,6 +38,13 @@ from app.core.domain.errors import (
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.contracts.visitor_stream import visitor_frames
 from app.modules.agent_surfaces.api import kept_chats
+from app.modules.agent_surfaces.api.public_form_schemas import (
+    PublicColumnItem,
+    PublicRowsResponse,
+    RowRequest,
+    TableColumn,
+    TableResponse,
+)
 from app.modules.agent_surfaces.api.public_dependencies import (
     OptionalVisitorDep,
     PublicVisitorDep,
@@ -49,6 +56,10 @@ from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.web_widgets import WebChatRefused, refused
 from app.modules.agent_surfaces.services.outsider_limits import WebWidgetLimiter
 from app.modules.agent_surfaces.services.web_chat import MAX_MESSAGE_CHARS, WebChat
+from app.modules.agent_surfaces.services.visitor_proofs import (
+    ProofFor,
+    visitor_challenge,
+)
 from app.modules.agent_surfaces.services.web_visitors import (
     StartedSession,
     WebVisitors,
@@ -140,47 +151,6 @@ class VerifyRequest(BaseModel):
     code: str = Field(max_length=12)
 
 
-class TableColumn(BaseModel):
-    name: str
-    type: str
-    required: bool
-    options: list[str]
-    description: str | None
-    #: The form input that asks for this column (``email``, ``select``, ...),
-    #: decided once by the datastore so every page draws it the same way.
-    input: str
-
-
-class TableResponse(BaseModel):
-    table: str
-    contacts_only: bool
-    columns: list[TableColumn]
-
-
-class PublicColumnItem(BaseModel):
-    name: str
-    type: str
-
-
-class PublicRowsResponse(BaseModel):
-    table: str
-    columns: list[PublicColumnItem]
-    rows: list[dict[str, JsonValue]] = Field(
-        description=(
-            "Every row, at most 500. Dates and times are ISO 8601; a JSON column "
-            "is its own lists and objects."
-        )
-    )
-    truncated: bool = Field(
-        description="More than 500 rows matched, so these are the first of them."
-    )
-
-
-class RowRequest(BaseModel):
-    table: str = Field(max_length=255)
-    values: dict[str, object] = Field(default_factory=dict)
-
-
 def _visitors(
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> WebVisitors:
@@ -201,15 +171,15 @@ def _session_response(started: StartedSession, *, title: str | None) -> SessionR
 @router.get("/{public_key}/challenge", operation_id="public.web.challenge.read")
 async def web_challenge(
     widget: PublicWidgetDep,
-    purpose: str = Query(default="session", pattern="^(session|code)$"),
-    visitors: WebVisitors = Depends(_visitors),
+    purpose: ProofFor = Query(default="session"),
 ) -> Mapping[str, object]:
-    """A proof-of-work to solve before starting a session or asking for a code.
+    """A proof-of-work to solve before starting a session, asking for a code,
+    or sending an answer from somebody the pod has not confirmed (``row``).
 
     ``{"enabled": false}`` when the deployment has bot protection off.
     """
     del widget  # resolved for the switch, the key and the origin
-    return await visitors.visitor_challenge(for_code=purpose == "code")
+    return await visitor_challenge(purpose)
 
 
 @router.post(
@@ -483,9 +453,10 @@ async def web_add_row(
     chat: WebChat = Depends(web_chat),
 ) -> Accepted:
     """Add one row to a table the pod opened to visitors. Nothing is read back."""
-    await chat.add_visitor_row(
-        widget, visitor, table=body.table, answers=body.values, address=address
+    await chat.admit_row(
+        widget, visitor, table=body.table, address=address, altcha=body.altcha
     )
+    await chat.save_visitor_row(widget, visitor, table=body.table, answers=body.values)
     return Accepted()
 
 
@@ -504,6 +475,7 @@ async def web_add_row_with_files(
     visitor: OptionalVisitorDep,
     address: VisitorAddressDep,
     table: str = Query(max_length=255),
+    altcha: str | None = Query(default=None, max_length=4096),
     chat: WebChat = Depends(web_chat),
 ) -> Accepted:
     """Add one row with files attached. Nothing is read back.
@@ -512,9 +484,12 @@ async def web_add_row_with_files(
     and at most one file per open file column, under the column's name. Who
     may send is settled before the body is read, so a refused visitor's files
     are never taken; past that, each file is held to its own cap and the
-    whole response to another.
+    whole response to another. The proof an unconfirmed visitor sends rides in
+    the query for the same reason: it is checked before the body is read.
     """
-    opened = await chat.admit_row(widget, visitor, table=table, address=address)
+    opened = await chat.admit_row(
+        widget, visitor, table=table, address=address, altcha=altcha
+    )
     attachable = [column.name for column in opened.columns if column.attached]
     async with AsyncExitStack() as stack:
         try:

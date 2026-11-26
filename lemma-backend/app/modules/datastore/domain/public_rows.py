@@ -169,6 +169,8 @@ class OpenTable:
     audience: PublicAudience
     contact_owned: bool
     columns: tuple[PublicColumn, ...]
+    #: How many answers a day it takes; ``None`` is the deployment's default.
+    answers_per_day: int | None = None
 
 
 class PublicRowRefused(ValueError):

@@ -917,10 +917,17 @@ Public, the way a group's people from outside it are.
 - The system shall stream the answer to the visitor as it is written, and
   shall never send them the model's thinking, tool traffic, or anything from a
   member's private note.
+- With bot protection on, the system shall take an answer to a form from
+  somebody the pod has not confirmed only with a proof-of-work solved for that
+  one answer, and shall check it before the answer counts against any limit.
+- The system shall count a form's answers per form, whichever page they came
+  through, and shall let the member who opened it set how many it takes a day,
+  up to the deployment's ceiling.
 
 **Contracts:** `agent.web_widget.create`, `agent.web_widget.update`,
 `agent.web_widget.reissue`, `public.web.session.start`,
-`public.web.message.send`, `public.web.stream.read`, `public.web.code.verify`
+`public.web.message.send`, `public.web.stream.read`, `public.web.code.verify`,
+`public.web.challenge.read`, `public.web.row.add`, `table.public_rows.open`
 
 ### PS-SURF-050 — A member writes first to a contact only where the contact wants it
 **Status:** planned

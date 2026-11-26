@@ -23,7 +23,10 @@ class HookSettings(BaseSettings):
     datastore_hook_body_max_bytes: int = Field(
         default=128 * 1024,
         ge=1024,
-        le=1024 * 1024,
+        # Not above 256 KB, the default ``datastore_cell_max_bytes``: past it
+        # the record validator would refuse the payload with a vague 422
+        # instead of this cap's 413, which names the limit.
+        le=256 * 1024,
         description=(
             "Largest body (bytes) one delivery to a hook may carry. Env: "
             "``DATASTORE_HOOK_BODY_MAX_BYTES``."
