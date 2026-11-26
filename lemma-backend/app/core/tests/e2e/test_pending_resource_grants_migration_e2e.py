@@ -1,4 +1,4 @@
-"""Migration 0077 adds `pending_resource_grants`, and takes it away again.
+"""Migration 0078 adds `pending_resource_grants`, and takes it away again.
 
 It only adds a table, so the test is that the table appears, goes on the
 downgrade, and comes back on a second upgrade.
@@ -18,8 +18,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = pytest.mark.e2e
 
 BACKEND = Path(__file__).resolve().parents[4]
-BEFORE = "0076_reports_and_blocks"
-REVISION = "0077_pending_resource_grants"
+BEFORE = "0077_public_rows_answers_per_day"
+REVISION = "0078_pending_resource_grants"
 
 
 def _migrate(database_url: str, direction: str, revision: str) -> None:

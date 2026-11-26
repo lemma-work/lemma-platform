@@ -25,7 +25,7 @@ A deleted grantee's pending grants go with its grants
 (:func:`delete_grantee_pending_grants`), and a deleted pod's with the pod.
 
 Every access first asks whether the table exists (:func:`_table_ready`): code
-shipped with migration 0077 also runs against the schema before it, where a
+shipped with migration 0078 also runs against the schema before it, where a
 hold does nothing and there is nothing to settle or delete.
 """
 
@@ -182,7 +182,7 @@ async def replace_grantee_pending_grants(
     action: str = "grant access you could not use yourself",
 ) -> bool:
     """Replace everything ``grantee_id`` waits for on ``resource_type`` in the
-    pod with ``grants``; whether they are held (not before migration 0077).
+    pod with ``grants``; whether they are held (not before migration 0078).
 
     Replace, like ``replace_grantee_resource_grants``: what the writer lists
     is the whole set, so a grant the grantee no longer needs stops waiting.

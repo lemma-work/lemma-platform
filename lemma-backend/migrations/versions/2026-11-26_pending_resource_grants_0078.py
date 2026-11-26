@@ -10,9 +10,9 @@ catalog connector and the mode), and becomes an ordinary grant when it does.
 Only adds a table; nothing existing is read or rewritten. Grants dropped by
 imports before this release are not recovered: nothing recorded them.
 
-Revision ID: 0077_pending_resource_grants
-Revises: 0076_reports_and_blocks
-Create Date: 2026-11-25
+Revision ID: 0078_pending_resource_grants
+Revises: 0077_public_rows_answers_per_day
+Create Date: 2026-11-26
 """
 
 from __future__ import annotations
@@ -20,8 +20,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0077_pending_resource_grants"
-down_revision = "0076_reports_and_blocks"
+revision = "0078_pending_resource_grants"
+down_revision = "0077_public_rows_answers_per_day"
 branch_labels = None
 depends_on = None
 

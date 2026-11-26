@@ -301,7 +301,7 @@ async def test_a_left_out_grant_waits_only_while_the_org_has_nothing_to_map_it_t
 
 
 async def test_the_importer_is_told_a_grant_was_dropped_when_none_can_wait():
-    """Before migration 0077 nothing can be held: the warning resolving wrote
+    """Before migration 0078 nothing can be held: the warning resolving wrote
     ("waits for it") is replaced by the one that is true ("was dropped")."""
     from app.modules.pod_bundle.infrastructure.connector_grants import (
         hold_waiting_grants,

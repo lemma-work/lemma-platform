@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -20,15 +20,24 @@ class RowRequest:
     """
     Attributes:
         table (str):
+        altcha (None | str | Unset): A solved `row` challenge. Every answer from somebody the pod has not confirmed
+            needs its own; a confirmed contact sends none.
         values (RowRequestValues | Unset):
     """
 
     table: str
+    altcha: None | str | Unset = UNSET
     values: RowRequestValues | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         table = self.table
+
+        altcha: None | str | Unset
+        if isinstance(self.altcha, Unset):
+            altcha = UNSET
+        else:
+            altcha = self.altcha
 
         values: dict[str, Any] | Unset = UNSET
         if not isinstance(self.values, Unset):
@@ -41,6 +50,8 @@ class RowRequest:
                 "table": table,
             }
         )
+        if altcha is not UNSET:
+            field_dict["altcha"] = altcha
         if values is not UNSET:
             field_dict["values"] = values
 
@@ -53,6 +64,15 @@ class RowRequest:
         d = dict(src_dict)
         table = d.pop("table")
 
+        def _parse_altcha(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        altcha = _parse_altcha(d.pop("altcha", UNSET))
+
         _values = d.pop("values", UNSET)
         values: RowRequestValues | Unset
         if isinstance(_values, Unset):
@@ -62,6 +82,7 @@ class RowRequest:
 
         row_request = cls(
             table=table,
+            altcha=altcha,
             values=values,
         )
 

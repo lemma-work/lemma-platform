@@ -3,6 +3,10 @@
 /* tslint:disable */
 /* eslint-disable */
 export type RowRequest = {
+    /**
+     * A solved `row` challenge. Every answer from somebody the pod has not confirmed needs its own; a confirmed contact sends none.
+     */
+    altcha?: (string | null);
     table: string;
     values?: Record<string, any>;
 };

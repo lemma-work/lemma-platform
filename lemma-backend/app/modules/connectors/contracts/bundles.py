@@ -475,7 +475,7 @@ async def hold_grants_until_declared(
     created_by_user_id: UUID | None,
 ) -> bool:
     """Keep ``grantee_id``'s grants on connectors the pod lacks until it has
-    one; whether they are kept (not before migration 0077, when they are not).
+    one; whether they are kept (not before migration 0078, when they are not).
 
     The pod connector's repository grants them when a POD-wide connector of
     that catalog connector and mode is declared here -- on somebody's first

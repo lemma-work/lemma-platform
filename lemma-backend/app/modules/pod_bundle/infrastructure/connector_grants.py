@@ -325,7 +325,7 @@ async def hold_waiting_grants(
     this settles onto a connector declared since resolving: what it now waits
     for, which replaces what it waited for before -- an empty set included, so a step
     run again clears what its first attempt held. Where nothing can be held
-    (before migration 0077) the importer is told the grant was dropped."""
+    (before migration 0078) the importer is told the grant was dropped."""
     if hold is None:
         from app.modules.connectors.contracts.bundles import (
             hold_grants_until_declared as hold,

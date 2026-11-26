@@ -7,6 +7,7 @@ from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
 from ..models.public_audience import PublicAudience
+from ..types import UNSET, Unset
 
 T = TypeVar("T", bound="OpenTableRequest")
 
@@ -18,16 +19,25 @@ class OpenTableRequest:
         audience (PublicAudience): Who outside the pod may add rows.
         columns (list[str]): The columns people outside may fill, in the order to ask them. Checked against the table
             when it is opened.
+        answers_per_day (int | None | Unset): How many answers a day it takes, up to `answers_per_day_max`; null is the
+            deployment's default. Omitted, it stays as it is.
     """
 
     audience: PublicAudience
     columns: list[str]
+    answers_per_day: int | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         audience = self.audience.value
 
         columns = self.columns
+
+        answers_per_day: int | None | Unset
+        if isinstance(self.answers_per_day, Unset):
+            answers_per_day = UNSET
+        else:
+            answers_per_day = self.answers_per_day
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -37,6 +47,8 @@ class OpenTableRequest:
                 "columns": columns,
             }
         )
+        if answers_per_day is not UNSET:
+            field_dict["answers_per_day"] = answers_per_day
 
         return field_dict
 
@@ -47,9 +59,19 @@ class OpenTableRequest:
 
         columns = cast(list[str], d.pop("columns"))
 
+        def _parse_answers_per_day(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        answers_per_day = _parse_answers_per_day(d.pop("answers_per_day", UNSET))
+
         open_table_request = cls(
             audience=audience,
             columns=columns,
+            answers_per_day=answers_per_day,
         )
 
         open_table_request.additional_properties = d
