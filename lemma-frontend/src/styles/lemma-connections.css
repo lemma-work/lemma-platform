@@ -10,6 +10,7 @@
    motion. */
 
 .kpc {
+    container: kpc / inline-size;
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: 22px;
@@ -165,7 +166,11 @@
     grid-template-columns: minmax(0, 1fr) auto;
 }
 
-@media (max-width: 640px) {
+/* The page's own width, not the window's: a row's right side (an offer
+   and its button run to ~350px) goes under the text once the column can't
+   hold both, which a tablet or a narrow window with the sidebar open
+   reaches well above a phone's width. */
+@container kpc (max-width: 680px) {
     .klist > .kpc-row {
         grid-template-columns: auto minmax(0, 1fr);
     }
