@@ -16,9 +16,13 @@ from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import UoWDep
 from app.core.authorization.dependencies import PodContextDep
-from app.core.public_web import public_web_enabled
+from app.core.public_web import (
+    public_web_answers_per_form_per_day_max,
+    public_web_enabled,
+)
 from app.modules.datastore.domain.public_rows import PublicAudience, PublicColumn
 from app.modules.datastore.services.public_rows import (
+    KeepAnswersPerDay,
     OpeningRefused,
     TableOpening,
     close_table,
@@ -58,6 +62,15 @@ class TableOpeningResponse(BaseModel):
         description="Who outside may add rows; null when the table is closed."
     )
     columns: list[str] = Field(description="The open columns, in order.")
+    answers_per_day: int | None = Field(
+        description=(
+            "How many answers a day it takes, when the member set it; null "
+            "is the deployment's default."
+        )
+    )
+    answers_per_day_max: int = Field(
+        description="The most answers a day a form may be set to take here."
+    )
 
 
 class OpenTableRequest(BaseModel):
@@ -67,6 +80,14 @@ class OpenTableRequest(BaseModel):
             "The columns people outside may fill, in the order to ask them. "
             "Checked against the table when it is opened."
         )
+    )
+    answers_per_day: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "How many answers a day it takes, up to `answers_per_day_max`; "
+            "null is the deployment's default. Omitted, it stays as it is."
+        ),
     )
 
 
@@ -98,6 +119,8 @@ def _opening(opening: TableOpening) -> TableOpeningResponse:
         offered=[_column(column) for column in opening.offered],
         audience=opening.audience,
         columns=list(opening.columns),
+        answers_per_day=opening.answers_per_day,
+        answers_per_day_max=public_web_answers_per_form_per_day_max(),
     )
 
 
@@ -151,6 +174,11 @@ async def put_public_rows(
             audience=request.audience,
             columns=request.columns,
             ctx=ctx,
+            answers_per_day=(
+                request.answers_per_day
+                if "answers_per_day" in request.model_fields_set
+                else KeepAnswersPerDay.KEEP
+            ),
         )
     except OpeningRefused as exc:
         # A code, so a client can tell "this table can't be opened like that"
