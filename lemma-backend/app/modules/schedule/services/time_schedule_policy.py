@@ -110,6 +110,7 @@ def validate_time_schedule_config(
     now: datetime | None = None,
 ) -> datetime | CronSchedule:
     """Validate one and only one TIME trigger, returning its parsed value."""
+    _validate_repository(config)
     cron = config.get("cron")
     scheduled_at = config.get("scheduled_at")
     zone_name = zone_name_of(config)
@@ -141,6 +142,23 @@ def validate_time_schedule_config(
     if run_date <= (now or datetime.now(timezone.utc)):
         raise ScheduleValidationError("scheduled_at must be in the future.")
     return run_date
+
+
+def _validate_repository(config: Mapping[str, object]) -> None:
+    """A TIME schedule's optional ``repository``, where its runs start.
+
+    Checked here rather than left to the clone: a typo saved into a weekly
+    schedule otherwise surfaces a week later as a run in an empty directory.
+    Whether the person's GitHub sign-in reaches it is the clone's to find --
+    it runs as them, so it can reach nothing they cannot.
+    """
+    from app.modules.agent.contracts.project_repos import is_repository_name
+
+    repository = config.get("repository")
+    if repository is not None and not is_repository_name(repository):
+        raise ScheduleValidationError(
+            "repository must be a GitHub repository as 'owner/name'."
+        )
 
 
 _TIME_FILTER_REFUSAL = (

@@ -9196,6 +9196,7 @@ var LemmaClient = (() => {
       authUrl: authUrl.replace(/\/$/, ""),
       podId,
       token,
+      tokenSource: overrides.tokenSource,
       app: (_i = overrides.app) != null ? _i : win.app,
       timeoutMs: (_j = overrides.timeoutMs) != null ? _j : win.timeoutMs,
       maxRetries: (_k = overrides.maxRetries) != null ? _k : win.maxRetries,
@@ -9749,11 +9750,15 @@ var LemmaClient = (() => {
      *   is no session cookie and no `localStorage`. It wins over a token set
      *   through `setTestingToken`, because it was passed for this client rather
      *   than left lying in shared state.
+     * @param tokenSource The current token and a renewed one, for a caller that
+     *   refreshes its own session (`LemmaConfig.tokenSource`). Only with `token`.
      */
-    constructor(apiUrl, authUrl, token) {
+    constructor(apiUrl, authUrl, token, tokenSource) {
       __publicField(this, "apiUrl");
       __publicField(this, "authUrl");
       __publicField(this, "injectedToken");
+      /** Where a token-mode caller's current token comes from, when it changes. */
+      __publicField(this, "tokenSource");
       /** An app framed inside an AI tool, whose token comes from the Lemma view around it. */
       __publicField(this, "embedded");
       __publicField(this, "state", { status: "loading", user: null });
@@ -9764,6 +9769,7 @@ var LemmaClient = (() => {
       this.apiUrl = apiUrl;
       this.authUrl = authUrl;
       this.injectedToken = (token == null ? void 0 : token.trim()) || detectInjectedToken();
+      this.tokenSource = this.injectedToken ? tokenSource != null ? tokenSource : null : null;
       this.embedded = !this.injectedToken && isEmbeddedInHost() ? new EmbeddedCredentials() : null;
       if (!this.injectedToken && !this.embedded) {
         ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
@@ -9930,6 +9936,9 @@ var LemmaClient = (() => {
      * Throws if no token is available.
      */
     async getAccessToken() {
+      if (this.tokenSource) {
+        return this.tokenSource.current();
+      }
       if (this.injectedToken) {
         return this.injectedToken;
       }
@@ -9948,6 +9957,9 @@ var LemmaClient = (() => {
      * Force a refresh-token flow and return the new access token.
      */
     async refreshAccessToken() {
+      if (this.tokenSource) {
+        return this.tokenSource.renew();
+      }
       if (this.injectedToken) {
         return this.injectedToken;
       }
@@ -12078,6 +12090,42 @@ var LemmaClient = (() => {
     get(conversationId, options = {}) {
       const podId = this.requirePodId(options.pod_id);
       return this.http.request("GET", `/pods/${podId}/conversations/${conversationId}`).then(normalizeConversation);
+    }
+    /** What a conversation opened with `repository` has changed in its checkout:
+     *  every file that differs from where its branch left the start point --
+     *  commits not yet pushed, edits not yet committed -- and its untracked
+     *  files, with line counts. `patch: true` adds the unified diff, cut at
+     *  `max_patch_bytes` (`truncated` says so).
+     *
+     *  `state` is `ready` when it was read. Otherwise it says why not:
+     *  `no_repository`, `not_checked_out` (the machine answered and holds no
+     *  checkout), `machine_unavailable` (the machine is not running and is not
+     *  started to answer -- so too before the conversation's first run) or
+     *  `elsewhere` (its last run worked on the person's own Mac). A read that
+     *  outlives its ceiling is a 504. Only the conversation's owner may read it. */
+    changes(conversationId, options = {}) {
+      var _a;
+      const podId = this.requirePodId(options.pod_id);
+      return this.http.request(
+        "GET",
+        `/pods/${podId}/conversations/${conversationId}/changes`,
+        {
+          params: {
+            patch: options.patch ? true : void 0,
+            max_patch_bytes: (_a = options.max_patch_bytes) != null ? _a : void 0
+          }
+        }
+      );
+    }
+    /** What a conversation has cost its owner so far, in US dollars and model
+     *  tokens: `totals` over every run, and `runs` (newest first) each with its
+     *  own `usage`. A run with `usage: null` reported nothing -- an Agent Host
+     *  harness that sends no usage, or a turn not finished yet -- and is counted
+     *  in `unreported_run_count`; show the total as incomplete then, not as $0.
+     *  Sub-agent conversations are not included: read each one's own. */
+    usage(conversationId, options = {}) {
+      const podId = this.requirePodId(options.pod_id);
+      return this.http.request("GET", `/pods/${podId}/conversations/${conversationId}/usage`);
     }
     async update(conversationId, payload, options = {}) {
       const podId = this.requirePodId(options.pod_id);
@@ -14818,7 +14866,7 @@ var LemmaClient = (() => {
     }
     /**
      * Execute Pod Connector Operation
-     * Run an operation through a pod connector. The account it runs as is decided by the connector: the caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals: `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`.
+     * Run an operation through a pod connector. The account it runs as is decided by the connector: the caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals: `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`; with `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and `APP_IDENTITY_UNAVAILABLE`.
      * @param podId
      * @param slug
      * @param operationName
@@ -18351,6 +18399,87 @@ var LemmaClient = (() => {
   // src/openapi_client/services/ChannelsService.ts
   var ChannelsService = class {
     /**
+     * List Blocks
+     * Everybody the reader blocked in this pod, newest first.
+     * @param podId
+     * @returns BlocksResponse Successful Response
+     * @throws ApiError
+     */
+    static channelBlockList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/blocks",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Unblock Person
+     * Lift a block: their lines read as anybody's again, the old ones too. A
+     * contact since merged is unblocked as the one they became, as blocking
+     * them was; one since forgotten, by the id given.
+     * @param podId
+     * @param kind
+     * @param personId
+     * @returns void
+     * @throws ApiError
+     */
+    static channelBlockRemove(podId, kind, personId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/blocks/{kind}:{person_id}",
+        path: {
+          "pod_id": podId,
+          "kind": kind,
+          "person_id": personId
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Block Person
+     * Block a member or a contact, for the reader alone. Blocking somebody
+     * already blocked changes nothing. A reader keeps at most `MAX_BLOCKS` here
+     * (409 `BLOCK_LIMIT`).
+     * @param podId
+     * @param kind
+     * @param personId
+     * @returns BlockResponse Successful Response
+     * @throws ApiError
+     */
+    static channelBlockAdd(podId, kind, personId) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/blocks/{kind}:{person_id}",
+        path: {
+          "pod_id": podId,
+          "kind": kind,
+          "person_id": personId
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
      * List Channels
      * The channels the reader may see, most recently active first, each with
      * what is new in it for them and its last line.
@@ -18964,6 +19093,39 @@ var LemmaClient = (() => {
           "message_id": messageId,
           "file_id": fileId
         },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Report Line
+     * Report a line to the team that runs Lemma: why, and anything to add.
+     * Reporting it again replaces the reader's report. The writer is not told.
+     * Not a line from somebody the reader blocked, which they are not shown
+     * (422): they unblock them first.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @param requestBody
+     * @returns ChannelReportResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMessageReport(podId, channelId, messageId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/report",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "message_id": messageId
+        },
+        body: requestBody,
+        mediaType: "application/json",
         errors: {
           400: `A cursor this API did not give.`,
           403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
@@ -19867,6 +20029,7 @@ var LemmaClient = (() => {
     }
     /**
      * Update Contact
+     * Rename a contact, or stop the pod's agents answering them (`blocked`).
      * @param podId
      * @param contactId
      * @param requestBody
@@ -23647,7 +23810,7 @@ var LemmaClient = (() => {
       this._config = resolveConfig(overrides);
       this._currentPodId = this._config.podId;
       this._podId = this._config.podId;
-      this.auth = (_a = internalOptions.authManager) != null ? _a : new AuthManager(this._config.apiUrl, this._config.authUrl, this._config.token);
+      this.auth = (_a = internalOptions.authManager) != null ? _a : new AuthManager(this._config.apiUrl, this._config.authUrl, this._config.token, this._config.tokenSource);
       this._http = new HttpClient(this._config.apiUrl, this.auth, {
         timeoutMs: this._config.timeoutMs,
         maxRetries: this._config.maxRetries,

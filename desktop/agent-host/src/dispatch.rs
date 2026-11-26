@@ -318,6 +318,7 @@ pub(crate) async fn run() -> anyhow::Result<()> {
                 // A smoke run is one shot with no conversation behind it.
                 resume_session_id: None,
                 workspace_cwd: None,
+                repository: None,
                 context: JsonMap::new(),
                 mcp: Value::Null,
                 run_deadline: chrono::Utc::now() + chrono::Duration::minutes(10),

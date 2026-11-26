@@ -126,6 +126,12 @@ class NormalizedWebhook:
     #: belongs to exactly one of them (audit H4): a schedule elsewhere that
     #: routes on its id -- however it came to -- is not its schedule.
     organization_id: str | None = None
+    #: When set, only schedules in these pods match. For an event another
+    #: module heard on its own verified ingress, where what proves a tenant is
+    #: not an account or an installation but the pods that brought the place it
+    #: happened in into Lemma: a Slack channel a pod's bot was connected to. A
+    #: schedule anywhere else naming the same channel is not its schedule.
+    pod_ids: frozenset[str] | None = None
 
 
 class WebhookNotVerified(Exception):

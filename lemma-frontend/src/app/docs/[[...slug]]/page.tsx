@@ -17,7 +17,8 @@ export async function generateMetadata({ params }: Props) {
     const p = slug ? docsPageMap.get(slug) : null;
     return pageMetadata(
         p?.title ?? "Documentation",
-        p?.description ?? "Learn the Lemma platform, SDK, and CLI.",
+        p?.description ??
+            "How to use Lemma, how to build on it, and how to run it yourself.",
         slug ? "/docs/" + slug : "/docs",
     );
 }

@@ -54,7 +54,14 @@ administrators are told. Only proof reaches this: a name never does.
   number as typed, spaces and all). Each contact has a `label` -- their name,
   else their email address or number -- and each handle says whether it
   `opted_out`.
-- `PATCH /pods/{pod_id}/contacts/{id}`: rename; takes `pod.update`.
+- `PATCH /pods/{pod_id}/contacts/{id}`: rename, or stop the pod's agents
+  answering them (`blocked`); takes `pod.update`. A blocked contact
+  (`contacts.blocked_at`) still reaches the pod's chats, where members read
+  them; no run starts for anything they write (`held_for_a_person`), nobody
+  is told and they are not told a person will reply, and `may_send` refuses
+  an agent's line or an acknowledgement to them (`RefusalCode.BLOCKED`). A
+  member writing to them by hand is held only to the usual rules. A merge
+  keeps the block.
 - `DELETE /pods/{pod_id}/contacts/{id}`: forget a contact; takes
   `pod.member.manage`. A merged contact's id forgets the person it became, as
   every verb here follows a merge. `services/forget.py`: their rows in contact-owned tables

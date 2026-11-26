@@ -68,6 +68,7 @@ from app.modules.agent.agent_host.harness.remote_payload import (
     run_start_payload,
     token_expires_at,
 )
+from app.modules.agent.agent_host.harness.run_repository import run_repository
 from app.modules.agent.domain.workspace_location import resolve_workspace_location
 
 logger = get_logger(__name__)
@@ -94,6 +95,7 @@ def run_spec_from(
     rests in plaintext in the command row and in the host's own journal.
     """
     prompt = json_object(payload.get("prompt"))
+    location = resolve_workspace_location(conversation)
     return AgentHostRunSpec(
         agent_run_id=UUID(str(payload["agent_run_id"])),
         conversation_id=conversation.id,
@@ -105,7 +107,8 @@ def run_spec_from(
         system_prompt_delivery=system_prompt_delivery,
         prompt=[{"type": "text", "text": str(prompt.get("user_prompt") or "")}],
         resume_session_id=resume_session_id,
-        workspace_cwd=resolve_workspace_location(conversation).cwd,
+        workspace_cwd=location.cwd,
+        repository=run_repository(location),
         run_deadline=run_deadline,
         pre_approvals=list(pre_approvals),
     )

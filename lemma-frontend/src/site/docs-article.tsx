@@ -12,6 +12,7 @@ import { docsPageToMarkdown } from "@/site/markdown/render";
 import { ConceptMap } from "@/site/concept-map";
 import {
     codeLabel,
+    docsCrumbs,
     docsNeighbours,
     docsPieces,
     docsSections,
@@ -39,6 +40,16 @@ function Words({ children }: { children: string }) {
                 i % 2 ? <code key={i}>{part}</code> : part,
             )}
         </>
+    );
+}
+
+/** A link out of a page's words: to another page here, or to a guide kept
+ *  with the code. */
+function Way({ href, children }: { href: string; children: string }) {
+    return href.startsWith("/") ? (
+        <Link href={href}>{children}</Link>
+    ) : (
+        <a href={href}>{children}</a>
     );
 }
 
@@ -164,6 +175,21 @@ function Piece({ piece }: { piece: DocsPiece }): ReactNode {
                 </>
             );
         }
+        case "links":
+            return (
+                <>
+                    {heading}
+                    {body}
+                    <ul className="docs-links">
+                        {block.items.map((item) => (
+                            <li key={item.href}>
+                                <Way href={item.href}>{item.label}</Way>
+                                {item.note && <span>{item.note}</span>}
+                            </li>
+                        ))}
+                    </ul>
+                </>
+            );
         case "code":
             return (
                 <>
@@ -215,9 +241,12 @@ export function DocsArticle({ page }: { page: DocsPage }) {
             <main id="content" className="docs-main docs-main--read">
                 <DocsPhoneBar />
                 <p className="docs-crumbs">
-                    Build on Lemma
-                    <CaretRight aria-hidden="true" />
-                    {page.group}
+                    {docsCrumbs(page).map((crumb, i) => (
+                        <Fragment key={crumb}>
+                            {i > 0 && <CaretRight aria-hidden="true" />}
+                            {crumb}
+                        </Fragment>
+                    ))}
                 </p>
                 <h1 className="docs-h1">{page.title}</h1>
                 <p className="docs-lede">{page.description}</p>

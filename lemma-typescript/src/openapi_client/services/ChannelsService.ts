@@ -2,6 +2,8 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { BlockResponse } from '../models/BlockResponse.js';
+import type { BlocksResponse } from '../models/BlocksResponse.js';
 import type { ChannelAnswerRequest } from '../models/ChannelAnswerRequest.js';
 import type { ChannelCreateRequest } from '../models/ChannelCreateRequest.js';
 import type { ChannelDetailResponse } from '../models/ChannelDetailResponse.js';
@@ -11,6 +13,8 @@ import type { ChannelListResponse } from '../models/ChannelListResponse.js';
 import type { ChannelMessageResponse } from '../models/ChannelMessageResponse.js';
 import type { ChannelMessagesResponse } from '../models/ChannelMessagesResponse.js';
 import type { ChannelPostRequest } from '../models/ChannelPostRequest.js';
+import type { ChannelReportRequest } from '../models/ChannelReportRequest.js';
+import type { ChannelReportResponse } from '../models/ChannelReportResponse.js';
 import type { ChannelUpdateRequest } from '../models/ChannelUpdateRequest.js';
 import type { ContactStatus } from '../models/ContactStatus.js';
 import type { DeliveriesResponse } from '../models/DeliveriesResponse.js';
@@ -31,6 +35,97 @@ import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
 export class ChannelsService {
+    /**
+     * List Blocks
+     * Everybody the reader blocked in this pod, newest first.
+     * @param podId
+     * @returns BlocksResponse Successful Response
+     * @throws ApiError
+     */
+    public static channelBlockList(
+        podId: string,
+    ): CancelablePromise<BlocksResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/blocks',
+            path: {
+                'pod_id': podId,
+            },
+            errors: {
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
+            },
+        });
+    }
+    /**
+     * Unblock Person
+     * Lift a block: their lines read as anybody's again, the old ones too. A
+     * contact since merged is unblocked as the one they became, as blocking
+     * them was; one since forgotten, by the id given.
+     * @param podId
+     * @param kind
+     * @param personId
+     * @returns void
+     * @throws ApiError
+     */
+    public static channelBlockRemove(
+        podId: string,
+        kind: SenderKind,
+        personId: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/pods/{pod_id}/blocks/{kind}:{person_id}',
+            path: {
+                'pod_id': podId,
+                'kind': kind,
+                'person_id': personId,
+            },
+            errors: {
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
+            },
+        });
+    }
+    /**
+     * Block Person
+     * Block a member or a contact, for the reader alone. Blocking somebody
+     * already blocked changes nothing. A reader keeps at most `MAX_BLOCKS` here
+     * (409 `BLOCK_LIMIT`).
+     * @param podId
+     * @param kind
+     * @param personId
+     * @returns BlockResponse Successful Response
+     * @throws ApiError
+     */
+    public static channelBlockAdd(
+        podId: string,
+        kind: SenderKind,
+        personId: string,
+    ): CancelablePromise<BlockResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/pods/{pod_id}/blocks/{kind}:{person_id}',
+            path: {
+                'pod_id': podId,
+                'kind': kind,
+                'person_id': personId,
+            },
+            errors: {
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
+            },
+        });
+    }
     /**
      * List Channels
      * The channels the reader may see, most recently active first, each with
@@ -738,6 +833,44 @@ export class ChannelsService {
                 'message_id': messageId,
                 'file_id': fileId,
             },
+            errors: {
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
+            },
+        });
+    }
+    /**
+     * Report Line
+     * Report a line to the team that runs Lemma: why, and anything to add.
+     * Reporting it again replaces the reader's report. The writer is not told.
+     * Not a line from somebody the reader blocked, which they are not shown
+     * (422): they unblock them first.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @param requestBody
+     * @returns ChannelReportResponse Successful Response
+     * @throws ApiError
+     */
+    public static channelMessageReport(
+        podId: string,
+        channelId: string,
+        messageId: string,
+        requestBody: ChannelReportRequest,
+    ): CancelablePromise<ChannelReportResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/report',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
+                'message_id': messageId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 400: `A cursor this API did not give.`,
                 403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,

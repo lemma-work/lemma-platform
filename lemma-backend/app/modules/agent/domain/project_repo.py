@@ -143,17 +143,35 @@ def parse_project_repo(value: object) -> ProjectRepo | None:
     if repo in {".", ".."}:
         return None
     raw_ref = str(value.get("ref") or "").strip()
-    ref = raw_ref if _REF_PATTERN.match(raw_ref) else None
+    ref = raw_ref if is_checkout_ref(raw_ref) else None
     return ProjectRepo(owner=owner, repo=repo, ref=ref)
 
 
-def parse_repository_name(value: str) -> ProjectRepo | None:
+def is_checkout_ref(value: str) -> bool:
+    """Whether ``value`` may name where a worktree starts.
+
+    A branch, a tag, a commit or ``pull/<n>/head``, held to what the checkout
+    passes to git unquoted by meaning: no leading ``-`` (an option), no ``..``
+    (a range, and never part of a ref git accepts), and no trailing ``/`` or
+    ``.``, which git also refuses.
+    """
+    return (
+        _REF_PATTERN.match(value) is not None
+        and ".." not in value
+        and not value.endswith(("/", ".", ".lock"))
+    )
+
+
+def parse_repository_name(value: str, *, ref: str | None = None) -> ProjectRepo | None:
     """``owner/name`` as a person picks it, or ``None`` if it isn't one.
 
     Held to the same rules as ``parse_project_repo``: a third segment, a
-    ``..`` or an option-shaped name is not a repository, whoever typed it.
+    ``..`` or an option-shaped name is not a repository, whoever typed it. A
+    ``ref`` that is not one a checkout may start from is dropped, the same as
+    in ``parse_project_repo``; a caller that must refuse it checks
+    ``is_checkout_ref`` first.
     """
     owner, separator, repo = value.strip().partition("/")
     if not separator:
         return None
-    return parse_project_repo({"owner": owner, "repo": repo})
+    return parse_project_repo({"owner": owner, "repo": repo, "ref": ref})

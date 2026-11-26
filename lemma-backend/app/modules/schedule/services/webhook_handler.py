@@ -18,6 +18,7 @@ from app.modules.connectors.contracts.pod_connectors import (
     standing_resolutions_once,
 )
 from app.modules.schedule.services.schedule_connector_policy import standing_account
+from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.modules.schedule.services.webhook_event_mapper import WebhookEventMapper
 from app.modules.schedule.services.webhook_schedule_matcher import (
     WebhookScheduleMatcher,
@@ -105,6 +106,103 @@ async def _in_organization(
     return kept
 
 
+def _in_pods(
+    schedules: list[ScheduleEntity], pod_ids: frozenset[str]
+) -> list[ScheduleEntity]:
+    """Only the schedules in the pods the delivery is for.
+
+    Matching is containment across every tenant's schedules, and a Slack
+    channel id is something anyone can type into a config. What makes a
+    channel's messages a pod's is that the pod brought the channel in -- which
+    the module that heard the message knows, and states as these pods.
+    """
+    kept = [s for s in schedules if s.pod_id is not None and str(s.pod_id) in pod_ids]
+    if len(kept) != len(schedules):
+        logger.warning(
+            "schedule.webhook_handler.foreign_pod_schedules_skipped.denied",
+            skipped=len(schedules) - len(kept),
+        )
+    return kept
+
+
+async def _eligible(
+    uow: Any,
+    schedules: list[ScheduleEntity],
+    normalized: NormalizedWebhook | None,
+    bound_account: BoundAccount,
+) -> list[ScheduleEntity]:
+    """The matched schedules this delivery may actually fire.
+
+    The tenancy scopes a source stated go first, so a schedule that is not the
+    delivery's never costs a connector resolution in `_still_bound`.
+    """
+    if normalized is not None:
+        schedules = _narrowed(schedules, normalized)
+        if normalized.pod_ids is not None:
+            schedules = _in_pods(schedules, normalized.pod_ids)
+    schedules = await _still_bound(
+        uow,
+        schedules,
+        normalized.account_id if normalized is not None else None,
+        bound_account,
+    )
+    if normalized is not None and normalized.organization_id is not None:
+        schedules = await _in_organization(uow, schedules, normalized.organization_id)
+    return schedules
+
+
+def _plugin_metadata(normalized: NormalizedWebhook) -> Dict[str, Any]:
+    """What a run is told about a delivery that stated its own routing key."""
+    metadata: Dict[str, Any] = {**(normalized.match or {}), **normalized.context}
+    metadata.setdefault("source_event_id", normalized.source_event_id)
+    return metadata
+
+
+async def fire_heard_event(
+    uow: Any,
+    normalized: NormalizedWebhook,
+    *,
+    matcher: WebhookScheduleMatcher | None = None,
+    fire: FireTrigger = fire_trigger,
+    bound_account: BoundAccount = standing_account,
+) -> list[UUID]:
+    """Fire the WEBHOOK schedules an event another module heard matches.
+
+    For an event that never reaches `POST /webhooks/{source}`: a Slack message
+    arrives on the agent surfaces' own endpoint, signed with the secret of the
+    app that heard it, and that module verified it, logged it and knows which
+    pods brought its channel in. It states that as `pod_ids`, which is required
+    -- a caller that could not say whose event this is must not reach every
+    tenant's schedules by containment.
+
+    Everything else is the delivery path's own: the same matching, the same
+    connector check, the same fire. All of it is writes on the caller's open
+    transaction, so the runs commit with whatever the caller wrote beside them,
+    and a repeat of the same `source_event_id` is a no-op per schedule.
+    """
+    if normalized.match is None or normalized.pod_ids is None:
+        raise ValueError("A heard event states its routing key and its pods.")
+    if not normalized.source_event_id:
+        raise ScheduleSourceEventIdRequiredError()
+    matcher = matcher or WebhookScheduleMatcher(
+        schedule_repository=ScheduleRepository(uow=uow)
+    )
+    schedules = await _eligible(
+        uow,
+        await matcher.match_criteria(normalized.match),
+        normalized,
+        bound_account,
+    )
+    event = TriggerEvent(
+        source_event_id=normalized.source_event_id,
+        payload=jsonable(normalized.payload),
+        metadata=jsonable(_plugin_metadata(normalized)),
+    )
+    for schedule in schedules:
+        await fire(uow, schedule, event)
+    return [schedule.id for schedule in schedules]
+
+
 class WebhookHandler:
     """Service for handling webhooks and matching them to schedules."""
 
@@ -147,8 +245,7 @@ class WebhookHandler:
         """
 
         if normalized is not None and normalized.match is not None:
-            metadata: Dict[str, Any] = {**normalized.match, **normalized.context}
-            metadata.setdefault("source_event_id", normalized.source_event_id)
+            metadata: Dict[str, Any] = _plugin_metadata(normalized)
             normalized_payload = normalized.payload
         else:
             normalized_payload = self.event_mapper.normalize_payload(
@@ -182,18 +279,7 @@ class WebhookHandler:
                 schedules = await matcher.match_criteria(normalized.match)
             else:
                 schedules = await matcher.match(source, metadata)
-            if normalized is not None:
-                schedules = _narrowed(schedules, normalized)
-            schedules = await _still_bound(
-                uow,
-                schedules,
-                normalized.account_id if normalized is not None else None,
-                self._bound_account,
-            )
-            if normalized is not None and normalized.organization_id is not None:
-                schedules = await _in_organization(
-                    uow, schedules, normalized.organization_id
-                )
+            schedules = await _eligible(uow, schedules, normalized, self._bound_account)
             for schedule in schedules:
                 # A webhook fire has no row owner; the schedule owner runs it.
                 await self._fire(uow, schedule, event)

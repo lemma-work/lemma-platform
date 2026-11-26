@@ -11,10 +11,16 @@ from __future__ import annotations
 import pytest
 
 from app.modules.connectors.domain.connector import ConnectorKind
+from app.modules.connectors.domain.app_identity import AppIdentityUnavailableError
 from app.modules.connectors.domain.connector_operation import ResolvedOperation
 from app.modules.connectors.domain.kinds import ExecutionRequest
+from app.modules.connectors.infrastructure.kinds.registry import KindRegistry
 from app.modules.connectors.services.auth.github_app import GitHubAppUnavailable
 from app.modules.connectors.services.execution import github_presenter
+from app.modules.connectors.services.execution.credential_presenter import (
+    PassThroughPresenter,
+)
+from app.modules.connectors.services.execution.dispatcher import KindDispatcher
 from app.modules.connectors.services.execution.github_presenter import (
     GitHubCredentialPresenter,
 )
@@ -238,3 +244,85 @@ class TestWhoTheCallerIs:
         request = _request("installation_ok", act_as="user", name=operation)
 
         assert await GitHubCredentialPresenter().present(request) == USER_TOKEN
+
+
+def _minted(token: str):
+    async def _mint(installation_id: str) -> str:
+        return token
+
+    return _mint
+
+
+async def _never_minted(installation_id: str) -> str:
+    raise AssertionError("must not mint for this call")
+
+
+class TestAFunctionThatAskedForTheApp:
+    """`app_only`: a function asked for the bot by name, so each place an
+    agent's call falls back to the person is a refusal instead. Posting under
+    the person's name when the bot was asked for is the one outcome nobody
+    chose."""
+
+    async def test_it_gets_the_app(self):
+        presented = await GitHubCredentialPresenter(
+            mint=_minted("ghs_the_app")
+        ).present(_request("installation_ok", act_as="app_only"))
+
+        assert presented["access_token"] == "ghs_the_app"
+
+    async def test_an_operation_only_a_person_may_call_is_refused(self):
+        with pytest.raises(AppIdentityUnavailableError):
+            await GitHubCredentialPresenter(mint=_never_minted).present(
+                _request("user_only", act_as="app_only")
+            )
+
+    async def test_an_account_with_no_installation_is_refused(self):
+        with pytest.raises(AppIdentityUnavailableError, match="no App installation"):
+            await GitHubCredentialPresenter(mint=_never_minted).present(
+                _request("installation_ok", installation=None, act_as="app_only")
+            )
+
+    async def test_a_token_github_will_not_give_is_refused(self):
+        async def _refused(installation_id: str) -> str:
+            raise GitHubAppUnavailable("uninstalled")
+
+        with pytest.raises(AppIdentityUnavailableError):
+            await GitHubCredentialPresenter(mint=_refused).present(
+                _request("installation_ok", act_as="app_only")
+            )
+
+    async def test_a_connector_with_no_app_is_refused(self):
+        """Every other connector passes credentials through; it has no app to
+        be, so the person's credential must not stand in for one."""
+        request = _request("installation_ok", act_as="app_only")
+        slack = ExecutionRequest(
+            connector_id="slack",
+            kind=request.kind,
+            operation=request.operation,
+            payload={},
+            credentials=dict(USER_TOKEN),
+            config={},
+            deadline_seconds=45.0,
+            act_as="app_only",
+        )
+
+        with pytest.raises(AppIdentityUnavailableError, match="slack"):
+            await PassThroughPresenter().present(slack)
+
+    @pytest.mark.parametrize("asked", ["user", "app", "app_only"])
+    async def test_the_dispatcher_keeps_the_ask(self, asked):
+        """It used to fold anything but "app" into "user", which would have
+        turned a function's refusal into the person's token."""
+        dispatcher = KindDispatcher(KindRegistry({}))
+
+        request = dispatcher.build_request(
+            connector_id="github",
+            kind=ConnectorKind.HTTP,
+            operation=ResolvedOperation(name="checks_create"),
+            payload={},
+            credentials={},
+            config={},
+            act_as=asked,
+        )
+
+        assert request.act_as == asked

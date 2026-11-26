@@ -4,7 +4,12 @@ import { useContext, useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useMe } from "@/session/use-me";
 import { Prose } from "@/thread/markdown";
-import { ChatIcon, DeleteIcon, EditIcon } from "@/ui/icons";
+import { BlockIcon, ChatIcon, DeleteIcon, EditIcon, ReportIcon } from "@/ui/icons";
+import { unblock } from "@/reports/api";
+import { BlockDialog } from "@/reports/block-dialog";
+import { useReportPlace } from "@/reports/context";
+import { blockable, blockedNote, cannotBlock, type Blockable } from "@/reports/model";
+import { ReportDialog } from "@/reports/report-dialog";
 import { Avatar } from "./avatar";
 import { channelApi } from "./api";
 import {
@@ -180,7 +185,19 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
     ];
     const outside = places.length ? sayList([...new Set(places)]) : null;
     const editable = mine && line.text !== null && !outside;
-    const tools = !line.deleted && !editing && !confirming && (Boolean(onThread) || editable || removable);
+    /* Anybody's line but one's own goes to the Lemma team; a person -- never
+       a Lemma, never oneself -- can be blocked, by the reader alone. */
+    const place = useReportPlace();
+    const [reporting, setReporting] = useState(false);
+    const [blocking, setBlocking] = useState<Blockable | null>(null);
+    const reportable = !line.deleted && !line.withheld && !line.blocked && !isMine(line, me);
+    const person = line.deleted ? null : blockable(line.sender, me);
+    const noBlock = line.deleted ? null : cannotBlock(line.sender);
+    const lift = useMutation({
+        mutationFn: (whom: Blockable) => unblock(podId, whom),
+        onSuccess: () => { void cache.invalidateQueries({ queryKey: ["channel", podId] }); },
+    });
+    const tools = !line.deleted && !editing && !confirming && (Boolean(onThread) || editable || removable || reportable || Boolean(person));
     return (
         <li
             className="cline"
@@ -223,6 +240,19 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
                     <p className="cline__gone">{removedNote(line, me)}</p>
                 ) : withheld ? (
                     <p className="cline__gone">{withheld}</p>
+                ) : line.blocked ? (
+                    <p className="cline__gone">
+                        {blockedNote(who)}
+                        {person && (
+                            <>
+                                {" "}
+                                <button type="button" className="linkish" disabled={lift.isPending} onClick={() => lift.mutate(person)}>
+                                    {lift.isPending ? "Unblocking…" : "Unblock"}
+                                </button>
+                            </>
+                        )}
+                        {lift.isError && <span className="cline__problem" role="alert"> {problemOf(lift.error, "Couldn’t unblock them.")}</span>}
+                    </p>
                 ) : editing ? (
                     <EditBox
                         line={line}
@@ -294,12 +324,46 @@ export function LineView({ podId, channel, line, onThread, mayWrite = true, answ
                             <EditIcon size={17} aria-hidden="true" /><span className="sr-only">Edit</span>
                         </button>
                     )}
+                    {reportable && (
+                        <button type="button" className="cline__tool" title="Report this message" onClick={() => setReporting(true)}>
+                            <ReportIcon size={17} aria-hidden="true" /><span className="sr-only">Report</span>
+                        </button>
+                    )}
+                    {person && !line.blocked && (
+                        <button type="button" className="cline__tool" title={"Block " + person.name} onClick={() => setBlocking(person)}>
+                            <BlockIcon size={17} aria-hidden="true" /><span className="sr-only">Block {person.name}</span>
+                        </button>
+                    )}
+                    {!person && noBlock && (
+                        <button type="button" className="cline__tool" title={noBlock} aria-disabled="true" disabled>
+                            <BlockIcon size={17} aria-hidden="true" /><span className="sr-only">Block. {noBlock}</span>
+                        </button>
+                    )}
                     {removable && (
                         <button type="button" className="cline__tool cline__tool--bad" title={mine ? "Delete message" : "Remove for everyone"} onClick={() => setConfirming(true)}>
                             <DeleteIcon size={17} aria-hidden="true" /><span className="sr-only">Delete</span>
                         </button>
                     )}
                 </div>
+            )}
+            {reporting && (
+                <ReportDialog
+                    podId={podId}
+                    target={{ kind: "line", channelId: channel.id, lineId: line.id }}
+                    author={agent ? null : who}
+                    person={person}
+                    onBlock={(whom) => { setReporting(false); setBlocking(whom); }}
+                    onClose={() => setReporting(false)}
+                />
+            )}
+            {blocking && (
+                <BlockDialog
+                    podId={podId}
+                    person={blocking}
+                    lemma={place.lemma}
+                    mayStopAnswering={place.mayStopAnswering}
+                    onClose={() => setBlocking(null)}
+                />
             )}
         </li>
     );

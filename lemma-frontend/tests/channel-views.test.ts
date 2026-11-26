@@ -45,8 +45,9 @@ test("an empty view says what it is empty of", () => {
 });
 
 test("actions imply the weaker ones: manage writes, write reads, messaging contacts reads them", () => {
-    assert.deepEqual(readAbilities(["channel.manage", "contact.message"]), { known: true, read: true, write: true, manage: true, contactRead: true, contactMessage: true });
-    assert.deepEqual(readAbilities(["channel.read"]), { known: true, read: true, write: false, manage: false, contactRead: false, contactMessage: false });
+    assert.deepEqual(readAbilities(["channel.manage", "contact.message"]), { known: true, read: true, write: true, manage: true, contactRead: true, contactMessage: true, podUpdate: false });
+    assert.deepEqual(readAbilities(["channel.read"]), { known: true, read: true, write: false, manage: false, contactRead: false, contactMessage: false, podUpdate: false });
+    assert.equal(readAbilities(["channel.read", "pod.update"]).podUpdate, true, "who may change the Lemma may stop it answering a contact");
     assert.equal(readAbilities(undefined).known, false);
     assert.equal(readAbilities(undefined).write, true, "nothing is withheld before the server has said");
     assert.equal(mayStartChannel(readAbilities(["channel.read"])), false);

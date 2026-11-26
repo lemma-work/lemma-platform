@@ -181,6 +181,28 @@ needs explicit grants for every table/file/connector it touches or the node fail
 `MISSING_WORKLOAD_RESOURCE_GRANT`. Grant + test the agent standalone before wiring it
 in (see `agents.md`).
 
+**In a checkout.** `repository` (`owner/name`) and `ref` start the agent in a git
+worktree of that repository, as a webhook-started run does: a reviewer reading a
+pull request at the commit it was opened for, say. Both are bindings like
+`input_mapping`'s; `ref` is a branch, a tag, a full commit sha or `pull/<n>/head`,
+and unset is the default branch. The clone goes through the pod's `github`
+connector as the run's owner, so the agent needs `connector:github:use`.
+
+```json
+"config": {
+  "agent_name": "reviewer",
+  "repository": { "type": "expression", "value": "start.payload.repository.full_name" },
+  "ref": { "type": "expression", "value": "start.payload.pull_request.head.sha" }
+}
+```
+
+A name or ref of the wrong shape -- or one that resolves to nothing -- fails
+the step rather than starting the agent on the default branch. A ref shaped
+right that git then cannot fetch (a branch deleted since the event, a fork's
+commit the host will not serve) is found out when the agent runs its first
+command: the agent is told its folder is empty, and the step fails with git's
+reason when the agent finishes, whatever the agent wrote.
+
 ### FUNCTION — the deterministic step
 
 ```json

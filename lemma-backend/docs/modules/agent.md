@@ -139,7 +139,7 @@ adapter is consolidated.
 | Routes | What they do |
 | --- | --- |
 | `/pods/{pod_id}/agents` | Agent CRUD plus resource permission replacement |
-| `/pods/{pod_id}/conversations` | Create/list/read/update, messages, approvals, send, stream, stop; `/repositories` lists the GitHub repositories one can be opened in; `/{id}/runs/{run_id}` reads one run back with the model tokens it used |
+| `/pods/{pod_id}/conversations` | Create/list/read/update, messages, approvals, send, stream, stop; `/repositories` lists the GitHub repositories one can be opened in; `/{id}/runs/{run_id}` reads one run back with the model tokens it used; `/{id}/changes` reads what a repository conversation has changed in its checkout, read-only and without waking its machine (`application/conversations/changes`) |
 | `/organizations/{org}/agent-runtime/profiles` | Discover/create model runtime profiles |
 | `/me/runtime/agent-hosts...`, `/agent-host/link`, `/agent-host/transfers/{id}`, `/agent-host/runs/{run_id}/blobs/{sha256}` | Agent Host pairing and management; the host's link WebSocket (commands, events, harnesses, Lemma MCP), and the host-authenticated HTTP routes its bulk bytes take instead (file chunks, event images) |
 | `/tools/*` | Server-side web search and feedback endpoints used by runtimes |
@@ -216,6 +216,13 @@ is a worktree of it of its own, `~/lemma/worktrees/{owner}/{repo}/{slug}` on
 branch `lemma/{slug}` (`domain/workspace_location`, `domain/project_repo`). A
 sub-agent inherits its parent's worktree; a run a webhook started, which is not
 stamped at creation, gets one keyed by its conversation id.
+
+Create also takes `ref`, where that branch starts: a branch, a tag, a commit or
+`pull/<n>/head` -- the same ref a webhook run gets from its event, so "fix this
+pull request" and "build on that branch" open from a person's request as well.
+It is held to `project_repo.is_checkout_ref` (no leading `-`, no `..`) and
+refused without a `repository`; left out, the worktree starts from the default
+branch.
 
 Before the agent's first shell or Python call, the sandbox clones the
 repository once per person, at `~/lemma/repos/{owner}/{repo}`, with the

@@ -12,6 +12,7 @@ would only let the two drift apart.
 |---|---|
 | `lemma-backend/` | The API, the worker, and every module. Python, FastAPI, Postgres |
 | `lemma-frontend/` | The web app: workspace, sign-in, and public site |
+| `lemma-mobile/` | The phone app (Expo, React Native), Android first |
 | `lemma-cli/`, `lemma-python/`, `lemma-typescript/` | The clients we ship |
 | `desktop/` | The desktop app and the agent host |
 | `docs/` | Documentation, indexed by [docs/README.md](docs/README.md) |

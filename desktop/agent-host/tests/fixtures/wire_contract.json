@@ -159,6 +159,7 @@
       "prompt",
       "resume_session_id",
       "workspace_cwd",
+      "repository",
       "context",
       "run_deadline",
       "system_prompt_delivery",
@@ -166,6 +167,15 @@
     ],
     "added_on_delivery": {
       "mcp": "Run-scoped Lemma MCP configuration, decrypted from `encrypted_mcp` by AgentHostDispatchRepository._wire_command when the command is delivered."
+    },
+    "repository": {
+      "_why": "`repository` is optional on both sides and added without a protocol bump: a host that predates it ignores the field (RunSpec does not deny unknown fields) and starts in the empty directory as before, and a backend that predates it never sends one, which a newer host reads as no repository. `ref` may be absent; the rest are always sent.",
+      "fields": [
+        "owner",
+        "repo",
+        "ref",
+        "slug"
+      ]
     }
   },
   "enums": {

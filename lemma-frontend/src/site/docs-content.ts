@@ -12,6 +12,7 @@ import {
     howLemmaWorksStub,
 } from "@/site/data/concept-docs";
 import { educationGuidePages } from "@/site/data/education-guides";
+import { runItYourselfPage, useLemmaPages } from "@/site/data/use-docs";
 import { githubUrl } from "@/site/links";
 import type { DocsHit } from "@/site/docs-search";
 
@@ -19,27 +20,31 @@ import type { DocsHit } from "@/site/docs-search";
    Kept apart from the components so the search index, the outline and the
    tests all cut a page the same way. */
 
-/** The half of the docs for people using Lemma, planned and not yet
- *  written. Listed as being written; never linked. */
-export const USE_LEMMA_TOPICS = [
-    "Lemmas",
-    "Apps",
-    "Automations",
-    "Where to reach a Lemma",
-    "People",
-    "Connectors",
-] as const;
+/** The two halves of the docs: the pages for people using Lemma, and the
+ *  pages for people building on it. */
+export type DocsDoor = "use" | "build";
+
+export const DOOR_LABELS: Record<DocsDoor, string> = {
+    use: "Use Lemma",
+    build: "Build on Lemma",
+};
 
 export type DocsNavPage = { slug: string; title: string };
-export type DocsNavGroup = { title: string; pages: DocsNavPage[] };
+export type DocsNavGroup = {
+    title: string;
+    door: DocsDoor;
+    pages: DocsNavPage[];
+};
 
-/** Every page, in the groups `docsGroups` names. A page the data holds but no
- *  group lists still appears, under its own group, so nothing written goes
- *  missing from the list. */
+/** Every page, in the groups `docsGroups` names, each group marked with the
+ *  half of the docs that lists it. A page the data holds but no group lists
+ *  still appears, under its own group, so nothing written goes missing from
+ *  the list. */
 export function docsNav(): DocsNavGroup[] {
     const seen = new Set<string>();
     const groups: DocsNavGroup[] = docsGroups.map((group) => ({
         title: group.title,
+        door: group.door ?? "build",
         pages: group.pages.flatMap((slug) => {
             const page = docsPageMap.get(slug);
             if (!page || seen.has(slug)) return [];
@@ -52,12 +57,33 @@ export function docsNav(): DocsNavGroup[] {
         seen.add(page.slug);
         let group = groups.find((g) => g.title === page.group);
         if (!group) {
-            group = { title: page.group, pages: [] };
+            group = { title: page.group, door: "build", pages: [] };
             groups.push(group);
         }
         group.pages.push({ slug: page.slug, title: page.title });
     }
     return groups.filter((group) => group.pages.length > 0);
+}
+
+/** The groups one half of the docs lists. */
+export function docsNavFor(door: DocsDoor): DocsNavGroup[] {
+    return docsNav().filter((group) => group.door === door);
+}
+
+/** Which half of the docs lists a page; null for the docs home and for an
+ *  address no page has. */
+export function docsDoorOf(slug: string): DocsDoor | null {
+    return (
+        docsNav().find((group) => group.pages.some((p) => p.slug === slug))
+            ?.door ?? null
+    );
+}
+
+/** Where a page sits, for the line above its title: its half of the docs,
+ *  then its group where that says something more. */
+export function docsCrumbs(page: DocsPage): string[] {
+    const door = DOOR_LABELS[docsDoorOf(page.slug) ?? "build"];
+    return page.group === door ? [door] : [door, page.group];
 }
 
 /** Every page, in the order the guide list shows them. */
@@ -251,11 +277,13 @@ const SOURCE_DIR = "lemma-frontend/src/site/data/";
 export function docsSourceUrl(page: DocsPage): string {
     const file = educationGuidePages.includes(page)
         ? "education-guides.ts"
-        : conceptDocsPages.includes(page) ||
-            page === howLemmaWorksStub ||
-            page === glossaryStub
-          ? "concept-docs.ts"
-          : "docs.ts";
+        : useLemmaPages.includes(page) || page === runItYourselfPage
+          ? "use-docs.ts"
+          : conceptDocsPages.includes(page) ||
+              page === howLemmaWorksStub ||
+              page === glossaryStub
+            ? "concept-docs.ts"
+            : "docs.ts";
     return `${githubUrl}/blob/main/${SOURCE_DIR}${file}`;
 }
 

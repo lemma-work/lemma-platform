@@ -55,6 +55,20 @@ function blockToMarkdown(block: DocsBlock): string {
             ]
                 .filter(Boolean)
                 .join("\n\n");
+        case "links":
+            return [
+                `### ${block.title}`,
+                block.body ?? null,
+                block.items
+                    .map(
+                        (item) =>
+                            `- [${item.label}](${item.href})` +
+                            (item.note ? `: ${item.note}` : ""),
+                    )
+                    .join("\n"),
+            ]
+                .filter(Boolean)
+                .join("\n\n");
         case "callout":
             return `> **${block.title}**\n>\n> ${block.body}`;
     }

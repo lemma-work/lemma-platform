@@ -22,6 +22,7 @@ pub mod mcp_relay;
 pub mod normalize;
 pub mod permissions;
 pub mod protocol;
+pub mod repository_checkout;
 pub mod runtime;
 pub mod service;
 

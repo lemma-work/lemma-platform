@@ -107,6 +107,24 @@ def time_event_payload(config: Mapping[str, object] | None) -> dict[str, JsonVal
     return dict(payload) if isinstance(payload, dict) else {}
 
 
+def time_event_metadata(config: Mapping[str, object] | None) -> dict[str, JsonValue]:
+    """Where a TIME schedule's run works: its config's ``repository``.
+
+    A webhook delivery says which repository it happened in, and its run
+    starts in a checkout of it. A clock says nothing, so the schedule says it
+    instead -- ``owner/name``, checked when the schedule is saved -- and the
+    run starts on the repository's default branch, cloned as the person it
+    runs for. One definition for the timer and for a run started by hand.
+    """
+    repository = (config or {}).get("repository")
+    if not isinstance(repository, str):
+        return {}
+    owner, _, name = repository.strip().partition("/")
+    if not owner or not name:
+        return {}
+    return {"repo": {"owner": owner, "repo": name}}
+
+
 def schedule_key(schedule_id: UUID) -> str:
     """Concurrency and rate key for one trigger."""
     return f"schedule:{schedule_id}"

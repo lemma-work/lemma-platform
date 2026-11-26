@@ -201,6 +201,34 @@ them, shared or not (`may_read`). Migration `0061_answers_shared` added the
 column true, so every group already there shows the answers posted from then
 on.
 
+### Somebody the reader blocked
+
+A member may block a member of the pod or one of its contacts
+(`/pods/{pod_id}/blocks`, table `person_blocks`, the pod's alone). It is that
+member's own view, nobody else's: every line the blocked person wrote comes to
+them marked `blocked`, with no text, parts or question -- in a page, a thread,
+search, the channel list's last line and the live socket alike, from the same
+mapper (`message_response(..., blocked=)`) -- a file one of their lines shares
+is not served to them either, though they kept its link (`line_file`, 404),
+and `fan_out` tells them of none of it outside the app. A push already waiting
+in their window when they block -- for the window's end, or held while they
+had the app open -- is asked again as it goes, and one led by that person's
+line goes nowhere (`pushes._send`). Nobody else's view
+changes, the person is not told, and the pod's agents answer them as before:
+stopping that is the contact's own `blocked` (`contacts`). A contact merged
+into another carries its blocks to the survivor (`contact_merged_work`); until
+that work runs, reads, pushes and unblocking all take a block under any id the
+person has had (`contacts`' `same_person`), so nothing of theirs shows in
+between. An agent cannot be blocked, nor the reader, nor somebody a platform
+did not vouch for, who has no contact. A reader keeps at most `MAX_BLOCKS` in a
+pod, counted under a lock for that reader and pod (409 `BLOCK_LIMIT` past it),
+so every block kept is one the read path applies. Nobody is pushed a line from
+a contact the pod stopped answering.
+
+Any line the reader can read, and did not write, can be reported to whoever
+runs the deployment (`/messages/{m}/report`, `reports`). The report keeps a
+copy of the line and of up to four before it, as the reporter read them.
+
 ### Tables a group was given
 
 People outside the pod in a group act as nobody: they read what is Public and

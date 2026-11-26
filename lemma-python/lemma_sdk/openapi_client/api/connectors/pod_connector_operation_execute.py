@@ -8,8 +8,8 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
-from ...models.operation_execution_request import OperationExecutionRequest
 from ...models.operation_execution_response import OperationExecutionResponse
+from ...models.pod_operation_execution_request import PodOperationExecutionRequest
 from ...types import Response
 
 
@@ -18,7 +18,7 @@ def _get_kwargs(
     slug: str,
     operation_name: str,
     *,
-    body: OperationExecutionRequest,
+    body: PodOperationExecutionRequest,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
 
@@ -75,20 +75,22 @@ def sync_detailed(
     operation_name: str,
     *,
     client: AuthenticatedClient | Client,
-    body: OperationExecutionRequest,
+    body: PodOperationExecutionRequest,
 ) -> Response[ErrorResponse | OperationExecutionResponse]:
     """Execute Pod Connector Operation
 
      Run an operation through a pod connector. The account it runs as is decided by the connector: the
     caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals:
     `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`,
-    `CONNECTOR_UNAVAILABLE`.
+    `CONNECTOR_UNAVAILABLE`; with `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and
+    `APP_IDENTITY_UNAVAILABLE`.
 
     Args:
         pod_id (UUID):
         slug (str):
         operation_name (str):
-        body (OperationExecutionRequest):
+        body (PodOperationExecutionRequest): A pod connector call's body: its arguments, and who
+            it presents as.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -118,20 +120,22 @@ def sync(
     operation_name: str,
     *,
     client: AuthenticatedClient | Client,
-    body: OperationExecutionRequest,
+    body: PodOperationExecutionRequest,
 ) -> ErrorResponse | OperationExecutionResponse | None:
     """Execute Pod Connector Operation
 
      Run an operation through a pod connector. The account it runs as is decided by the connector: the
     caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals:
     `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`,
-    `CONNECTOR_UNAVAILABLE`.
+    `CONNECTOR_UNAVAILABLE`; with `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and
+    `APP_IDENTITY_UNAVAILABLE`.
 
     Args:
         pod_id (UUID):
         slug (str):
         operation_name (str):
-        body (OperationExecutionRequest):
+        body (PodOperationExecutionRequest): A pod connector call's body: its arguments, and who
+            it presents as.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -156,20 +160,22 @@ async def asyncio_detailed(
     operation_name: str,
     *,
     client: AuthenticatedClient | Client,
-    body: OperationExecutionRequest,
+    body: PodOperationExecutionRequest,
 ) -> Response[ErrorResponse | OperationExecutionResponse]:
     """Execute Pod Connector Operation
 
      Run an operation through a pod connector. The account it runs as is decided by the connector: the
     caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals:
     `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`,
-    `CONNECTOR_UNAVAILABLE`.
+    `CONNECTOR_UNAVAILABLE`; with `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and
+    `APP_IDENTITY_UNAVAILABLE`.
 
     Args:
         pod_id (UUID):
         slug (str):
         operation_name (str):
-        body (OperationExecutionRequest):
+        body (PodOperationExecutionRequest): A pod connector call's body: its arguments, and who
+            it presents as.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -197,20 +203,22 @@ async def asyncio(
     operation_name: str,
     *,
     client: AuthenticatedClient | Client,
-    body: OperationExecutionRequest,
+    body: PodOperationExecutionRequest,
 ) -> ErrorResponse | OperationExecutionResponse | None:
     """Execute Pod Connector Operation
 
      Run an operation through a pod connector. The account it runs as is decided by the connector: the
     caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals:
     `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`,
-    `CONNECTOR_UNAVAILABLE`.
+    `CONNECTOR_UNAVAILABLE`; with `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and
+    `APP_IDENTITY_UNAVAILABLE`.
 
     Args:
         pod_id (UUID):
         slug (str):
         operation_name (str):
-        body (OperationExecutionRequest):
+        body (PodOperationExecutionRequest): A pod connector call's body: its arguments, and who
+            it presents as.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

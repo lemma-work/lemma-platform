@@ -21,6 +21,9 @@ class ShellOutcome:
     exit_code: int | None
     stdout: str
     stderr: str
+    #: Why the runtime did not run the command, when it did not. With no exit
+    #: code and no error, the command was still running at its deadline.
+    error: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -71,6 +74,7 @@ async def run_on_machine(
         exit_code=result.exit_code,
         stdout=result.stdout or "",
         stderr=result.stderr or "",
+        error=result.error,
     )
 
 

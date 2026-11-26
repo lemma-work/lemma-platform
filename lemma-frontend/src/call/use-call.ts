@@ -4,16 +4,9 @@ import { createPCMPlayer, startMicPCMStream, type MicStream, type PCMPlayer } fr
 import { foldTranscript, type CallLine } from "./call-transcript";
 import { canvasItemFrom, type CanvasItem } from "./canvas";
 import { callSocketUrl, openCallSocket, type CallConnection, type CallFrame, type CallStart } from "./call-socket";
+import { rejoinAfter } from "./call-rejoin";
+import { NOTICE_MS } from "./call-status";
 
-/** Drops in a row joined again before the call is given up as ended. A
- *  rejoin that connects starts the count over: a long call on a flaky
- *  network is not ended by its third blip. */
-const MAX_REJOINS = 4;
-/** The wait before the first rejoin, doubled for the next: a server
- *  restarting or a network coming back is not there the instant it went. */
-const REJOIN_DELAY_MS = 1_000;
-/** How long a notice stays up: it says something once, it is not a state. */
-const NOTICE_MS = 12_000;
 /** When a call ends without the server saying it saved, how long until its
  *  chat is read again anyway: the server goes on draining the last turn and
  *  writing the transcript after this tab has stopped waiting. */
@@ -211,7 +204,8 @@ export function useCall() {
                            Join it again, a couple of times at most, so a flaky
                            network does not leave the person on a screen that
                            has nothing to do with what the voice says. */
-                        if (dropped && rejoinsRef.current < MAX_REJOINS) {
+                        const delay = rejoinAfter(dropped, rejoinsRef.current);
+                        if (delay !== null) {
                             rejoinsRef.current += 1;
                             dropSocket();
                             setStatus("connecting");
@@ -220,7 +214,7 @@ export function useCall() {
                                 // Not if the person ended the call meanwhile.
                                 if (again !== attemptRef.current) return;
                                 void startRef.current?.(podId, callId, details, true);
-                            }, REJOIN_DELAY_MS * 2 ** (rejoinsRef.current - 1));
+                            }, delay);
                             return;
                         }
                         teardown();

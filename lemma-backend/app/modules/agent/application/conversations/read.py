@@ -14,6 +14,7 @@ writes and no commits. It never starts a run.
 from __future__ import annotations
 
 from collections.abc import Collection
+from dataclasses import dataclass
 from uuid import UUID
 
 from app.core.authorization.permissions import Permissions
@@ -25,7 +26,7 @@ from app.modules.agent.infrastructure import repositories
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.db.pauses import Awaiting, Pauses
-from app.modules.agent.infrastructure.db.runs import Runs
+from app.modules.agent.infrastructure.db.runs import RunWindow, Runs
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ConversationAgentSelection,
@@ -42,7 +43,12 @@ from app.modules.agent.domain.pauses import (
 from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.errors import AgentRunNotFoundError
 from app.modules.agent.services.background_model import AFTER_THE_RUN_SOURCES
-from app.modules.usage.contracts.run_usage import RunTokenUsage, run_token_usage
+from app.modules.usage.contracts.run_usage import (
+    LedgerTotals,
+    RunTokenUsage,
+    ledger_totals_by_run,
+    run_token_usage,
+)
 from app.modules.agent.domain.pending_interactions import (
     PendingInteraction,
     PendingInteractionCursor,
@@ -52,6 +58,20 @@ from app.modules.agent.services.conversation_access import (
     require_agent_action,
     resolve_expected_agent_id,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationLedger:
+    """A conversation's runs and what the ledger holds against them."""
+
+    #: The newest runs, newest first.
+    windows: list[RunWindow]
+    #: Totals for those of ``windows`` with anything recorded.
+    by_run: dict[UUID, LedgerTotals]
+    #: Over every run of the conversation, listed or not.
+    totals: LedgerTotals
+    run_count: int
+    reported_run_count: int
 
 
 class ConversationReads:
@@ -225,6 +245,41 @@ class ConversationReads:
             self.uow.session, agent_run_id, exclude_sources=AFTER_THE_RUN_SOURCES
         )
         return run, usage
+
+    async def get_usage(
+        self,
+        *,
+        conversation_id: UUID,
+        user_id: UUID,
+        pod_id: UUID,
+        run_limit: int,
+    ) -> ConversationLedger:
+        """What a conversation the caller may read has cost them: over every
+        run, and run by run for its newest ``run_limit``.
+
+        Read only from rows recorded against the caller. The conversation is
+        theirs (``validate_conversation_access``), so this is their own spend,
+        the same rows ``/usage/me/events`` shows them for it.
+        """
+        await self._authorized(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_name=None,
+        )
+        windows = await self.runs.newest_windows(conversation_id, limit=run_limit)
+        totals, reported_runs = await self.runs.ledger_totals(
+            conversation_id, user_id=user_id
+        )
+        return ConversationLedger(
+            windows=windows,
+            by_run=await ledger_totals_by_run(
+                self.uow.session, [window.id for window in windows], user_id=user_id
+            ),
+            totals=totals,
+            run_count=await self.runs.count_for_conversation(conversation_id),
+            reported_run_count=reported_runs,
+        )
 
     async def _authorized(
         self,

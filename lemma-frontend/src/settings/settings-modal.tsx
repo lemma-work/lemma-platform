@@ -18,7 +18,7 @@ import { PeopleSection } from "@/org/people";
 import { ModelsSection } from "@/org/models";
 import { OrgUsageSection } from "@/org/org-usage";
 import { Modal } from "@/shell/modal";
-import { isLocalDeployment } from "@/site/config";
+import { sellsHere } from "@/site/config";
 import {
     RefreshIcon, SignOutIcon, ProfileIcon, AppearanceIcon,
     UsageIcon, PeopleIcon, KeyIcon, OrgIcon, CardIcon, ReceiptIcon,
@@ -113,11 +113,12 @@ export const NEW_ORG = "new-organization";
 /** Sections about paying, which a local installation has nothing to say in:
  *  it runs the open-source backend on somebody's own machine, with no plans
  *  to pick and no seats to buy. Hidden rather than shown empty, because an
- *  empty Plan page reads as "billing is broken", not "there is no billing". */
+ *  empty Plan page reads as "billing is broken", not "there is no billing".
+ *  The phone app's WebViews leave them out too (`sellsHere`). */
 const BILLING: ReadonlySet<SettingsSection> = new Set(["plan", "team-billing"]);
 
 function offered(entries: SettingsEntry[]): SettingsEntry[] {
-    return isLocalDeployment() ? entries.filter((entry) => !BILLING.has(entry.key)) : entries;
+    return sellsHere() ? entries : entries.filter((entry) => !BILLING.has(entry.key));
 }
 
 /** Where a request for a section lands. Advanced became the last part of

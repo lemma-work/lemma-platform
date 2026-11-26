@@ -1255,6 +1255,58 @@
             "description": "Another model from the agent's runtime profile, for this step only. Unset runs on the agent's model.",
             "title": "Model Name"
           },
+          "ref": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "expression": "#/components/schemas/ExpressionInputBinding",
+                    "literal": "#/components/schemas/LiteralInputBinding"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ExpressionInputBinding"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LiteralInputBinding"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where that worktree starts: a branch, a tag, a commit sha, or a pull request's head as `pull/<n>/head`. Unset is the repository's default branch. Needs `repository`.",
+            "title": "Ref"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "expression": "#/components/schemas/ExpressionInputBinding",
+                    "literal": "#/components/schemas/LiteralInputBinding"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ExpressionInputBinding"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LiteralInputBinding"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The GitHub repository the agent works in, as `owner/name`. The run starts in a worktree of it, cloned through the pod's `github` connector as the run's person, as a webhook-started run does. Usually an expression, e.g. `start.payload.repository.full_name`.",
+            "title": "Repository"
+          },
           "timeout_seconds": {
             "anyOf": [
               {
@@ -1507,7 +1559,7 @@
                 "type": "null"
               }
             ],
-            "description": "Model tokens the run used, summed over its model calls; null when none were recorded against it. A run still working reads what it has used so far. Leaves out the conversation's title and the memory kept after the run, which land later. Tokens only: no cost."
+            "description": "Model tokens the run used, summed over its model calls; null when none were recorded against it. A run still working reads what it has used so far. Leaves out the conversation's title and the memory kept after the run, which land later. Tokens only: no cost (the conversation's usage route has it)."
           }
         },
         "required": [
@@ -3678,6 +3730,40 @@
         "title": "AvailableSurfacesResponse",
         "type": "object"
       },
+      "BlockResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "person": {
+            "$ref": "#/components/schemas/PersonRef"
+          }
+        },
+        "required": [
+          "person",
+          "created_at"
+        ],
+        "title": "BlockResponse",
+        "type": "object"
+      },
+      "BlocksResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BlockResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "BlocksResponse",
+        "type": "object"
+      },
       "BrowserAccessRequest": {
         "properties": {
           "ttl_seconds": {
@@ -4458,6 +4544,12 @@
       },
       "ChannelMessageResponse": {
         "properties": {
+          "blocked": {
+            "default": false,
+            "description": "Written by somebody the reader blocked (`/pods/{pod}/blocks`): shown only that it is there, until they unblock them.",
+            "title": "Blocked",
+            "type": "boolean"
+          },
           "can_share": {
             "default": false,
             "description": "The reader is the member an `asker_only` answer was made for, and may share it with the channel (`\u2026/messages/{id}/share`).",
@@ -4670,7 +4762,7 @@
                 "type": "null"
               }
             ],
-            "description": "Absent where the line is withheld from the reader, or deleted.",
+            "description": "Absent where the line is withheld from the reader, written by somebody they blocked, or deleted.",
             "title": "Text"
           },
           "thread_root_id": {
@@ -4894,6 +4986,54 @@
           "kind"
         ],
         "title": "ChannelRef",
+        "type": "object"
+      },
+      "ChannelReportRequest": {
+        "description": "Why the reader reports this line, and anything they want to add.",
+        "properties": {
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The reader's own words, for the team. Optional.",
+            "title": "Note"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ReportReason",
+            "description": "`OFFENSIVE` offensive or hateful, `HARMFUL` harmful or dangerous, `SEXUAL` sexual, `SPAM` spam or a scam, `OTHER` something else."
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "ChannelReportRequest",
+        "type": "object"
+      },
+      "ChannelReportResponse": {
+        "description": "The report as kept. Reporting the same line again replaces it: the\nsame id comes back.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "created_at"
+        ],
+        "title": "ChannelReportResponse",
         "type": "object"
       },
       "ChannelResponse": {
@@ -6377,6 +6517,19 @@
             "description": "When an agent first answered them; what the contact limit counts.",
             "title": "Answered At"
           },
+          "blocked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the pod's agents were stopped from answering them: what they write still reaches the pod's chats, and no agent answers it or writes to them. Members still can.",
+            "title": "Blocked At"
+          },
           "channel_id": {
             "anyOf": [
               {
@@ -6472,6 +6625,18 @@
       },
       "ContactUpdateRequest": {
         "properties": {
+          "blocked": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "True stops the pod's agents answering them, or writing to them; false lets them again. Absent leaves it as it is.",
+            "title": "Blocked"
+          },
           "display_name": {
             "anyOf": [
               {
@@ -6577,6 +6742,190 @@
         "title": "ContactsCapUpdate",
         "type": "object"
       },
+      "ConversationChangedFile": {
+        "properties": {
+          "additions": {
+            "title": "Additions",
+            "type": "integer"
+          },
+          "binary": {
+            "description": "Git found no lines to count; additions and deletions are 0.",
+            "title": "Binary",
+            "type": "boolean"
+          },
+          "deletions": {
+            "title": "Deletions",
+            "type": "integer"
+          },
+          "old_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where a renamed file was, before it moved.",
+            "title": "Old Path"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "added",
+              "modified",
+              "deleted",
+              "renamed",
+              "untracked"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "status",
+          "additions",
+          "deletions",
+          "binary"
+        ],
+        "title": "ConversationChangedFile",
+        "type": "object"
+      },
+      "ConversationChangesResponse": {
+        "description": "What the conversation's checkout holds that its start point does not.",
+        "properties": {
+          "ahead": {
+            "default": 0,
+            "description": "Commits on the checkout since `base_sha`.",
+            "title": "Ahead",
+            "type": "integer"
+          },
+          "base_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The start point compared against: `origin/<ref>`, the ref itself for a tag or a commit, or the branch `origin/HEAD` names (as `origin/main`). Null when it could not be found in the checkout; the files are then its uncommitted work only.",
+            "title": "Base Ref"
+          },
+          "base_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The merge base of the checkout's HEAD with `base_ref`.",
+            "title": "Base Sha"
+          },
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The checkout's branch; null when detached.",
+            "title": "Branch"
+          },
+          "files": {
+            "description": "Every file that differs from `base_sha` in the working tree -- committed, staged or not -- then the untracked files.",
+            "items": {
+              "$ref": "#/components/schemas/ConversationChangedFile"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "head_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Sha"
+          },
+          "patch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The unified diff, when asked for with `patch=true`.",
+            "title": "Patch"
+          },
+          "state": {
+            "description": "`ready`: read now, and everything below is filled in. `no_repository`: the conversation was not opened in a repository. `not_checked_out`: it was, and its machine answered, but the conversation's directory holds no checkout -- cleared, or never made on this machine. `machine_unavailable`: the machine it works on is not running -- it is not started to answer, so a conversation with no run yet answers this -- or a run of the conversation may not use it now. `elsewhere`: its last run worked on its person's own Mac (a coding agent through Agent Host, or host execution), where the checkout is.",
+            "enum": [
+              "ready",
+              "no_repository",
+              "not_checked_out",
+              "machine_unavailable",
+              "elsewhere"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/ConversationChangesTotals"
+          },
+          "truncated": {
+            "default": false,
+            "description": "Something was cut to fit: the patch at `max_patch_bytes`, or the file list in a very large change.",
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "uncommitted": {
+            "default": false,
+            "description": "Edits not yet committed, or untracked files, are present.",
+            "title": "Uncommitted",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "ConversationChangesResponse",
+        "type": "object"
+      },
+      "ConversationChangesTotals": {
+        "properties": {
+          "additions": {
+            "default": 0,
+            "title": "Additions",
+            "type": "integer"
+          },
+          "deletions": {
+            "default": 0,
+            "title": "Deletions",
+            "type": "integer"
+          },
+          "files": {
+            "default": 0,
+            "title": "Files",
+            "type": "integer"
+          }
+        },
+        "title": "ConversationChangesTotals",
+        "type": "object"
+      },
       "ConversationListResponse": {
         "properties": {
           "items": {
@@ -6607,6 +6956,54 @@
           "limit"
         ],
         "title": "ConversationListResponse",
+        "type": "object"
+      },
+      "ConversationReportRequest": {
+        "description": "Why the reader reports this message, and anything they want to add.",
+        "properties": {
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The reader's own words, for the team. Optional.",
+            "title": "Note"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ReportReason",
+            "description": "`OFFENSIVE` offensive or hateful, `HARMFUL` harmful or dangerous, `SEXUAL` sexual, `SPAM` spam or a scam, `OTHER` something else."
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "ConversationReportRequest",
+        "type": "object"
+      },
+      "ConversationReportResponse": {
+        "description": "The report as kept. Reporting the same message again replaces it: the\nsame id comes back.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "created_at"
+        ],
+        "title": "ConversationReportResponse",
         "type": "object"
       },
       "ConversationRepositoryListResponse": {
@@ -6957,6 +7354,53 @@
         ],
         "title": "ConversationType",
         "type": "string"
+      },
+      "ConversationUsageResponse": {
+        "description": "What one conversation has cost its owner so far.",
+        "properties": {
+          "conversation_id": {
+            "format": "uuid",
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "has_more_runs": {
+            "description": "Whether older runs exist than `runs` lists; `totals` has them.",
+            "title": "Has More Runs",
+            "type": "boolean"
+          },
+          "run_count": {
+            "description": "Every run of the conversation.",
+            "title": "Run Count",
+            "type": "integer"
+          },
+          "runs": {
+            "description": "The newest runs, newest first, each with its own usage.",
+            "items": {
+              "$ref": "#/components/schemas/RunUsageResponse"
+            },
+            "title": "Runs",
+            "type": "array"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/LedgerTotals",
+            "description": "Summed over every run of the conversation, the title and the memory kept after a run included. A sub-agent's conversation is its own: list them with `parent_id` and read each one's usage."
+          },
+          "unreported_run_count": {
+            "description": "Runs with nothing recorded against them. Above zero, `totals` leaves those runs out: show the total as incomplete, not as everything spent.",
+            "title": "Unreported Run Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "totals",
+          "run_count",
+          "unreported_run_count",
+          "runs",
+          "has_more_runs"
+        ],
+        "title": "ConversationUsageResponse",
+        "type": "object"
       },
       "CreateAgentHostRuntimeProfileRequest": {
         "properties": {
@@ -7406,6 +7850,19 @@
               }
             ],
             "title": "Parent Id"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where in `repository` the worktree starts: a branch, a tag, a commit, or a pull request's head as 'pull/<number>/head'. The conversation still works on a branch of its own (lemma/<slug>), made from this point; without it, from the default branch. Only with `repository`.",
+            "title": "Ref"
           },
           "repository": {
             "anyOf": [
@@ -7947,7 +8404,7 @@
           },
           "config": {
             "additionalProperties": true,
-            "description": "Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`. DATASTORE `rows: OWNER_READABLE` hands the trigger only rows its owner can read (their own on a per-person table, every row on a shared one), each run as the owner; making it needs only to read the table's rows, where the default `rows: ALL` needs `datastore.table.update`.",
+            "description": "Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. A TIME schedule may set `repository` to a GitHub repository as `owner/name`: its agent runs then start in a checkout of it on the default branch, as a webhook-triggered run does. It is cloned with the account the pod's `github` connector resolves to for the person the run is for: their own, or an account shared with the pod whose owner allows its use inside workspaces, in which case GitHub checks that owner's access, not the person's. A clone that fails (that account cannot reach the repository, say) does not stop the run: it starts in an empty directory and the agent is told why. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`. DATASTORE `rows: OWNER_READABLE` hands the trigger only rows its owner can read (their own on a per-person table, every row on a shared one), each run as the owner; making it needs only to read the table's rows, where the default `rows: ALL` needs `datastore.table.update`.",
             "title": "Config",
             "type": "object"
           },
@@ -13979,6 +14436,49 @@
         "type": "object"
       },
       "JsonValue": {},
+      "LedgerTotals": {
+        "description": "What a set of ledger rows cost, and the model tokens among them.",
+        "properties": {
+          "cache_write_tokens": {
+            "default": 0,
+            "description": "Input tokens written to the provider's prompt cache.",
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "cached_input_tokens": {
+            "default": 0,
+            "description": "Input tokens read from the provider's prompt cache.",
+            "title": "Cached Input Tokens",
+            "type": "integer"
+          },
+          "cost_usd": {
+            "default": 0.0,
+            "description": "What every recorded call cost, in US dollars, whichever provider profile paid for it. A call recorded without a price adds nothing.",
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "input_tokens": {
+            "default": 0,
+            "description": "Tokens sent to the model, cached ones included (cached_input_tokens says how many of these were cache reads).",
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "model_calls": {
+            "default": 0,
+            "description": "Model calls recorded: one per request for a run Lemma answers itself; an Agent Host reports each turn's calls as one.",
+            "title": "Model Calls",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "description": "Tokens the model wrote.",
+            "title": "Output Tokens",
+            "type": "integer"
+          }
+        },
+        "title": "LedgerTotals",
+        "type": "object"
+      },
       "LineDelivery": {
         "description": "Where a line went outside Lemma, as everybody who reads it is shown.",
         "properties": {
@@ -14036,6 +14536,12 @@
       },
       "LinePreview": {
         "properties": {
+          "blocked": {
+            "default": false,
+            "description": "Written by somebody the reader blocked.",
+            "title": "Blocked",
+            "type": "boolean"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -14060,7 +14566,7 @@
             "type": "integer"
           },
           "text": {
-            "description": "The start of what was said; empty when withheld or deleted.",
+            "description": "The start of what was said; empty when withheld, written by somebody the reader blocked, or deleted.",
             "title": "Text",
             "type": "string"
           },
@@ -16290,21 +16796,6 @@
         ],
         "title": "OperationDiscoveryStatus",
         "type": "string"
-      },
-      "OperationExecutionRequest": {
-        "properties": {
-          "payload": {
-            "additionalProperties": true,
-            "description": "The operation's arguments. A file argument takes a reference -- `{\"pod_path\": \"/me/report.pdf\"}`, `{\"file_id\": \"...\"}`, `{\"url\": \"https://...\"}` or `{\"base64\": \"...\", \"filename\": \"...\"}` -- read with the caller's own access before the call is made. `output_path` chooses where a file result lands in the pod.",
-            "title": "Payload",
-            "type": "object"
-          }
-        },
-        "required": [
-          "payload"
-        ],
-        "title": "OperationExecutionRequest",
-        "type": "object"
       },
       "OperationExecutionResponse": {
         "properties": {
@@ -19701,6 +20192,32 @@
         "title": "PodMemberUpdateRoleRequest",
         "type": "object"
       },
+      "PodOperationExecutionRequest": {
+        "description": "A pod connector call's body: its arguments, and who it presents as.",
+        "properties": {
+          "act_as": {
+            "default": "user",
+            "description": "Who the call presents as. `user` (the default) is the account's own person. `app` is the connector's app -- for GitHub, the Lemma App's bot -- and only a function run may ask for it: anyone else is refused with `APP_IDENTITY_FUNCTIONS_ONLY`. It is the app or nothing: an operation only a person may call, an account with no App installation, or a connector with no app is refused with `APP_IDENTITY_UNAVAILABLE` before anything is sent.",
+            "enum": [
+              "user",
+              "app"
+            ],
+            "title": "Act As",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "description": "The operation's arguments. A file argument takes a reference -- `{\"pod_path\": \"/me/report.pdf\"}`, `{\"file_id\": \"...\"}`, `{\"url\": \"https://...\"}` or `{\"base64\": \"...\", \"filename\": \"...\"}` -- read with the caller's own access before the call is made. `output_path` chooses where a file result lands in the pod.",
+            "title": "Payload",
+            "type": "object"
+          }
+        },
+        "required": [
+          "payload"
+        ],
+        "title": "PodOperationExecutionRequest",
+        "type": "object"
+      },
       "PodOutcome": {
         "description": "What the pod owns, as stored on its config.",
         "properties": {
@@ -21351,6 +21868,18 @@
         "title": "ReportFeedbackResponse",
         "type": "object"
       },
+      "ReportReason": {
+        "description": "Why it was reported, as the person picked it.",
+        "enum": [
+          "OFFENSIVE",
+          "HARMFUL",
+          "SEXUAL",
+          "SPAM",
+          "OTHER"
+        ],
+        "title": "ReportReason",
+        "type": "string"
+      },
       "ResetRequest": {
         "properties": {
           "confirm": {
@@ -21756,6 +22285,54 @@
           }
         },
         "title": "RunTokenUsage",
+        "type": "object"
+      },
+      "RunUsageResponse": {
+        "description": "One run of a conversation and what it cost.",
+        "properties": {
+          "agent_run_id": {
+            "format": "uuid",
+            "title": "Agent Run Id",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AgentRunStatus"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LedgerTotals"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the run cost and the tokens it used; null when nothing was recorded against it, which is not the same as nothing spent. A run on an Agent Host is recorded only if its harness reports usage, and only as each turn ends. A run still working reads what has been recorded so far."
+          }
+        },
+        "required": [
+          "agent_run_id",
+          "status",
+          "started_at"
+        ],
+        "title": "RunUsageResponse",
         "type": "object"
       },
       "RuntimeModelCapability": {
@@ -27283,7 +27860,7 @@
                 "type": "null"
               }
             ],
-            "description": "Replaces the whole config. Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`. DATASTORE `rows: OWNER_READABLE` hands the trigger only rows its owner can read (their own on a per-person table, every row on a shared one), each run as the owner; making it needs only to read the table's rows, where the default `rows: ALL` needs `datastore.table.update`.",
+            "description": "Replaces the whole config. Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. A TIME schedule may set `repository` to a GitHub repository as `owner/name`: its agent runs then start in a checkout of it on the default branch, as a webhook-triggered run does. It is cloned with the account the pod's `github` connector resolves to for the person the run is for: their own, or an account shared with the pod whose owner allows its use inside workspaces, in which case GitHub checks that owner's access, not the person's. A clone that fails (that account cannot reach the repository, say) does not stop the run: it starts in an empty directory and the agent is told why. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`. DATASTORE `rows: OWNER_READABLE` hands the trigger only rows its owner can read (their own on a per-person table, every row on a shared one), each run as the owner; making it needs only to read the table's rows, where the default `rows: ALL` needs `datastore.table.update`.",
             "title": "Config"
           },
           "filter_instruction": {
@@ -39689,6 +40266,312 @@
         }
       }
     },
+    "/pods/{pod_id}/blocks": {
+      "get": {
+        "description": "Everybody the reader blocked in this pod, newest first.",
+        "operationId": "channel.block.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlocksResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
+          }
+        },
+        "summary": "List Blocks",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "channel.block",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/pods/{pod_id}/blocks/{kind}:{person_id}": {
+      "delete": {
+        "description": "Lift a block: their lines read as anybody's again, the old ones too. A\ncontact since merged is unblocked as the one they became, as blocking\nthem was; one since forgotten, by the id given.",
+        "operationId": "channel.block.remove",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SenderKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "person_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Person Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
+          }
+        },
+        "summary": "Unblock Person",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.block"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.block",
+          "result": "void",
+          "verb": "remove"
+        }
+      },
+      "put": {
+        "description": "Block a member or a contact, for the reader alone. Blocking somebody\nalready blocked changes nothing. A reader keeps at most `MAX_BLOCKS` here\n(409 `BLOCK_LIMIT`).",
+        "operationId": "channel.block.add",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SenderKind"
+            }
+          },
+          {
+            "in": "path",
+            "name": "person_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Person Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
+          }
+        },
+        "summary": "Block Person",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.block"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.block",
+          "result": "entity",
+          "verb": "add"
+        }
+      }
+    },
     "/pods/{pod_id}/bundle/exports": {
       "post": {
         "description": "Enqueue a pod export. Returns 202 with an export_id; poll the status endpoint until READY, then fetch the signed download_url.",
@@ -43381,6 +44264,130 @@
         }
       }
     },
+    "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/report": {
+      "post": {
+        "description": "Report a line to the team that runs Lemma: why, and anything to add.\nReporting it again replaces the reader's report. The writer is not told.\nNot a line from somebody the reader blocked, which they are not shown\n(422): they unblock them first.",
+        "operationId": "channel.message.report",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Message Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
+          }
+        },
+        "summary": "Report Line",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.message"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.message",
+          "result": "entity",
+          "verb": "report"
+        }
+      }
+    },
     "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/share": {
       "post": {
         "description": "Share an agent's answer made with your own access with everybody in the\nchannel. Until then only you read it; the others are shown that it was\ngiven. Yours alone to share; sharing it again changes nothing.",
@@ -45164,7 +46171,7 @@
     },
     "/pods/{pod_id}/connectors/{slug}/operations/{operation_name}/execute": {
       "post": {
-        "description": "Run an operation through a pod connector. The account it runs as is decided by the connector: the caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals: `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`.",
+        "description": "Run an operation through a pod connector. The account it runs as is decided by the connector: the caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals: `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`; with `act_as: app`, `APP_IDENTITY_FUNCTIONS_ONLY` and `APP_IDENTITY_UNAVAILABLE`.",
         "operationId": "pod.connector.operation.execute",
         "parameters": [
           {
@@ -45200,7 +46207,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OperationExecutionRequest"
+                "$ref": "#/components/schemas/PodOperationExecutionRequest"
               }
             }
           },
@@ -45459,6 +46466,7 @@
         }
       },
       "patch": {
+        "description": "Rename a contact, or stop the pod's agents answering them (`blocked`).",
         "operationId": "contact.update",
         "parameters": [
           {
@@ -46378,6 +47386,93 @@
         }
       }
     },
+    "/pods/{pod_id}/conversations/{conversation_id}/changes": {
+      "get": {
+        "description": "What a conversation opened in a repository has changed in its checkout, live: every file that differs from where its branch left the start point (`origin/<ref>`, else `origin/HEAD`) -- commits not yet pushed, staged and unstaged edits -- and its untracked files, with line counts, and the patch with `patch=true`. Read-only: nothing is fetched and the repository is not written. A machine that is not running is not started (`machine_unavailable`); a conversation whose last run worked on its person's Mac answers `elsewhere`. A read that runs past its ceiling is a 504, `CONVERSATION_CHANGES_TIMED_OUT`. Only the conversation's owner may read it.",
+        "operationId": "agent.conversation.changes.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Include the unified diff.",
+            "in": "query",
+            "name": "patch",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Include the unified diff.",
+              "title": "Patch",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Cut the patch at this many bytes; `truncated` says so.",
+            "in": "query",
+            "name": "max_patch_bytes",
+            "required": false,
+            "schema": {
+              "default": 262144,
+              "description": "Cut the patch at this many bytes; `truncated` says so.",
+              "maximum": 1048576,
+              "minimum": 1024,
+              "title": "Max Patch Bytes",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationChangesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Conversation Changes",
+        "tags": [
+          "agent_conversations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.conversation.changes",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
     "/pods/{pod_id}/conversations/{conversation_id}/messages": {
       "get": {
         "description": "List the latest persisted messages in chronological order. Pass next_page_token as page_token to fetch the next older page above the current page.",
@@ -46747,6 +47842,100 @@
         }
       }
     },
+    "/pods/{pod_id}/conversations/{conversation_id}/messages/{message_id}/report": {
+      "post": {
+        "description": "Report a reply of the Lemma's, or a message from somebody outside, to the team that runs Lemma: why, and anything to add. Reporting it again replaces the report.",
+        "operationId": "agent.conversation.message.report",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Message Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conversation or message not found, or not visible"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not something that can be reported"
+          }
+        },
+        "summary": "Report Conversation Message",
+        "tags": [
+          "agent_conversations"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.conversation.message"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.conversation.message",
+          "result": "entity",
+          "verb": "report"
+        }
+      }
+    },
     "/pods/{pod_id}/conversations/{conversation_id}/retry": {
       "post": {
         "description": "Start a new run from the latest failed run's persisted conversation history without appending a duplicate user message. Retry is allowed only when the failed run produced no assistant, tool, or system activity. Attach to the returned run with the conversation stream endpoint.",
@@ -47044,6 +48233,67 @@
           "resource": "agent.conversation",
           "result": "entity",
           "verb": "stream"
+        }
+      }
+    },
+    "/pods/{pod_id}/conversations/{conversation_id}/usage": {
+      "get": {
+        "description": "What a conversation has cost so far, in US dollars and model tokens: summed over every run, and run by run for the newest 200. Readable by whoever may read the conversation (its owner), and only from what was recorded against them: the same rows their own usage shows. A run with nothing recorded has null `usage` and is counted in `unreported_run_count`: an Agent Host run whose harness reports no usage, or one not reported yet. Sub-agent conversations are not included; read each one's own.",
+        "operationId": "agent.conversation.usage.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationUsageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Conversation Usage",
+        "tags": [
+          "agent_conversations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.conversation.usage",
+          "result": "entity",
+          "verb": "get"
         }
       }
     },

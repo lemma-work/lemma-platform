@@ -36,6 +36,7 @@ async fn authenticated_harnesses_stream_real_answers_over_acp() {
                         })],
                         resume_session_id: None,
                         workspace_cwd: None,
+                        repository: None,
                         context: BTreeMap::new(),
                         mcp: Value::Null,
                         run_deadline: chrono::Utc::now() + chrono::Duration::minutes(5),

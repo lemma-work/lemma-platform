@@ -343,6 +343,9 @@ async def test_the_checkout_ends_on_the_sweep_only_when_it_ran() -> None:
         async def set(self, key, value, *, ex):
             self.values[key] = value
 
+        async def delete(self, key):
+            self.values.pop(key, None)
+
     redis = _Redis()
     session = _FakeSession({"success": True, "exit_code": 0, "stderr": ""})
     ctx = _context()

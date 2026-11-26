@@ -25,13 +25,21 @@ it, and the account knows its installation. Anything else is the person's token
 -- including an install nobody has reconnected yet, which keeps working exactly
 as it did and gains the App identity the moment it has an installation id.
 
+A function that asked for the app by name ("app_only") gets the app or a
+refusal at each of those fallbacks, never the person's token in its place: it
+chose the bot, and posting under the person's name instead is the one outcome
+nobody asked for (``domain/app_identity.py``).
+
 The sandbox's `git`/`gh` never reaches here at all: it resolves its credential
 straight from the account, for the same reason.
 """
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
 from app.core.log.log import get_logger
+from app.modules.connectors.domain.app_identity import AppIdentityUnavailableError
 from app.modules.connectors.domain.kinds import ExecutionRequest
 from app.modules.connectors.services.auth.github_app import (
     GitHubAppUnavailable,
@@ -42,11 +50,26 @@ logger = get_logger(__name__)
 
 _USER_ONLY = "user_only"
 _AS_APP = "app"
+_APP_ONLY = "app_only"
+
+
+#: Mints an installation token for an installation id. GitHub, in production.
+InstallationTokenMinter = Callable[[str], Awaitable[str]]
+
+
+async def _mint(installation_id: str) -> str:
+    # Looked up at call time, so a test that patches the module's
+    # ``installation_token`` still reaches the presenter it built by default.
+    return await installation_token(installation_id)
 
 
 class GitHubCredentialPresenter:
+    def __init__(self, mint: InstallationTokenMinter = _mint) -> None:
+        self._mint = mint
+
     async def present(self, request: ExecutionRequest) -> dict[str, object]:
-        if request.act_as != _AS_APP:
+        strict = request.act_as == _APP_ONLY
+        if request.act_as != _AS_APP and not strict:
             # The caller did not ask to be the app. Publishing a pod, importing
             # one, or any path that has not thought about it: acting as the
             # person is both the safe answer and the one they had before.
@@ -54,6 +77,10 @@ class GitHubCredentialPresenter:
 
         token_kind = (request.operation.execution or {}).get("github_token_kind")
         if token_kind == _USER_ONLY:
+            if strict:
+                raise AppIdentityUnavailableError(
+                    "GitHub lets only a person make this call."
+                )
             return request.credentials
 
         # The *account's* binding, not the install's. A GitHub App installed on
@@ -62,14 +89,23 @@ class GitHubCredentialPresenter:
         # hand one organization's token to the other.
         installation_id = request.account_external_ref
         if not installation_id:
+            if strict:
+                raise AppIdentityUnavailableError(
+                    "this GitHub account has no App installation. Reconnect it "
+                    "from the Lemma's connectors."
+                )
             # An install that has not been reconnected yet. It has a user token
             # and that token still works; going quiet here instead would break
             # every operation on it for the sake of an identity it never had.
             return request.credentials
 
         try:
-            token = await installation_token(str(installation_id))
-        except GitHubAppUnavailable:
+            token = await self._mint(str(installation_id))
+        except GitHubAppUnavailable as exc:
+            if strict:
+                raise AppIdentityUnavailableError(
+                    "GitHub did not give the App a token for this installation."
+                ) from exc
             # No key configured, or GitHub refused -- most often the App was
             # uninstalled since the id was stored. The user token is a real
             # credential and a narrower one; falling back to it degrades the

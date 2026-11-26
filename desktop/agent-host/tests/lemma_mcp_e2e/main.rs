@@ -231,6 +231,7 @@ pub(crate) fn journal_run(paths: &HostPaths, target_id: Uuid, run_id: Uuid, mcp:
         prompt: vec![json!({"type": "text", "text": "unused"})],
         resume_session_id: None,
         workspace_cwd: None,
+        repository: None,
         context: JsonMap::new(),
         mcp,
         run_deadline: Utc::now() + chrono::Duration::minutes(5),
