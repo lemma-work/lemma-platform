@@ -190,6 +190,25 @@ async def test_a_delivery_runs_the_schedules_of_every_org_holding_it_and_no_othe
     ), "a pull request ran a schedule in an organization that does not hold it"
 
 
+async def test_routing_reads_every_holder_past_one_page(
+    scenario,
+    db_session,
+    github_sees,  # noqa: F811
+    monkeypatch,
+):
+    """Holders are paged, not capped: one past a page still hears deliveries."""
+    from app.modules.connectors.services.auth import github_bindings
+
+    monkeypatch.setattr(github_bindings, "_ORGANIZATIONS_PAGE", 1)
+    installation_id = _installation_id()
+    org_b, _ = await _both_hold(scenario, db_session, github_sees, installation_id)
+
+    normalized = await _verified_delivery(installation_id)
+
+    assert normalized is not None
+    assert normalized.organization_ids == frozenset({scenario.org_id, org_b})
+
+
 async def test_uninstalling_lets_go_of_it_in_every_org(
     scenario,
     db_session,
@@ -238,6 +257,50 @@ async def test_an_org_lets_go_of_its_own_binding_and_the_other_keeps_its(
     again = await scenario.owner_client.delete(url)
     assert again.status_code == 404, again.text
     assert again.json()["code"] == "GITHUB_INSTALLATION_NOT_HELD"
+
+
+async def test_letting_go_outlives_a_read_and_only_a_pick_takes_it_back(
+    scenario,
+    db_session,
+    github_sees,  # noqa: F811
+):
+    """The person who let go is still the GitHub organization's admin, and
+    their account still sees the installation. Reading the account used to
+    bind it straight back on their proof. Now it is offered and nothing is
+    held; picking it is the explicit claim that takes it back."""
+    installation_id = _installation_id()
+    org_b, b_account = await _both_hold(
+        scenario, db_session, github_sees, installation_id
+    )
+    released = await scenario.owner_client.delete(
+        f"/organizations/{org_b}/connectors/github/installations/{installation_id}"
+    )
+    assert released.status_code == 200, released.text
+    account_url = (
+        f"/organizations/{org_b}/connectors/accounts/{b_account}/github/installations"
+    )
+
+    read = await scenario.owner_client.get(account_url, params={"refresh": True})
+
+    assert read.status_code == 200, read.text
+    assert read.json()["install_state"] == "CHOOSE_INSTALL", read.json()
+    assert installation_id in [one["installation_id"] for one in read.json()["choices"]]
+    assert await _holders(db_session, installation_id) == {UUID(scenario.org_id)}
+    assert await _routable(db_session, b_account) is None
+
+    picked = await scenario.owner_client.post(
+        account_url, json={"installation_id": installation_id}
+    )
+
+    assert picked.status_code == 200, picked.text
+    assert await _holders(db_session, installation_id) == {
+        UUID(scenario.org_id),
+        UUID(org_b),
+    }
+    assert await _routable(db_session, b_account) == installation_id
+    normalized = await _verified_delivery(installation_id)
+    assert normalized is not None
+    assert normalized.organization_ids == frozenset({scenario.org_id, org_b})
 
 
 async def test_only_someone_who_manages_installations_may_let_go(

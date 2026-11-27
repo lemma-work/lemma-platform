@@ -66,6 +66,10 @@ OVERRIDES: dict[str, dict[str, Any]] = {
     # A delete that answers with what it did: which organizations went with
     # the account and which it left.
     "user.current.delete": {"result": "entity"},
+    # Clears the routing key on the organization's accounts that named it.
+    "connector.github_installation.release": {
+        "invalidates": ["connector.github_installation", "connector.account"]
+    },
 }
 
 

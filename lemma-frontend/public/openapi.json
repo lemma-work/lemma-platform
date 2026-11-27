@@ -37634,7 +37634,7 @@
     },
     "/organizations/{organization_id}/connectors/github/installations/{installation_id}": {
       "delete": {
-        "description": "This organization lets go of a GitHub App installation it holds. Other organizations holding the same installation keep theirs. Its accounts naming the installation forget it, and its schedules stop hearing the installation's events. Needs `org.installation.manage`.",
+        "description": "This organization lets go of a GitHub App installation it holds. Other organizations holding the same installation keep theirs. Its accounts naming the installation forget it, and its schedules stop hearing the installation's events. Reading an account does not take it back; picking it on an account, or connecting through it, does. Needs `org.installation.manage`.",
         "operationId": "connector.github_installation.release",
         "parameters": [
           {
@@ -37668,6 +37668,16 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "This organization does not hold that installation"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -37685,7 +37695,8 @@
         ],
         "x-lemma": {
           "invalidates": [
-            "connector.github_installation"
+            "connector.github_installation",
+            "connector.account"
           ],
           "kind": "mutation",
           "paginates": false,

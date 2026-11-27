@@ -36,6 +36,11 @@ def _parse_response(
 
         return response_200
 
+    if response.status_code == 404:
+        response_404 = ErrorResponse.from_dict(response.json())
+
+        return response_404
+
     if response.status_code == 422:
         response_422 = ErrorResponse.from_dict(response.json())
 
@@ -68,7 +73,8 @@ def sync_detailed(
 
      This organization lets go of a GitHub App installation it holds. Other organizations holding the
     same installation keep theirs. Its accounts naming the installation forget it, and its schedules
-    stop hearing the installation's events. Needs `org.installation.manage`.
+    stop hearing the installation's events. Reading an account does not take it back; picking it on an
+    account, or connecting through it, does. Needs `org.installation.manage`.
 
     Args:
         organization_id (UUID):
@@ -104,7 +110,8 @@ def sync(
 
      This organization lets go of a GitHub App installation it holds. Other organizations holding the
     same installation keep theirs. Its accounts naming the installation forget it, and its schedules
-    stop hearing the installation's events. Needs `org.installation.manage`.
+    stop hearing the installation's events. Reading an account does not take it back; picking it on an
+    account, or connecting through it, does. Needs `org.installation.manage`.
 
     Args:
         organization_id (UUID):
@@ -135,7 +142,8 @@ async def asyncio_detailed(
 
      This organization lets go of a GitHub App installation it holds. Other organizations holding the
     same installation keep theirs. Its accounts naming the installation forget it, and its schedules
-    stop hearing the installation's events. Needs `org.installation.manage`.
+    stop hearing the installation's events. Reading an account does not take it back; picking it on an
+    account, or connecting through it, does. Needs `org.installation.manage`.
 
     Args:
         organization_id (UUID):
@@ -169,7 +177,8 @@ async def asyncio(
 
      This organization lets go of a GitHub App installation it holds. Other organizations holding the
     same installation keep theirs. Its accounts naming the installation forget it, and its schedules
-    stop hearing the installation's events. Needs `org.installation.manage`.
+    stop hearing the installation's events. Reading an account does not take it back; picking it on an
+    account, or connecting through it, does. Needs `org.installation.manage`.
 
     Args:
         organization_id (UUID):

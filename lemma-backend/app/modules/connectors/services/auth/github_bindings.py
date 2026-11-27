@@ -34,6 +34,13 @@ GitHub account, so a GitHub organization worked on from two Lemma
 organizations is one installation, and a rule of one holder let only one of
 them connect at all. Each still needs its own GitHub admin's proof.
 
+An organization can let go of an installation it holds
+(``release_for_organization``). The row stays, marked released, and stops
+counting everywhere a binding counts; it is kept so that the next read of an
+account does not quietly bind the installation again on the same person's
+proof. Taking it back is an explicit claim -- picking it on an account, or
+connecting through it -- which clears the mark.
+
 There is no unbound path. Migration 0063 bound every existing installation
 whose organization could be derived and unbound the accounts of the rest. A
 derived binding is *unproven* (``proven_at`` NULL): it keeps working for the
@@ -45,8 +52,10 @@ from __future__ import annotations
 
 from uuid import UUID, uuid7
 
-from sqlalchemy import delete, func, select, update
-from sqlalchemy.dialects.postgresql import insert
+from datetime import UTC, datetime
+
+from sqlalchemy import String, delete, func, literal, select, tuple_, update
+from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.log.log import get_logger
@@ -82,6 +91,16 @@ def _row(installation_id: str, organization_id: UUID):
     )
 
 
+#: The key on a row's ``details`` saying its organization let go of it.
+RELEASED = "released_at"
+
+
+def held():
+    """A row that stands: not one its organization let go of. Every read of
+    who holds an installation filters on this."""
+    return ~ConnectorInstallation.details.has_key(RELEASED)
+
+
 async def is_bound_to(
     session: AsyncSession, installation_id: str, organization_id: UUID
 ) -> bool:
@@ -89,33 +108,69 @@ async def is_bound_to(
     return (
         await session.scalar(
             select(ConnectorInstallation.id).where(
-                *_row(installation_id, organization_id)
+                *_row(installation_id, organization_id), held()
             )
         )
         is not None
     )
 
 
-#: Organizations one installation's delivery is routed to. One per Lemma
-#: organization a GitHub organization's admins work in, which is a handful;
-#: the bound keeps a delivery's routing from walking past what anyone uses.
-_MAX_BOUND_ORGANIZATIONS = 100
+async def was_released(
+    session: AsyncSession, installation_id: str, organization_id: UUID
+) -> bool:
+    """Whether this organization let go of the installation, and has not
+    taken it back."""
+    return (
+        await session.scalar(
+            select(ConnectorInstallation.id).where(
+                *_row(installation_id, organization_id), ~held()
+            )
+        )
+        is not None
+    )
+
+
+#: Bindings read per page when routing a delivery.
+_ORGANIZATIONS_PAGE = 100
 
 
 async def bound_organizations(
     session: AsyncSession, installation_id: str
 ) -> frozenset[UUID]:
-    """Every organization this installation is bound to; empty if none."""
-    rows = await session.scalars(
-        select(ConnectorInstallation.organization_id)
-        .where(
-            ConnectorInstallation.connector_id == GITHUB,
-            ConnectorInstallation.external_id == str(installation_id),
+    """Every organization this installation is bound to; empty if none.
+
+    Paged, never capped: each row was earned on its own GitHub admin's
+    proof, and one left out would silently stop hearing deliveries it is
+    entitled to. In practice one page -- a binding per Lemma organization a
+    GitHub organization's admins work in.
+    """
+    found: list[UUID] = []
+    after: tuple[object, UUID] | None = None
+    while True:
+        query = (
+            select(
+                ConnectorInstallation.organization_id,
+                ConnectorInstallation.created_at,
+                ConnectorInstallation.id,
+            )
+            .where(
+                ConnectorInstallation.connector_id == GITHUB,
+                ConnectorInstallation.external_id == str(installation_id),
+                held(),
+            )
+            .order_by(ConnectorInstallation.created_at, ConnectorInstallation.id)
+            .limit(_ORGANIZATIONS_PAGE)
         )
-        .order_by(ConnectorInstallation.created_at, ConnectorInstallation.id)
-        .limit(_MAX_BOUND_ORGANIZATIONS)
-    )
-    return frozenset(rows.all())
+        if after is not None:
+            query = query.where(
+                tuple_(ConnectorInstallation.created_at, ConnectorInstallation.id)
+                > tuple_(literal(after[0]), literal(after[1]))
+            )
+        rows = (await session.execute(query)).all()
+        found.extend(row.organization_id for row in rows)
+        if len(rows) < _ORGANIZATIONS_PAGE:
+            return frozenset(found)
+        after = (rows[-1].created_at, rows[-1].id)
 
 
 #: Installations one organization is read for. One per GitHub account its
@@ -139,6 +194,7 @@ async def bound_installations(
         .where(
             ConnectorInstallation.connector_id == GITHUB,
             ConnectorInstallation.organization_id == organization_id,
+            held(),
         )
         .order_by(ConnectorInstallation.created_at, ConnectorInstallation.id)
         .limit(_MAX_BOUND_INSTALLATIONS)
@@ -156,7 +212,7 @@ async def held_proven_by(
     """
     proven_at = await session.scalar(
         select(ConnectorInstallation.proven_at).where(
-            *_row(installation_id, organization_id)
+            *_row(installation_id, organization_id), held()
         )
     )
     return proven_at is not None
@@ -192,15 +248,21 @@ async def claim_installation(
     organization in Lemma (``org.installation.manage``). What another
     organization holds is neither a reason to refuse nor a reason to accept:
     its row is its own, and this claim neither moves nor reads it.
+
+    One this organization let go of is not held: taking it back needs the
+    same proof as binding it the first time, and clears the release.
     """
-    held = await session.scalar(
-        select(ConnectorInstallation.proven_at.is_not(None)).where(
-            *_row(installation_id, organization_id)
+    row = (
+        await session.execute(
+            select(
+                ConnectorInstallation.proven_at.is_not(None).label("proven"),
+                held().label("standing"),
+            ).where(*_row(installation_id, organization_id))
         )
-    )
-    if held is not None:
+    ).first()
+    if row is not None and row.standing:
         if (
-            not held
+            not row.proven
             and administered
             and await _may_install(session, user_id, organization_id)
         ):
@@ -218,6 +280,23 @@ async def claim_installation(
             organization_id=str(organization_id),
         )
         raise InstallationClaimNotPermittedError()
+    if row is not None:
+        await session.execute(
+            update(ConnectorInstallation)
+            .where(*_row(installation_id, organization_id))
+            .values(
+                proven_at=func.now(),
+                bound_by_user_id=user_id,
+                details=ConnectorInstallation.details.op("-", return_type=JSONB)(
+                    literal(RELEASED, String)
+                ),
+            )
+        )
+        logger.info(
+            "connectors.github_bindings.installation_reclaimed",
+            organization_id=str(organization_id),
+        )
+        return
     # Nothing on conflict: a second claim from this organization racing this
     # one bound the same row, and either way the organization holds it.
     inserted = await session.execute(
@@ -306,12 +385,23 @@ async def release_for_organization(
     delivery reaches only organizations that hold the installation. The
     caller has checked the person may manage the organization's installations.
 
+    The row is kept, marked released and unproven, rather than deleted: an
+    account in the organization that can still see the installation would
+    otherwise bind it straight back on its next read, on the proof of the
+    very person who let it go. Only an explicit claim takes it back.
+
     ``None`` when the organization did not hold it; otherwise the accounts
     that forgot it, for the caller to drop what it remembers of each.
     """
     released = await session.execute(
-        delete(ConnectorInstallation)
-        .where(*_row(installation_id, organization_id))
+        update(ConnectorInstallation)
+        .where(*_row(installation_id, organization_id), held())
+        .values(
+            proven_at=None,
+            details=ConnectorInstallation.details.op("||", return_type=JSONB)(
+                literal({RELEASED: datetime.now(UTC).isoformat()}, JSONB)
+            ),
+        )
         .returning(ConnectorInstallation.id)
     )
     if released.scalar() is None:
@@ -346,6 +436,9 @@ class InstallationBindings:
 
     async def holds(self, organization_id: UUID, installation_id: str) -> bool:
         return await is_bound_to(self._session, installation_id, organization_id)
+
+    async def released(self, organization_id: UUID, installation_id: str) -> bool:
+        return await was_released(self._session, installation_id, organization_id)
 
     async def claim(
         self, account: AccountEntity, installation_id: str, *, administered: bool
@@ -390,4 +483,5 @@ __all__ = [
     "release_for_organization",
     "release_installation",
     "routable_external_ref",
+    "was_released",
 ]

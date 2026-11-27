@@ -592,7 +592,7 @@ export class ConnectorsService {
     }
     /**
      * Stop Using A GitHub Installation
-     * This organization lets go of a GitHub App installation it holds. Other organizations holding the same installation keep theirs. Its accounts naming the installation forget it, and its schedules stop hearing the installation's events. Needs `org.installation.manage`.
+     * This organization lets go of a GitHub App installation it holds. Other organizations holding the same installation keep theirs. Its accounts naming the installation forget it, and its schedules stop hearing the installation's events. Reading an account does not take it back; picking it on an account, or connecting through it, does. Needs `org.installation.manage`.
      * @param organizationId
      * @param installationId
      * @returns MessageResponseSchema Successful Response
@@ -610,6 +610,7 @@ export class ConnectorsService {
                 'installation_id': installationId,
             },
             errors: {
+                404: `This organization does not hold that installation`,
                 422: `Validation Error`,
             },
         });

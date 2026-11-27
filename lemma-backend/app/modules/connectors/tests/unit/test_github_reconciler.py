@@ -81,12 +81,20 @@ class _Bindings:
     anybody yet unless a test says so. Its refusals are covered end to end
     against Postgres."""
 
-    def __init__(self, holders: dict[str, set[object]] | None = None) -> None:
+    def __init__(
+        self,
+        holders: dict[str, set[object]] | None = None,
+        released: dict[str, set[object]] | None = None,
+    ) -> None:
         self.holders = {key: set(value) for key, value in (holders or {}).items()}
+        self.let_go = {key: set(value) for key, value in (released or {}).items()}
         self.claimed: list[tuple[str, bool]] = []
 
     async def holds(self, organization_id, installation_id: str) -> bool:
         return organization_id in self.holders.get(installation_id, set())
+
+    async def released(self, organization_id, installation_id: str) -> bool:
+        return organization_id in self.let_go.get(installation_id, set())
 
     async def claim(self, account, installation_id: str, *, administered: bool):
         self.claimed.append((installation_id, administered))
@@ -422,6 +430,34 @@ class TestTheStateIsWhatTheClaimMadeTrue:
         ).outcome(_account())
         assert claimed.state is InstallState.READY
         assert also_elsewhere.claimed == [("158040062", True)]
+
+    async def test_one_this_org_let_go_of_is_offered_not_taken_back(self, answers):
+        """Letting go would be undone by the next read otherwise: the person
+        who let it go is still its GitHub admin. It is offered, and only a
+        pick claims it."""
+        setter, _ = answers
+        choice = InstallationChoice(
+            installation_id="158040062",
+            account_login="octo",
+            account_type="Organization",
+            repository_selection="all",
+        )
+        setter(
+            InstallationOutcome(
+                InstallState.READY, installation_id="158040062", choices=(choice,)
+            )
+        )
+        account = _account()
+        let_go = _Bindings(released={"158040062": {account.organization_id}})
+
+        offered = await _reconciler(_Service(), _Cache(), bindings=let_go).outcome(
+            account
+        )
+
+        assert offered.state is InstallState.CHOOSE_INSTALL
+        assert [one.installation_id for one in offered.choices] == ["158040062"]
+        assert let_go.claimed == []
+        assert account.external_ref is None
 
     async def test_the_claim_carries_whether_github_vouched(self, answers):
         """A binding this organization holds needs no proof, so none is asked

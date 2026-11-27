@@ -177,16 +177,18 @@ async def _setup_callback(
 
 
 async def _holders(db_session: AsyncSession, installation_id: str) -> set[UUID]:
-    """Every organization the installation is bound to."""
+    """Every organization the installation is bound to, and has not let go of."""
     from app.modules.connectors.infrastructure.models.connector_installation import (
         ConnectorInstallation,
     )
+    from app.modules.connectors.services.auth.github_bindings import held
 
     db_session.expire_all()
     rows = await db_session.scalars(
         select(ConnectorInstallation.organization_id).where(
             ConnectorInstallation.connector_id == "github",
             ConnectorInstallation.external_id == installation_id,
+            held(),
         )
     )
     return set(rows.all())

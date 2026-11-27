@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Query, Request
 
 from app.core.api.dependencies import CurrentUser, get_uow_factory
+from app.core.api.schemas import ErrorResponse
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.app_pin import refuse_other_pod
 from app.core.authorization.permissions import Permissions
@@ -338,12 +339,20 @@ async def bind_account_installation(
     "/installations/{installation_id}",
     response_model=MessageResponseSchema,
     operation_id="connector.github_installation.release",
+    responses={
+        404: {
+            "model": ErrorResponse,
+            "description": "This organization does not hold that installation",
+        }
+    },
     summary="Stop Using A GitHub Installation",
     description=(
         "This organization lets go of a GitHub App installation it holds. "
         "Other organizations holding the same installation keep theirs. Its "
         "accounts naming the installation forget it, and its schedules stop "
-        "hearing the installation's events. Needs `org.installation.manage`."
+        "hearing the installation's events. Reading an account does not take "
+        "it back; picking it on an account, or connecting through it, does. "
+        "Needs `org.installation.manage`."
     ),
     status_code=200,
 )

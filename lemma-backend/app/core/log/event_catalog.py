@@ -815,6 +815,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'connectors.github_bindings.claim_not_permitted.denied': EventSpec('warning', frozenset({'organization_id'})),
     'connectors.github_bindings.claim_unproven.denied': EventSpec('warning', frozenset({'organization_id'})),
     'connectors.github_bindings.installation_bound': EventSpec('info', frozenset({'organization_id'})),
+    'connectors.github_bindings.installation_reclaimed': EventSpec('info', frozenset({'organization_id'})),
     'connectors.github_bindings.installation_released': EventSpec('info', frozenset({'organization_id'})),
     'connectors.github_bindings.unbound_installation_ignored.denied': EventSpec('warning', frozenset({'account_id'})),
     'connectors.github_installation.administration_unproven.degraded': EventSpec('warning', frozenset()),
