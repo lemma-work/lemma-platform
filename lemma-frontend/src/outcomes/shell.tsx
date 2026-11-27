@@ -7,7 +7,7 @@ import { source, type Org, type Pod } from "@/data";
 import { lemma } from "@/session/client";
 import { key } from "@/session/storage";
 import { readAddress } from "@/shell/address";
-import { directionOf, heroOf, move } from "./move";
+import { move } from "./move";
 import { NotYours } from "@/shell/not-yours";
 import { isForbidden, isMissing } from "@/session/auth-state";
 import { useAnalyticsIdentity } from "@/site/analytics/identity";
@@ -303,7 +303,7 @@ export function OutcomesShell() {
             return;
         }
         const from = viewNow.current;
-        move(directionOf(from, next), heroOf(from, next), () => new Promise<void>((done) => {
+        move(from, next, () => new Promise<void>((done) => {
             landed.current = done;
             window.history.pushState({ oxStep: step() + 1 }, "", url);
             setHandoff(options.handoff ?? null);

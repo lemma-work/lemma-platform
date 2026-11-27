@@ -5233,11 +5233,12 @@ a.ox-piece:hover .ox-piece__t {
 }
 
 /* ── moving between pages ───────────────────────────────────────────────
-   The move says where the reader went (`outcomes/move.ts`). Across, one
-   place in the sidebar to another: the page settles in from 6px down.
-   Deeper, into something on the page: it comes in from the right. Back:
-   from the left. What was clicked carries over as `ox-hero`. The sidebar
-   never moves, and nothing else on the screen does either. */
+   A new page fades in over the old one, in place (`outcomes/move.ts`): it
+   never slides or rises, which read as the whole screen jumping. A change
+   on the same page -- an app moving inside itself, another section of a
+   tab -- does not move at all. What was clicked carries over as
+   `ox-hero`. The sidebar never moves, and nothing else on the screen does
+   either. */
 .ox-side {
     view-transition-name: ox-side;
 }
@@ -5248,9 +5249,11 @@ a.ox-piece:hover .ox-piece__t {
 
 ::view-transition-old(root),
 ::view-transition-new(root),
+::view-transition-group(root),
 ::view-transition-group(ox-side),
 ::view-transition-old(ox-side),
-::view-transition-new(ox-side) {
+::view-transition-new(ox-side),
+::view-transition-group(ox-page) {
     animation: none;
 }
 
@@ -5258,28 +5261,14 @@ a.ox-piece:hover .ox-piece__t {
     display: none;
 }
 
-:root[data-move="across"]::view-transition-old(ox-page) {
-    animation: ox-move-out 120ms ease-out both;
-}
-
-:root[data-move="across"]::view-transition-new(ox-page) {
-    animation: ox-move-up 260ms cubic-bezier(0.2, 0.9, 0.3, 1) 40ms both;
-}
-
-:root[data-move="deeper"]::view-transition-old(ox-page) {
-    animation: ox-move-left 220ms cubic-bezier(0.4, 0, 1, 1) both;
-}
-
-:root[data-move="deeper"]::view-transition-new(ox-page) {
-    animation: ox-move-from-right 340ms cubic-bezier(0.2, 0.9, 0.3, 1) 60ms both;
-}
-
-:root[data-move="back"]::view-transition-old(ox-page) {
-    animation: ox-move-right 220ms cubic-bezier(0.4, 0, 1, 1) both;
-}
-
-:root[data-move="back"]::view-transition-new(ox-page) {
-    animation: ox-move-from-left 340ms cubic-bezier(0.2, 0.9, 0.3, 1) 60ms both;
+/* Both at once and the same length, so the page never dips to blank
+   between them; the browser's own blend keeps what both pages share
+   steady while they cross. */
+::view-transition-old(ox-page),
+::view-transition-new(ox-page) {
+    animation-duration: 160ms;
+    animation-timing-function: ease-out;
+    animation-fill-mode: both;
 }
 
 ::view-transition-group(ox-hero) {
@@ -5293,47 +5282,6 @@ a.ox-piece:hover .ox-piece__t {
     height: 100%;
     animation-duration: 420ms;
     object-fit: contain;
-}
-
-@keyframes ox-move-out {
-    to {
-        opacity: 0;
-    }
-}
-
-@keyframes ox-move-up {
-    from {
-        opacity: 0;
-        transform: translateY(6px);
-    }
-}
-
-@keyframes ox-move-left {
-    to {
-        opacity: 0;
-        transform: translateX(-28px);
-    }
-}
-
-@keyframes ox-move-from-right {
-    from {
-        opacity: 0;
-        transform: translateX(40px);
-    }
-}
-
-@keyframes ox-move-right {
-    to {
-        opacity: 0;
-        transform: translateX(28px);
-    }
-}
-
-@keyframes ox-move-from-left {
-    from {
-        opacity: 0;
-        transform: translateX(-40px);
-    }
 }
 
 @media (prefers-reduced-motion: reduce) {
