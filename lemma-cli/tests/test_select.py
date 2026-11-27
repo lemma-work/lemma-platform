@@ -34,6 +34,21 @@ def test_filter_items_no_match_is_empty():
     assert sel.filter_items(ITEMS, "zzz") == []
 
 
+def test_filter_items_finds_a_conversation_by_its_title():
+    conversations = [
+        {"id": "5f0a-1", "title": "Q3 revenue review"},
+        {"id": "5f0a-2", "title": "Onboarding notes"},
+        {"id": "5f0a-3", "title": None},
+    ]
+    assert sel.filter_items(conversations, "revenue") == [conversations[0]]
+    assert sel.filter_items(conversations, "5f0a-3") == [conversations[2]]
+
+
+def test_item_label_prefers_name_then_title():
+    assert sel.item_label({"id": "1", "name": "N", "title": "T"}) == "N (1)"
+    assert sel.item_label({"id": "1", "title": "T"}) == "T (1)"
+
+
 def test_filter_items_does_not_change_the_input():
     sel.filter_items(ITEMS, "beta")
     assert len(ITEMS) == 3
@@ -183,12 +198,39 @@ def test_escape_sequence_tail_never_reaches_the_filter():
 
 def test_read_exactly_gathers_bytes_delivered_one_at_a_time():
     deliveries = iter([b"\x82", b"\xac"])  # the rest of a euro sign, in pieces
-    gathered = sel._read_exactly(0, b"\xe2", 2, read=lambda _fd, _n: next(deliveries))
+    gathered = sel._read_exactly(0, b"\xe2", 2, read=lambda _fd: next(deliveries))
     assert gathered.decode() == "€"
 
 
-def test_read_exactly_stops_at_end_of_input():
-    assert sel._read_exactly(0, b"\xe2", 2, read=lambda _fd, _n: b"") == b"\xe2"
+def test_read_exactly_stops_when_nothing_more_arrives():
+    assert sel._read_exactly(0, b"\xe2", 2, read=lambda _fd: None) == b"\xe2"
+
+
+def test_read_exactly_stops_at_a_byte_that_is_not_a_continuation():
+    deliveries = iter([b"a", b"b"])
+    gathered = sel._read_exactly(0, b"\xe2", 2, read=lambda _fd: next(deliveries))
+    assert gathered == b"\xe2a"  # "b" is left for the next key press
+
+
+@needs_posix
+def test_stray_lead_byte_does_not_swallow_the_next_keys():
+    r = _pipe_with(b"\xe2ab")
+    try:
+        assert sel._read_key(r) == "a"
+        assert sel._read_key(r) == "b"
+    finally:
+        os.close(r)
+
+
+@needs_posix
+def test_stray_lead_byte_alone_does_not_block():
+    r, w = os.pipe()  # writer stays open: waiting for more would hang here
+    try:
+        os.write(w, b"\xe2")
+        assert sel._read_key(r) == ""
+    finally:
+        os.close(r)
+        os.close(w)
 
 
 @needs_posix

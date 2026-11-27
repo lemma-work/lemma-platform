@@ -14,7 +14,13 @@ from .state import console, fail
 
 
 def item_label(item: dict[str, Any], fallback: str = "") -> str:
-    name = item.get("name") or item.get("slug") or item.get("id") or fallback
+    name = (
+        item.get("name")
+        or item.get("title")
+        or item.get("slug")
+        or item.get("id")
+        or fallback
+    )
     subtitle = item.get("slug") or item.get("id")
     return f"{name} ({subtitle})" if subtitle and subtitle != name else str(name)
 
@@ -114,7 +120,7 @@ def _read_key(fd: int) -> str:
 
     Reads the fd directly, because sys.stdin buffers and select() cannot see
     bytes that are already inside that buffer. A read may return fewer bytes
-    than asked for, so multi-byte input is gathered until it is complete.
+    than asked for, so multi-byte input is gathered byte by byte.
     """
     first = os.read(fd, 1)
     if not first:
@@ -125,18 +131,27 @@ def _read_key(fd: int) -> str:
 
 
 def _read_exactly(
-    fd: int, data: bytes, extra: int, read: Callable[[int, int], bytes] = os.read
+    fd: int,
+    data: bytes,
+    extra: int,
+    read: Callable[[int], bytes | None] = lambda fd: _read_byte(fd),
 ) -> bytes:
-    """``data`` plus ``extra`` more bytes, stopping early only at end of input.
+    """``data`` plus up to ``extra`` UTF-8 continuation bytes.
 
-    ``read`` is a seam so a test can hand the bytes over in short reads.
+    Stops early when nothing more arrives, or when the next byte is not a
+    continuation byte: a stray lead byte must not swallow the key presses that
+    follow it. That byte stays in the result, and decoding with errors ignored
+    drops the stray lead and keeps it. ``read`` returns one byte or None, and
+    is a seam so a test can hand the bytes over one at a time.
     """
     while extra > 0:
-        chunk = read(fd, extra)
-        if not chunk:
+        byte = read(fd)
+        if byte is None:
             break
-        data += chunk
-        extra -= len(chunk)
+        data += byte
+        if not 0x80 <= byte[0] <= 0xBF:
+            break
+        extra -= 1
     return data
 
 
