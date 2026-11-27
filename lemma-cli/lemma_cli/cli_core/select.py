@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from typing import Any
+from typing import Any, TextIO
 
 import typer
 from rich.markup import escape
@@ -10,9 +10,29 @@ from .state import console, fail
 
 
 def item_label(item: dict[str, Any], fallback: str = "") -> str:
-    name = item.get("name") or item.get("slug") or item.get("id") or fallback
+    name = (
+        item.get("name")
+        or item.get("title")
+        or item.get("slug")
+        or item.get("id")
+        or fallback
+    )
     subtitle = item.get("slug") or item.get("id")
     return f"{name} ({subtitle})" if subtitle and subtitle != name else str(name)
+
+
+def filter_items(items: list[dict[str, Any]], text: str) -> list[dict[str, Any]]:
+    needle = text.lower()
+    if not needle:
+        return list(items)
+    return [
+        item
+        for item in items
+        if needle
+        in " ".join(
+            str(item.get(k) or "") for k in ("name", "slug", "id", "title")
+        ).lower()
+    ]
 
 
 def _arrows_available() -> bool:
@@ -60,25 +80,64 @@ def _select_with_arrows(
     import termios
     import tty
 
+    filter_text = ""
     selected = _initial_index(items, current_id)
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
     try:
         tty.setcbreak(fd)
         while True:
-            _render_arrow_selector(items, label=label, selected=selected)
+            filtered = filter_items(items, filter_text)
+            if filtered:
+                selected = max(0, min(selected, len(filtered) - 1))
+            else:
+                selected = 0
+            _render_arrow_selector(
+                filtered,
+                label=label,
+                selected=selected,
+                filter_text=filter_text,
+            )
             key = sys.stdin.read(1)
             if key == "\x1b":
-                key += sys.stdin.read(2)
+                # Drain the rest of the escape sequence (arrows, delete \x1b[3~, home \x1b[1~, etc.)
+                while True:
+                    ch = sys.stdin.read(1)
+                    key += ch
+                    if ch == "~" or ch.isalpha():
+                        break
             if key in {"\r", "\n"}:
-                console.print()
-                return items[selected]
+                if filtered:
+                    console.print()
+                    return filtered[selected]
+                sys.stdout.write("\a")
+                sys.stdout.flush()
+                continue
             if key in {"\x03", "\x04"}:
                 raise typer.Exit(code=1)
             if key == "\x1b[A":
-                selected = (selected - 1) % len(items)
+                if filtered:
+                    selected = (selected - 1) % len(filtered)
             elif key == "\x1b[B":
-                selected = (selected + 1) % len(items)
+                if filtered:
+                    selected = (selected + 1) % len(filtered)
+            elif key in {"\x7f", "\x08", "\b"}:
+                if filter_text:
+                    prev_item = filtered[selected] if filtered else None
+                    filter_text = filter_text[:-1]
+                    new_filtered = filter_items(items, filter_text)
+                    if prev_item and prev_item in new_filtered:
+                        selected = new_filtered.index(prev_item)
+                    else:
+                        selected = max(0, min(selected, len(new_filtered) - 1))
+            elif key.isprintable() and len(key) == 1:
+                prev_item = filtered[selected] if filtered else None
+                filter_text += key
+                new_filtered = filter_items(items, filter_text)
+                if prev_item and prev_item in new_filtered:
+                    selected = new_filtered.index(prev_item)
+                else:
+                    selected = 0
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
@@ -92,15 +151,25 @@ def _initial_index(items: list[dict[str, Any]], current_id: str | None) -> int:
 
 
 def _render_arrow_selector(
-    items: list[dict[str, Any]], *, label: str, selected: int
+    items: list[dict[str, Any]],
+    *,
+    label: str,
+    selected: int,
+    filter_text: str = "",
+    output: TextIO | None = None,
 ) -> None:
-    output = sys.stdout
-    output.write("\033[2J\033[H")
-    output.write(f"Select {label} (up/down, enter)\n")
-    for index, item in enumerate(items):
-        prefix = ">" if index == selected else " "
-        line = f"{prefix} {item_label(item, str(index + 1))}"
-        if index == selected:
-            line = f"\033[7m{line}\033[0m"
-        output.write(f"{line}\n")
-    output.flush()
+    out = output if output is not None else sys.stdout
+    out.write("\033[2J\033[H")
+    out.write(f"Select {label} (type to filter, up/down, enter)\n")
+    if filter_text:
+        out.write(f"Filter: {filter_text}\n")
+    if not items:
+        out.write("  (no matches)\n")
+    else:
+        for index, item in enumerate(items):
+            prefix = ">" if index == selected else " "
+            line = f"{prefix} {item_label(item, str(index + 1))}"
+            if index == selected:
+                line = f"\033[7m{line}\033[0m"
+            out.write(f"{line}\n")
+    out.flush()
