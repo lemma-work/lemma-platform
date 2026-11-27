@@ -124,6 +124,7 @@ export type { ConnectedClientResponse } from './models/ConnectedClientResponse.j
 export type { ConnectedClientsResponse } from './models/ConnectedClientsResponse.js';
 export type { ConnectionAccount } from './models/ConnectionAccount.js';
 export type { ConnectionCoverage } from './models/ConnectionCoverage.js';
+export type { ConnectionGithub } from './models/ConnectionGithub.js';
 export type { ConnectionMe } from './models/ConnectionMe.js';
 export type { ConnectionRunsAs } from './models/ConnectionRunsAs.js';
 export { ConnectionStanding } from './models/ConnectionStanding.js';
@@ -279,6 +280,8 @@ export { FunctionType } from './models/FunctionType.js';
 export type { GenerationSettings } from './models/GenerationSettings.js';
 export type { GithubBot } from './models/GithubBot.js';
 export type { GithubBotInstallation } from './models/GithubBotInstallation.js';
+export type { GithubInstallationOffer } from './models/GithubInstallationOffer.js';
+export { GithubWait } from './models/GithubWait.js';
 export { GoogleGenAIBackend } from './models/GoogleGenAIBackend.js';
 export { GranteeRef } from './models/GranteeRef.js';
 export type { GroupPublicResponse } from './models/GroupPublicResponse.js';

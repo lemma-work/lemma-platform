@@ -221,6 +221,7 @@ def _installations_response(outcome) -> AccountInstallationsSchema:
     return AccountInstallationsSchema(
         install_state=outcome.state.value,
         installation_id=outcome.installation_id,
+        waiting_on=outcome.waiting_on.value if outcome.waiting_on else None,
         choices=[
             InstallationChoiceSchema(
                 installation_id=choice.installation_id,

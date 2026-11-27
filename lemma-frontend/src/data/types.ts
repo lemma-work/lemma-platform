@@ -859,6 +859,12 @@ export interface PodSource {
      *  whose account a call runs as, and where they stand with it. Read-only;
      *  `GET /pods/{pod_id}/connections`. */
     podConnections(podId: string): Promise<PodConnections>;
+    /** Ask GitHub again what my GitHub account reaches, past what was last
+     *  heard: after installing the App, or after an admin acted on GitHub. */
+    checkGithubAccount(orgId: string, accountId: string): Promise<void>;
+    /** Which of the App's installations my GitHub account works through,
+     *  when it can reach several. */
+    pickGithubInstallation(orgId: string, accountId: string, installationId: string): Promise<void>;
     /** Put a surface on one of the pod's SHARED connectors, by slug — the one
      *  account it answers as, for everyone. */
     connectPodConnector(podId: string, platform: string, podConnector: string): Promise<Surface>;

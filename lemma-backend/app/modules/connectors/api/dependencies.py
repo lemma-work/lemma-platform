@@ -337,9 +337,19 @@ def build_pod_connections_reader(uow: SqlAlchemyUnitOfWork) -> "PodConnectionsRe
         people = await people_through_contracts(uow, pod_id, limit=MAX_POD_PEOPLE)
         return {one.user_id: one.name for one in people if one.user_id in user_ids}
 
+    async def github(account):
+        from app.modules.connectors.services.auth.github_reconciler import (
+            GithubInstallationReconciler,
+        )
+
+        return await GithubInstallationReconciler(get_connector_service(uow)).outcome(
+            account
+        )
+
     return PodConnectionsReader(
         parts=pod_connector_composition.build_pod_connector_service(uow),
         catalog=_connector_repository(uow),
         coverage=coverage.coverage,
         names=names,
+        github=github,
     )

@@ -136,6 +136,15 @@
     font-size: 13.5px;
 }
 
+/* GitHub's way on: install, pick, or open on GitHub, then check again. */
+.kpc-fix {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px 8px;
+}
+
 .kpc-chev {
     flex: none;
     color: var(--ink-3);

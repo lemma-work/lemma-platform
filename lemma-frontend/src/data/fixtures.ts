@@ -3358,6 +3358,12 @@ export const fixtureSource: PodSource = {
         settleAccount();
         return readPodConnections(sampleConnections(podId));
     },
+    async checkGithubAccount() {
+        await wait(300);
+    },
+    async pickGithubInstallation() {
+        await wait(300);
+    },
     async addPodConnector(podId: string, draft: PodConnectorDraft) {
         await wait(350);
         if (draft.slug && POD_CONNECTORS.some((one) => one.slug === draft.slug)) {

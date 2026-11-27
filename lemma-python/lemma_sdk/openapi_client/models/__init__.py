@@ -168,6 +168,7 @@ _NAME_TO_MODULE = {
     'ConnectedClientsResponse': 'connected_clients_response',
     'ConnectionAccount': 'connection_account',
     'ConnectionCoverage': 'connection_coverage',
+    'ConnectionGithub': 'connection_github',
     'ConnectionMe': 'connection_me',
     'ConnectionRunsAs': 'connection_runs_as',
     'ConnectionStanding': 'connection_standing',
@@ -373,6 +374,8 @@ _NAME_TO_MODULE = {
     'GenerationSettings': 'generation_settings',
     'GithubBot': 'github_bot',
     'GithubBotInstallation': 'github_bot_installation',
+    'GithubInstallationOffer': 'github_installation_offer',
+    'GithubWait': 'github_wait',
     'GoogleGenAIBackend': 'google_gen_ai_backend',
     'GranteeRef': 'grantee_ref',
     'GranteeRefGranteeType': 'grantee_ref_grantee_type',
@@ -1075,6 +1078,7 @@ if TYPE_CHECKING:
     from .connected_clients_response import ConnectedClientsResponse
     from .connection_account import ConnectionAccount
     from .connection_coverage import ConnectionCoverage
+    from .connection_github import ConnectionGithub
     from .connection_me import ConnectionMe
     from .connection_runs_as import ConnectionRunsAs
     from .connection_standing import ConnectionStanding
@@ -1280,6 +1284,8 @@ if TYPE_CHECKING:
     from .generation_settings import GenerationSettings
     from .github_bot import GithubBot
     from .github_bot_installation import GithubBotInstallation
+    from .github_installation_offer import GithubInstallationOffer
+    from .github_wait import GithubWait
     from .google_gen_ai_backend import GoogleGenAIBackend
     from .grantee_ref import GranteeRef
     from .grantee_ref_grantee_type import GranteeRefGranteeType
@@ -1995,6 +2001,7 @@ __all__ = [
     'ConnectedClientsResponse',
     'ConnectionAccount',
     'ConnectionCoverage',
+    'ConnectionGithub',
     'ConnectionMe',
     'ConnectionRunsAs',
     'ConnectionStanding',
@@ -2200,6 +2207,8 @@ __all__ = [
     'GenerationSettings',
     'GithubBot',
     'GithubBotInstallation',
+    'GithubInstallationOffer',
+    'GithubWait',
     'GoogleGenAIBackend',
     'GranteeRef',
     'GranteeRefGranteeType',

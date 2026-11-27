@@ -197,6 +197,18 @@
               }
             ],
             "title": "Installation Id"
+          },
+          "waiting_on": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "With PENDING_APPROVAL, whose act it waits on: `github_admin` (an admin of the GitHub account it is installed on), `github_permission` (an owner accepting the App's Members: read on GitHub), or `lemma_admin` (someone who may install apps for this organization).",
+            "title": "Waiting On"
           }
         },
         "required": [
@@ -5948,6 +5960,62 @@
         "title": "ConnectionCoverage",
         "type": "object"
       },
+      "ConnectionGithub": {
+        "description": "With ``install``: why GitHub is not usable here yet, and the way on.",
+        "properties": {
+          "choices": {
+            "description": "With `choose`: the installations the account can see; otherwise the one in question.",
+            "items": {
+              "$ref": "#/components/schemas/GithubInstallationOffer"
+            },
+            "title": "Choices",
+            "type": "array"
+          },
+          "install_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "With `install`: where the App is installed.",
+            "title": "Install Url"
+          },
+          "login": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The GitHub account the installation in question is on.",
+            "title": "Login"
+          },
+          "manage_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manage Url"
+          },
+          "wait": {
+            "$ref": "#/components/schemas/GithubWait"
+          }
+        },
+        "required": [
+          "wait"
+        ],
+        "title": "ConnectionGithub",
+        "type": "object"
+      },
       "ConnectionMe": {
         "properties": {
           "account": {
@@ -5970,6 +6038,17 @@
               }
             ],
             "description": "Set with `use_existing`: the account to add."
+          },
+          "github": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConnectionGithub"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set with `install`."
           },
           "standing": {
             "$ref": "#/components/schemas/ConnectionStanding"
@@ -6031,9 +6110,10 @@
         "type": "object"
       },
       "ConnectionStanding": {
-        "description": "What the caller can do about a connector right now.\n\nBy mode: PER_MEMBER is ``ready``, ``connect`` (no account of theirs on the\ninstallation anywhere), ``use_existing`` (one in the organization, not in\nthis pod yet) or ``reconnect``; SHARED and APP are ``ready`` or ``waiting``\n(no account shared; the App not installed); any mode is ``waiting`` when\nits installation is disabled, and ``not_allowed`` without ``connector.use``.",
+        "description": "What the caller can do about a connector right now.\n\nBy mode: PER_MEMBER is ``ready``, ``connect`` (no account of theirs on the\ninstallation anywhere), ``use_existing`` (one in the organization, not in\nthis pod yet) or ``reconnect``; SHARED and APP are ``ready`` or ``waiting``\n(no account shared; the App not installed); any mode is ``waiting`` when\nits installation is disabled, and ``not_allowed`` without ``connector.use``.\nGitHub's PER_MEMBER and SHARED are ``install`` while the account in use\nreaches no GitHub App installation this organization holds; ``github``\non ``me`` says why and what unblocks it.",
         "enum": [
           "ready",
+          "install",
           "connect",
           "reconnect",
           "use_existing",
@@ -13275,6 +13355,54 @@
         },
         "title": "GithubBotInstallation",
         "type": "object"
+      },
+      "GithubInstallationOffer": {
+        "properties": {
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "login": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Login"
+          },
+          "manage_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The installation's settings page on GitHub: where its repositories, and a pending permission, are changed.",
+            "title": "Manage Url"
+          }
+        },
+        "required": [
+          "installation_id"
+        ],
+        "title": "GithubInstallationOffer",
+        "type": "object"
+      },
+      "GithubWait": {
+        "description": "Why a GitHub account here reaches no installation, by who can fix it.",
+        "enum": [
+          "install",
+          "choose",
+          "github_admin",
+          "github_permission",
+          "lemma_admin"
+        ],
+        "title": "GithubWait",
+        "type": "string"
       },
       "GoogleGenAIBackend": {
         "description": "Which host answers the Google Gen AI API, and so how it is signed in to.\n\n``GEMINI_API`` takes an API key. ``VERTEX_AI`` takes a service account --\na stored key file, or for the deployment's own profile, the identity the\nserver already runs as (Application Default Credentials).",

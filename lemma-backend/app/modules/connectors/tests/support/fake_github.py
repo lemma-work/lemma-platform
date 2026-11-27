@@ -59,9 +59,16 @@ class FakeGitHub:
         return token
 
     def install(
-        self, installation_id: str, *, on: str, account_type: str = "Organization"
+        self,
+        installation_id: str,
+        *,
+        on: str,
+        account_type: str = "Organization",
+        members: bool = True,
     ) -> None:
-        """The App installed on GitHub account ``on`` (a login)."""
+        """The App installed on GitHub account ``on`` (a login). ``members``:
+        whether the installation granted the App Members: read, without which
+        GitHub will not say who a GitHub organization's admins are."""
         owner = next((u for u in self.users.values() if u.login == on), None)
         self.installations[installation_id] = {
             "id": int(installation_id),
@@ -71,6 +78,8 @@ class FakeGitHub:
                 "id": owner.id if owner and account_type == "User" else 9_000_000,
             },
             "repository_selection": "selected",
+            "permissions": {"metadata": "read", "contents": "write"}
+            | ({"members": "read"} if members else {}),
         }
 
     def refreshable(self, refresh_token: str, *, code: str) -> None:

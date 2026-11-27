@@ -269,7 +269,7 @@ function ConnectionRow({ pod, item, me, may, named, waiting, focused, flow, onOp
     const out = flow.waiting === item.slug;
     /* My standing first: when it asks something of me, that is the row's
        one thing. Otherwise an editor sees who it still waits on. */
-    const mine = standing === "connect" || standing === "reconnect" || standing === "use_existing";
+    const mine = standing === "connect" || standing === "reconnect" || standing === "use_existing" || standing === "install";
     const count = may && !mine && standing !== "not_allowed" && item.mode === "PER_MEMBER" && item.status === "READY" ? connectedCount(item.coverage) : "";
     const status: RowStatus = !mine && waiting.length > 0
         ? { word: "Waiting on " + (waiting.length === 1 ? waiting[0].name : waiting.length + " people"), tone: "warn" }
@@ -307,6 +307,11 @@ function ConnectionRow({ pod, item, me, may, named, waiting, focused, flow, onOp
                             {busy ? <LoadingIndicator inline label="Opening sign-in" /> : standing === "reconnect" ? "Reconnect" : "Connect"}
                         </button>
                     </>
+                ) : standing === "install" && !out ? (
+                    <>
+                        <Status status={said.status} />
+                        <GithubFix pod={pod} item={item} onChanged={onChanged} />
+                    </>
                 ) : sharedWaiting && may && ownable ? (
                     <>
                         <Status status={said.status} />
@@ -316,6 +321,45 @@ function ConnectionRow({ pod, item, me, may, named, waiting, focused, flow, onOp
                 <ChevronRightIcon size={16} className="kpc-chev" aria-hidden="true" />
             </span>
         </div>
+    );
+}
+
+/** The one way on for a GitHub account that reaches nothing here yet:
+ *  install the App, pick which installation, or open the installation on
+ *  GitHub for whoever has to act — and, after any of them, check again,
+ *  which asks GitHub past what was last heard. */
+function GithubFix({ pod, item, onChanged }: { pod: Pod; item: PodConnection; onChanged: () => void }) {
+    const github = item.me.github;
+    const accountId = item.me.account?.id ?? "";
+    const check = useMutation({
+        mutationFn: async () => { if (accountId) await source.checkGithubAccount(pod.orgId, accountId); },
+        onSettled: onChanged,
+    });
+    const pick = useMutation({
+        mutationFn: (installationId: string) => source.pickGithubInstallation(pod.orgId, accountId, installationId),
+        onSuccess: onChanged,
+    });
+    const busy = check.isPending || pick.isPending;
+    const link = github?.wait === "install" ? github.installUrl : github?.manageUrl ?? "";
+    return (
+        <span className="kpc-fix">
+            {github?.wait === "choose" && accountId ? github.choices.slice(0, 3).map((one) => (
+                <button key={one.installationId} type="button" className="b b--s b--primary" disabled={busy}
+                    onClick={() => pick.mutate(one.installationId)}>
+                    {pick.isPending && pick.variables === one.installationId ? "Using…" : "Use " + (one.login || "this one")}
+                </button>
+            )) : link ? (
+                <a className={"b b--s" + (github?.wait === "install" ? " b--primary" : "")} href={link} target="_blank" rel="noreferrer">
+                    {github?.wait === "install" ? "Install on GitHub" : "Open on GitHub"}
+                </a>
+            ) : null}
+            <button type="button" className="b b--s" disabled={busy} onClick={() => check.mutate()}>
+                {check.isPending ? "Checking…" : "Check again"}
+            </button>
+            {(check.isError || pick.isError) && (
+                <span className="kpc-problem" role="alert">{connectorProblem(check.error ?? pick.error, "GitHub didn’t answer just now. Try again in a moment.")}</span>
+            )}
+        </span>
     );
 }
 

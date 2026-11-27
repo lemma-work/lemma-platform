@@ -157,11 +157,70 @@ async def test_a_bound_account_costs_nothing(answers):
     setter, calls = answers
     setter(InstallationOutcome(InstallState.INSTALL_REQUIRED))
     account = _account(external_ref="158040062")
+    held = _Bindings({"158040062": {account.organization_id}})
 
-    outcome = await _reconciler(_Service(), _Cache()).outcome(account)
+    outcome = await _reconciler(_Service(), _Cache(), bindings=held).outcome(account)
 
     assert outcome.installation_id == "158040062"
     assert calls == []
+
+
+async def test_an_account_naming_an_installation_its_org_does_not_hold_is_not_ready(
+    answers,
+):
+    """It mints nothing there, so READY would be the lie the Connections page
+    told: the account names an installation only another organization holds.
+    It is worked out again, and waits on an admin like any unbound one."""
+    setter, calls = answers
+    setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
+    account = _account(external_ref="158040062")
+    elsewhere = _Bindings({"158040062": {uuid4()}})
+
+    async def _not_theirs(_token: str, _installation_id: str) -> bool:
+        return False
+
+    outcome = await _reconciler(
+        _Service(), _Cache(), bindings=elsewhere, prove=_not_theirs
+    ).outcome(account)
+
+    assert calls == ["gho_token"]
+    assert outcome.state is InstallState.PENDING_APPROVAL
+
+
+async def test_a_wait_says_whose_act_it_waits_on(answers):
+    """Not an admin of it, the installation never granted Members: read, and
+    an admin who may not install apps here are three different people to ask."""
+    from app.modules.connectors.domain.github_installation_errors import (
+        InstallationClaimNotPermittedError,
+    )
+    from app.modules.connectors.services.auth.github_installation import (
+        Administration,
+        WaitingOn,
+    )
+
+    setter, _ = answers
+    setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
+
+    async def _says(answer):
+        async def _prove(_token: str, _installation_id: str):
+            return answer
+
+        return await _reconciler(_Service(), _Cache(), prove=_prove).outcome(_account())
+
+    assert (await _says(Administration.DOES_NOT)).waiting_on is WaitingOn.GITHUB_ADMIN
+    assert (
+        await _says(Administration.CANNOT_TELL)
+    ).waiting_on is WaitingOn.GITHUB_PERMISSION
+
+    class _NotHere(_Bindings):
+        async def claim(self, account, installation_id: str, *, administered: bool):
+            raise InstallationClaimNotPermittedError()
+
+    refused = await _reconciler(_Service(), _Cache(), bindings=_NotHere()).outcome(
+        _account()
+    )
+    assert refused.state is InstallState.PENDING_APPROVAL
+    assert refused.waiting_on is WaitingOn.LEMMA_ADMIN
 
 
 async def test_refresh_asks_again_even_when_bound(answers):
