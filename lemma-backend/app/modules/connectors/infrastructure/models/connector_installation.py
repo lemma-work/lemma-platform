@@ -6,15 +6,18 @@ upstream names each installation by a bare id. Whoever holds that id holds
 the app's power over the tenant -- GitHub App tokens on every repository in
 the installation, and its webhooks (audit H4). So the upstream id cannot be a
 free value on an account; a row here is the installation's owner on the
-Lemma side: the first organization to bind it through a verified path, and
-nobody else after. ``UNIQUE (connector_id, external_id)`` is the rule; the
-binding code is only its messenger.
+Lemma side: each organization that bound it through a verified path. GitHub
+allows one installation per GitHub account, so a GitHub organization worked on
+from several Lemma organizations is one installation with a row for each.
+Every row is earned on its own claim (``github_bindings``); one organization's
+row gives no other anything. ``UNIQUE (connector_id, external_id,
+organization_id)``; migration 0080 widened it from one row per installation.
 
 Not an auth config. An auth config is an organization's app *registration* --
 its client id and secret, several per org, unique in no wider sense. This is
-the ownership of one *upstream tenant*, unique across every organization.
+an organization's hold on one *upstream tenant*.
 GitHub binds here today; Lemma's own Slack app holds the same fact in
-``slack_manager_installs`` and can move here. DDL matches migration 0063.
+``slack_manager_installs`` and can move here. DDL matches migrations 0063 and 0080.
 """
 
 from __future__ import annotations
@@ -49,8 +52,7 @@ class ConnectorInstallation(UUIDCreatedBase):
     #: When a claimant last proved control of it: GitHub said they administer
     #: it, and they may install apps for the organization in Lemma. NULL for
     #: a binding migration 0063 derived from the accounts carrying it, which
-    #: nobody proved -- a proven claim from another organization takes such a
-    #: binding over, and the holder's own next proven claim stamps it.
+    #: nobody proved; the holder's own next proven claim stamps it.
     proven_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -63,7 +65,8 @@ class ConnectorInstallation(UUIDCreatedBase):
         UniqueConstraint(
             "connector_id",
             "external_id",
-            name="uq_connector_installations_connector_external",
+            "organization_id",
+            name="uq_connector_installations_connector_external_org",
         ),
         Index("ix_connector_installations_organization_id", "organization_id"),
     )

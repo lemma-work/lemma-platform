@@ -187,6 +187,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | --- | --- | --- | --- |
 | DELETE | `/organizations/{organization_id}/connectors/accounts/{account_id}` | `connector.account.delete` | Delete Account |
 | DELETE | `/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}` | `connector.auth_config.delete` | Delete Auth Config |
+| DELETE | `/organizations/{organization_id}/connectors/github/installations/{installation_id}` | `connector.github_installation.release` | Stop Using A GitHub Installation |
 | DELETE | `/pods/{pod_id}/connector-accounts/{pod_account_id}` | `pod.connector_account.remove` | Remove An Account From The Pod |
 | DELETE | `/pods/{pod_id}/connectors/{slug}` | `pod.connector.delete` | Remove Pod Connector |
 | GET | `/connectors` | `connector.list` | List Connectors |

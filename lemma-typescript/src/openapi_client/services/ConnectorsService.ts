@@ -591,6 +591,30 @@ export class ConnectorsService {
         });
     }
     /**
+     * Stop Using A GitHub Installation
+     * This organization lets go of a GitHub App installation it holds. Other organizations holding the same installation keep theirs. Its accounts naming the installation forget it, and its schedules stop hearing the installation's events. Needs `org.installation.manage`.
+     * @param organizationId
+     * @param installationId
+     * @returns MessageResponseSchema Successful Response
+     * @throws ApiError
+     */
+    public static connectorGithubInstallationRelease(
+        organizationId: string,
+        installationId: string,
+    ): CancelablePromise<MessageResponseSchema> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/organizations/{organization_id}/connectors/github/installations/{installation_id}',
+            path: {
+                'organization_id': organizationId,
+                'installation_id': installationId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * Get Connector Status
      * @param organizationId
      * @returns ConnectorStatusResponse Successful Response

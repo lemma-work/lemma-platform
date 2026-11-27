@@ -3,10 +3,11 @@
 Audit H4's backfill bound every installation exactly one organization carried
 to that organization, so an installation somebody squatted on before the fix
 stayed theirs. Such a binding is *unproven* (``proven_at`` NULL): it keeps
-working for its holder, a proven claim from another organization -- a GitHub
-admin of the installation who may install apps for their Lemma organization --
-takes it over, and the holder's own next proven claim stamps it final. An
-unproven claim never moves it.
+working for its holder's accounts, the bot (APP mode) never acts on it, and
+the holder's own next proven claim stamps it. Another organization's proven
+claim -- a GitHub admin of the installation who may install apps for their
+Lemma organization -- binds it there too and leaves the derived binding as it
+was: each organization's binding is its own. An unproven claim binds nothing.
 
 A binding is seeded the way the migration leaves one; the claims run against
 Postgres, and GitHub is answered at the HTTP boundary for the two journeys
@@ -22,7 +23,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.connectors.domain.github_installation_errors import (
-    GithubInstallationBoundElsewhereError,
     GithubInstallationNotAdministeredError,
     InstallationClaimNotPermittedError,
 )
@@ -64,20 +64,23 @@ async def _derived_binding(
     await db_session.commit()
 
 
-async def _binding(db_session: AsyncSession, installation_id: str):
+async def _bindings(db_session: AsyncSession, installation_id: str) -> dict:
+    """Each holder of the installation: whether it is proven, and who bound it."""
     db_session.expire_all()
-    return (
-        await db_session.execute(
-            select(
-                ConnectorInstallation.organization_id,
-                ConnectorInstallation.proven_at,
-                ConnectorInstallation.bound_by_user_id,
-            ).where(
-                ConnectorInstallation.connector_id == "github",
-                ConnectorInstallation.external_id == installation_id,
-            )
+    rows = await db_session.execute(
+        select(
+            ConnectorInstallation.organization_id,
+            ConnectorInstallation.proven_at,
+            ConnectorInstallation.bound_by_user_id,
+        ).where(
+            ConnectorInstallation.connector_id == "github",
+            ConnectorInstallation.external_id == installation_id,
         )
-    ).one()
+    )
+    return {
+        organization_id: (proven_at is not None, bound_by)
+        for organization_id, proven_at, bound_by in rows.all()
+    }
 
 
 async def _squatter_and_claimant(scenario):
@@ -88,7 +91,7 @@ async def _squatter_and_claimant(scenario):
     return squatter, scenario.owner_user, scenario.owner_client, scenario.org_id
 
 
-async def test_a_proven_claim_from_another_org_takes_an_unproven_binding_over(
+async def test_a_proven_claim_from_another_org_binds_it_there_and_moves_nothing(
     scenario, db_session
 ):
     installation_id = _installation_id()
@@ -104,29 +107,32 @@ async def test_a_proven_claim_from_another_org_takes_an_unproven_binding_over(
     )
     await db_session.commit()
 
-    owner, proven_at, bound_by = await _binding(db_session, installation_id)
-    assert owner == UUID(org_id)
-    assert proven_at is not None
-    assert bound_by == UUID(claimant["id"])
+    assert await _bindings(db_session, installation_id) == {
+        UUID(squatter): (False, None),
+        UUID(org_id): (True, UUID(claimant["id"])),
+    }
 
 
-async def test_a_proven_binding_is_not_taken_over(scenario, db_session):
+async def test_a_proven_claim_beside_a_proven_binding_binds_it_there_too(
+    scenario, db_session
+):
     installation_id = _installation_id()
     holder, claimant, _, org_id = await _squatter_and_claimant(scenario)
     await _derived_binding(db_session, installation_id, holder, proven=True)
 
-    with pytest.raises(GithubInstallationBoundElsewhereError):
-        await claim_installation(
-            db_session,
-            installation_id=installation_id,
-            organization_id=UUID(org_id),
-            user_id=UUID(claimant["id"]),
-            administered=True,
-        )
-    await db_session.rollback()
+    await claim_installation(
+        db_session,
+        installation_id=installation_id,
+        organization_id=UUID(org_id),
+        user_id=UUID(claimant["id"]),
+        administered=True,
+    )
+    await db_session.commit()
 
-    owner, _, _ = await _binding(db_session, installation_id)
-    assert owner == UUID(holder)
+    assert await _bindings(db_session, installation_id) == {
+        UUID(holder): (True, None),
+        UUID(org_id): (True, UUID(claimant["id"])),
+    }
 
 
 async def test_the_holders_proven_claim_stamps_its_binding(scenario, db_session):
@@ -146,16 +152,17 @@ async def test_the_holders_proven_claim_stamps_its_binding(scenario, db_session)
             administered=administered,
         )
         await db_session.commit()
-        owner, proven_at, _ = await _binding(db_session, installation_id)
-        assert owner == UUID(holder)
-        assert (proven_at is not None) is administered
+        assert await _bindings(db_session, installation_id) == {
+            UUID(holder): (administered, None)
+        }
 
 
-async def test_an_unproven_claim_never_takes_an_unproven_binding_over(
+async def test_an_unproven_claim_binds_nothing_beside_an_unproven_binding(
     scenario, db_session
 ):
     """Neither GitHub's word missing (a person who only sees it) nor Lemma's
-    permission missing (a GitHub admin who is a plain member) moves it."""
+    permission missing (a GitHub admin who is a plain member) binds it here,
+    and neither touches the binding already there."""
     installation_id = _installation_id()
     squatter, claimant, owner_client, org_id = await _squatter_and_claimant(scenario)
     await _derived_binding(db_session, installation_id, squatter, proven=False)
@@ -179,19 +186,20 @@ async def test_an_unproven_claim_never_takes_an_unproven_binding_over(
             )
         await db_session.rollback()
 
-    owner, proven_at, _ = await _binding(db_session, installation_id)
-    assert owner == UUID(squatter)
-    assert proven_at is None
+    assert await _bindings(db_session, installation_id) == {
+        UUID(squatter): (False, None)
+    }
 
 
-async def test_a_github_admin_takes_a_squatted_installation_back_through_setup(
+async def test_a_github_admin_binds_a_squatted_installation_through_setup(
     scenario,
     db_session,
     github_sees,  # noqa: F811
 ):
-    """The journey the takeover is for: the installation's real admin comes
-    back from GitHub's install page naming it, and their organization holds
-    it from then on -- the squatter's accounts mint nothing for it."""
+    """The installation's real admin comes back from GitHub's install page
+    naming it, and their organization holds it, proven, from then on. The
+    squatter's derived binding is left as it was: never proven, so the bot
+    never acts on it there."""
     installation_id = _installation_id()
     squatter, _, _, org_id = await _squatter_and_claimant(scenario)
     await _derived_binding(db_session, installation_id, squatter, proven=False)
@@ -209,8 +217,9 @@ async def test_a_github_admin_takes_a_squatted_installation_back_through_setup(
     )
 
     assert claimed.status_code == 200, claimed.text
-    owner, proven_at, _ = await _binding(db_session, installation_id)
-    assert (owner, proven_at is not None) == (UUID(org_id), True)
+    bindings = await _bindings(db_session, installation_id)
+    assert bindings[UUID(org_id)][0] is True
+    assert bindings[UUID(squatter)] == (False, None)
     [account] = await _accounts_on(db_session, org_id)
     assert account.external_ref == installation_id
 

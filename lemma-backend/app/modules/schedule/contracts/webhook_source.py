@@ -81,10 +81,10 @@ class VerifiedDelivery:
     #: The account whose own secret verified this delivery, for a source whose
     #: secret is per subscription. Carried into `NormalizedWebhook.account_id`.
     account_id: str | None = None
-    #: The Lemma organization the delivery's tenant is bound to, for a source
-    #: whose tenant is bound to one -- a GitHub App installation. Carried into
-    #: `NormalizedWebhook.organization_id`.
-    organization_id: str | None = None
+    #: The Lemma organizations the delivery's tenant is bound to, for a source
+    #: whose tenant is bound to some -- a GitHub App installation. Carried into
+    #: `NormalizedWebhook.organization_ids`.
+    organization_ids: frozenset[str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,11 +121,12 @@ class NormalizedWebhook:
     #: that verified the delivery with one account's secret knows whose event it
     #: is, and no other schedule may claim it whatever its config says.
     account_id: str | None = None
-    #: When set, only schedules in this organization's pods match. One GitHub
+    #: When set, only schedules in these organizations' pods match. One GitHub
     #: App serves every organization that installed it, and an installation
-    #: belongs to exactly one of them (audit H4): a schedule elsewhere that
-    #: routes on its id -- however it came to -- is not its schedule.
-    organization_id: str | None = None
+    #: belongs only to the organizations that each proved it (audit H4): a
+    #: schedule elsewhere that routes on its id -- however it came to -- is not
+    #: its schedule.
+    organization_ids: frozenset[str] | None = None
     #: When set, only schedules in these pods match. For an event another
     #: module heard on its own verified ingress, where what proves a tenant is
     #: not an account or an installation but the pods that brought the place it

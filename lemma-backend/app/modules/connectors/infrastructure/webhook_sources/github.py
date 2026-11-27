@@ -310,13 +310,13 @@ class GitHubWebhookSource:
 
     def __init__(
         self,
-        bound_organization: Callable[[WebhookPayload], Awaitable[str | None]]
+        bound_organizations: Callable[[WebhookPayload], Awaitable[frozenset[str]]]
         | None = None,
     ) -> None:
-        """``bound_organization`` finds which Lemma organization a delivery's
-        installation is bound to; the binding table unless a caller says
-        otherwise."""
-        self._bound_organization = bound_organization or _bound_organization
+        """``bound_organizations`` finds which Lemma organizations a
+        delivery's installation is bound to; the binding table unless a caller
+        says otherwise."""
+        self._bound_organizations = bound_organizations or _bound_organizations
 
     async def verify(self, delivery: WebhookDelivery) -> VerifiedDelivery:
         import json
@@ -342,7 +342,7 @@ class GitHubWebhookSource:
         return VerifiedDelivery(
             delivery=delivery,
             payload=payload,
-            organization_id=await self._bound_organization(payload),
+            organization_ids=await self._bound_organizations(payload),
         )
 
     async def observe(self, verified: VerifiedDelivery) -> None:
@@ -385,7 +385,7 @@ class GitHubWebhookSource:
             )
             return None
 
-        if verified.organization_id is None:
+        if not verified.organization_ids:
             # Bound to no Lemma organization, so no schedule anywhere is its
             # schedule (audit H4). Acknowledged rather than refused: a non-2xx
             # answer has GitHub retry and then disable the hook for everyone.
@@ -416,7 +416,7 @@ class GitHubWebhookSource:
             match=match,
             refine=_narrower(repository_id, payload.get("action")),
             context=_repo_context(payload, event),
-            organization_id=verified.organization_id,
+            organization_ids=verified.organization_ids,
         )
 
 
@@ -534,25 +534,25 @@ def _narrower(
     return accepts
 
 
-async def _bound_organization(payload: WebhookPayload) -> str | None:
-    """The Lemma organization this delivery's installation is bound to.
+async def _bound_organizations(payload: WebhookPayload) -> frozenset[str]:
+    """The Lemma organizations this delivery's installation is bound to.
 
     Looked up rather than inferred from whichever schedules carry the id: the
-    binding is the one place an installation's owner is written down, and a
-    schedule's routing key is only a copy of it.
+    bindings are the one place an installation's holders are written down, and
+    a schedule's routing key is only a copy of one.
     """
     installation_id = (payload.get("installation") or {}).get("id")
     if installation_id is None:
-        return None
+        return frozenset()
     from app.core.api.dependencies import get_uow_factory
     from app.core.authorization.scope import uow_scope
     from app.modules.connectors.services.auth.github_bindings import (
-        bound_organization,
+        bound_organizations,
     )
 
     async with uow_scope(get_uow_factory()) as uow:
-        organization_id = await bound_organization(uow.session, str(installation_id))
-    return str(organization_id) if organization_id is not None else None
+        organization_ids = await bound_organizations(uow.session, str(installation_id))
+    return frozenset(str(one) for one in organization_ids)
 
 
 async def _retire_installation(installation_id: str, *, action: str) -> None:

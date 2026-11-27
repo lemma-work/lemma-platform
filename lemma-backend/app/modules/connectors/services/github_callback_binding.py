@@ -1,11 +1,11 @@
 """What the OAuth callback does with the GitHub installation it came back with.
 
-Audit H4. An installation another organization holds is refused outright. One
-nobody holds yet is bound only to its owner on GitHub's side; anyone else still
-connects their own GitHub account -- the OAuth grant is theirs -- just without
-the installation, and the connect request says so, so the callback reports the
-same PENDING_APPROVAL a reconcile does. A later reconcile picks the
-installation up once an admin has bound it.
+Audit H4. An installation this organization does not hold yet -- whether or
+not another one does -- is bound only for its owner on GitHub's side; anyone
+else still connects their own GitHub account -- the OAuth grant is theirs --
+just without the installation, and the connect request says so, so the
+callback reports the same PENDING_APPROVAL a reconcile does. A later reconcile
+picks the installation up once an admin has bound it here.
 
 Out of `oauth_callback` so that file stays one saga under the size ceiling.
 """

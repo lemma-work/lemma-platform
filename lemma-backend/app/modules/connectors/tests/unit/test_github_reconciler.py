@@ -81,19 +81,12 @@ class _Bindings:
     anybody yet unless a test says so. Its refusals are covered end to end
     against Postgres."""
 
-    def __init__(self, owners: dict[str, object] | None = None) -> None:
-        self.owners = dict(owners or {})
+    def __init__(self, holders: dict[str, set[object]] | None = None) -> None:
+        self.holders = {key: set(value) for key, value in (holders or {}).items()}
         self.claimed: list[tuple[str, bool]] = []
 
-    async def owner(self, installation_id: str):
-        return self.owners.get(installation_id)
-
-    async def claimable_by(self, organization_id, installation_ids):
-        return {
-            one
-            for one in installation_ids
-            if self.owners.get(one) in (None, organization_id)
-        }
+    async def holds(self, organization_id, installation_id: str) -> bool:
+        return organization_id in self.holders.get(installation_id, set())
 
     async def claim(self, account, installation_id: str, *, administered: bool):
         self.claimed.append((installation_id, administered))
@@ -358,7 +351,7 @@ class TestNoClaimWithoutProof:
         setter, _ = answers
         setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
         account = _account()
-        bindings = _Bindings({"158040062": account.organization_id})
+        bindings = _Bindings({"158040062": {account.organization_id}})
 
         async def _never(_token: str, _installation_id: str) -> bool:
             raise AssertionError("asked GitHub for proof it did not need")
@@ -406,20 +399,29 @@ class TestTheStateIsWhatTheClaimMadeTrue:
         assert account.external_ref is None
         assert service.account_repository.updated == []
 
-    async def test_one_lost_to_another_org_is_not_ready_either(self, answers):
-        from app.modules.connectors.domain.github_installation_errors import (
-            GithubInstallationBoundElsewhereError,
-        )
-
+    async def test_one_another_org_holds_still_needs_this_orgs_own_proof(self, answers):
+        """Another organization's binding is neither a refusal nor a pass:
+        without GitHub's word that this person controls it, it waits; with
+        it, this organization claims its own binding."""
         setter, _ = answers
         setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
-        bindings = self._Refusing(GithubInstallationBoundElsewhereError())
 
-        outcome = await _reconciler(_Service(), _Cache(), bindings=bindings).outcome(
-            _account()
-        )
+        async def _not_theirs(_token: str, _installation_id: str) -> bool:
+            return False
 
-        assert outcome.state is InstallState.INSTALL_REQUIRED
+        elsewhere = _Bindings({"158040062": {uuid4()}})
+        waiting = await _reconciler(
+            _Service(), _Cache(), bindings=elsewhere, prove=_not_theirs
+        ).outcome(_account())
+        assert waiting.state is InstallState.PENDING_APPROVAL
+        assert elsewhere.claimed == []
+
+        also_elsewhere = _Bindings({"158040062": {uuid4()}})
+        claimed = await _reconciler(
+            _Service(), _Cache(), bindings=also_elsewhere
+        ).outcome(_account())
+        assert claimed.state is InstallState.READY
+        assert also_elsewhere.claimed == [("158040062", True)]
 
     async def test_the_claim_carries_whether_github_vouched(self, answers):
         """A binding this organization holds needs no proof, so none is asked
@@ -428,7 +430,7 @@ class TestTheStateIsWhatTheClaimMadeTrue:
         setter, _ = answers
         setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
         account = _account()
-        held = _Bindings({"158040062": account.organization_id})
+        held = _Bindings({"158040062": {account.organization_id}})
         await _reconciler(_Service(), _Cache(), bindings=held).outcome(account)
         unbound = _Bindings()
         await _reconciler(_Service(), _Cache(), bindings=unbound).outcome(_account())

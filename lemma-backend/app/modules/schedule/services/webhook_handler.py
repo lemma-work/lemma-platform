@@ -82,15 +82,16 @@ async def _still_bound(
     return kept
 
 
-async def _in_organization(
-    uow: Any, schedules: list[ScheduleEntity], organization_id: str
+async def _in_organizations(
+    uow: Any, schedules: list[ScheduleEntity], organization_ids: frozenset[str]
 ) -> list[ScheduleEntity]:
-    """Only the schedules in pods of the organization the delivery belongs to.
+    """Only the schedules in pods of the organizations the delivery belongs to.
 
-    The routing key names a tenant the source bound to one organization (a
-    GitHub installation, audit H4). A schedule in another organization that
-    carries the same key -- written before the binding existed, or by any path
-    that skipped it -- is somebody else's, and does not run on this event.
+    The routing key names a tenant the source bound to organizations, each on
+    its own proof (a GitHub installation, audit H4). A schedule in any other
+    organization that carries the same key -- written before the binding
+    existed, or by any path that skipped it -- is somebody else's, and does
+    not run on this event.
     """
     from app.modules.pod.contracts.members import pod_organization_id
 
@@ -101,7 +102,7 @@ async def _in_organization(
             continue
         if schedule.pod_id not in owners:
             owners[schedule.pod_id] = await pod_organization_id(uow, schedule.pod_id)
-        if str(owners[schedule.pod_id]) == organization_id:
+        if str(owners[schedule.pod_id]) in organization_ids:
             kept.append(schedule)
     if len(kept) != len(schedules):
         logger.warning(
@@ -151,8 +152,8 @@ async def _eligible(
         normalized.account_id if normalized is not None else None,
         bound_account,
     )
-    if normalized is not None and normalized.organization_id is not None:
-        schedules = await _in_organization(uow, schedules, normalized.organization_id)
+    if normalized is not None and normalized.organization_ids is not None:
+        schedules = await _in_organizations(uow, schedules, normalized.organization_ids)
     return schedules
 
 
