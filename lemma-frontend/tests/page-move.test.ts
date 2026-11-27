@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { samePage } from "../src/outcomes/move.ts";
+import { move, samePage } from "../src/outcomes/move.ts";
 import type { View } from "../src/outcomes/address.ts";
 
 /** A page change fades the main area from one page to the next. A change on
@@ -41,4 +41,66 @@ test("the page already open is the same page; another place is not", () => {
     assert.equal(samePage({ name: "chats", open: { kind: "chat", podId: POD, id: "c_1" } }, { name: "chats", open: { kind: "chat", podId: POD, id: "c_2" } }), false);
     assert.equal(samePage({ name: "today" }, { name: "apps" }), false);
     assert.equal(samePage({ name: "table", podId: POD, table: "deals" }, { name: "record", podId: POD, table: "deals", recordId: "r_1" }), false);
+});
+
+/** A browser whose view transitions hold their update until told to run it,
+ *  as a real one holds it for a frame while it captures the old page. */
+function browserWithTransitions(): { pending: (() => Promise<void> | void)[]; restore: () => void } {
+    const pending: (() => Promise<void> | void)[] = [];
+    const done = Promise.resolve();
+    const fake = {
+        visibilityState: "visible",
+        querySelector: () => null,
+        startViewTransition: (update: () => Promise<void> | void) => {
+            pending.push(update);
+            return { ready: done, finished: done, skipTransition: () => undefined };
+        },
+    };
+    const was = { document: (globalThis as { document?: unknown }).document, window: (globalThis as { window?: unknown }).window };
+    Object.assign(globalThis, { document: fake, window: { matchMedia: () => ({ matches: false }), setTimeout: () => 0 } });
+    return {
+        pending,
+        restore: () => Object.assign(globalThis, was),
+    };
+}
+
+test("a page change still waiting to move does not land over a later change on the same page", async () => {
+    const browser = browserWithTransitions();
+    try {
+        const made: string[] = [];
+        const from: View = { name: "app", podId: POD, app: "crm" };
+        move(from, { name: "apps" }, async () => { made.push("apps"); });
+        move(from, { name: "app", podId: POD, app: "crm", at: "/people/7" }, async () => { made.push("app moved"); });
+        assert.deepEqual(made, ["app moved"]);
+        for (const update of browser.pending) await update();
+        assert.deepEqual(made, ["app moved"]);
+    } finally {
+        browser.restore();
+    }
+});
+
+test("of two page changes asked for in one frame, the later is the one made", async () => {
+    const browser = browserWithTransitions();
+    try {
+        const made: string[] = [];
+        move({ name: "today" }, { name: "apps" }, async () => { made.push("apps"); });
+        move({ name: "today" }, { name: "connectors" }, async () => { made.push("connectors"); });
+        for (const update of browser.pending) await update();
+        assert.deepEqual(made, ["connectors"]);
+    } finally {
+        browser.restore();
+    }
+});
+
+test("a page change on its own is made once its move starts", async () => {
+    const browser = browserWithTransitions();
+    try {
+        const made: string[] = [];
+        move({ name: "today" }, { name: "apps" }, async () => { made.push("apps"); });
+        assert.deepEqual(made, []);
+        for (const update of browser.pending) await update();
+        assert.deepEqual(made, ["apps"]);
+    } finally {
+        browser.restore();
+    }
 });

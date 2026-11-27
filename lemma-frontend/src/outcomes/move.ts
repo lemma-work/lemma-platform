@@ -65,6 +65,12 @@ function canMove(): boolean {
         && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
+/** The latest change asked for. A page change waits a frame for its move to
+ *  start, while a change on the same page happens at once; so one asked for
+ *  later can land first, and the earlier one, still waiting, makes nothing
+ *  when its turn comes. The last change asked for is where the reader is. */
+let latest = 0;
+
 /** Make the change `update` makes -- one that resolves once the new page is
  *  on screen -- going from `from` to `to`: the new page fading in over the
  *  old, and what was clicked carried across. A change on the same page just
@@ -72,6 +78,7 @@ function canMove(): boolean {
  *  never held up; one cut short by the next is fine, since the page is
  *  already right. */
 export function move(from: View, to: View, update: () => Promise<void>): void {
+    const asked = ++latest;
     if (samePage(from, to) || !canMove()) {
         void update();
         return;
@@ -85,6 +92,7 @@ export function move(from: View, to: View, update: () => Promise<void>): void {
     const transition = start(async () => {
         started = true;
         if (source) source.style.viewTransitionName = "";
+        if (asked !== latest) return;
         await update();
         target = hero && source ? document.querySelector<HTMLElement>(hero.to) : null;
         if (target) target.style.viewTransitionName = "ox-hero";
