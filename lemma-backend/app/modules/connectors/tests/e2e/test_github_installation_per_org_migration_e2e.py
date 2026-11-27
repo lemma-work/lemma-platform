@@ -1,9 +1,10 @@
 """Migration 0080 lets an installation be bound to several organizations.
 
 Up: two organizations bind the same installation, which the old constraint
-refused, and one organization still cannot bind it twice. Down: the oldest
-binding of each installation is kept and the rest deleted, so the old
-constraint can be put back; up again works.
+refused, and one organization still cannot bind it twice. Down: rows an
+organization let go of are deleted, then the oldest binding of each
+installation is kept and the rest deleted, so the old constraint can be put
+back; up again works.
 """
 
 from __future__ import annotations
@@ -48,12 +49,17 @@ def _org(connection) -> object:
     return org_id
 
 
-def _bind(connection, org_id, *, minutes_ago: int) -> None:
+def _bind(connection, org_id, *, minutes_ago: int, released: bool = False) -> None:
     connection.execute(
         "INSERT INTO connector_installations (id, created_at, connector_id, "
-        "external_id, organization_id) VALUES (gen_random_uuid(), "
-        "now() - make_interval(mins => %s), 'github', %s, %s)",
-        (minutes_ago, INSTALLATION, org_id),
+        "external_id, organization_id, metadata) VALUES (gen_random_uuid(), "
+        "now() - make_interval(mins => %s), 'github', %s, %s, %s::jsonb)",
+        (
+            minutes_ago,
+            INSTALLATION,
+            org_id,
+            '{"released_at": "2026-11-27T00:00:00+00:00"}' if released else "{}",
+        ),
     )
 
 
@@ -95,3 +101,21 @@ def test_one_installation_binds_to_several_orgs_and_down_keeps_the_oldest() -> N
         with psycopg.connect(plain_url) as connection:
             _bind(connection, second, minutes_ago=1)
         assert _holders(plain_url) == {first, second}
+
+
+def test_down_keeps_the_live_binding_over_an_older_one_let_go_of() -> None:
+    """The old code reads any row as a binding: were the older, released row
+    kept, the organization that let go would hold the installation again and
+    the one still using it would lose it, with no claim to take it back."""
+    with get_postgres_container() as postgres:
+        database_url = get_postgres_url(postgres)
+        plain_url = database_url.replace("postgresql+asyncpg", "postgresql")
+        _migrate(database_url, "upgrade", REVISION)
+
+        with psycopg.connect(plain_url) as connection:
+            let_go, live = _org(connection), _org(connection)
+            _bind(connection, let_go, minutes_ago=30, released=True)
+            _bind(connection, live, minutes_ago=10)
+
+        _migrate(database_url, "downgrade", BEFORE)
+        assert _holders(plain_url) == {live}

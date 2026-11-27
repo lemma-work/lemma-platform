@@ -178,7 +178,8 @@ class GithubInstallationReconciler:
         this organization already holds needs no proof; whether another holds
         it changes nothing, since each organization's binding is its own.
         One this organization let go of is offered, not bound: only an
-        explicit pick takes it back.
+        explicit pick takes it back, and only to somebody whose pick would
+        stand -- anyone else is told it waits, as for one never bound.
         """
         installation_id = outcome.installation_id
         if not outcome.is_ready or not installation_id:
@@ -187,26 +188,37 @@ class GithubInstallationReconciler:
             return outcome, False
         if await self._bindings.holds(account.organization_id, installation_id):
             return outcome, False
-        if await self._bindings.released(account.organization_id, installation_id):
-            # Let go of on purpose. Reading an account is no reason to take it
-            # back -- on the proof of the very person who let it go -- so it is
-            # offered, and picking it is the explicit claim that does.
-            return (
-                InstallationOutcome(
-                    InstallState.CHOOSE_INSTALL, choices=outcome.choices
-                ),
-                False,
-            )
         administered = False
         if token:
             async with connection_released(self._session):
                 administered = await self._prove(token, installation_id)
-        if administered:
-            return outcome, True
-        return (
-            InstallationOutcome(InstallState.PENDING_APPROVAL, choices=outcome.choices),
-            False,
-        )
+        if not administered:
+            return (
+                InstallationOutcome(
+                    InstallState.PENDING_APPROVAL, choices=outcome.choices
+                ),
+                False,
+            )
+        if await self._bindings.released(account.organization_id, installation_id):
+            # Let go of on purpose. Reading an account is no reason to take it
+            # back -- on the proof of the very person who let it go -- so it is
+            # offered, and picking it is the explicit claim that does. Offered
+            # only where that pick would stand: the claim needs Lemma's
+            # permission as well as GitHub's proof.
+            if await self._bindings.may_claim(account.user_id, account.organization_id):
+                return (
+                    InstallationOutcome(
+                        InstallState.CHOOSE_INSTALL, choices=outcome.choices
+                    ),
+                    False,
+                )
+            return (
+                InstallationOutcome(
+                    InstallState.PENDING_APPROVAL, choices=outcome.choices
+                ),
+                False,
+            )
+        return outcome, True
 
     async def _bind(
         self, account: Any, outcome: InstallationOutcome, *, administered: bool

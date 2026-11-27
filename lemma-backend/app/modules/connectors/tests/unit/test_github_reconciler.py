@@ -85,9 +85,12 @@ class _Bindings:
         self,
         holders: dict[str, set[object]] | None = None,
         released: dict[str, set[object]] | None = None,
+        *,
+        may_claim: bool = True,
     ) -> None:
         self.holders = {key: set(value) for key, value in (holders or {}).items()}
         self.let_go = {key: set(value) for key, value in (released or {}).items()}
+        self.permitted = may_claim
         self.claimed: list[tuple[str, bool]] = []
 
     async def holds(self, organization_id, installation_id: str) -> bool:
@@ -95,6 +98,9 @@ class _Bindings:
 
     async def released(self, organization_id, installation_id: str) -> bool:
         return organization_id in self.let_go.get(installation_id, set())
+
+    async def may_claim(self, user_id, organization_id) -> bool:
+        return self.permitted
 
     async def claim(self, account, installation_id: str, *, administered: bool):
         self.claimed.append((installation_id, administered))
@@ -458,6 +464,30 @@ class TestTheStateIsWhatTheClaimMadeTrue:
         assert [one.installation_id for one in offered.choices] == ["158040062"]
         assert let_go.claimed == []
         assert account.external_ref is None
+
+    @pytest.mark.parametrize("vouched,may_claim", [(False, True), (True, False)])
+    async def test_one_let_go_of_is_offered_only_where_the_pick_would_stand(
+        self, answers, vouched, may_claim
+    ):
+        """Picking it is a claim, which needs GitHub's proof and Lemma's
+        permission both. Offered to anyone else, the pick would be refused: it
+        waits on somebody who may, as one never bound does."""
+        setter, _ = answers
+        setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
+        account = _account()
+        let_go = _Bindings(
+            released={"158040062": {account.organization_id}}, may_claim=may_claim
+        )
+
+        async def prove(_token: str, _installation_id: str) -> bool:
+            return vouched
+
+        said = await _reconciler(
+            _Service(), _Cache(), bindings=let_go, prove=prove
+        ).outcome(account)
+
+        assert said.state is InstallState.PENDING_APPROVAL
+        assert let_go.claimed == []
 
     async def test_the_claim_carries_whether_github_vouched(self, answers):
         """A binding this organization holds needs no proof, so none is asked

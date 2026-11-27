@@ -9,9 +9,12 @@ its own claim, with GitHub's proof that the claimant controls the installation
 
 Only the constraint changes. Every existing row is valid under the new one, and
 its leading columns still serve the lookups by installation that the old one
-did. The downgrade keeps the oldest binding of each installation and deletes
-the others; the accounts on those keep naming it and mint nothing for it, as
-any account on an installation its organization does not hold.
+did. The downgrade first deletes the rows an organization let go of
+(``metadata ? 'released_at'``): the old code has no notion of letting go and
+would read one as a binding. Then it keeps the oldest remaining binding of each
+installation and deletes the others; the accounts on those keep naming it and
+mint nothing for it, as any account on an installation its organization does
+not hold.
 
 Revision ID: 0080_github_installation_per_org
 Revises: 0079_datastore_hooks
@@ -40,6 +43,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # A released row is kept only so the next read cannot take the
+    # installation back. Before the oldest row is chosen, so a let-go row
+    # never survives in place of a live one.
+    op.execute(f"DELETE FROM {_TABLE} WHERE metadata ? 'released_at'")
     op.execute(
         f"""
         DELETE FROM {_TABLE} later

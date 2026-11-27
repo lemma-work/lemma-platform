@@ -440,6 +440,11 @@ class InstallationBindings:
     async def released(self, organization_id: UUID, installation_id: str) -> bool:
         return await was_released(self._session, installation_id, organization_id)
 
+    async def may_claim(self, user_id: UUID | None, organization_id: UUID) -> bool:
+        """Whether Lemma lets this person install apps for the organization:
+        the half of a claim GitHub's proof does not cover."""
+        return await _may_install(self._session, user_id, organization_id)
+
     async def claim(
         self, account: AccountEntity, installation_id: str, *, administered: bool
     ) -> None:
