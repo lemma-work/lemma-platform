@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import select
 import sys
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -72,6 +71,7 @@ def _select_with_arrows(
 
     state = _MenuState(selected=_initial_index(items, current_id))
     fd = sys.stdin.fileno()
+    keys = _KeyReader(fd)
     old_settings = termios.tcgetattr(fd)
     try:
         tty.setcbreak(fd)
@@ -83,7 +83,7 @@ def _select_with_arrows(
                 selected=state.selected,
                 filter_text=state.filter_text,
             )
-            state, done = _apply_key(_read_key(fd), state, len(visible))
+            state, done = _apply_key(_read_key(keys), state, len(visible))
             if done == "pick":
                 console.print()
                 return visible[state.selected]
@@ -115,47 +115,70 @@ _ESC_WAIT_SECONDS = 0.05
 _MAX_ESCAPE_BYTES = 16
 
 
-def _read_key(fd: int) -> str:
-    """One key press, whole: a character or a complete escape sequence.
+class _KeyReader:
+    """Bytes from the terminal, with one byte of pushback.
 
     Reads the fd directly, because sys.stdin buffers and select() cannot see
-    bytes that are already inside that buffer. A read may return fewer bytes
-    than asked for, so multi-byte input is gathered byte by byte.
+    bytes that are already inside that buffer.
     """
-    first = os.read(fd, 1)
+
+    def __init__(self, fd: int) -> None:
+        self._fd = fd
+        self._pushed = b""
+
+    def read(self) -> bytes:
+        """The next byte, waiting for it. Empty at end of input."""
+        if self._pushed:
+            byte, self._pushed = self._pushed, b""
+            return byte
+        return os.read(self._fd, 1)
+
+    def read_within_wait(self) -> bytes | None:
+        """The next byte if one arrives within the escape wait, else None."""
+        if self._pushed:
+            return self.read()
+        if not select.select([self._fd], [], [], _ESC_WAIT_SECONDS)[0]:
+            return None
+        return os.read(self._fd, 1) or None
+
+    def push_back(self, byte: bytes) -> None:
+        """Hand a byte back, to be read again as the start of the next key."""
+        self._pushed = byte
+
+
+def _read_key(keys: _KeyReader) -> str:
+    """One key press, whole: a character or a complete escape sequence.
+
+    A read may return fewer bytes than asked for, so multi-byte input is
+    gathered byte by byte.
+    """
+    first = keys.read()
     if not first:
         return "\x04"  # end of input, treated like Ctrl+D
     if first == b"\x1b":
-        return _read_escape(fd)
-    return _read_exactly(fd, first, _utf8_tail_length(first[0])).decode(errors="ignore")
+        return _read_escape(keys)
+    return _read_utf8(keys, first).decode(errors="ignore")
 
 
-def _read_exactly(
-    fd: int,
-    data: bytes,
-    extra: int,
-    read: Callable[[int], bytes | None] = lambda fd: _read_byte(fd),
-) -> bytes:
-    """``data`` plus up to ``extra`` UTF-8 continuation bytes.
+def _read_utf8(keys: _KeyReader, data: bytes) -> bytes:
+    """``data`` plus the UTF-8 continuation bytes that follow its lead byte.
 
     Stops early when nothing more arrives, or when the next byte is not a
     continuation byte: a stray lead byte must not swallow the key presses that
-    follow it. That byte stays in the result, and decoding with errors ignored
-    drops the stray lead and keeps it. ``read`` returns one byte or None, and
-    is a seam so a test can hand the bytes over one at a time.
+    follow it, so that byte is pushed back to start the next key.
     """
-    while extra > 0:
-        byte = read(fd)
+    for _ in range(_utf8_tail_length(data[0])):
+        byte = keys.read_within_wait()
         if byte is None:
             break
-        data += byte
         if not 0x80 <= byte[0] <= 0xBF:
+            keys.push_back(byte)
             break
-        extra -= 1
+        data += byte
     return data
 
 
-def _read_escape(fd: int) -> str:
+def _read_escape(keys: _KeyReader) -> str:
     """The rest of an escape sequence, after its first byte.
 
     A lone Esc returns at once. ``Esc [`` starts a CSI sequence, which runs to
@@ -163,30 +186,23 @@ def _read_escape(fd: int) -> str:
     never lands in the filter). ``Esc O`` is the same for application mode.
     """
     sequence = b"\x1b"
-    second = _read_byte(fd)
+    second = keys.read_within_wait()
     if second is None:
         return "\x1b"
     sequence += second
     if second == b"O":
-        third = _read_byte(fd)
+        third = keys.read_within_wait()
         if third is not None:
             sequence += third
     elif second == b"[":
         while len(sequence) < _MAX_ESCAPE_BYTES:
-            byte = _read_byte(fd)
+            byte = keys.read_within_wait()
             if byte is None:
                 break
             sequence += byte
             if 0x40 <= byte[0] <= 0x7E:  # final byte ends the sequence
                 break
     return sequence.decode(errors="ignore")
-
-
-def _read_byte(fd: int) -> bytes | None:
-    """The next byte if one arrives within the escape wait, else None."""
-    if not select.select([fd], [], [], _ESC_WAIT_SECONDS)[0]:
-        return None
-    return os.read(fd, 1) or None
 
 
 def _utf8_tail_length(lead_byte: int) -> int:

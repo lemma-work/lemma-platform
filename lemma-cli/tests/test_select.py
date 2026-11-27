@@ -143,7 +143,7 @@ needs_posix = pytest.mark.skipif(
 def test_read_key_arrow_sequence():
     r = _pipe_with(b"\x1b[A")
     try:
-        assert sel._read_key(r) == "\x1b[A"
+        assert sel._read_key(sel._KeyReader(r)) == "\x1b[A"
     finally:
         os.close(r)
 
@@ -153,7 +153,7 @@ def test_read_key_lone_escape_does_not_block():
     r, w = os.pipe()  # writer stays open: a blocking read(2) would hang here
     try:
         os.write(w, b"\x1b")
-        assert sel._read_key(r) == "\x1b"
+        assert sel._read_key(sel._KeyReader(r)) == "\x1b"
     finally:
         os.close(r)
         os.close(w)
@@ -163,7 +163,7 @@ def test_read_key_lone_escape_does_not_block():
 def test_read_key_reads_a_whole_utf8_character():
     r = _pipe_with("é".encode())
     try:
-        assert sel._read_key(r) == "é"
+        assert sel._read_key(sel._KeyReader(r)) == "é"
     finally:
         os.close(r)
 
@@ -181,7 +181,7 @@ def test_read_key_reads_a_whole_utf8_character():
 def test_read_key_returns_the_whole_escape_sequence(data, expected):
     r = _pipe_with(data)
     try:
-        assert sel._read_key(r) == expected
+        assert sel._read_key(sel._KeyReader(r)) == expected
     finally:
         os.close(r)
 
@@ -190,36 +190,65 @@ def test_read_key_returns_the_whole_escape_sequence(data, expected):
 def test_escape_sequence_tail_never_reaches_the_filter():
     r = _pipe_with(b"\x1b[3~x")
     try:
-        assert sel._read_key(r) == "\x1b[3~"
-        assert sel._read_key(r) == "x"
+        assert sel._read_key(sel._KeyReader(r)) == "\x1b[3~"
+        assert sel._read_key(sel._KeyReader(r)) == "x"
     finally:
         os.close(r)
 
 
-def test_read_exactly_gathers_bytes_delivered_one_at_a_time():
-    deliveries = iter([b"\x82", b"\xac"])  # the rest of a euro sign, in pieces
-    gathered = sel._read_exactly(0, b"\xe2", 2, read=lambda _fd: next(deliveries))
-    assert gathered.decode() == "€"
+class _ScriptedReader:
+    """Hands over the given bytes one at a time, then reports silence."""
+
+    def __init__(self, *chunks: bytes) -> None:
+        self._chunks = list(chunks)
+        self.pushed_back: list[bytes] = []
+
+    def read_within_wait(self) -> bytes | None:
+        return self._chunks.pop(0) if self._chunks else None
+
+    def push_back(self, byte: bytes) -> None:
+        self.pushed_back.append(byte)
 
 
-def test_read_exactly_stops_when_nothing_more_arrives():
-    assert sel._read_exactly(0, b"\xe2", 2, read=lambda _fd: None) == b"\xe2"
+def test_read_utf8_gathers_bytes_delivered_one_at_a_time():
+    keys = _ScriptedReader(b"\x82", b"\xac")  # the rest of a euro sign
+    assert sel._read_utf8(keys, b"\xe2").decode() == "€"
 
 
-def test_read_exactly_stops_at_a_byte_that_is_not_a_continuation():
-    deliveries = iter([b"a", b"b"])
-    gathered = sel._read_exactly(0, b"\xe2", 2, read=lambda _fd: next(deliveries))
-    assert gathered == b"\xe2a"  # "b" is left for the next key press
+def test_read_utf8_stops_when_nothing_more_arrives():
+    assert sel._read_utf8(_ScriptedReader(), b"\xe2") == b"\xe2"
+
+
+def test_read_utf8_pushes_back_a_byte_that_is_not_a_continuation():
+    keys = _ScriptedReader(b"a", b"b")
+    assert sel._read_utf8(keys, b"\xe2") == b"\xe2"
+    assert keys.pushed_back == [b"a"]  # "b" was never read
+
+
+def _all_keys(data: bytes) -> list[str]:
+    """Every key read from ``data``, leaving out the empty one a stray byte gives."""
+    r = _pipe_with(data)
+    try:
+        keys = sel._KeyReader(r)
+        found = []
+        while (key := sel._read_key(keys)) != "\x04":
+            found.append(key)
+        return [key for key in found if key]
+    finally:
+        os.close(r)
 
 
 @needs_posix
-def test_stray_lead_byte_does_not_swallow_the_next_keys():
-    r = _pipe_with(b"\xe2ab")
-    try:
-        assert sel._read_key(r) == "a"
-        assert sel._read_key(r) == "b"
-    finally:
-        os.close(r)
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        (b"\xe2ab", ["a", "b"]),  # stray lead byte, then plain keys
+        (b"\xe2\x1b[B", ["\x1b[B"]),  # the arrow still moves down
+        (b"\xe2\xc3\xa9", ["é"]),  # the next character stays whole
+    ],
+)
+def test_stray_lead_byte_does_not_swallow_the_next_key(data, expected):
+    assert _all_keys(data) == expected
 
 
 @needs_posix
@@ -227,7 +256,7 @@ def test_stray_lead_byte_alone_does_not_block():
     r, w = os.pipe()  # writer stays open: waiting for more would hang here
     try:
         os.write(w, b"\xe2")
-        assert sel._read_key(r) == ""
+        assert sel._read_key(sel._KeyReader(r)) == ""
     finally:
         os.close(r)
         os.close(w)
@@ -238,6 +267,6 @@ def test_read_key_treats_end_of_input_as_ctrl_d():
     r, w = os.pipe()
     os.close(w)
     try:
-        assert sel._read_key(r) == "\x04"
+        assert sel._read_key(sel._KeyReader(r)) == "\x04"
     finally:
         os.close(r)
