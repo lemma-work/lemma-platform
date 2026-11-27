@@ -1,16 +1,32 @@
 from __future__ import annotations
 
 import json
+import os
+import re
+import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import typer
+from typer.main import get_command
 
 from lemma_cli.cli_core.app import app
 from lemma_cli.cli_core.commands import machine
 from lemma_cli.cli_core.commands.machine import split_machine_path
+
+
+#: Help and usage errors come back Rich-rendered: coloured, wrapped and boxed
+#: on a wide terminal such as CI's (FORCE_COLOR is set there), which can split
+#: a flag like `--pod` with escape codes. Strip all of that before looking for
+#: words in it -- the same pattern test_commands_decisions.py uses.
+_STYLING = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    return " ".join(_STYLING.sub("", text).replace("\u2502", " ").split())
 
 
 class FakeStream:
@@ -32,6 +48,17 @@ class FakeStream:
     def kill(self) -> None:
         self.killed = True
 
+    #: The real ``run_shell`` drives these on the stream it is handed, so a
+    #: fake stream it can run a whole shell session against offers them.
+    def resize(self, columns: int, lines: int) -> None:
+        pass
+
+    def send_input(self, text: str) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
 
 class FakeFiles:
     def __init__(self) -> None:
@@ -47,15 +74,24 @@ class FakeFiles:
         return Path(target)
 
 
+class FakeProcesses:
+    def __init__(self, calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]]):
+        self._calls = calls
+
+    def list(self, ref: str = "me") -> dict[str, Any]:
+        self._calls.append(("ps", (ref,), {}))
+        return {"processes": [{"id": "p-1", "ref": ref}]}
+
+    def kill(self, ref: str, pid: str) -> None:
+        self._calls.append(("kill", (ref, pid), {}))
+
+
 class FakeMachines:
     def __init__(self, stream: FakeStream | None = None) -> None:
         self.stream = stream
         self.files = FakeFiles()
         self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
-        self.processes = SimpleNamespace(
-            list=lambda ref: {"processes": [{"id": "p-1", "ref": ref}]},
-            kill=lambda ref, pid: self.calls.append(("kill", (ref, pid), {})),
-        )
+        self.processes = FakeProcesses(self.calls)
 
     def exec(self, ref: str, line: str, **kwargs: Any) -> FakeStream:
         self.calls.append(("exec", (ref, line), kwargs))
@@ -65,6 +101,21 @@ class FakeMachines:
     def reset(self, ref: str, scopes: list[str], **kwargs: Any) -> dict[str, Any]:
         self.calls.append(("reset", (ref, scopes), kwargs))
         return {"results": [{"scope": s, "ok": True} for s in scopes]}
+
+
+#: The pod `--pod` names in these tests, and the stored default it must beat.
+POD_A = "11111111-1111-1111-1111-111111111111"
+POD_B = "22222222-2222-2222-2222-222222222222"
+
+
+def _state_with_pod(pod_id: str, output: str = "pretty") -> SimpleNamespace:
+    """A CLI state whose stored default pod is ``pod_id`` (a UUID, as stored
+    defaults are)."""
+    return SimpleNamespace(
+        config={"defaults": {"org_id": "org-1", "pod_id": pod_id}},
+        output=output,
+        full=False,
+    )
 
 
 def _patch(patch_run, state, machines: FakeMachines) -> None:
@@ -109,11 +160,11 @@ def test_a_ref_with_no_path_is_a_usage_error(spec) -> None:
 
 
 def test_exec_streams_output_and_exits_with_the_commands_code(
-    runner, patch_run, pod_state
+    runner, patch_run
 ) -> None:
     stream = FakeStream([("stdout", "hello\n"), ("stderr", "oops\n")], 3, "failed")
     machines = FakeMachines(stream)
-    _patch(patch_run, pod_state, machines)
+    _patch(patch_run, _state_with_pod(POD_B), machines)
 
     result = runner.invoke(
         app, ["machine", "exec", "--env", "A=1", "pod:builder", "ls", "-la"]
@@ -125,7 +176,7 @@ def test_exec_streams_output_and_exits_with_the_commands_code(
     assert machines.calls == [
         (
             "exec",
-            ("pod:builder", "ls -la"),
+            (f"pod:{POD_B}:builder", "ls -la"),
             {"cwd": None, "env": {"A": "1"}, "timeout_seconds": None},
         )
     ]
@@ -150,6 +201,155 @@ def test_exec_runs_a_single_argument_as_a_shell_line(
         "stdout": "ok\n",
         "stderr": "",
     }
+
+
+def test_exec_with_pod_flag_targets_that_pod_not_the_stored_default(
+    runner, patch_run
+) -> None:
+    machines = FakeMachines(FakeStream([], 0, "succeeded"))
+    _patch(patch_run, _state_with_pod(POD_B), machines)
+
+    result = runner.invoke(
+        app, ["machine", "exec", "--pod", POD_A, "pod:bay-1", "true"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    ((verb, (ref, _line), _kwargs),) = machines.calls
+    assert verb == "exec"
+    assert ref == f"pod:{POD_A}:bay-1"
+    assert POD_B not in ref
+
+
+@pytest.mark.parametrize("flag", [["--pod", POD_A], [f"--pod={POD_A}"]])
+def test_a_pod_flag_after_the_ref_is_a_usage_error(runner, patch_run, flag) -> None:
+    """Everything after the ref is the command, so a `--pod` typed there is
+    swallowed into the shell line and the ref binds to the stored default
+    pod. Refuse it rather than run on the wrong pod."""
+    machines = FakeMachines(FakeStream([], 0, "succeeded"))
+    _patch(patch_run, _state_with_pod(POD_B), machines)
+
+    result = runner.invoke(app, ["machine", "exec", "pod:bay-1", "true", *flag])
+
+    assert result.exit_code == 2
+    assert "--pod" in _plain(result.output)
+    assert machines.calls == []  # nothing ran, on any pod
+
+
+def test_a_bare_pod_ref_resolves_to_the_stored_default(runner, patch_run) -> None:
+    machines = FakeMachines(FakeStream([], 0, "succeeded"))
+    _patch(patch_run, _state_with_pod(POD_B), machines)
+
+    result = runner.invoke(app, ["machine", "exec", "pod:bay-1", "true"])
+
+    assert result.exit_code == 0, result.stderr
+    assert machines.calls[0][1][0] == f"pod:{POD_B}:bay-1"
+
+
+def test_the_refs_own_pod_wins_over_the_flag(runner, patch_run) -> None:
+    named = "33333333-3333-3333-3333-333333333333"
+    machines = FakeMachines(FakeStream([], 0, "succeeded"))
+    _patch(patch_run, _state_with_pod(POD_B), machines)
+
+    result = runner.invoke(
+        app, ["machine", "exec", "--pod", POD_A, f"pod:{named}:bay-1", "true"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert machines.calls[0][1][0] == f"pod:{named}:bay-1"
+
+
+def test_a_quoted_command_may_itself_mention_pod(runner, patch_run) -> None:
+    """One argument is a shell line as written; a `--pod` inside it is the
+    command's own, not the CLI's."""
+    machines = FakeMachines(FakeStream([], 0, "succeeded"))
+    _patch(patch_run, _state_with_pod(POD_B), machines)
+
+    result = runner.invoke(
+        app, ["machine", "exec", "pod:bay-1", "kubectl logs --pod web"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert machines.calls[0][1] == (
+        f"pod:{POD_B}:bay-1",
+        "kubectl logs --pod web",
+    )
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["machine", "exec", "--pod", POD_A, "me", "true"],
+        ["machine", "ps", "--pod", POD_A, "me"],
+        ["machine", "kill", "--pod", POD_A, "me", "p-1", "-y"],
+    ],
+)
+def test_the_pod_flag_needs_a_pod_ref(runner, patch_run, args) -> None:
+    machines = FakeMachines(FakeStream([], 0, "succeeded"))
+    _patch(patch_run, _state_with_pod(POD_B), machines)
+
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 2
+    assert machines.calls == []
+
+
+def test_ps_and_kill_resolve_the_ref_like_exec(runner, patch_run) -> None:
+    machines = FakeMachines()
+    _patch(patch_run, _state_with_pod(POD_B), machines)
+
+    listed = runner.invoke(app, ["machine", "ps", "--pod", POD_A, "pod:bay-1"])
+    killed = runner.invoke(
+        app, ["machine", "kill", "--pod", POD_A, "pod:bay-1", "p-1", "-y"]
+    )
+
+    assert (listed.exit_code, killed.exit_code) == (0, 0)
+    assert machines.calls == [
+        ("ps", (f"pod:{POD_A}:bay-1",), {}),
+        ("kill", (f"pod:{POD_A}:bay-1", "p-1"), {}),
+    ]
+
+
+def test_shell_resolves_the_ref_like_exec(patch_run, monkeypatch) -> None:
+    """The real ``run_shell`` runs here, against the fake client with a real
+    pty as its terminal: nothing inside the shell path is doubled. CliRunner
+    cannot drive it -- it replaces sys.stdin/stdout with pipes, which the tty
+    guard would rightly refuse -- so the click command is invoked directly.
+    """
+    pty = pytest.importorskip("pty")  # run_shell needs a POSIX terminal
+    machines = FakeMachines(FakeStream([], 0, "succeeded"))
+    _patch(patch_run, _state_with_pod(POD_B), machines)
+    master_fd, slave_fd = pty.openpty()
+    stdin = os.fdopen(os.dup(slave_fd), encoding="utf-8")
+    stdout = os.fdopen(os.dup(slave_fd), "w", encoding="utf-8")
+    monkeypatch.setattr(sys, "stdin", stdin)
+    monkeypatch.setattr(sys, "stdout", stdout)
+    try:
+        code = get_command(app).main(
+            ["machine", "shell", "--pod", POD_A, "pod:bay-1"],
+            prog_name="lemma",
+            standalone_mode=False,
+        )
+        assert code == 0
+        ((verb, (ref, line), kwargs),) = machines.calls
+        assert verb == "exec"
+        assert (ref, line) == (f"pod:{POD_A}:bay-1", "bash -l")
+        assert kwargs["via"] == "socket"
+    finally:
+        # run_shell's `finally` set its done event; give the keyboard thread
+        # its 0.1s poll to leave select() before the pty closes under it.
+        time.sleep(0.2)
+        stdin.close()
+        stdout.close()
+        os.close(slave_fd)
+        os.close(master_fd)
+
+
+@pytest.mark.parametrize("command", ["exec", "shell", "ps", "kill"])
+def test_machine_commands_advertise_the_pod_flag(runner, command) -> None:
+    result = runner.invoke(app, ["machine", command, "--help"])
+
+    assert result.exit_code == 0
+    assert "--pod" in _plain(result.output)
 
 
 def test_cp_uploads_a_local_file_into_a_directory(
