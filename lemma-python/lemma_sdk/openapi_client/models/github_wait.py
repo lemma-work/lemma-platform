@@ -2,6 +2,7 @@ from enum import Enum
 
 
 class GithubWait(str, Enum):
+    CHECK = "check"
     CHOOSE = "choose"
     GITHUB_ADMIN = "github_admin"
     GITHUB_PERMISSION = "github_permission"

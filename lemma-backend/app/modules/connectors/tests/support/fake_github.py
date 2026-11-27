@@ -46,6 +46,9 @@ class FakeGitHub:
     before_token_request: Callable[[dict[str, list[str]]], Awaitable[None]] | None = (
         None
     )
+    #: Awaited before each REST call (api.github.com) is answered: what a test
+    #: uses to make GitHub slow.
+    before_api_request: Callable[[str], Awaitable[None]] | None = None
     _next_id: int = 1000
 
     def person(self, code: str, **kwargs: Any) -> str:
@@ -160,6 +163,8 @@ def _stand_in_front(monkeypatch: Any, library: Any, fake: FakeGitHub) -> None:
         body = await request.aread()
         if request.url.host == "github.com" and fake.before_token_request:
             await fake.before_token_request(parse_qs(body.decode()))
+        if request.url.host != "github.com" and fake.before_api_request:
+            await fake.before_api_request(request.url.path)
         status, payload = fake.answer(
             method=request.method,
             host=request.url.host,

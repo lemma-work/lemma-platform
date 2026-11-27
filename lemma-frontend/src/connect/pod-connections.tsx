@@ -331,6 +331,9 @@ function ConnectionRow({ pod, item, me, may, named, waiting, focused, flow, onOp
 function GithubFix({ pod, item, onChanged }: { pod: Pod; item: PodConnection; onChanged: () => void }) {
     const github = item.me.github;
     const accountId = item.me.account?.id ?? "";
+    // Asking GitHub again takes the account, which only its owner has here.
+    // Anyone else can only re-read the page, which helps when GitHub was slow.
+    const canCheck = Boolean(accountId) || github?.wait === "check";
     const check = useMutation({
         mutationFn: async () => { if (accountId) await source.checkGithubAccount(pod.orgId, accountId); },
         onSettled: onChanged,
@@ -353,9 +356,11 @@ function GithubFix({ pod, item, onChanged }: { pod: Pod; item: PodConnection; on
                     {github?.wait === "install" ? "Install on GitHub" : "Open on GitHub"}
                 </a>
             ) : null}
-            <button type="button" className="b b--s" disabled={busy} onClick={() => check.mutate()}>
-                {check.isPending ? "Checking…" : "Check again"}
-            </button>
+            {canCheck && (
+                <button type="button" className="b b--s" disabled={busy} onClick={() => check.mutate()}>
+                    {check.isPending ? "Checking…" : "Check again"}
+                </button>
+            )}
             {(check.isError || pick.isError) && (
                 <span className="kpc-problem" role="alert">{connectorProblem(check.error ?? pick.error, "GitHub didn’t answer just now. Try again in a moment.")}</span>
             )}

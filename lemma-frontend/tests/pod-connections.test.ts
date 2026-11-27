@@ -534,6 +534,9 @@ test("a connected GitHub account that reaches nothing here is install, and says 
     assert.deepEqual(said({ wait: "install", install_url: "https://github.com/apps/lemma/installations/new" }).status, { word: "App not installed", tone: "bad" });
     const choose = row({ wait: "choose", choices: [{ installation_id: "1", login: "octo" }, { installation_id: "2", login: "me" }, { login: "no id" }] });
     assert.deepEqual(choose.me.github?.choices.map((one) => one.login), ["octo", "me"], "a choice with no id is not one");
+    assert.deepEqual(said({ wait: "choose", choices: [{ installation_id: "1", login: "octo" }] }).status, { word: "Not in use", tone: "warn" });
+    assert.match(said({ wait: "choose", choices: [{ installation_id: "1", login: "octo" }] }).line, /octo, and your organization here stopped using it/);
+    assert.deepEqual(said({ wait: "check" }).status, { word: "GitHub didn't answer", tone: "off" });
     assert.equal(said({ wait: "later" }).status.word, "Not ready", "a reason this client doesn't know is still not ready");
     assert.equal(row({ wait: "install", install_url: "javascript:alert(1)" }).me.github?.installUrl, "", "only a GitHub link is offered as one");
     assert.equal(row(null, { me: { standing: "ready", github: { wait: "install" } } }).me.github, null, "only install carries a reason");

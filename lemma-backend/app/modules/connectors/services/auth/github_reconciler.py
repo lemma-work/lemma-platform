@@ -23,6 +23,8 @@ ready, and answers with no call at all.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -84,8 +86,15 @@ class GithubInstallationReconciler:
         *,
         bindings: InstallationBindings | None = None,
         prove: Prove = administration,
+        budget: float | None = None,
     ):
         self._service = connector_service
+        #: Seconds GitHub gets, across every call one `outcome` makes, before
+        #: it raises `TimeoutError`. None for no limit: the account page's own
+        #: read is the call that may be slow. A page that renders rows it
+        #: already has passes one, so a hung GitHub cannot hold it.
+        self._budget = budget
+        self._deadline: float | None = None
         # Named once so every non-database await below can hand the pooled
         # connection back. Redis is fast, but "fast" is not the rule: a session
         # holds a Postgres connection until it closes, and every await inside
@@ -135,6 +144,10 @@ class GithubInstallationReconciler:
             if cached is not None:
                 return cached
 
+        if self._budget is not None:
+            self._deadline = asyncio.get_running_loop().time() + self._budget
+        # A timeout escapes before anything is remembered or bound: a slow
+        # GitHub is not an answer.
         answer, token = await self._ask(account)
         outcome, administered = await self._proven(account, answer, token)
         # Bound before it is remembered: READY is what the claim made true,
@@ -143,6 +156,16 @@ class GithubInstallationReconciler:
         outcome = await self._bind(account, outcome, administered=administered)
         await self._remember(key, outcome)
         return outcome
+
+    def _bounded(self) -> contextlib.AbstractAsyncContextManager[object]:
+        """The rest of this read's budget, around one GitHub round trip.
+
+        Only ever inside `connection_released`: a timeout cancels the call it
+        wraps, and that must never be a query.
+        """
+        if self._deadline is None:
+            return contextlib.nullcontext()
+        return asyncio.timeout_at(self._deadline)
 
     async def invalidate(self, account_id: object) -> None:
         """Forget what we last heard, because something changed it.
@@ -171,7 +194,7 @@ class GithubInstallationReconciler:
         # GitHub can take seconds to answer and this runs inside a request that
         # holds a pooled connection. The binding write below needs the session
         # again, so only the round trip is outside it.
-        async with connection_released(self._session):
+        async with connection_released(self._session), self._bounded():
             return await resolve_outcome(str(token)), str(token)
 
     async def _proven(
@@ -202,7 +225,7 @@ class GithubInstallationReconciler:
             return outcome, False
         said: Administration | bool = Administration.DOES_NOT
         if token:
-            async with connection_released(self._session):
+            async with connection_released(self._session), self._bounded():
                 said = await self._prove(token, installation_id)
         if not (said is True or said is Administration.ADMINISTERS):
             return (

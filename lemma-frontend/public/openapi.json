@@ -13399,7 +13399,8 @@
           "choose",
           "github_admin",
           "github_permission",
-          "lemma_admin"
+          "lemma_admin",
+          "check"
         ],
         "title": "GithubWait",
         "type": "string"

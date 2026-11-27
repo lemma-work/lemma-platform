@@ -22,7 +22,7 @@ export type ConnectionStanding = "ready" | "connect" | "reconnect" | "use_existi
 /** Why a GitHub account here reaches no installation of the App, by who can
  *  fix it (`me.github` with `install`). `unknown` is a reason this client was
  *  not taught: still not ready, with nothing but checking again offered. */
-export type GithubWait = "install" | "choose" | "github_admin" | "github_permission" | "lemma_admin" | "unknown";
+export type GithubWait = "install" | "choose" | "github_admin" | "github_permission" | "lemma_admin" | "check" | "unknown";
 
 /** An installation of the App the account can see. */
 export interface GithubOffer {
@@ -117,7 +117,7 @@ export interface PodConnections {
 const MODES: PodConnectorMode[] = ["PER_MEMBER", "SHARED", "APP"];
 const STATUSES: PodConnectorStatus[] = ["READY", "NEEDS_ACCOUNT", "NEEDS_INSTALLATION", "UNAVAILABLE"];
 const STANDINGS: ConnectionStanding[] = ["ready", "connect", "reconnect", "use_existing", "install", "waiting", "not_allowed"];
-const WAITS: GithubWait[] = ["install", "choose", "github_admin", "github_permission", "lemma_admin"];
+const WAITS: GithubWait[] = ["install", "choose", "github_admin", "github_permission", "lemma_admin", "check"];
 const RUNS_AS: RunsAsKind[] = ["me", "person", "app", "nobody"];
 
 function record(value: unknown): Record<string, unknown> {
@@ -337,6 +337,13 @@ export function githubSaid(github: GithubStanding | null, lemma: string): { line
                 status: { word: "App not installed", tone: "bad" },
             };
         case "choose":
+            if (github.choices.length === 1) {
+                const one = github.choices[0].login || "a GitHub account";
+                return {
+                    line: "Lemma's GitHub App is installed on " + one + ", and your organization here stopped using it. Use it again to reach its repositories.",
+                    status: { word: "Not in use", tone: "warn" },
+                };
+            }
             return {
                 line: "Lemma's GitHub App is installed on " + github.choices.length + " GitHub accounts you can reach. Pick the one " + lemma + " works in.",
                 status: { word: "Pick one", tone: "warn" },
@@ -355,6 +362,11 @@ export function githubSaid(github: GithubStanding | null, lemma: string): { line
             return {
                 line: "You're an admin of " + on + " on GitHub, but adding it to your organization here takes someone who manages its apps. Once they connect GitHub, it works for everyone.",
                 status: { word: "Waiting on an owner", tone: "warn" },
+            };
+        case "check":
+            return {
+                line: "GitHub didn't answer in time to say what your account can reach. Check again in a moment.",
+                status: { word: "GitHub didn't answer", tone: "off" },
             };
         default:
             return { line: "Your GitHub account is connected, but it can't reach any repository here yet.", status: { word: "Not ready", tone: "off" } };

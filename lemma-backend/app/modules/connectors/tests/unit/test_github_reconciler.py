@@ -110,9 +110,9 @@ async def _administered(_token: str, _installation_id: str) -> bool:
     return True
 
 
-def _reconciler(service, cache, *, bindings=None, prove=_administered):
+def _reconciler(service, cache, *, bindings=None, prove=_administered, budget=None):
     return GithubInstallationReconciler(
-        service, cache, bindings=bindings or _Bindings(), prove=prove
+        service, cache, bindings=bindings or _Bindings(), prove=prove, budget=budget
     )
 
 
@@ -134,6 +134,34 @@ def answers(monkeypatch):
 
     monkeypatch.setattr(github_reconciler, "fresh_credentials", _credentials)
     return _set, calls
+
+
+async def test_a_budget_bounds_a_slow_github_and_remembers_nothing(
+    answers, monkeypatch
+):
+    """A page that renders rows it already has gives GitHub a budget. Past
+    it, the read raises rather than hang; nothing is bound or remembered, so
+    the next read asks again."""
+    import asyncio
+
+    setter, _ = answers
+    setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
+
+    async def _hangs(_token: str, _installation_id: str) -> bool:
+        await asyncio.sleep(30)
+        return True
+
+    service, cache, bindings = _Service(), _Cache(), _Bindings()
+    reconciler = _reconciler(
+        service, cache, bindings=bindings, prove=_hangs, budget=0.05
+    )
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(reconciler.outcome(_account()), timeout=5)
+
+    assert bindings.claimed == []
+    assert cache.values == {}
+    assert service.account_repository.updated == []
 
 
 async def test_an_installation_made_out_of_band_is_picked_up(answers):

@@ -206,3 +206,29 @@ async def test_a_github_admin_who_installs_apps_here_is_ready_beside_another_org
     assert me["standing"] == "ready"
     assert me.get("github") is None
     assert await _holders(db_session, installation_id) == {other, world.org_id}
+
+
+async def test_a_github_that_does_not_answer_cannot_hold_the_page(
+    scenario, db_session, github, monkeypatch
+):
+    """The page renders rows it already has; GitHub gets a budget for the one
+    account it has to ask about. Past it the row says GitHub did not answer
+    -- not ready, check again -- instead of the page hanging."""
+    import asyncio
+
+    from app.modules.connectors.api import dependencies
+
+    async def _hangs(_path: str) -> None:
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(dependencies, "GITHUB_PAGE_BUDGET_SECONDS", 0.05)
+    github.before_api_request = _hangs
+    world = await _github_world(scenario, db_session)
+    await _per_member(world)
+    token = github.person("alice-gh")
+    await _mine_here(db_session, world, world.alice, token)
+
+    me = await asyncio.wait_for(_me(world, world.alice), timeout=10)
+
+    assert me["standing"] == "install"
+    assert me["github"]["wait"] == "check"

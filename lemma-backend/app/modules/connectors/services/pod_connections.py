@@ -81,7 +81,9 @@ CoverageReader = Callable[[Context, UUID, str], Awaitable[PodConnectorCoverage]]
 NamesReader = Callable[[UUID, set[UUID]], Awaitable[dict[UUID, str | None]]]
 #: ``(account) -> outcome``: where a GitHub account stands with the App's
 #: installations (``GithubInstallationReconciler.outcome``, cached).
-GithubReader = Callable[[AccountEntity], Awaitable[InstallationOutcome]]
+#: Where a GitHub account stands, or ``None`` when GitHub did not answer in
+#: time to say.
+GithubReader = Callable[[AccountEntity], Awaitable[InstallationOutcome | None]]
 
 _WAITS = {
     WaitingOn.GITHUB_ADMIN: GithubWait.GITHUB_ADMIN,
@@ -159,7 +161,12 @@ class PodConnectionsReader:
             or account is None
         ):
             return me
-        said = github_said(await self._github(account))
+        outcome = await self._github(account)
+        said = (
+            ConnectionGithub(wait=GithubWait.CHECK)
+            if outcome is None
+            else github_said(outcome)
+        )
         if said is None:
             return me
         return me.model_copy(

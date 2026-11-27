@@ -11,4 +11,5 @@ export enum GithubWait {
     GITHUB_ADMIN = 'github_admin',
     GITHUB_PERMISSION = 'github_permission',
     LEMMA_ADMIN = 'lemma_admin',
+    CHECK = 'check',
 }

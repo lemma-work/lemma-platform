@@ -92,6 +92,9 @@ class GithubWait(StrEnum):
     GITHUB_PERMISSION = "github_permission"
     #: Someone who may install apps for this Lemma organization has to.
     LEMMA_ADMIN = "lemma_admin"
+    #: GitHub did not answer in time for this page. Not ready as far as
+    #: anyone knows; checking again asks it again.
+    CHECK = "check"
 
 
 class GithubInstallationOffer(BaseModel):
