@@ -91,6 +91,8 @@ Before anything consequential, like sending an email, issuing a refund or
 deleting a record, it pauses and asks the person who owns that decision. The run
 waits, for days if it has to, and carries on when they answer.
 
+Ready-made teammates other people built and published: [awesome-lemma-teammates](awesome-lemma-teammates/README.md)
+
 ## <img src="docs/Assets/icons/apps.svg" width="26" height="26" align="top" alt=""> Apps
 
 A lot of work needs a screen rather than a chat thread: a queue to clear, a
