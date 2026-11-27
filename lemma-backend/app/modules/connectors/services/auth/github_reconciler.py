@@ -111,7 +111,7 @@ class GithubInstallationReconciler:
         self._prove = prove
 
     async def outcome(
-        self, account: Any, *, force: bool = False
+        self, account: Any, *, force: bool = False, bind: bool = True
     ) -> InstallationOutcome:
         """Where this account stands, asking GitHub only when that can change it.
 
@@ -124,6 +124,13 @@ class GithubInstallationReconciler:
         one. `force` is for the two moments where the stored answer is the
         thing in doubt -- somebody pressing Refresh, and a repository lookup
         that came back empty.
+
+        `bind=False` is for somebody other than the account's owner reading
+        it -- a shared account on the Connections page. GitHub is asked the
+        same, but an installation this organization does not hold yet is not
+        bound on their page load: it waits on its GitHub admin, the owner,
+        whose own read binds it. Nothing such a read says is remembered, so
+        it cannot stand in for the owner's.
         """
         if not _is_github(account):
             return InstallationOutcome(InstallState.READY)
@@ -150,6 +157,12 @@ class GithubInstallationReconciler:
         # GitHub is not an answer.
         answer, token = await self._ask(account)
         outcome, administered = await self._proven(account, answer, token)
+        if administered and not bind:
+            return InstallationOutcome(
+                InstallState.PENDING_APPROVAL,
+                choices=outcome.choices,
+                waiting_on=WaitingOn.GITHUB_ADMIN,
+            )
         # Bound before it is remembered: READY is what the claim made true,
         # not what GitHub said, and a claim refused here must not leave a
         # cached READY with nothing bound and no token to mint.

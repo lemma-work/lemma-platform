@@ -64,10 +64,15 @@ def sync_detailed(
     """My Connections Here
 
      One row per pod connector, judged for the caller: whose account a call by them runs as (`runs_as`),
-    and what they can do about it (`me.standing`: ready, connect, use_existing, reconnect, waiting or
-    not_allowed). `coverage` is filled for PER_MEMBER connectors when the caller may manage the pod's
-    connectors; `github_bot` names the organization's GitHub App installations an APP connector can use.
-    Read-only: it declares and adds nothing.
+    and what they can do about it (`me.standing`: ready, install, connect, use_existing, reconnect,
+    waiting or not_allowed). `install` is GitHub's: the account in use reaches no GitHub App
+    installation this organization holds, and `me.github` says why and who can fix it. `coverage` is
+    filled for PER_MEMBER connectors when the caller may manage the pod's connectors; `github_bot` names
+    the organization's GitHub App installations an APP connector can use. It declares no connector and
+    adds no account. For a GitHub account the caller owns it asks GitHub where the account stands, as
+    the account page does, and may bind the installation it reaches to the organization when GitHub says
+    the caller administers it and they may install apps here; for anyone else's account it binds
+    nothing.
 
     Args:
         pod_id (UUID):
@@ -99,10 +104,15 @@ def sync(
     """My Connections Here
 
      One row per pod connector, judged for the caller: whose account a call by them runs as (`runs_as`),
-    and what they can do about it (`me.standing`: ready, connect, use_existing, reconnect, waiting or
-    not_allowed). `coverage` is filled for PER_MEMBER connectors when the caller may manage the pod's
-    connectors; `github_bot` names the organization's GitHub App installations an APP connector can use.
-    Read-only: it declares and adds nothing.
+    and what they can do about it (`me.standing`: ready, install, connect, use_existing, reconnect,
+    waiting or not_allowed). `install` is GitHub's: the account in use reaches no GitHub App
+    installation this organization holds, and `me.github` says why and who can fix it. `coverage` is
+    filled for PER_MEMBER connectors when the caller may manage the pod's connectors; `github_bot` names
+    the organization's GitHub App installations an APP connector can use. It declares no connector and
+    adds no account. For a GitHub account the caller owns it asks GitHub where the account stands, as
+    the account page does, and may bind the installation it reaches to the organization when GitHub says
+    the caller administers it and they may install apps here; for anyone else's account it binds
+    nothing.
 
     Args:
         pod_id (UUID):
@@ -129,10 +139,15 @@ async def asyncio_detailed(
     """My Connections Here
 
      One row per pod connector, judged for the caller: whose account a call by them runs as (`runs_as`),
-    and what they can do about it (`me.standing`: ready, connect, use_existing, reconnect, waiting or
-    not_allowed). `coverage` is filled for PER_MEMBER connectors when the caller may manage the pod's
-    connectors; `github_bot` names the organization's GitHub App installations an APP connector can use.
-    Read-only: it declares and adds nothing.
+    and what they can do about it (`me.standing`: ready, install, connect, use_existing, reconnect,
+    waiting or not_allowed). `install` is GitHub's: the account in use reaches no GitHub App
+    installation this organization holds, and `me.github` says why and who can fix it. `coverage` is
+    filled for PER_MEMBER connectors when the caller may manage the pod's connectors; `github_bot` names
+    the organization's GitHub App installations an APP connector can use. It declares no connector and
+    adds no account. For a GitHub account the caller owns it asks GitHub where the account stands, as
+    the account page does, and may bind the installation it reaches to the organization when GitHub says
+    the caller administers it and they may install apps here; for anyone else's account it binds
+    nothing.
 
     Args:
         pod_id (UUID):
@@ -162,10 +177,15 @@ async def asyncio(
     """My Connections Here
 
      One row per pod connector, judged for the caller: whose account a call by them runs as (`runs_as`),
-    and what they can do about it (`me.standing`: ready, connect, use_existing, reconnect, waiting or
-    not_allowed). `coverage` is filled for PER_MEMBER connectors when the caller may manage the pod's
-    connectors; `github_bot` names the organization's GitHub App installations an APP connector can use.
-    Read-only: it declares and adds nothing.
+    and what they can do about it (`me.standing`: ready, install, connect, use_existing, reconnect,
+    waiting or not_allowed). `install` is GitHub's: the account in use reaches no GitHub App
+    installation this organization holds, and `me.github` says why and who can fix it. `coverage` is
+    filled for PER_MEMBER connectors when the caller may manage the pod's connectors; `github_bot` names
+    the organization's GitHub App installations an APP connector can use. It declares no connector and
+    adds no account. For a GitHub account the caller owns it asks GitHub where the account stands, as
+    the account page does, and may bind the installation it reaches to the organization when GitHub says
+    the caller administers it and they may install apps here; for anyone else's account it binds
+    nothing.
 
     Args:
         pod_id (UUID):

@@ -345,7 +345,7 @@ def build_pod_connections_reader(uow: SqlAlchemyUnitOfWork) -> "PodConnectionsRe
         people = await people_through_contracts(uow, pod_id, limit=MAX_POD_PEOPLE)
         return {one.user_id: one.name for one in people if one.user_id in user_ids}
 
-    async def github(account):
+    async def github(account, *, bind: bool):
         from app.modules.connectors.services.auth.github_reconciler import (
             GithubInstallationReconciler,
         )
@@ -353,7 +353,7 @@ def build_pod_connections_reader(uow: SqlAlchemyUnitOfWork) -> "PodConnectionsRe
         try:
             return await GithubInstallationReconciler(
                 get_connector_service(uow), budget=GITHUB_PAGE_BUDGET_SECONDS
-            ).outcome(account)
+            ).outcome(account, bind=bind)
         except TimeoutError:
             logger.warning(
                 "connectors.pod_connections.github_unanswered.degraded",

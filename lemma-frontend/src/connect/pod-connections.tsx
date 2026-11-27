@@ -666,7 +666,7 @@ function ConnectionSheet({ pod, item, items, me, may, named, bot, flow, onShareM
                                     <ServiceMark entry={{ title: app, icon: item.icon }} />
                                     {item.me.account ? (
                                         <span><span className="kpc-fig">{item.me.account.label || "Your " + app + " account"}</span>
-                                            <small>{item.me.standing === "reconnect" ? app + " signed you out." : mineShared ? "Runs " + app + " for everyone here." : item.mode === "SHARED" ? "Only your own calls use it while it runs as someone else’s." : "Used when you, or an agent working for you, use " + app + " here."}</small>
+                                            <small>{item.me.standing === "reconnect" ? app + " signed you out." : item.me.standing === "install" ? "Connected, but it reaches no repository here yet." : mineShared ? "Runs " + app + " for everyone here." : item.mode === "SHARED" ? "Only your own calls use it while it runs as someone else’s." : "Used when you, or an agent working for you, use " + app + " here."}</small>
                                         </span>
                                     ) : item.me.existing ? (
                                         <span><span className="kpc-fig">{item.me.existing.label || "Your " + app + " account"}</span><small>Connected in your organization, not used here yet.</small></span>

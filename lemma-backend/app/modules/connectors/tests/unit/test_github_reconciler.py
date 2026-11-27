@@ -251,6 +251,34 @@ async def test_a_wait_says_whose_act_it_waits_on(answers):
     assert refused.waiting_on is WaitingOn.LEMMA_ADMIN
 
 
+async def test_somebody_elses_read_binds_nothing_and_is_not_remembered(answers):
+    """A shared account read by somebody other than its owner: GitHub is asked
+    as for the owner, but nothing is claimed on their page load, and the
+    answer is not cached -- or the owner's own read would get it back instead
+    of binding."""
+    from app.modules.connectors.services.auth.github_installation import WaitingOn
+
+    setter, _ = answers
+    setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
+    account = _account()
+    bindings, cache = _Bindings(), _Cache()
+
+    said = await _reconciler(_Service(), cache, bindings=bindings).outcome(
+        account, bind=False
+    )
+
+    assert said.state is InstallState.PENDING_APPROVAL
+    assert said.waiting_on is WaitingOn.GITHUB_ADMIN
+    assert bindings.claimed == []
+    assert account.external_ref is None
+    assert cache.values == {}
+
+    owners = await _reconciler(_Service(), cache, bindings=bindings).outcome(account)
+
+    assert owners.state is InstallState.READY
+    assert bindings.claimed == [("158040062", True)]
+
+
 async def test_refresh_asks_again_even_when_bound(answers):
     setter, calls = answers
     setter(InstallationOutcome(InstallState.READY, installation_id="200000001"))

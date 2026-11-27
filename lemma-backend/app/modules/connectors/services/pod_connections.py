@@ -82,8 +82,9 @@ NamesReader = Callable[[UUID, set[UUID]], Awaitable[dict[UUID, str | None]]]
 #: ``(account) -> outcome``: where a GitHub account stands with the App's
 #: installations (``GithubInstallationReconciler.outcome``, cached).
 #: Where a GitHub account stands, or ``None`` when GitHub did not answer in
-#: time to say.
-GithubReader = Callable[[AccountEntity], Awaitable[InstallationOutcome | None]]
+#: time to say. ``bind``: whether the read may bind an installation for
+#: the organization -- only on the account owner's own view.
+GithubReader = Callable[..., Awaitable[InstallationOutcome | None]]
 
 _WAITS = {
     WaitingOn.GITHUB_ADMIN: GithubWait.GITHUB_ADMIN,
@@ -148,12 +149,21 @@ class PodConnectionsReader:
         self._github = github
 
     async def _with_github(
-        self, me: ConnectionMe, account: AccountEntity | None, github: bool
+        self,
+        me: ConnectionMe,
+        account: AccountEntity | None,
+        github: bool,
+        *,
+        owned: bool,
     ) -> ConnectionMe:
         """``me``, unless the GitHub account it would run as reaches nothing
         here: a connected account is not a usable one until an installation
         this organization holds is behind it, and saying ``ready`` before
-        then sends people to a page that reaches no repository."""
+        then sends people to a page that reaches no repository.
+
+        ``owned``: the caller is the account's owner. Only then may the read
+        bind an installation for the organization, on the owner's proof:
+        anyone else's page load would claim it on the owner's behalf."""
         if (
             not github
             or self._github is None
@@ -161,7 +171,7 @@ class PodConnectionsReader:
             or account is None
         ):
             return me
-        outcome = await self._github(account)
+        outcome = await self._github(account, bind=owned)
         said = (
             ConnectionGithub(wait=GithubWait.CHECK)
             if outcome is None
@@ -299,7 +309,10 @@ class PodConnectionsReader:
             else None
         )
         return runs_as, await self._with_github(
-            ConnectionMe(standing=standing, account=mine), account, github
+            ConnectionMe(standing=standing, account=mine),
+            account,
+            github,
+            owned=mine is not None,
         )
 
     async def _per_member(
@@ -342,6 +355,7 @@ class PodConnectionsReader:
                 ),
                 account,
                 github,
+                owned=True,
             )
         existing = await accounts.get_by_user_org_and_auth_config(
             person, auth_config.organization_id, auth_config.id

@@ -1807,7 +1807,11 @@ function sampleConnections(podId: string): Record<string, unknown> {
                 runsAs = { kind: owner === "sample-user" ? "me" : "person", label: shared.display_name, owner_user_id: owner, owner_name: memberName(owner) };
             }
         } else if (podAccount) {
-            standing = org?.status.toUpperCase() === "REAUTH_REQUIRED" ? "reconnect" : "ready";
+            standing = org?.status.toUpperCase() === "REAUTH_REQUIRED" ? "reconnect"
+                /* A GitHub account is usable only once an installation of the
+                   App stands behind it, as the server judges it. */
+                : row.connector_id === "github" && org?.installState.toUpperCase() === "INSTALL_REQUIRED" ? "install"
+                    : "ready";
             runsAs = { kind: "me", label: podAccount.display_name };
         } else if (elsewhere) {
             standing = elsewhere.status.toUpperCase() === "REAUTH_REQUIRED" ? "reconnect" : "use_existing";
@@ -1820,7 +1824,10 @@ function sampleConnections(podId: string): Record<string, unknown> {
             mode: row.mode, purpose: row.purpose ?? "", required: row.required === true, status: row.mode === "SHARED" && standing === "waiting" ? "NEEDS_ACCOUNT" : status,
             auth_config_id: row.auth_config_id, installation_name: row.installation_name,
             runs_as: runsAs,
-            me: { standing, account, existing: standing === "use_existing" || row.mode === "SHARED" ? existing : null },
+            me: {
+                standing, account, existing: standing === "use_existing" || row.mode === "SHARED" ? existing : null,
+                github: standing === "install" ? { wait: "install", install_url: "https://github.com/apps/lemma-sample/installations/new", choices: [] } : null,
+            },
             coverage: coverage ? { connected: coverage.connected, total: coverage.eligible } : null,
         };
     });

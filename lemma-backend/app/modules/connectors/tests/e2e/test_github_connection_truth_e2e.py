@@ -232,3 +232,57 @@ async def test_a_github_that_does_not_answer_cannot_hold_the_page(
 
     assert me["standing"] == "install"
     assert me["github"]["wait"] == "check"
+
+
+async def test_a_shared_account_is_bound_on_its_owners_read_and_nobody_elses(
+    scenario, db_session, github
+):
+    """A shared GitHub account runs for everyone, and anyone may open the
+    page. Binding hands the organization the App's token on every repository
+    in the installation, so it happens on the owner's own read, on their
+    proof -- not because somebody else loaded the page."""
+    world = await _github_world(scenario, db_session)
+    declared = await scenario.owner_client.post(
+        f"/pods/{world.pod_id}/connectors",
+        json={
+            "slug": "github",
+            "auth_config_id": world.auth_config_id,
+            "mode": "SHARED",
+        },
+    )
+    assert declared.status_code == status.HTTP_201_CREATED, declared.text
+    token = github.person("owner-gh", admin_of={"octo"})
+    installation_id = _installation_id()
+    github.install(installation_id, on="octo")
+    github.users[token].sees.add(installation_id)
+    account_id = await _account_in(
+        db_session,
+        org_id=str(world.org_id),
+        user_id=scenario.owner_user["id"],
+        token=token,
+        auth_config_id=UUID(world.auth_config_id),
+    )
+    shared = await scenario.async_client.post(
+        f"/pods/{world.pod_id}/connector-accounts",
+        headers=auth_headers(scenario.owner_user),
+        json={"account_id": account_id, "visibility": "POD"},
+    )
+    assert shared.status_code == status.HTTP_201_CREATED, shared.text
+    pointed = await scenario.owner_client.patch(
+        f"/pods/{world.pod_id}/connectors/github",
+        json={"shared_pod_account_id": shared.json()["id"]},
+    )
+    assert pointed.status_code == status.HTTP_200_OK, pointed.text
+
+    for_alice = await _me(world, world.alice)
+
+    assert for_alice["standing"] == "install"
+    assert for_alice["github"]["wait"] == "github_admin"
+    assert for_alice["github"]["login"] == "octo"
+    assert await _holders(db_session, installation_id) == set()
+
+    for_owner = await _me(world, scenario.owner_user)
+
+    assert for_owner["standing"] == "ready"
+    assert await _holders(db_session, installation_id) == {world.org_id}
+    assert (await _me(world, world.alice))["standing"] == "ready"
