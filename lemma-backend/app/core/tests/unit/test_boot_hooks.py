@@ -18,6 +18,14 @@ from app.core.registry.installed import OSS_MODULES
 
 #: ``<process>:<module>.<hook>`` -> why it may run at boot.
 ALLOWED_BOOT_HOOKS: dict[str, str] = {
+    "api:vault.api_vault_lifespan": (
+        "unwraps the vault's key-encryption keys: a handful of rows, one per "
+        "rotation, however many secrets there are"
+    ),
+    "worker:vault.worker_vault_lifespan": (
+        "unwraps the vault's key-encryption keys: a handful of rows, one per "
+        "rotation, however many secrets there are"
+    ),
     "api:identity._close_user_cache": "shutdown only; closes Redis clients",
     "api:datastore._preload_local_embeddings": (
         "loads one embedding model (or starts it in the background); "

@@ -7,6 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 from app.core.infrastructure.db.base import Base
 
 
+#: Kept across tests. Every process caches the vault's unwrapped keys by id, so
+#: emptying this table would leave them writing secrets under keys that no
+#: longer exist. Tests that rotate keys reset the vault runtime themselves.
+_PRESERVED_TABLES = frozenset({"vault_keys"})
+
+
 @dataclass(frozen=True, slots=True)
 class TableSnapshot:
     """Rows copied out of the e2e schema into ``schema``, one table per name."""
@@ -71,7 +77,11 @@ class DatabaseManager:
         empty relation), and CASCADE still empties anything referencing a dirty
         table, so isolation is unchanged.
         """
-        table_names = [table.name for table in reversed(Base.metadata.sorted_tables)]
+        table_names = [
+            table.name
+            for table in reversed(Base.metadata.sorted_tables)
+            if table.name not in _PRESERVED_TABLES
+        ]
         if not table_names:
             return
         async with self.engine.begin() as conn:
@@ -114,8 +124,14 @@ class DatabaseManager:
 
         ``truncate_all(restore=...)`` puts them back. ``CREATE TABLE AS`` keeps
         the column order, so the copy can be restored with ``SELECT *``.
+        Preserved tables are never truncated, so they are never copied either:
+        restoring them would insert rows that are still there.
         """
-        table_names = [table.name for table in Base.metadata.sorted_tables]
+        table_names = [
+            table.name
+            for table in Base.metadata.sorted_tables
+            if table.name not in _PRESERVED_TABLES
+        ]
         async with self.engine.begin() as conn:
             await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
             await conn.execute(text(f'CREATE SCHEMA "{schema}"'))

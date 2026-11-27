@@ -1,0 +1,392 @@
+"""The key-encryption keys, unwrapped once and held in memory.
+
+Reading a secret needs its KEK. KEKs are few (one active per purpose, plus any
+kept for decryption after a rotation), so every process unwraps all of them
+when it starts and keeps them -- the only in-process cache the vault has, and
+the only use of the root key after start. Plaintext secrets are never cached.
+
+Loading reads ``vault_keys`` on a short session of its own and closes it before
+unwrapping: with Cloud KMS the unwrap is a network call, and no caller's
+connection is held across it.
+
+Two purposes: ``encrypt`` (wraps data keys) and ``sign`` (the HMAC root for
+token signing when the root key is remote). A missing active key is created on
+first load; concurrent creators race on a partial unique index and the loser
+reloads the winner's.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import threading
+import time
+import weakref
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from uuid import UUID, uuid7
+
+from sqlalchemy import func, select, text, update
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
+
+from app.core.crypto.aad import encode_aad
+from app.core.crypto.aead import new_key
+from app.core.crypto.ports import KeyMaterial, Keyring
+from app.core.crypto.roots.ports import RootKeyProvider
+from app.core.crypto.signing_keys import local_signing_keyring
+from app.core.log.log import get_logger
+
+from app.modules.vault.config import vault_settings
+from app.modules.vault.domain.errors import (
+    KeyNotKept,
+    KeyRetirementRefused,
+    VaultUnavailable,
+)
+from app.modules.vault.infrastructure.models import VaultKey, VaultSecret
+
+logger = get_logger(__name__)
+
+ENCRYPT = "encrypt"
+SIGN = "sign"
+ACTIVE = "active"
+DECRYPT_ONLY = "decrypt_only"
+RETIRED = "retired"
+_MAX_LIVE_KEYS = 1000
+#: A write reloads keys loaded longer ago than this many refresh intervals.
+#: Below the two intervals ``retire`` waits, so no write outlives a retirement.
+WRITE_KEY_MAX_AGE_REFRESHES = 1.5
+
+
+def kek_aad(key_id: UUID, purpose: str) -> bytes:
+    return encode_aad("lemma-vault/kek/v1", str(key_id), purpose)
+
+
+def signing_kid(key_id: UUID) -> str:
+    return "v" + key_id.hex[:12]
+
+
+@dataclass(frozen=True, slots=True)
+class _Key:
+    id: UUID
+    purpose: str
+    state: str
+    material: bytes
+
+
+class VaultKeyring:
+    def __init__(
+        self,
+        root: RootKeyProvider,
+        session_factory: Callable[[], AsyncSession],
+        *,
+        on_loaded: Callable[[VaultKeyring], None] | None = None,
+    ) -> None:
+        self._root = root
+        self._session_factory = session_factory
+        self._on_loaded = on_loaded
+        self._lock = threading.Lock()
+        self._keys: dict[UUID, _Key] = {}
+        self._active: dict[str, UUID] = {}
+        self._signing: Keyring | None = None
+        self._loaded = False
+        self._loaded_at = 0.0
+        # Loads overlap (start, refresh, a rotation, a cache miss). They run one
+        # at a time per event loop, from the read to the publish, so a load
+        # never publishes keys read before ones already published. That relies
+        # on one loop per process (API, worker, `vault_admin`); the number only
+        # drops a load that started before the last published one, which does
+        # not order reads made on two loops at once.
+        self._load_locks: weakref.WeakKeyDictionary[
+            asyncio.AbstractEventLoop, asyncio.Lock
+        ] = weakref.WeakKeyDictionary()
+        self._load_started = 0
+        self._load_published = 0
+
+    @property
+    def root(self) -> RootKeyProvider:
+        return self._root
+
+    @property
+    def loaded(self) -> bool:
+        return self._loaded
+
+    # ------------------------------------------------------------------ reads
+    def cached_active_encryption_key(self) -> tuple[UUID, bytes] | None:
+        """The active KEK if loaded recently enough. No I/O: every write's path.
+
+        ``None`` once the last successful load is older than
+        :data:`WRITE_KEY_MAX_AGE_REFRESHES` refresh intervals, so a process whose
+        background refreshes keep failing reloads before it writes -- or fails
+        the write -- instead of wrapping under a key that may since have been
+        retired (``retire`` waits two intervals after the rotation).
+        """
+        key_id = self._active.get(ENCRYPT)
+        if key_id is None or self._stale():
+            return None
+        return key_id, self._keys[key_id].material
+
+    def _stale(self) -> bool:
+        max_age = WRITE_KEY_MAX_AGE_REFRESHES * vault_settings.vault_kek_refresh_seconds
+        return time.monotonic() - self._loaded_at > max_age
+
+    def cached_encryption_key(self, key_id: UUID) -> bytes | None:
+        """A KEK if loaded. No I/O: the path every secret read takes."""
+        key = self._keys.get(key_id)
+        return None if key is None else key.material
+
+    async def active_encryption_key(self) -> tuple[UUID, bytes]:
+        if ENCRYPT not in self._active or self._stale():
+            await self.load()
+        key_id = self._active.get(ENCRYPT)
+        if key_id is None:
+            raise VaultUnavailable("no active vault encryption key")
+        if self._stale():
+            # Even the load just made read its keys too long ago to trust that
+            # this one is still active; nothing guards a sealed value later.
+            raise VaultUnavailable("vault keys could not be loaded recently enough")
+        return key_id, self._keys[key_id].material
+
+    async def encryption_key(self, key_id: UUID) -> bytes:
+        key = self._keys.get(key_id)
+        if key is None:
+            # Created or re-activated by another process since we loaded.
+            await self.load()
+            key = self._keys.get(key_id)
+        if key is None:
+            raise KeyNotKept(key_id)
+        return key.material
+
+    def signing_keyring(self) -> Keyring:
+        if self._signing is None:
+            raise VaultUnavailable("vault signing keys are not loaded")
+        return self._signing
+
+    # ---------------------------------------------------------------- loading
+    async def load(self) -> None:
+        """(Re)read every usable key; create missing active ones; rewrap stale."""
+        async with self._load_lock():
+            await self._load()
+
+    def _load_lock(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        with self._lock:
+            lock = self._load_locks.get(loop)
+            if lock is None:
+                lock = self._load_locks[loop] = asyncio.Lock()
+            return lock
+
+    async def _load(self) -> None:
+        with self._lock:
+            self._load_started += 1
+            generation = self._load_started
+        # Freshness counts from the read, not the publish: a slow unwrap must
+        # not make keys read before a rotation look recently loaded.
+        read_at = time.monotonic()
+        rows = await self._read_keys()
+        for purpose in (ENCRYPT, SIGN):
+            if not any(r.purpose == purpose and r.state == ACTIVE for r in rows):
+                await self._bootstrap(purpose)
+                rows = await self._read_keys()
+        keys: dict[UUID, _Key] = {}
+        active: dict[str, UUID] = {}
+        stale: list[tuple[UUID, str, bytes]] = []
+        for row in rows:
+            aad = kek_aad(row.id, row.purpose)
+            material = await self._root.unwrap(
+                row.root_key_ref, row.wrapped_key, aad=aad
+            )
+            keys[row.id] = _Key(row.id, row.purpose, row.state, material)
+            if row.state == ACTIVE:
+                active[row.purpose] = row.id
+            if self._root.needs_rewrap(row.root_key_ref):
+                stale.append((row.id, row.purpose, material))
+        for key_id, purpose, material in stale:
+            await self._rewrap(key_id, purpose, material)
+        signing = _signing_keyring(keys, active, local_signing_keyring())
+        with self._lock:
+            if generation < self._load_published:
+                return
+            self._load_published = generation
+            self._keys = keys
+            self._active = active
+            self._signing = signing
+            self._loaded = True
+            self._loaded_at = read_at
+        if self._on_loaded is not None:
+            self._on_loaded(self)
+        logger.info(
+            "vault.keyring.loaded",
+            root_provider=self._root.name,
+            key_count=len(keys),
+            rewrapped_count=len(stale),
+        )
+
+    async def _read_keys(self) -> list[VaultKey]:
+        async with self._session_factory() as session:
+            # Bounded by how often anyone rotates: one active key per purpose
+            # plus those kept for decryption. Past the cap something is wrong;
+            # a keyring missing a key would report it retired, so refuse.
+            result = await session.execute(
+                select(VaultKey)
+                .where(VaultKey.state != RETIRED)
+                .order_by(VaultKey.created_at.desc())
+                .limit(_MAX_LIVE_KEYS + 1)
+            )
+            rows = list(result.scalars().all())
+        if len(rows) > _MAX_LIVE_KEYS:
+            raise VaultUnavailable(
+                f"more than {_MAX_LIVE_KEYS} unretired vault keys; rewrap and "
+                "retire old ones with scripts/vault_admin.py"
+            )
+        return rows
+
+    async def _bootstrap(self, purpose: str) -> None:
+        key_id = uuid7()
+        wrapped = await self._root.wrap(new_key(), aad=kek_aad(key_id, purpose))
+        async with self._session_factory() as session:
+            await session.execute(
+                insert(VaultKey)
+                .values(
+                    id=key_id,
+                    purpose=purpose,
+                    state=ACTIVE,
+                    root_provider=self._root.name,
+                    root_key_ref=wrapped.root_ref,
+                    wrapped_key=wrapped.blob,
+                )
+                # A literal predicate: Postgres infers the partial index from it,
+                # and cannot from a bound parameter.
+                .on_conflict_do_nothing(
+                    index_elements=["purpose"], index_where=text("state = 'active'")
+                )
+            )
+            await session.commit()
+        logger.info("vault.keyring.key_created", purpose=purpose, key_id=str(key_id))
+
+    async def _rewrap(self, key_id: UUID, purpose: str, material: bytes) -> None:
+        wrapped = await self._root.wrap(material, aad=kek_aad(key_id, purpose))
+        async with self._session_factory() as session:
+            await session.execute(
+                update(VaultKey)
+                .where(VaultKey.id == key_id)
+                .values(
+                    root_provider=self._root.name,
+                    root_key_ref=wrapped.root_ref,
+                    wrapped_key=wrapped.blob,
+                )
+            )
+            await session.commit()
+
+    # --------------------------------------------------------------- rotation
+    async def rotate(self, purpose: str) -> UUID:
+        """Make a new active key; the old one keeps decrypting (or verifying).
+
+        Other processes pick the new key up on their next refresh; until then
+        they keep writing under the old one, which stays readable -- so there
+        is no window in which anything fails.
+        """
+        key_id = uuid7()
+        wrapped = await self._root.wrap(new_key(), aad=kek_aad(key_id, purpose))
+        async with self._session_factory() as session:
+            await session.execute(
+                update(VaultKey)
+                .where(VaultKey.purpose == purpose, VaultKey.state == ACTIVE)
+                .values(state=DECRYPT_ONLY)
+            )
+            session.add(
+                VaultKey(
+                    id=key_id,
+                    purpose=purpose,
+                    state=ACTIVE,
+                    root_provider=self._root.name,
+                    root_key_ref=wrapped.root_ref,
+                    wrapped_key=wrapped.blob,
+                )
+            )
+            await session.commit()
+        await self.load()
+        return key_id
+
+    async def retire(self, key_id: UUID) -> None:
+        """Retire a ``decrypt_only`` key that no secret is wrapped under.
+
+        Atomic with the writes: the key row is locked first, which waits for
+        any transaction writing a secret under it (the write trigger holds a
+        share lock on the row), and the count runs after the lock is held. A
+        write that starts later sees the key retired and is refused.
+        """
+        async with self._session_factory() as session:
+            state = (
+                await session.execute(
+                    select(VaultKey.state)
+                    .where(VaultKey.id == key_id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if state is None:
+                raise KeyRetirementRefused(f"vault key {key_id} does not exist")
+            if state == ACTIVE:
+                raise KeyRetirementRefused(
+                    f"vault key {key_id} is active; rotate first, then rewrap"
+                )
+            if state == RETIRED:
+                return
+            held = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(VaultSecret)
+                    .where(VaultSecret.kek_id == key_id)
+                )
+            ).scalar_one()
+            if held:
+                raise KeyRetirementRefused(
+                    f"vault key {key_id} still wraps {held} secrets; rewrap first"
+                )
+            # A process that has not refreshed since the rotation still writes
+            # under this key; retiring it now would fail those writes.
+            this, newer = aliased(VaultKey), aliased(VaultKey)
+            settled = (
+                await session.execute(
+                    select(func.min(newer.created_at)).where(
+                        newer.purpose == this.purpose,
+                        newer.created_at > this.created_at,
+                        this.id == key_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            wait = timedelta(seconds=2 * vault_settings.vault_kek_refresh_seconds)
+            if settled is not None and datetime.now(timezone.utc) - settled < wait:
+                raise KeyRetirementRefused(
+                    f"vault key {key_id} was rotated out less than {wait} ago; "
+                    "processes may still be writing under it -- retry later"
+                )
+            await session.execute(
+                update(VaultKey)
+                .where(VaultKey.id == key_id)
+                .values(state=RETIRED, retired_at=datetime.now(timezone.utc))
+            )
+            await session.commit()
+        await self.load()
+
+
+def _signing_keyring(
+    keys: dict[UUID, _Key], active: dict[str, UUID], local: Keyring | None
+) -> Keyring:
+    """Vault signing keys, plus the local keyset when there is one.
+
+    The local keyset stays primary when present, so a deployment that already
+    signs with ``SECRET_ENCRYPTION_KEY`` keeps minting the same tokens; the
+    vault key becomes primary only where there is no local key (Cloud KMS).
+    Tokens signed under either keep verifying.
+    """
+    materials = {
+        signing_kid(key.id): KeyMaterial(signing_kid(key.id), key.material)
+        for key in keys.values()
+        if key.purpose == SIGN
+    }
+    if local is not None:
+        materials.update(local.keys)
+        return Keyring(primary_kid=local.primary_kid, keys=materials)
+    return Keyring(primary_kid=signing_kid(active[SIGN]), keys=materials)

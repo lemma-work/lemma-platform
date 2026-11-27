@@ -31,7 +31,7 @@
     },
     {
       "name": "agent-workspace",
-      "args": "app/core/authorization/tests/e2e app/modules/agent/tests/e2e/test_agent_hermetic_journeys_e2e.py app/modules/agent/tests/e2e/test_long_running_and_research_e2e.py",
+      "args": "app/core/authorization/tests/e2e app/modules/vault/tests/e2e app/modules/agent/tests/e2e/test_agent_hermetic_journeys_e2e.py app/modules/agent/tests/e2e/test_long_running_and_research_e2e.py",
       "workers": 1,
       "markers": "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected",
       "needs_sandbox_images": true,
