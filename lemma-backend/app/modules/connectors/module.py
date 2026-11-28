@@ -4,6 +4,7 @@ from app.core.registry import LemmaModule
 
 
 def _routers():
+    from app.modules.connectors.api.account_controller import github_router
     from app.modules.connectors.api.account_controller import router as account
     from app.modules.connectors.api.auth_config_controller import (
         router as auth_config,
@@ -45,6 +46,7 @@ def _routers():
         connect_request,
         org_router,
         account,
+        github_router,
         pod_connector,
         me_router,
         installation_router,

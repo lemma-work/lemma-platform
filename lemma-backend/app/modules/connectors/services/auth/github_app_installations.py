@@ -31,7 +31,8 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import httpx
-from sqlalchemy import select, update
+from sqlalchemy import literal, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -45,7 +46,7 @@ from app.modules.connectors.services.auth.github_app import (
     GitHubAppUnavailable,
     app_jwt,
 )
-from app.modules.connectors.services.auth.github_bindings import GITHUB
+from app.modules.connectors.services.auth.github_bindings import GITHUB, held
 
 logger = get_logger(__name__)
 
@@ -115,6 +116,7 @@ async def bound_app_installations(
             ConnectorInstallation.connector_id == GITHUB,
             ConnectorInstallation.organization_id == organization_id,
             ConnectorInstallation.proven_at.is_not(None),
+            held(),
         )
         .order_by(ConnectorInstallation.created_at, ConnectorInstallation.id)
         .limit(_MAX_INSTALLATIONS)
@@ -135,6 +137,7 @@ async def installations_to_check(
             ConnectorInstallation.connector_id == GITHUB,
             ConnectorInstallation.organization_id == organization_id,
             ConnectorInstallation.proven_at.is_not(None),
+            held(),
         )
         .order_by(ConnectorInstallation.created_at, ConnectorInstallation.id)
         .limit(_MAX_INSTALLATIONS)
@@ -150,21 +153,21 @@ async def installations_to_check(
 async def record_app_installations(
     session: AsyncSession, found: Sequence[AppInstallation]
 ) -> None:
-    """Keep what GitHub said of each installation on its binding."""
+    """Keep what GitHub said of each installation on its bindings.
+
+    Merged into each organization's row in place: one installation has a row
+    per organization holding it, and each row keeps its own other keys --
+    whether that organization let go of it, above all.
+    """
     stamp = datetime.now(UTC).isoformat()
     for installation in found:
-        current = await session.scalar(
-            select(ConnectorInstallation.details).where(
-                ConnectorInstallation.connector_id == GITHUB,
-                ConnectorInstallation.external_id == installation.installation_id,
-            )
-        )
-        details = dict(current) if isinstance(current, dict) else {}
-        details[_ACCOUNT_KEY] = {
-            "login": installation.account_login,
-            "type": installation.account_type,
-            "repository_selection": installation.repository_selection,
-            "checked_at": stamp,
+        said = {
+            _ACCOUNT_KEY: {
+                "login": installation.account_login,
+                "type": installation.account_type,
+                "repository_selection": installation.repository_selection,
+                "checked_at": stamp,
+            }
         }
         await session.execute(
             update(ConnectorInstallation)
@@ -172,7 +175,11 @@ async def record_app_installations(
                 ConnectorInstallation.connector_id == GITHUB,
                 ConnectorInstallation.external_id == installation.installation_id,
             )
-            .values(details=details)
+            .values(
+                details=ConnectorInstallation.details.op("||", return_type=JSONB)(
+                    literal(said, JSONB)
+                )
+            )
         )
 
 

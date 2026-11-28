@@ -37632,6 +37632,80 @@
         }
       }
     },
+    "/organizations/{organization_id}/connectors/github/installations/{installation_id}": {
+      "delete": {
+        "description": "This organization lets go of a GitHub App installation it holds. Other organizations holding the same installation keep theirs. Its accounts naming the installation forget it, and its schedules on it are switched off, with the reason. Reading an account does not take it back; picking it on an account, or connecting through it, does. Needs `org.installation.manage`.",
+        "operationId": "connector.github_installation.release",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "installation_id",
+            "required": true,
+            "schema": {
+              "title": "Installation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponseSchema"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "This organization does not hold that installation"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Using A GitHub Installation",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "connector.github_installation",
+            "connector.account"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "connector.github_installation",
+          "result": "entity",
+          "verb": "release"
+        }
+      }
+    },
     "/organizations/{organization_id}/connectors/status": {
       "get": {
         "operationId": "connector.status.get",

@@ -12,6 +12,7 @@ from ..openapi_client.api.connectors import (
     connector_account_list,
     connector_account_bind_installation,
     connector_account_installations,
+    connector_github_installation_release,
     connector_connect_request_create,
     connector_connect_request_install,
     connector_get,
@@ -725,6 +726,19 @@ class BoundConnectors(BoundResource):
             account_id,
             body=compact({"installation_id": installation_id}),
             body_model=InstallationBindSchema,
+        )
+
+    def release_github_installation(self, installation_id: str) -> None:
+        """Stop this organization using a GitHub App installation.
+
+        Other organizations holding the same installation keep theirs. Taking
+        it back is an explicit claim again: picking it on an account, or
+        connecting through it. Needs `org.installation.manage`.
+        """
+        self._call(
+            connector_github_installation_release,
+            self._org_uuid(),
+            str(installation_id),
         )
 
     def status(self) -> dict:

@@ -5,8 +5,10 @@ from uuid import UUID
 from fastapi import APIRouter, Query, Request
 
 from app.core.api.dependencies import CurrentUser, get_uow_factory
+from app.core.api.schemas import ErrorResponse
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.app_pin import refuse_other_pod
+from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.connectors.api.dependencies import ConnectorServiceDep
 from app.modules.connectors.api.schemas import (
@@ -21,9 +23,13 @@ from app.modules.connectors.api.schemas import (
 )
 from app.modules.connectors.contracts.github import install_state_for
 from app.modules.connectors.domain.errors import ConnectorValidationError
+from app.modules.connectors.domain.github_installation_errors import (
+    GithubInstallationNotHeldError,
+)
 from app.modules.connectors.services.auth.github_bindings import (
     claim_for_account,
     held_proven_by,
+    release_for_organization,
 )
 from app.modules.connectors.services.auth.github_installation import (
     administers,
@@ -39,6 +45,10 @@ from app.modules.connectors.services.account_credential_rotation import (
 
 router = APIRouter(
     prefix="/organizations/{organization_id}/connectors/accounts",
+    tags=["Connectors"],
+)
+github_router = APIRouter(
+    prefix="/organizations/{organization_id}/connectors/github",
     tags=["Connectors"],
 )
 
@@ -290,8 +300,8 @@ async def bind_account_installation(
     if callable(reveal):
         token = reveal()
     session = connector_service.uow.session
-    # Not this organization's on a proven claim: binding it -- or taking over,
-    # or stamping, a binding migration 0063 derived -- needs proof this person
+    # Not this organization's on a proven claim: binding it here -- or
+    # stamping a binding migration 0063 derived -- needs proof this person
     # controls it on GitHub's side, not only that they can see it (audit H4).
     needs_proof = not await held_proven_by(
         session, data.installation_id, organization_id
@@ -308,8 +318,8 @@ async def bind_account_installation(
         raise ConnectorValidationError(
             "That installation is not one this account can reach."
         )
-    # Reaching it is not owning it (audit H4): one another organization holds
-    # is refused, and one nobody holds needs its GitHub owner.
+    # Reaching it is not owning it (audit H4): one this organization does not
+    # hold needs its GitHub owner, whoever else holds it.
     await claim_for_account(
         session, account, data.installation_id, administered=administered
     )
@@ -323,3 +333,50 @@ async def bind_account_installation(
     account.external_ref = data.installation_id
     await GithubInstallationReconciler(connector_service).invalidate(account.id)
     return await _account_response(connector_service, account)
+
+
+@github_router.delete(
+    "/installations/{installation_id}",
+    response_model=MessageResponseSchema,
+    operation_id="connector.github_installation.release",
+    responses={
+        404: {
+            "model": ErrorResponse,
+            "description": "This organization does not hold that installation",
+        }
+    },
+    summary="Stop Using A GitHub Installation",
+    description=(
+        "This organization lets go of a GitHub App installation it holds. "
+        "Other organizations holding the same installation keep theirs. Its "
+        "accounts naming the installation forget it, and its schedules on it "
+        "are switched off, with the reason. Reading an account does not take "
+        "it back; picking it on an account, or connecting through it, does. "
+        "Needs `org.installation.manage`."
+    ),
+    status_code=200,
+)
+async def release_github_installation(
+    user: CurrentUser,
+    organization_id: UUID,
+    installation_id: str,
+    connector_service: ConnectorServiceDep,
+) -> MessageResponseSchema:
+    await connector_service._require_org_member(
+        user_id=user.id,
+        organization_id=organization_id,
+        permission=Permissions.ORG_INSTALLATION_MANAGE,
+    )
+    forgot = await release_for_organization(
+        connector_service.uow.session, installation_id, organization_id
+    )
+    if forgot is None:
+        raise GithubInstallationNotHeldError()
+    await connector_service.uow.commit()
+    reconciler = GithubInstallationReconciler(connector_service)
+    for account_id in forgot:
+        await reconciler.invalidate(account_id)
+    return MessageResponseSchema(
+        message="This organization no longer uses that GitHub installation.",
+        success=True,
+    )

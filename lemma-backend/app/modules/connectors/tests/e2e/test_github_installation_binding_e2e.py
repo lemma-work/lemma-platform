@@ -1,4 +1,4 @@
-"""A GitHub App installation belongs to the Lemma organization that bound it.
+"""A GitHub App installation belongs to the Lemma organizations that bound it.
 
 Audit H4: one App serves every organization that installs it, and an
 installation used to bind to any Lemma account whose GitHub user could see one
@@ -66,8 +66,8 @@ GITHUB_OAUTH = [
 
 
 def _installation_id() -> str:
-    """One per test: the binding is unique per installation across the
-    worker's database, and tests share it."""
+    """One per test: tests share the worker's database, and an installation's
+    bindings are read across every organization."""
     return str(random.randint(10**9, 2 * 10**9))
 
 
@@ -176,6 +176,24 @@ async def _setup_callback(
     )
 
 
+async def _holders(db_session: AsyncSession, installation_id: str) -> set[UUID]:
+    """Every organization the installation is bound to, and has not let go of."""
+    from app.modules.connectors.infrastructure.models.connector_installation import (
+        ConnectorInstallation,
+    )
+    from app.modules.connectors.services.auth.github_bindings import held
+
+    db_session.expire_all()
+    rows = await db_session.scalars(
+        select(ConnectorInstallation.organization_id).where(
+            ConnectorInstallation.connector_id == "github",
+            ConnectorInstallation.external_id == installation_id,
+            held(),
+        )
+    )
+    return set(rows.all())
+
+
 async def _accounts_on(db_session: AsyncSession, org_id: str) -> list[Account]:
     db_session.expire_all()
     rows = await db_session.execute(
@@ -211,7 +229,9 @@ async def test_another_org_cannot_adopt_an_installation_through_the_setup_callba
     scenario, db_session, github_sees
 ):
     """Org B's person can see a repository in org A's installation and comes
-    back from GitHub naming it, under a state org B minted itself."""
+    back from GitHub naming it, under a state org B minted itself. Org A
+    holding it is no pass for org B: her sign-in connects, the installation
+    waits on an admin of it, and org B holds nothing."""
     installation_id = _installation_id()
     await _org_a_binds(scenario, db_session, github_sees, installation_id)
 
@@ -227,9 +247,10 @@ async def test_another_org_cannot_adopt_an_installation_through_the_setup_callba
         code="mallory",
     )
 
-    assert adopted.status_code == 409, adopted.text
-    assert adopted.json()["code"] == "GITHUB_INSTALLATION_BOUND_ELSEWHERE"
-    assert [a.external_ref for a in await _accounts_on(db_session, org_b)] == []
+    assert adopted.status_code == 200, adopted.text
+    assert adopted.json()["install_state"] == "PENDING_APPROVAL"
+    assert [a.external_ref for a in await _accounts_on(db_session, org_b)] == [None]
+    assert await _holders(db_session, installation_id) == {UUID(scenario.org_id)}
 
 
 async def test_a_forged_or_another_orgs_state_completes_nothing(
@@ -344,10 +365,11 @@ async def test_reconciling_an_account_does_not_adopt_another_orgs_installation(
     )
 
     assert seen.status_code == 200, seen.text
-    assert seen.json()["install_state"] == "INSTALL_REQUIRED", seen.json()
-    assert seen.json()["choices"] == []
+    # Waiting on an admin of it, exactly as if nobody held it.
+    assert seen.json()["install_state"] == "PENDING_APPROVAL", seen.json()
     [account] = await _accounts_on(db_session, org_b)
     assert account.external_ref is None
+    assert await _holders(db_session, installation_id) == {UUID(scenario.org_id)}
 
 
 async def test_binding_by_hand_refuses_another_orgs_installation(
@@ -364,10 +386,11 @@ async def test_binding_by_hand_refuses_another_orgs_installation(
         json={"installation_id": installation_id},
     )
 
-    assert bound.status_code == 409, bound.text
-    assert bound.json()["code"] == "GITHUB_INSTALLATION_BOUND_ELSEWHERE"
+    assert bound.status_code == 403, bound.text
+    assert bound.json()["code"] == "GITHUB_INSTALLATION_NOT_ADMINISTERED"
     [account] = await _accounts_on(db_session, org_b)
     assert account.external_ref is None
+    assert await _holders(db_session, installation_id) == {UUID(scenario.org_id)}
 
 
 async def test_a_legacy_account_naming_another_orgs_installation_mints_nothing(
@@ -550,7 +573,7 @@ async def test_a_delivery_runs_only_schedules_in_the_installations_org(
 
     normalized = await _verified_delivery(installation_id)
     assert normalized is not None
-    assert normalized.organization_id == scenario.org_id
+    assert normalized.organization_ids == frozenset({scenario.org_id})
     await handler.handle_webhook(
         source="github", payload=normalized.payload, normalized=normalized
     )

@@ -32,7 +32,6 @@ from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.log.log import get_logger
 from app.modules.connectors.domain.account import AccountEntity
 from app.modules.connectors.domain.github_installation_errors import (
-    GithubInstallationBoundElsewhereError,
     GithubInstallationNotAdministeredError,
 )
 from app.modules.connectors.services.auth.github_bindings import (
@@ -123,9 +122,7 @@ class GithubInstallationReconciler:
                 return cached
 
         answer, token = await self._ask(account)
-        outcome, administered = await self._proven(
-            account, await self._admissible(account, answer), token
-        )
+        outcome, administered = await self._proven(account, answer, token)
         # Bound before it is remembered: READY is what the claim made true,
         # not what GitHub said, and a claim refused here must not leave a
         # cached READY with nothing bound and no token to mint.
@@ -163,40 +160,6 @@ class GithubInstallationReconciler:
         async with connection_released(self._session):
             return await resolve_outcome(str(token)), str(token)
 
-    async def _admissible(
-        self, account: AccountEntity, outcome: InstallationOutcome
-    ) -> InstallationOutcome:
-        """What GitHub said, less the installations another organization holds.
-
-        GitHub answers which installations this person can *see*; seeing one
-        is not owning it (audit H4). One another Lemma organization holds on a
-        proven claim is neither offered nor resolved to, and an outcome that
-        named one is worked out again from what is left. One held on a binding
-        migration 0063 derived stays in, for `_proven` to ask GitHub about.
-        """
-        named = {choice.installation_id for choice in outcome.choices}
-        if outcome.installation_id:
-            named.add(outcome.installation_id)
-        if not named:
-            return outcome
-        allowed = await self._bindings.claimable_by(account.organization_id, named)
-        if allowed == named:
-            return outcome
-        choices = tuple(c for c in outcome.choices if c.installation_id in allowed)
-        if outcome.installation_id in allowed:
-            return InstallationOutcome(
-                outcome.state, installation_id=outcome.installation_id, choices=choices
-            )
-        if len(choices) == 1:
-            return InstallationOutcome(
-                InstallState.READY,
-                installation_id=choices[0].installation_id,
-                choices=choices,
-            )
-        if not choices:
-            return InstallationOutcome(InstallState.INSTALL_REQUIRED)
-        return InstallationOutcome(InstallState.CHOOSE_INSTALL, choices=choices)
-
     async def _proven(
         self,
         account: AccountEntity,
@@ -212,27 +175,50 @@ class GithubInstallationReconciler:
         GitHub's side may: the GitHub user it is installed on, or an admin of
         the GitHub organization. Anyone else is told it waits on them --
         PENDING_APPROVAL, "an owner has to act" -- and nothing is bound. One
-        this organization already holds needs no proof.
+        this organization already holds needs no proof; whether another holds
+        it changes nothing, since each organization's binding is its own.
+        One this organization let go of is offered, not bound: only an
+        explicit pick takes it back, and only to somebody whose pick would
+        stand -- anyone else is told it waits, as for one never bound.
         """
         installation_id = outcome.installation_id
         if not outcome.is_ready or not installation_id:
             return outcome, False
         if str(account.external_ref or "") == installation_id:
             return outcome, False
-        if await self._bindings.owner(installation_id) == account.organization_id:
+        if await self._bindings.holds(account.organization_id, installation_id):
             return outcome, False
-        # Unbound, or held unproven elsewhere (`_admissible` dropped the rest):
-        # either way only GitHub's proof lets this organization have it.
         administered = False
         if token:
             async with connection_released(self._session):
                 administered = await self._prove(token, installation_id)
-        if administered:
-            return outcome, True
-        return (
-            InstallationOutcome(InstallState.PENDING_APPROVAL, choices=outcome.choices),
-            False,
-        )
+        if not administered:
+            return (
+                InstallationOutcome(
+                    InstallState.PENDING_APPROVAL, choices=outcome.choices
+                ),
+                False,
+            )
+        if await self._bindings.released(account.organization_id, installation_id):
+            # Let go of on purpose. Reading an account is no reason to take it
+            # back -- on the proof of the very person who let it go -- so it is
+            # offered, and picking it is the explicit claim that does. Offered
+            # only where that pick would stand: the claim needs Lemma's
+            # permission as well as GitHub's proof.
+            if await self._bindings.may_claim(account.user_id, account.organization_id):
+                return (
+                    InstallationOutcome(
+                        InstallState.CHOOSE_INSTALL, choices=outcome.choices
+                    ),
+                    False,
+                )
+            return (
+                InstallationOutcome(
+                    InstallState.PENDING_APPROVAL, choices=outcome.choices
+                ),
+                False,
+            )
+        return outcome, True
 
     async def _bind(
         self, account: Any, outcome: InstallationOutcome, *, administered: bool
@@ -248,9 +234,7 @@ class GithubInstallationReconciler:
         READY only once the claim stands. Refused for want of Lemma's
         permission -- a GitHub admin who may not install apps for the
         organization -- it is PENDING_APPROVAL: somebody who manages the
-        organization's installations has to connect it. Lost to another
-        organization since `_admissible` read the binding, it is whatever is
-        left to choose from.
+        organization's installations has to connect it.
         """
         if not outcome.is_ready or not outcome.installation_id:
             return outcome
@@ -267,15 +251,6 @@ class GithubInstallationReconciler:
             return InstallationOutcome(
                 InstallState.PENDING_APPROVAL, choices=outcome.choices
             )
-        except GithubInstallationBoundElsewhereError:
-            left = tuple(
-                choice
-                for choice in outcome.choices
-                if choice.installation_id != outcome.installation_id
-            )
-            if not left:
-                return InstallationOutcome(InstallState.INSTALL_REQUIRED)
-            return InstallationOutcome(InstallState.CHOOSE_INSTALL, choices=left)
         # The routing key alone. `account` was read before `_ask`, which may
         # have refreshed its token since; writing the whole of it back put the
         # token it had been read with over the new one, and GitHub's refresh

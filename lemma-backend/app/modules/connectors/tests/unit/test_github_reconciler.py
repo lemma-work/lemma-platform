@@ -81,19 +81,26 @@ class _Bindings:
     anybody yet unless a test says so. Its refusals are covered end to end
     against Postgres."""
 
-    def __init__(self, owners: dict[str, object] | None = None) -> None:
-        self.owners = dict(owners or {})
+    def __init__(
+        self,
+        holders: dict[str, set[object]] | None = None,
+        released: dict[str, set[object]] | None = None,
+        *,
+        may_claim: bool = True,
+    ) -> None:
+        self.holders = {key: set(value) for key, value in (holders or {}).items()}
+        self.let_go = {key: set(value) for key, value in (released or {}).items()}
+        self.permitted = may_claim
         self.claimed: list[tuple[str, bool]] = []
 
-    async def owner(self, installation_id: str):
-        return self.owners.get(installation_id)
+    async def holds(self, organization_id, installation_id: str) -> bool:
+        return organization_id in self.holders.get(installation_id, set())
 
-    async def claimable_by(self, organization_id, installation_ids):
-        return {
-            one
-            for one in installation_ids
-            if self.owners.get(one) in (None, organization_id)
-        }
+    async def released(self, organization_id, installation_id: str) -> bool:
+        return organization_id in self.let_go.get(installation_id, set())
+
+    async def may_claim(self, user_id, organization_id) -> bool:
+        return self.permitted
 
     async def claim(self, account, installation_id: str, *, administered: bool):
         self.claimed.append((installation_id, administered))
@@ -358,7 +365,7 @@ class TestNoClaimWithoutProof:
         setter, _ = answers
         setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
         account = _account()
-        bindings = _Bindings({"158040062": account.organization_id})
+        bindings = _Bindings({"158040062": {account.organization_id}})
 
         async def _never(_token: str, _installation_id: str) -> bool:
             raise AssertionError("asked GitHub for proof it did not need")
@@ -406,20 +413,81 @@ class TestTheStateIsWhatTheClaimMadeTrue:
         assert account.external_ref is None
         assert service.account_repository.updated == []
 
-    async def test_one_lost_to_another_org_is_not_ready_either(self, answers):
-        from app.modules.connectors.domain.github_installation_errors import (
-            GithubInstallationBoundElsewhereError,
-        )
-
+    async def test_one_another_org_holds_still_needs_this_orgs_own_proof(self, answers):
+        """Another organization's binding is neither a refusal nor a pass:
+        without GitHub's word that this person controls it, it waits; with
+        it, this organization claims its own binding."""
         setter, _ = answers
         setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
-        bindings = self._Refusing(GithubInstallationBoundElsewhereError())
 
-        outcome = await _reconciler(_Service(), _Cache(), bindings=bindings).outcome(
-            _account()
+        async def _not_theirs(_token: str, _installation_id: str) -> bool:
+            return False
+
+        elsewhere = _Bindings({"158040062": {uuid4()}})
+        waiting = await _reconciler(
+            _Service(), _Cache(), bindings=elsewhere, prove=_not_theirs
+        ).outcome(_account())
+        assert waiting.state is InstallState.PENDING_APPROVAL
+        assert elsewhere.claimed == []
+
+        also_elsewhere = _Bindings({"158040062": {uuid4()}})
+        claimed = await _reconciler(
+            _Service(), _Cache(), bindings=also_elsewhere
+        ).outcome(_account())
+        assert claimed.state is InstallState.READY
+        assert also_elsewhere.claimed == [("158040062", True)]
+
+    async def test_one_this_org_let_go_of_is_offered_not_taken_back(self, answers):
+        """Letting go would be undone by the next read otherwise: the person
+        who let it go is still its GitHub admin. It is offered, and only a
+        pick claims it."""
+        setter, _ = answers
+        choice = InstallationChoice(
+            installation_id="158040062",
+            account_login="octo",
+            account_type="Organization",
+            repository_selection="all",
+        )
+        setter(
+            InstallationOutcome(
+                InstallState.READY, installation_id="158040062", choices=(choice,)
+            )
+        )
+        account = _account()
+        let_go = _Bindings(released={"158040062": {account.organization_id}})
+
+        offered = await _reconciler(_Service(), _Cache(), bindings=let_go).outcome(
+            account
         )
 
-        assert outcome.state is InstallState.INSTALL_REQUIRED
+        assert offered.state is InstallState.CHOOSE_INSTALL
+        assert [one.installation_id for one in offered.choices] == ["158040062"]
+        assert let_go.claimed == []
+        assert account.external_ref is None
+
+    @pytest.mark.parametrize("vouched,may_claim", [(False, True), (True, False)])
+    async def test_one_let_go_of_is_offered_only_where_the_pick_would_stand(
+        self, answers, vouched, may_claim
+    ):
+        """Picking it is a claim, which needs GitHub's proof and Lemma's
+        permission both. Offered to anyone else, the pick would be refused: it
+        waits on somebody who may, as one never bound does."""
+        setter, _ = answers
+        setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
+        account = _account()
+        let_go = _Bindings(
+            released={"158040062": {account.organization_id}}, may_claim=may_claim
+        )
+
+        async def prove(_token: str, _installation_id: str) -> bool:
+            return vouched
+
+        said = await _reconciler(
+            _Service(), _Cache(), bindings=let_go, prove=prove
+        ).outcome(account)
+
+        assert said.state is InstallState.PENDING_APPROVAL
+        assert let_go.claimed == []
 
     async def test_the_claim_carries_whether_github_vouched(self, answers):
         """A binding this organization holds needs no proof, so none is asked
@@ -428,7 +496,7 @@ class TestTheStateIsWhatTheClaimMadeTrue:
         setter, _ = answers
         setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
         account = _account()
-        held = _Bindings({"158040062": account.organization_id})
+        held = _Bindings({"158040062": {account.organization_id}})
         await _reconciler(_Service(), _Cache(), bindings=held).outcome(account)
         unbound = _Bindings()
         await _reconciler(_Service(), _Cache(), bindings=unbound).outcome(_account())

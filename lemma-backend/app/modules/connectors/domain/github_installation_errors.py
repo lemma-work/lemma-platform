@@ -1,36 +1,19 @@
 """The refusals a GitHub installation gives.
 
-To an organization it does not belong to, and to a repository it does not
+To an organization that does not hold it, and to a repository it does not
 cover -- the second asked whenever a person names one to work in.
 """
 
 from __future__ import annotations
 
 from app.modules.connectors.domain.errors import (
-    ConnectorConflictError,
     ConnectorDomainError,
 )
 
 
-class GithubInstallationBoundElsewhereError(ConnectorConflictError):
-    """Another Lemma organization already holds this installation (audit H4).
-
-    Deliberately says nothing about which one: the installation id is a bare
-    number, and confirming whose it is would answer a question the caller has
-    no business asking.
-    """
-
-    def __init__(self) -> None:
-        super().__init__(
-            "This GitHub App installation is connected to a different Lemma "
-            "organization. Install the Lemma app on a GitHub account or "
-            "organization for this one, then connect again."
-        )
-        self.code = "GITHUB_INSTALLATION_BOUND_ELSEWHERE"
-
-
 class GithubInstallationNotAdministeredError(ConnectorDomainError):
-    """Nobody has bound this installation yet, and the claimant cannot.
+    """This organization does not hold the installation, and the claimant
+    cannot bind it.
 
     Binding hands the claimant's organization the App's token on every
     repository in the installation, so only its owner on GitHub's side may do
@@ -72,6 +55,17 @@ class InstallationClaimNotPermittedError(GithubInstallationNotAdministeredError)
             ),
             code="INSTALLATION_CLAIM_NOT_PERMITTED",
             status_code=403,
+        )
+
+
+class GithubInstallationNotHeldError(ConnectorDomainError):
+    """The organization holds no binding to that installation to let go of."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            message="This organization is not using that GitHub installation.",
+            code="GITHUB_INSTALLATION_NOT_HELD",
+            status_code=404,
         )
 
 

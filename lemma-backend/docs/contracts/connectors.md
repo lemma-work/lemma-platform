@@ -27,6 +27,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `connector.connect_request.create` | POST | `/organizations/{organization_id}/connectors/connect-requests` | Initiate Connect Request |
 | `connector.connect_request.install` | POST | `/organizations/{organization_id}/connectors/connect-requests/install` | Start Install Step |
 | `connector.get` | GET | `/connectors/{connector_id}` | Get Connector |
+| `connector.github_installation.release` | DELETE | `/organizations/{organization_id}/connectors/github/installations/{installation_id}` | Stop Using A GitHub Installation |
 | `connector.installation.impact` | GET | `/organizations/{organization_id}/installations/{auth_config_id}/impact` | What Removing An Installation Would Stop |
 | `connector.list` | GET | `/connectors` | List Connectors |
 | `connector.oauth.callback` | GET | `/connectors/connect-requests/oauth/callback` | OAuth Callback |

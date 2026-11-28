@@ -117,8 +117,8 @@ def test_installations_are_bound_where_derivable_and_cleared_where_contested() -
                     "WHERE connector_id = 'github'"
                 ).fetchall()
             )
-        # Bound, but unproven: nobody showed GitHub's proof for it, so a
-        # proven claim from the org that really administers it takes it over.
+        # Bound, but unproven: nobody showed GitHub's proof for it, so the bot
+        # never acts on it until the holder's own proven claim stamps it.
         assert bindings == [(SOLO, ids["a"], ids["first_user"], None)]
         assert refs == {
             ids["first"]: SOLO,
