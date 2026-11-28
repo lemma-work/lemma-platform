@@ -104,6 +104,32 @@ class InstallationChoice:
         )
 
 
+class WaitingOn(str, enum.Enum):
+    """Whose act a PENDING_APPROVAL installation waits on, so the person is
+    told who can unblock it rather than only that something is in the way."""
+
+    #: An admin of the GitHub organization (or the GitHub user) it is on: this
+    #: person can see it and does not control it.
+    GITHUB_ADMIN = "github_admin"
+    #: An owner of the GitHub organization, to accept the App's Members: read
+    #: permission on the installation. Without it GitHub will not say who its
+    #: admins are, so nobody's control of it can be proved.
+    GITHUB_PERMISSION = "github_permission"
+    #: Someone who may install apps for the Lemma organization: this person
+    #: controls the installation on GitHub, and may not install it here.
+    LEMMA_ADMIN = "lemma_admin"
+
+
+class Administration(str, enum.Enum):
+    """What GitHub said about whether a token's user controls an installation."""
+
+    ADMINISTERS = "administers"
+    DOES_NOT = "does_not"
+    #: The installation never granted the App Members: read, so GitHub cannot
+    #: answer for a GitHub organization -- not a "no" about the person.
+    CANNOT_TELL = "cannot_tell"
+
+
 @dataclass(frozen=True, slots=True)
 class InstallationOutcome:
     """What a connect attempt established, and what is still outstanding."""
@@ -111,6 +137,8 @@ class InstallationOutcome:
     state: InstallState
     installation_id: str | None = None
     choices: tuple[InstallationChoice, ...] = ()
+    #: Set with PENDING_APPROVAL when it is known whose act it waits on.
+    waiting_on: WaitingOn | None = None
 
     @property
     def is_ready(self) -> bool:
@@ -312,7 +340,21 @@ async def _is_org_admin(
 
 
 async def administers(access_token: str, installation_id: str) -> bool:
-    """Whether this token's GitHub user controls that installation (audit H4).
+    """Whether this token's GitHub user controls that installation (audit H4)."""
+    return (
+        await administration(access_token, installation_id)
+        is Administration.ADMINISTERS
+    )
+
+
+def _grants_members(item: Installation) -> bool:
+    permissions = item.get("permissions")
+    return isinstance(permissions, dict) and bool(permissions.get("members"))
+
+
+async def administration(access_token: str, installation_id: str) -> Administration:
+    """Whether this token's GitHub user controls that installation (audit H4),
+    and when GitHub cannot say, that it cannot.
 
     Seeing an installation is not controlling it: a contractor with read on one
     repository sees it in `/user/installations`. Binding an unbound installation
@@ -320,7 +362,11 @@ async def administers(access_token: str, installation_id: str) -> bool:
     repository in it, so the claimant has to be the installation's owner on
     GitHub's side -- the GitHub user it is installed on, or an admin of the
     GitHub organization it is installed on (`members: read` in the manifest is
-    what lets a user token ask). Anything else, a failed call included, is no.
+    what lets a user token ask). An installation on a GitHub organization that
+    never accepted that permission cannot be asked about: CANNOT_TELL, so the
+    person is sent to the one fix that exists (an owner accepts it on GitHub)
+    rather than told they are not an admin. Anything else, a failed call
+    included, is no.
     """
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
@@ -331,6 +377,11 @@ async def administers(access_token: str, installation_id: str) -> bool:
             elif account.get("type") == "User":
                 administered = await _is_the_user(client, access_token, account)
             elif account.get("type") == _ORGANIZATION and account.get("login"):
+                if item is not None and not _grants_members(item):
+                    logger.info(
+                        "connectors.github_installation.members_permission_missing.denied"
+                    )
+                    return Administration.CANNOT_TELL
                 administered = await _is_org_admin(
                     client, access_token, str(account["login"])
                 )
@@ -341,10 +392,11 @@ async def administers(access_token: str, installation_id: str) -> bool:
             "connectors.github_installation.administration_unproven.degraded",
             exc_info=True,
         )
-        return False
+        return Administration.DOES_NOT
     if not administered:
         logger.info("connectors.github_installation.not_administered.denied")
-    return administered
+        return Administration.DOES_NOT
+    return Administration.ADMINISTERS
 
 
 async def credentials_administer(

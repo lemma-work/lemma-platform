@@ -4,6 +4,8 @@ from uuid import UUID
 
 from fastapi import Depends
 
+from app.core.domain.errors import DomainError
+from app.core.log.log import get_logger
 from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.authorization.context import Context
 from app.core.config import settings
@@ -84,6 +86,8 @@ if TYPE_CHECKING:
         OperationFiles,
     )
 
+logger = get_logger(__name__)
+
 
 def _connector_repository(uow: UoWDep) -> ConnectorRepository:
     return ConnectorRepository(uow=uow)
@@ -114,6 +118,11 @@ def _trigger_repository(uow: UoWDep) -> ConnectorTriggerRepository:
 def _operation_repository(uow: UoWDep) -> ConnectorOperationRepository:
     return ConnectorOperationRepository(uow=uow)
 
+
+#: How long a Connections page waits on GitHub for one account before it
+#: says GitHub did not answer: rows it already has must not hang on a
+#: provider, and checking again asks without a limit.
+GITHUB_PAGE_BUDGET_SECONDS = 4.0
 
 #: A Composio auth config outlives any one connect; a week bounds how long an
 #: id made under a since-rotated API key is tried before being made again.
@@ -337,9 +346,30 @@ def build_pod_connections_reader(uow: SqlAlchemyUnitOfWork) -> "PodConnectionsRe
         people = await people_through_contracts(uow, pod_id, limit=MAX_POD_PEOPLE)
         return {one.user_id: one.name for one in people if one.user_id in user_ids}
 
+    async def github(account, *, bind: bool):
+        from app.modules.connectors.services.auth.github_reconciler import (
+            GithubInstallationReconciler,
+        )
+
+        try:
+            return await GithubInstallationReconciler(
+                get_connector_service(uow), budget=GITHUB_PAGE_BUDGET_SECONDS
+            ).outcome(account, bind=bind)
+        except (TimeoutError, DomainError) as exc:
+            # The page lists every connector; one GitHub account it could not
+            # ask about -- slow, or its token dead and not refreshable -- is a
+            # row saying so, not an error in place of all of them.
+            logger.warning(
+                "connectors.pod_connections.github_unanswered.degraded",
+                account_id=str(account.id),
+                error=type(exc).__name__,
+            )
+            return None
+
     return PodConnectionsReader(
         parts=pod_connector_composition.build_pod_connector_service(uow),
         catalog=_connector_repository(uow),
         coverage=coverage.coverage,
         names=names,
+        github=github,
     )

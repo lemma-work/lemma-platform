@@ -46,6 +46,9 @@ class FakeGitHub:
     before_token_request: Callable[[dict[str, list[str]]], Awaitable[None]] | None = (
         None
     )
+    #: Awaited before each REST call (api.github.com) is answered: what a test
+    #: uses to make GitHub slow.
+    before_api_request: Callable[[str], Awaitable[None]] | None = None
     _next_id: int = 1000
 
     def person(self, code: str, **kwargs: Any) -> str:
@@ -59,9 +62,16 @@ class FakeGitHub:
         return token
 
     def install(
-        self, installation_id: str, *, on: str, account_type: str = "Organization"
+        self,
+        installation_id: str,
+        *,
+        on: str,
+        account_type: str = "Organization",
+        members: bool = True,
     ) -> None:
-        """The App installed on GitHub account ``on`` (a login)."""
+        """The App installed on GitHub account ``on`` (a login). ``members``:
+        whether the installation granted the App Members: read, without which
+        GitHub will not say who a GitHub organization's admins are."""
         owner = next((u for u in self.users.values() if u.login == on), None)
         self.installations[installation_id] = {
             "id": int(installation_id),
@@ -71,6 +81,8 @@ class FakeGitHub:
                 "id": owner.id if owner and account_type == "User" else 9_000_000,
             },
             "repository_selection": "selected",
+            "permissions": {"metadata": "read", "contents": "write"}
+            | ({"members": "read"} if members else {}),
         }
 
     def refreshable(self, refresh_token: str, *, code: str) -> None:
@@ -151,6 +163,8 @@ def _stand_in_front(monkeypatch: Any, library: Any, fake: FakeGitHub) -> None:
         body = await request.aread()
         if request.url.host == "github.com" and fake.before_token_request:
             await fake.before_token_request(parse_qs(body.decode()))
+        if request.url.host != "github.com" and fake.before_api_request:
+            await fake.before_api_request(request.url.path)
         status, payload = fake.answer(
             method=request.method,
             host=request.url.host,

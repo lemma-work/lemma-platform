@@ -110,9 +110,9 @@ async def _administered(_token: str, _installation_id: str) -> bool:
     return True
 
 
-def _reconciler(service, cache, *, bindings=None, prove=_administered):
+def _reconciler(service, cache, *, bindings=None, prove=_administered, budget=None):
     return GithubInstallationReconciler(
-        service, cache, bindings=bindings or _Bindings(), prove=prove
+        service, cache, bindings=bindings or _Bindings(), prove=prove, budget=budget
     )
 
 
@@ -136,6 +136,34 @@ def answers(monkeypatch):
     return _set, calls
 
 
+async def test_a_budget_bounds_a_slow_github_and_remembers_nothing(
+    answers, monkeypatch
+):
+    """A page that renders rows it already has gives GitHub a budget. Past
+    it, the read raises rather than hang; nothing is bound or remembered, so
+    the next read asks again."""
+    import asyncio
+
+    setter, _ = answers
+    setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
+
+    async def _hangs(_token: str, _installation_id: str) -> bool:
+        await asyncio.sleep(30)
+        return True
+
+    service, cache, bindings = _Service(), _Cache(), _Bindings()
+    reconciler = _reconciler(
+        service, cache, bindings=bindings, prove=_hangs, budget=0.05
+    )
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(reconciler.outcome(_account()), timeout=5)
+
+    assert bindings.claimed == []
+    assert cache.values == {}
+    assert service.account_repository.updated == []
+
+
 async def test_an_installation_made_out_of_band_is_picked_up(answers):
     """Nobody came back through a redirect and no webhook was delivered. The
     account still ends up bound, which is the whole point."""
@@ -157,11 +185,119 @@ async def test_a_bound_account_costs_nothing(answers):
     setter, calls = answers
     setter(InstallationOutcome(InstallState.INSTALL_REQUIRED))
     account = _account(external_ref="158040062")
+    held = _Bindings({"158040062": {account.organization_id}})
 
-    outcome = await _reconciler(_Service(), _Cache()).outcome(account)
+    outcome = await _reconciler(_Service(), _Cache(), bindings=held).outcome(account)
 
     assert outcome.installation_id == "158040062"
     assert calls == []
+
+
+async def test_an_account_naming_an_installation_its_org_does_not_hold_is_not_ready(
+    answers,
+):
+    """It mints nothing there, so READY would be the lie the Connections page
+    told: the account names an installation only another organization holds.
+    It is worked out again, and waits on an admin like any unbound one."""
+    setter, calls = answers
+    setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
+    account = _account(external_ref="158040062")
+    elsewhere = _Bindings({"158040062": {uuid4()}})
+
+    async def _not_theirs(_token: str, _installation_id: str) -> bool:
+        return False
+
+    outcome = await _reconciler(
+        _Service(), _Cache(), bindings=elsewhere, prove=_not_theirs
+    ).outcome(account)
+
+    assert calls == ["gho_token"]
+    assert outcome.state is InstallState.PENDING_APPROVAL
+
+
+async def test_a_wait_says_whose_act_it_waits_on(answers):
+    """Not an admin of it, the installation never granted Members: read, and
+    an admin who may not install apps here are three different people to ask."""
+    from app.modules.connectors.domain.github_installation_errors import (
+        InstallationClaimNotPermittedError,
+    )
+    from app.modules.connectors.services.auth.github_installation import (
+        Administration,
+        WaitingOn,
+    )
+
+    setter, _ = answers
+    setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
+
+    async def _says(answer):
+        async def _prove(_token: str, _installation_id: str):
+            return answer
+
+        return await _reconciler(_Service(), _Cache(), prove=_prove).outcome(_account())
+
+    assert (await _says(Administration.DOES_NOT)).waiting_on is WaitingOn.GITHUB_ADMIN
+    assert (
+        await _says(Administration.CANNOT_TELL)
+    ).waiting_on is WaitingOn.GITHUB_PERMISSION
+
+    class _NotHere(_Bindings):
+        async def claim(self, account, installation_id: str, *, administered: bool):
+            raise InstallationClaimNotPermittedError()
+
+    refused = await _reconciler(_Service(), _Cache(), bindings=_NotHere()).outcome(
+        _account()
+    )
+    assert refused.state is InstallState.PENDING_APPROVAL
+    assert refused.waiting_on is WaitingOn.LEMMA_ADMIN
+
+
+async def test_somebody_elses_read_binds_nothing_and_is_not_remembered(answers):
+    """A shared account read by somebody other than its owner: GitHub is asked
+    as for the owner, but nothing is claimed on their page load, and the
+    answer is not cached -- or the owner's own read would get it back instead
+    of binding."""
+    from app.modules.connectors.services.auth.github_installation import WaitingOn
+
+    setter, _ = answers
+    setter(InstallationOutcome(InstallState.READY, installation_id="158040062"))
+    account = _account()
+    bindings, cache = _Bindings(), _Cache()
+
+    said = await _reconciler(_Service(), cache, bindings=bindings).outcome(
+        account, bind=False
+    )
+
+    assert said.state is InstallState.PENDING_APPROVAL
+    assert said.waiting_on is WaitingOn.GITHUB_ADMIN
+    assert bindings.claimed == []
+    assert account.external_ref is None
+    assert cache.values == {}
+
+    owners = await _reconciler(_Service(), cache, bindings=bindings).outcome(account)
+
+    assert owners.state is InstallState.READY
+    assert bindings.claimed == [("158040062", True)]
+
+
+@pytest.mark.parametrize(
+    "github_says",
+    [
+        InstallationOutcome(InstallState.INSTALL_REQUIRED),
+        InstallationOutcome(InstallState.CHOOSE_INSTALL),
+    ],
+)
+async def test_nothing_somebody_elses_read_hears_is_remembered(answers, github_says):
+    """Review of #1260: only a proven claim skipped the cache on a read that
+    may not bind; any other answer it heard was cached for two minutes under
+    the account, and stood in for the owner's own read."""
+    setter, calls = answers
+    setter(github_says)
+    cache = _Cache()
+
+    await _reconciler(_Service(), cache).outcome(_account(), bind=False)
+
+    assert calls == ["gho_token"]
+    assert cache.values == {}
 
 
 async def test_refresh_asks_again_even_when_bound(answers):

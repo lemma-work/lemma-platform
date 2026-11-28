@@ -1426,6 +1426,22 @@ export const liveSource: PodSource = {
         return readPodConnections(await lemma(podId).request("GET", `/pods/${encodeURIComponent(podId)}/connections`));
     },
 
+    async checkGithubAccount(orgId: string, accountId: string) {
+        await lemma().request(
+            "GET",
+            `/organizations/${encodeURIComponent(orgId)}/connectors/accounts/${encodeURIComponent(accountId)}/github/installations`,
+            { params: { refresh: true } },
+        );
+    },
+
+    async pickGithubInstallation(orgId: string, accountId: string, installationId: string) {
+        await lemma().request(
+            "POST",
+            `/organizations/${encodeURIComponent(orgId)}/connectors/accounts/${encodeURIComponent(accountId)}/github/installations`,
+            { body: { installation_id: installationId } },
+        );
+    },
+
     async connectPodConnector(podId: string, platform: string, podConnector: string): Promise<Surface> {
         /* Asserted once, as `connectSystem` says why. */
         const payload = { platform, credential_mode: "CUSTOM", pod_connector: podConnector } as unknown as Parameters<

@@ -71,7 +71,12 @@ async def test_a_per_member_connector_says_connect_use_existing_then_ready(
     assert (await world.declare("crm", "PER_MEMBER")).status_code == 201
 
     nothing = _row(await _connections(world, world.alice), "crm")
-    assert nothing["me"] == {"standing": "connect", "account": None, "existing": None}
+    assert nothing["me"] == {
+        "standing": "connect",
+        "account": None,
+        "existing": None,
+        "github": None,
+    }
     assert nothing["runs_as"]["kind"] == "me"
     assert nothing["auth_config_id"] == world.auth_config_id
     assert nothing["installation_name"] == world.installation_name

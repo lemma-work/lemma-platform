@@ -262,6 +262,16 @@ class AccountInstallationsSchema(BaseModel):
     install_state: str
     installation_id: Optional[str] = None
     choices: List[InstallationChoiceSchema] = Field(default_factory=list)
+    waiting_on: Optional[str] = Field(
+        default=None,
+        description=(
+            "With PENDING_APPROVAL, whose act it waits on: `github_admin` (an "
+            "admin of the GitHub account it is installed on), "
+            "`github_permission` (an owner accepting the App's Members: read "
+            "on GitHub), or `lemma_admin` (someone who may install apps for "
+            "this organization)."
+        ),
+    )
 
 
 class InstallationBindSchema(BaseModel):

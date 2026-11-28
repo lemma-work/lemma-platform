@@ -23,6 +23,8 @@ ready, and answers with no call at all.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -33,15 +35,18 @@ from app.core.log.log import get_logger
 from app.modules.connectors.domain.account import AccountEntity
 from app.modules.connectors.domain.github_installation_errors import (
     GithubInstallationNotAdministeredError,
+    InstallationClaimNotPermittedError,
 )
 from app.modules.connectors.services.auth.github_bindings import (
     InstallationBindings,
 )
 from app.modules.connectors.services.auth.github_installation import (
+    Administration,
     InstallationChoice,
     InstallationOutcome,
     InstallState,
-    administers,
+    WaitingOn,
+    administration,
     resolve_outcome,
 )
 from app.modules.connectors.services.credential_freshness import fresh_credentials
@@ -50,8 +55,9 @@ logger = get_logger(__name__)
 
 GITHUB = "github"
 
-#: Asks GitHub whether a token's user controls an installation.
-Prove = Callable[[str, str], Awaitable[bool]]
+#: Asks GitHub whether a token's user controls an installation. A plain
+#: ``bool`` is read as a yes or a no.
+Prove = Callable[[str, str], Awaitable[Administration | bool]]
 
 #: Short. This exists to stop a page that renders several unbound accounts, or a
 #: person clicking about, from spending one GitHub call each -- not to remember
@@ -79,9 +85,16 @@ class GithubInstallationReconciler:
         cache: RedisJsonCache | None = None,
         *,
         bindings: InstallationBindings | None = None,
-        prove: Prove = administers,
+        prove: Prove = administration,
+        budget: float | None = None,
     ):
         self._service = connector_service
+        #: Seconds GitHub gets, across every call one `outcome` makes, before
+        #: it raises `TimeoutError`. None for no limit: the account page's own
+        #: read is the call that may be slow. A page that renders rows it
+        #: already has passes one, so a hung GitHub cannot hold it.
+        self._budget = budget
+        self._deadline: float | None = None
         # Named once so every non-database await below can hand the pooled
         # connection back. Redis is fast, but "fast" is not the rule: a session
         # holds a Postgres connection until it closes, and every await inside
@@ -98,19 +111,36 @@ class GithubInstallationReconciler:
         self._prove = prove
 
     async def outcome(
-        self, account: Any, *, force: bool = False
+        self, account: Any, *, force: bool = False, bind: bool = True
     ) -> InstallationOutcome:
         """Where this account stands, asking GitHub only when that can change it.
 
-        A bound account is ready and costs nothing: `external_ref` is the
-        installation, and an installation that has gone away announces itself
-        through the `installation` webhook, which retires the account. `force`
-        is for the two moments where the stored answer is the thing in doubt --
-        somebody pressing Refresh, and a repository lookup that came back empty.
+        A bound account is ready and costs one read: `external_ref` is the
+        installation, its organization holds it, and an installation that has
+        gone away announces itself through the `installation` webhook, which
+        retires the account. One naming an installation its organization does
+        not hold is not ready, whatever it names: it mints nothing there
+        (`routable_external_ref`), so it is worked out again like an unbound
+        one. `force` is for the two moments where the stored answer is the
+        thing in doubt -- somebody pressing Refresh, and a repository lookup
+        that came back empty.
+
+        `bind=False` is for somebody other than the account's owner reading
+        it -- a shared account on the Connections page. GitHub is asked the
+        same, but an installation this organization does not hold yet is not
+        bound on their page load: it waits on its GitHub admin, the owner,
+        whose own read binds it. Nothing such a read says is remembered, so
+        it cannot stand in for the owner's.
         """
         if not _is_github(account):
             return InstallationOutcome(InstallState.READY)
-        if account.external_ref and not force:
+        if (
+            account.external_ref
+            and not force
+            and await self._bindings.holds(
+                account.organization_id, str(account.external_ref)
+            )
+        ):
             return InstallationOutcome(
                 InstallState.READY, installation_id=str(account.external_ref)
             )
@@ -121,14 +151,35 @@ class GithubInstallationReconciler:
             if cached is not None:
                 return cached
 
+        if self._budget is not None:
+            self._deadline = asyncio.get_running_loop().time() + self._budget
+        # A timeout escapes before anything is remembered or bound: a slow
+        # GitHub is not an answer.
         answer, token = await self._ask(account)
         outcome, administered = await self._proven(account, answer, token)
+        if administered and not bind:
+            return InstallationOutcome(
+                InstallState.PENDING_APPROVAL,
+                choices=outcome.choices,
+                waiting_on=WaitingOn.GITHUB_ADMIN,
+            )
         # Bound before it is remembered: READY is what the claim made true,
         # not what GitHub said, and a claim refused here must not leave a
         # cached READY with nothing bound and no token to mint.
         outcome = await self._bind(account, outcome, administered=administered)
-        await self._remember(key, outcome)
+        if bind:
+            await self._remember(key, outcome)
         return outcome
+
+    def _bounded(self) -> contextlib.AbstractAsyncContextManager[object]:
+        """The rest of this read's budget, around one GitHub round trip.
+
+        Only ever inside `connection_released`: a timeout cancels the call it
+        wraps, and that must never be a query.
+        """
+        if self._deadline is None:
+            return contextlib.nullcontext()
+        return asyncio.timeout_at(self._deadline)
 
     async def invalidate(self, account_id: object) -> None:
         """Forget what we last heard, because something changed it.
@@ -157,7 +208,7 @@ class GithubInstallationReconciler:
         # GitHub can take seconds to answer and this runs inside a request that
         # holds a pooled connection. The binding write below needs the session
         # again, so only the round trip is outside it.
-        async with connection_released(self._session):
+        async with connection_released(self._session), self._bounded():
             return await resolve_outcome(str(token)), str(token)
 
     async def _proven(
@@ -184,18 +235,20 @@ class GithubInstallationReconciler:
         installation_id = outcome.installation_id
         if not outcome.is_ready or not installation_id:
             return outcome, False
-        if str(account.external_ref or "") == installation_id:
-            return outcome, False
         if await self._bindings.holds(account.organization_id, installation_id):
             return outcome, False
-        administered = False
+        said: Administration | bool = Administration.DOES_NOT
         if token:
-            async with connection_released(self._session):
-                administered = await self._prove(token, installation_id)
-        if not administered:
+            async with connection_released(self._session), self._bounded():
+                said = await self._prove(token, installation_id)
+        if not (said is True or said is Administration.ADMINISTERS):
             return (
                 InstallationOutcome(
-                    InstallState.PENDING_APPROVAL, choices=outcome.choices
+                    InstallState.PENDING_APPROVAL,
+                    choices=outcome.choices,
+                    waiting_on=WaitingOn.GITHUB_PERMISSION
+                    if said is Administration.CANNOT_TELL
+                    else WaitingOn.GITHUB_ADMIN,
                 ),
                 False,
             )
@@ -214,7 +267,9 @@ class GithubInstallationReconciler:
                 )
             return (
                 InstallationOutcome(
-                    InstallState.PENDING_APPROVAL, choices=outcome.choices
+                    InstallState.PENDING_APPROVAL,
+                    choices=outcome.choices,
+                    waiting_on=WaitingOn.LEMMA_ADMIN,
                 ),
                 False,
             )
@@ -238,7 +293,11 @@ class GithubInstallationReconciler:
         """
         if not outcome.is_ready or not outcome.installation_id:
             return outcome
-        if str(account.external_ref or "") == outcome.installation_id:
+        if str(account.external_ref or "") == outcome.installation_id and not (
+            administered
+        ):
+            # Held here already (`_proven` passes nothing else unproved), and
+            # already the account's: nothing to write.
             return outcome
         try:
             # `_proven` let it through: held by this organization already, or
@@ -246,10 +305,17 @@ class GithubInstallationReconciler:
             await self._bindings.claim(
                 account, outcome.installation_id, administered=administered
             )
-        except GithubInstallationNotAdministeredError:
-            # `InstallationClaimNotPermittedError` among them.
+        except InstallationClaimNotPermittedError:
             return InstallationOutcome(
-                InstallState.PENDING_APPROVAL, choices=outcome.choices
+                InstallState.PENDING_APPROVAL,
+                choices=outcome.choices,
+                waiting_on=WaitingOn.LEMMA_ADMIN,
+            )
+        except GithubInstallationNotAdministeredError:
+            return InstallationOutcome(
+                InstallState.PENDING_APPROVAL,
+                choices=outcome.choices,
+                waiting_on=WaitingOn.GITHUB_ADMIN,
             )
         # The routing key alone. `account` was read before `_ask`, which may
         # have refreshed its token since; writing the whole of it back put the
@@ -299,6 +365,7 @@ def _to_payload(outcome: InstallationOutcome) -> dict[str, Any]:
     return {
         "state": outcome.state.value,
         "installation_id": outcome.installation_id,
+        "waiting_on": outcome.waiting_on.value if outcome.waiting_on else None,
         "choices": [
             {
                 "installation_id": choice.installation_id,
@@ -319,9 +386,16 @@ def _from_payload(payload: Any) -> InstallationOutcome | None:
     except KeyError, ValueError:
         return None
     choices = payload.get("choices")
+    try:
+        waiting_on = (
+            WaitingOn(payload["waiting_on"]) if payload.get("waiting_on") else None
+        )
+    except ValueError:
+        waiting_on = None
     return InstallationOutcome(
         state=state,
         installation_id=payload.get("installation_id"),
+        waiting_on=waiting_on,
         choices=tuple(
             InstallationChoice(**choice)
             for choice in (choices if isinstance(choices, list) else [])

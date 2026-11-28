@@ -3,6 +3,7 @@ from enum import Enum
 
 class ConnectionStanding(str, Enum):
     CONNECT = "connect"
+    INSTALL = "install"
     NOT_ALLOWED = "not_allowed"
     READY = "ready"
     RECONNECT = "reconnect"

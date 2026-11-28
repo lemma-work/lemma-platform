@@ -17,7 +17,32 @@ import type { PodConnectorMode, PodConnectorStatus } from "./pod-connectors";
 
 /** Where I stand with one app here. `unknown` is a standing this client was
  *  not taught: shown as not working for me, with nothing offered. */
-export type ConnectionStanding = "ready" | "connect" | "reconnect" | "use_existing" | "waiting" | "not_allowed" | "unknown";
+export type ConnectionStanding = "ready" | "connect" | "reconnect" | "use_existing" | "install" | "waiting" | "not_allowed" | "unknown";
+
+/** Why a GitHub account here reaches no installation of the App, by who can
+ *  fix it (`me.github` with `install`). `unknown` is a reason this client was
+ *  not taught: still not ready, with nothing but checking again offered. */
+export type GithubWait = "install" | "choose" | "github_admin" | "github_permission" | "lemma_admin" | "check" | "unknown";
+
+/** An installation of the App the account can see. */
+export interface GithubOffer {
+    installationId: string;
+    /** The GitHub account it is on. */
+    login: string;
+    /** Its settings page on GitHub. */
+    manageUrl: string;
+}
+
+export interface GithubStanding {
+    wait: GithubWait;
+    /** The GitHub account the installation in question is on. */
+    login: string;
+    manageUrl: string;
+    /** With `install`: where the App is installed. */
+    installUrl: string;
+    /** With `choose`, the ones to pick from. */
+    choices: GithubOffer[];
+}
 
 /** Who a call by me runs as. */
 export type RunsAsKind = "me" | "person" | "app" | "nobody";
@@ -61,7 +86,7 @@ export interface PodConnection {
     required: boolean;
     status: PodConnectorStatus;
     runsAs: RunsAs;
-    me: { standing: ConnectionStanding; account: MyConnectionAccount | null; existing: ExistingAccount | null };
+    me: { standing: ConnectionStanding; account: MyConnectionAccount | null; existing: ExistingAccount | null; github: GithubStanding | null };
     /** PER_MEMBER, for someone who may manage the Lemma's connectors. */
     coverage: { connected: number; total: number } | null;
     /** The installation it runs through, which a sign-in is started against.
@@ -91,7 +116,8 @@ export interface PodConnections {
 
 const MODES: PodConnectorMode[] = ["PER_MEMBER", "SHARED", "APP"];
 const STATUSES: PodConnectorStatus[] = ["READY", "NEEDS_ACCOUNT", "NEEDS_INSTALLATION", "UNAVAILABLE"];
-const STANDINGS: ConnectionStanding[] = ["ready", "connect", "reconnect", "use_existing", "waiting", "not_allowed"];
+const STANDINGS: ConnectionStanding[] = ["ready", "connect", "reconnect", "use_existing", "install", "waiting", "not_allowed"];
+const WAITS: GithubWait[] = ["install", "choose", "github_admin", "github_permission", "lemma_admin", "check"];
 const RUNS_AS: RunsAsKind[] = ["me", "person", "app", "nobody"];
 
 function record(value: unknown): Record<string, unknown> {
@@ -118,6 +144,30 @@ function readExisting(raw: unknown): ExistingAccount | null {
     const row = record(raw);
     const accountId = text(row["account_id"]);
     return accountId ? { accountId, label: text(row["label"]) } : null;
+}
+
+/** Only an https link to GitHub is offered as one. */
+function githubLink(value: unknown): string {
+    const url = text(value);
+    return /^https:\/\/github\.com\//.test(url) ? url : "";
+}
+
+function readGithub(raw: unknown): GithubStanding | null {
+    if (!raw || typeof raw !== "object") return null;
+    const row = record(raw);
+    const wait = text(row["wait"]).toLowerCase() as GithubWait;
+    return {
+        wait: WAITS.includes(wait) ? wait : "unknown",
+        login: text(row["login"]),
+        manageUrl: githubLink(row["manage_url"]),
+        installUrl: githubLink(row["install_url"]),
+        choices: (Array.isArray(row["choices"]) ? row["choices"] as unknown[] : [])
+            .map((entry) => {
+                const one = record(entry);
+                return { installationId: text(one["installation_id"]), login: text(one["login"]), manageUrl: githubLink(one["manage_url"]) };
+            })
+            .filter((one) => one.installationId),
+    };
 }
 
 export function readPodConnection(raw: unknown): PodConnection | null {
@@ -157,6 +207,7 @@ export function readPodConnection(raw: unknown): PodConnection | null {
             standing: said === "ready" && known !== "READY" ? "waiting" : said,
             account: readAccount(me["account"]),
             existing: readExisting(me["existing"]),
+            github: said === "install" ? readGithub(me["github"]) : null,
         },
         coverage: coverage ? { connected: count(coverage["connected"]), total: count(coverage["total"]) } : null,
         authConfigId: text(row["auth_config_id"]),
@@ -246,6 +297,10 @@ export function connectionSaid(item: PodConnection, lemma: string, me: string): 
                 status: { word: owner && owner !== "you" ? "Waiting on " + owner : "Waiting for an account", tone: "warn" },
             };
         }
+        if (item.me.standing === "install") {
+            const why = githubSaid(item.me.github, lemma, owner);
+            return { line: (owner === "you" ? "Your account, for everyone. " : owner ? owner + "'s account, for everyone. " : "") + why.line, status: why.status };
+        }
         const whose = owner === "you" ? "Your account, for everyone" : owner ? owner + "'s account, for everyone" : "One account, for everyone";
         return { line: whose + (item.runsAs.label ? " · " + item.runsAs.label : ""), status: { word: "Working", tone: "ok" } };
     }
@@ -263,10 +318,60 @@ export function connectionSaid(item: PodConnection, lemma: string, me: string): 
             };
         case "reconnect":
             return { line: app + " signed you out. " + lemma + " can't use it for you until you sign in again.", status: { word: "Signed out", tone: "bad" } };
+        case "install":
+            return githubSaid(item.me.github, lemma);
         case "connect":
             return { line: "Runs as each person's own account." + purpose, status: { word: "Not connected", tone: "off" } };
         default:
             return { line: "It isn't working for you here yet.", status: { word: "Not ready", tone: "off" } };
+    }
+}
+
+/** Why GitHub can't reach anything here yet, said by who can fix it.
+    `whose`: "you" when the account is the reader's own, else its owner's
+    name (empty when unknown) -- a shared account is somebody else's. */
+export function githubSaid(github: GithubStanding | null, lemma: string, whose: string | null = "you"): { line: string; status: RowStatus } {
+    const on = github?.login || "that GitHub organization";
+    switch (github?.wait) {
+        case "install":
+            return {
+                line: "The GitHub account is connected, but Lemma's GitHub App isn't installed on anything it can reach. Install it on the GitHub organization " + lemma + " works in.",
+                status: { word: "App not installed", tone: "bad" },
+            };
+        case "choose":
+            if (github.choices.length === 1) {
+                const one = github.choices[0].login || "a GitHub account";
+                return {
+                    line: "Lemma's GitHub App is installed on " + one + ", and your organization here stopped using it. Use it again to reach its repositories.",
+                    status: { word: "Not in use", tone: "warn" },
+                };
+            }
+            return {
+                line: "Lemma's GitHub App is installed on " + github.choices.length + " GitHub accounts this account can reach. Pick the one " + lemma + " works in.",
+                status: { word: "Pick one", tone: "warn" },
+            };
+        case "github_admin":
+            return {
+                line: "Lemma's GitHub App is installed on " + on + ", but only an admin of " + on + " on GitHub can add it to your organization here. Once one has, it works for everyone.",
+                status: { word: "Waiting on a GitHub admin", tone: "warn" },
+            };
+        case "github_permission":
+            return {
+                line: "An owner of " + on + " has to accept the GitHub App's new Members permission on GitHub. Until then GitHub won't say who its admins are, so nobody can add it here.",
+                status: { word: "Waiting on GitHub", tone: "warn" },
+            };
+        case "lemma_admin":
+            return {
+                line: (whose === "you" ? "You're an admin of " : whose ? whose + " is an admin of " : "The account's owner is an admin of ") + on + " on GitHub, but adding it to your organization here takes someone who manages its apps. Once they connect GitHub, it works for everyone.",
+                status: { word: "Waiting on an owner", tone: "warn" },
+            };
+        case "check":
+            return {
+                line: "GitHub didn't answer when " + lemma + " asked what this account can reach. Check again in a moment. If it keeps saying this, the account may need signing in to GitHub again.",
+                status: { word: "GitHub didn't answer", tone: "off" },
+            };
+        default:
+            return { line: "The GitHub account is connected, but it can't reach any repository here yet.", status: { word: "Not ready", tone: "off" } };
     }
 }
 

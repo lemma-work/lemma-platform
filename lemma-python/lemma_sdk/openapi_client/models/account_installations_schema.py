@@ -23,11 +23,15 @@ class AccountInstallationsSchema:
         install_state (str):
         choices (list[InstallationChoiceSchema] | Unset):
         installation_id (None | str | Unset):
+        waiting_on (None | str | Unset): With PENDING_APPROVAL, whose act it waits on: `github_admin` (an admin of the
+            GitHub account it is installed on), `github_permission` (an owner accepting the App's Members: read on GitHub),
+            or `lemma_admin` (someone who may install apps for this organization).
     """
 
     install_state: str
     choices: list[InstallationChoiceSchema] | Unset = UNSET
     installation_id: None | str | Unset = UNSET
+    waiting_on: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -46,6 +50,12 @@ class AccountInstallationsSchema:
         else:
             installation_id = self.installation_id
 
+        waiting_on: None | str | Unset
+        if isinstance(self.waiting_on, Unset):
+            waiting_on = UNSET
+        else:
+            waiting_on = self.waiting_on
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -57,6 +67,8 @@ class AccountInstallationsSchema:
             field_dict["choices"] = choices
         if installation_id is not UNSET:
             field_dict["installation_id"] = installation_id
+        if waiting_on is not UNSET:
+            field_dict["waiting_on"] = waiting_on
 
         return field_dict
 
@@ -85,10 +97,20 @@ class AccountInstallationsSchema:
 
         installation_id = _parse_installation_id(d.pop("installation_id", UNSET))
 
+        def _parse_waiting_on(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        waiting_on = _parse_waiting_on(d.pop("waiting_on", UNSET))
+
         account_installations_schema = cls(
             install_state=install_state,
             choices=choices,
             installation_id=installation_id,
+            waiting_on=waiting_on,
         )
 
         account_installations_schema.additional_properties = d

@@ -517,6 +517,36 @@ test("each row says whose account it runs as, or why it can't run and who can fi
     assert.deepEqual(connectionSaid(uninstalled, "Kit", "me").status, { word: "App not installed", tone: "bad" });
 });
 
+test("a connected GitHub account that reaches nothing here is install, and says who can fix it", () => {
+    const row = (github: unknown, extra: Record<string, unknown> = {}) => readPodConnections({ items: [{
+        slug: "github", connector_id: "github", title: "GitHub", mode: "PER_MEMBER", status: "READY",
+        me: { standing: "install", account: { id: "acc-gh", label: "me-gh", pod_account_id: "pa-gh" }, github }, ...extra,
+    }] }).items[0];
+    const said = (github: unknown) => connectionSaid(row(github), "Kit", "me");
+
+    const waiting = row({ wait: "github_admin", login: "octo", manage_url: "https://github.com/organizations/octo/settings/installations/7", choices: [] });
+    assert.equal(waiting.me.standing, "install");
+    assert.deepEqual(waiting.me.github, { wait: "github_admin", login: "octo", manageUrl: "https://github.com/organizations/octo/settings/installations/7", installUrl: "", choices: [] });
+    assert.deepEqual(said({ wait: "github_admin", login: "octo" }).status, { word: "Waiting on a GitHub admin", tone: "warn" });
+    assert.match(said({ wait: "github_admin", login: "octo" }).line, /only an admin of octo on GitHub can add it/);
+    assert.match(said({ wait: "github_permission", login: "octo" }).line, /An owner of octo has to accept the GitHub App's new Members permission/);
+    assert.deepEqual(said({ wait: "lemma_admin", login: "octo" }).status, { word: "Waiting on an owner", tone: "warn" });
+    assert.deepEqual(said({ wait: "install", install_url: "https://github.com/apps/lemma/installations/new" }).status, { word: "App not installed", tone: "bad" });
+    const choose = row({ wait: "choose", choices: [{ installation_id: "1", login: "octo" }, { installation_id: "2", login: "me" }, { login: "no id" }] });
+    assert.deepEqual(choose.me.github?.choices.map((one) => one.login), ["octo", "me"], "a choice with no id is not one");
+    assert.deepEqual(said({ wait: "choose", choices: [{ installation_id: "1", login: "octo" }] }).status, { word: "Not in use", tone: "warn" });
+    assert.match(said({ wait: "choose", choices: [{ installation_id: "1", login: "octo" }] }).line, /octo, and your organization here stopped using it/);
+    assert.deepEqual(said({ wait: "check" }).status, { word: "GitHub didn't answer", tone: "off" });
+    assert.match(said({ wait: "lemma_admin", login: "octo" }).line, /^You're an admin of octo on GitHub/);
+    assert.match(said({ wait: "install" }).line, /^The GitHub account is connected/, "not \"Your\": a shared row is somebody else's account");
+    const shared = (github: unknown) => connectionSaid(row(github, { mode: "SHARED", runs_as: { kind: "person", owner_user_id: "alice", owner_name: "Alice" } }), "Kit", "me");
+    assert.match(shared({ wait: "install" }).line, /^Alice's account, for everyone\. The GitHub account is connected/);
+    assert.match(shared({ wait: "lemma_admin", login: "octo" }).line, /Alice is an admin of octo on GitHub/, "the reader is not the admin of somebody else's account");
+    assert.equal(said({ wait: "later" }).status.word, "Not ready", "a reason this client doesn't know is still not ready");
+    assert.equal(row({ wait: "install", install_url: "javascript:alert(1)" }).me.github?.installUrl, "", "only a GitHub link is offered as one");
+    assert.equal(row(null, { me: { standing: "ready", github: { wait: "install" } } }).me.github, null, "only install carries a reason");
+});
+
 test("slugs show only where a Lemma has two of one app, and the band names who hasn't connected", () => {
     assert.deepEqual([...twiceOver(CONNECTIONS.items)].sort(), ["github", "gmail"]);
     assert.equal(connectedCount(CONNECTIONS.items[0].coverage), "1 of 2 connected");

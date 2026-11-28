@@ -11,6 +11,7 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.connection_account import ConnectionAccount
+    from ..models.connection_github import ConnectionGithub
     from ..models.existing_account import ExistingAccount
 
 
@@ -28,17 +29,23 @@ class ConnectionMe:
             this pod yet) or ``reconnect``; SHARED and APP are ``ready`` or ``waiting``
             (no account shared; the App not installed); any mode is ``waiting`` when
             its installation is disabled, and ``not_allowed`` without ``connector.use``.
+            GitHub's PER_MEMBER and SHARED are ``install`` while the account in use
+            reaches no GitHub App installation this organization holds; ``github``
+            on ``me`` says why and what unblocks it.
         account (ConnectionAccount | None | Unset):
         existing (ExistingAccount | None | Unset): Set with `use_existing`: the account to add.
+        github (ConnectionGithub | None | Unset): Set with `install`.
     """
 
     standing: ConnectionStanding
     account: ConnectionAccount | None | Unset = UNSET
     existing: ExistingAccount | None | Unset = UNSET
+    github: ConnectionGithub | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         from ..models.connection_account import ConnectionAccount
+        from ..models.connection_github import ConnectionGithub
         from ..models.existing_account import ExistingAccount
 
         standing = self.standing.value
@@ -59,6 +66,14 @@ class ConnectionMe:
         else:
             existing = self.existing
 
+        github: dict[str, Any] | None | Unset
+        if isinstance(self.github, Unset):
+            github = UNSET
+        elif isinstance(self.github, ConnectionGithub):
+            github = self.github.to_dict()
+        else:
+            github = self.github
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -70,12 +85,15 @@ class ConnectionMe:
             field_dict["account"] = account
         if existing is not UNSET:
             field_dict["existing"] = existing
+        if github is not UNSET:
+            field_dict["github"] = github
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.connection_account import ConnectionAccount
+        from ..models.connection_github import ConnectionGithub
         from ..models.existing_account import ExistingAccount
 
         d = dict(src_dict)
@@ -115,10 +133,28 @@ class ConnectionMe:
 
         existing = _parse_existing(d.pop("existing", UNSET))
 
+        def _parse_github(data: object) -> ConnectionGithub | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                github_type_0 = ConnectionGithub.from_dict(data)
+
+                return github_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(ConnectionGithub | None | Unset, data)
+
+        github = _parse_github(d.pop("github", UNSET))
+
         connection_me = cls(
             standing=standing,
             account=account,
             existing=existing,
+            github=github,
         )
 
         connection_me.additional_properties = d

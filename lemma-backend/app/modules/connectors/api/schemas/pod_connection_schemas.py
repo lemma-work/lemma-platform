@@ -21,9 +21,13 @@ class ConnectionStanding(StrEnum):
     this pod yet) or ``reconnect``; SHARED and APP are ``ready`` or ``waiting``
     (no account shared; the App not installed); any mode is ``waiting`` when
     its installation is disabled, and ``not_allowed`` without ``connector.use``.
+    GitHub's PER_MEMBER and SHARED are ``install`` while the account in use
+    reaches no GitHub App installation this organization holds; ``github``
+    on ``me`` says why and what unblocks it.
     """
 
     READY = "ready"
+    INSTALL = "install"
     CONNECT = "connect"
     RECONNECT = "reconnect"
     USE_EXISTING = "use_existing"
@@ -74,11 +78,62 @@ class ExistingAccount(BaseModel):
     label: str | None = None
 
 
+class GithubWait(StrEnum):
+    """Why a GitHub account here reaches no installation, by who can fix it."""
+
+    #: The App is installed on nothing the account can see: install it.
+    INSTALL = "install"
+    #: Several installations, none picked: pick one.
+    CHOOSE = "choose"
+    #: An admin of the GitHub account it is installed on has to connect it here.
+    GITHUB_ADMIN = "github_admin"
+    #: An owner of that GitHub organization has to accept the App's Members:
+    #: read permission on GitHub first; until then nobody can prove control.
+    GITHUB_PERMISSION = "github_permission"
+    #: Someone who may install apps for this Lemma organization has to.
+    LEMMA_ADMIN = "lemma_admin"
+    #: GitHub did not answer in time for this page. Not ready as far as
+    #: anyone knows; checking again asks it again.
+    CHECK = "check"
+
+
+class GithubInstallationOffer(BaseModel):
+    installation_id: str
+    login: str | None = None
+    manage_url: str | None = Field(
+        default=None,
+        description="The installation's settings page on GitHub: where its "
+        "repositories, and a pending permission, are changed.",
+    )
+
+
+class ConnectionGithub(BaseModel):
+    """With ``install``: why GitHub is not usable here yet, and the way on."""
+
+    wait: GithubWait
+    login: str | None = Field(
+        default=None,
+        description="The GitHub account the installation in question is on.",
+    )
+    manage_url: str | None = None
+    install_url: str | None = Field(
+        default=None, description="With `install`: where the App is installed."
+    )
+    choices: list[GithubInstallationOffer] = Field(
+        default_factory=list,
+        description="With `choose`: the installations the account can see; "
+        "otherwise the one in question.",
+    )
+
+
 class ConnectionMe(BaseModel):
     standing: ConnectionStanding
     account: ConnectionAccount | None = None
     existing: ExistingAccount | None = Field(
         default=None, description="Set with `use_existing`: the account to add."
+    )
+    github: ConnectionGithub | None = Field(
+        default=None, description="Set with `install`."
     )
 
 
@@ -133,12 +188,15 @@ class PodConnectionsResponse(BaseModel):
 __all__ = [
     "ConnectionAccount",
     "ConnectionCoverage",
+    "ConnectionGithub",
     "ConnectionMe",
     "ConnectionRunsAs",
     "ConnectionStanding",
     "ExistingAccount",
     "GithubBot",
     "GithubBotInstallation",
+    "GithubInstallationOffer",
+    "GithubWait",
     "PodConnectionItem",
     "PodConnectionsResponse",
     "RunsAsKind",
