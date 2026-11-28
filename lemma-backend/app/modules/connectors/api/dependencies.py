@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import Depends
 
+from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger
 from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.authorization.context import Context
@@ -354,10 +355,14 @@ def build_pod_connections_reader(uow: SqlAlchemyUnitOfWork) -> "PodConnectionsRe
             return await GithubInstallationReconciler(
                 get_connector_service(uow), budget=GITHUB_PAGE_BUDGET_SECONDS
             ).outcome(account, bind=bind)
-        except TimeoutError:
+        except (TimeoutError, DomainError) as exc:
+            # The page lists every connector; one GitHub account it could not
+            # ask about -- slow, or its token dead and not refreshable -- is a
+            # row saying so, not an error in place of all of them.
             logger.warning(
                 "connectors.pod_connections.github_unanswered.degraded",
                 account_id=str(account.id),
+                error=type(exc).__name__,
             )
             return None
 

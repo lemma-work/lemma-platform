@@ -234,13 +234,12 @@ async def test_a_github_that_does_not_answer_cannot_hold_the_page(
     assert me["github"]["wait"] == "check"
 
 
-async def test_a_shared_account_is_bound_on_its_owners_read_and_nobody_elses(
-    scenario, db_session, github
-):
-    """A shared GitHub account runs for everyone, and anyone may open the
-    page. Binding hands the organization the App's token on every repository
-    in the installation, so it happens on the owner's own read, on their
-    proof -- not because somebody else loaded the page."""
+async def _shared_github(
+    scenario, db_session, github, credentials: dict[str, str] | None = None
+) -> tuple[GitHubWorld, str]:
+    """A SHARED GitHub connector running as the owner's account, which sees an
+    installation on ``octo`` -- a GitHub organization the owner administers --
+    that no Lemma organization holds yet."""
     world = await _github_world(scenario, db_session)
     declared = await scenario.owner_client.post(
         f"/pods/{world.pod_id}/connectors",
@@ -261,6 +260,7 @@ async def test_a_shared_account_is_bound_on_its_owners_read_and_nobody_elses(
         user_id=scenario.owner_user["id"],
         token=token,
         auth_config_id=UUID(world.auth_config_id),
+        credentials=credentials,
     )
     shared = await scenario.async_client.post(
         f"/pods/{world.pod_id}/connector-accounts",
@@ -273,6 +273,17 @@ async def test_a_shared_account_is_bound_on_its_owners_read_and_nobody_elses(
         json={"shared_pod_account_id": shared.json()["id"]},
     )
     assert pointed.status_code == status.HTTP_200_OK, pointed.text
+    return world, installation_id
+
+
+async def test_a_shared_account_is_bound_on_its_owners_read_and_nobody_elses(
+    scenario, db_session, github
+):
+    """A shared GitHub account runs for everyone, and anyone may open the
+    page. Binding hands the organization the App's token on every repository
+    in the installation, so it happens on the owner's own read, on their
+    proof -- not because somebody else loaded the page."""
+    world, installation_id = await _shared_github(scenario, db_session, github)
 
     for_alice = await _me(world, world.alice)
 
@@ -286,3 +297,31 @@ async def test_a_shared_account_is_bound_on_its_owners_read_and_nobody_elses(
     assert for_owner["standing"] == "ready"
     assert await _holders(db_session, installation_id) == {world.org_id}
     assert (await _me(world, world.alice))["standing"] == "ready"
+
+
+async def test_a_shared_account_whose_token_is_dead_still_lists_the_page(
+    scenario, db_session, github
+):
+    """Review of #1260: asking GitHub refreshes the account's token first, and
+    a refresh GitHub refuses raised straight through the read -- so a shared
+    account with a dead token failed the whole page, every connector with
+    it, for everyone in the pod, on every load. The row says GitHub could not
+    be asked; the page answers."""
+    from datetime import datetime, timedelta, timezone
+
+    world, installation_id = await _shared_github(
+        scenario,
+        db_session,
+        github,
+        credentials={
+            "access_token": "gho_expired",
+            "refresh_token": "ghr_github-forgot-this",
+            "expires_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+        },
+    )
+
+    for user in (world.alice, scenario.owner_user):
+        me = await _me(world, user)
+        assert me["standing"] == "install"
+        assert me["github"]["wait"] == "check"
+    assert await _holders(db_session, installation_id) == set()

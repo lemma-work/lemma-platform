@@ -167,7 +167,8 @@ class GithubInstallationReconciler:
         # not what GitHub said, and a claim refused here must not leave a
         # cached READY with nothing bound and no token to mint.
         outcome = await self._bind(account, outcome, administered=administered)
-        await self._remember(key, outcome)
+        if bind:
+            await self._remember(key, outcome)
         return outcome
 
     def _bounded(self) -> contextlib.AbstractAsyncContextManager[object]:

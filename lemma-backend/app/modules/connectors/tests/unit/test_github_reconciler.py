@@ -279,6 +279,27 @@ async def test_somebody_elses_read_binds_nothing_and_is_not_remembered(answers):
     assert bindings.claimed == [("158040062", True)]
 
 
+@pytest.mark.parametrize(
+    "github_says",
+    [
+        InstallationOutcome(InstallState.INSTALL_REQUIRED),
+        InstallationOutcome(InstallState.CHOOSE_INSTALL),
+    ],
+)
+async def test_nothing_somebody_elses_read_hears_is_remembered(answers, github_says):
+    """Review of #1260: only a proven claim skipped the cache on a read that
+    may not bind; any other answer it heard was cached for two minutes under
+    the account, and stood in for the owner's own read."""
+    setter, calls = answers
+    setter(github_says)
+    cache = _Cache()
+
+    await _reconciler(_Service(), cache).outcome(_account(), bind=False)
+
+    assert calls == ["gho_token"]
+    assert cache.values == {}
+
+
 async def test_refresh_asks_again_even_when_bound(answers):
     setter, calls = answers
     setter(InstallationOutcome(InstallState.READY, installation_id="200000001"))

@@ -357,7 +357,7 @@ function GithubFix({ pod, item, onChanged }: { pod: Pod; item: PodConnection; on
                 </a>
             ) : null}
             {canCheck && (
-                <button type="button" className="b b--s" disabled={busy} onClick={() => check.mutate()}>
+                <button type="button" className="b b--s b--secondary" disabled={busy} onClick={() => check.mutate()}>
                     {check.isPending ? "Checking…" : "Check again"}
                 </button>
             )}

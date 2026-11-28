@@ -298,7 +298,7 @@ export function connectionSaid(item: PodConnection, lemma: string, me: string): 
             };
         }
         if (item.me.standing === "install") {
-            const why = githubSaid(item.me.github, lemma);
+            const why = githubSaid(item.me.github, lemma, owner);
             return { line: (owner === "you" ? "Your account, for everyone. " : owner ? owner + "'s account, for everyone. " : "") + why.line, status: why.status };
         }
         const whose = owner === "you" ? "Your account, for everyone" : owner ? owner + "'s account, for everyone" : "One account, for everyone";
@@ -327,13 +327,15 @@ export function connectionSaid(item: PodConnection, lemma: string, me: string): 
     }
 }
 
-/** Why GitHub can't reach anything here yet, said by who can fix it. */
-export function githubSaid(github: GithubStanding | null, lemma: string): { line: string; status: RowStatus } {
+/** Why GitHub can't reach anything here yet, said by who can fix it.
+    `whose`: "you" when the account is the reader's own, else its owner's
+    name (empty when unknown) -- a shared account is somebody else's. */
+export function githubSaid(github: GithubStanding | null, lemma: string, whose: string | null = "you"): { line: string; status: RowStatus } {
     const on = github?.login || "that GitHub organization";
     switch (github?.wait) {
         case "install":
             return {
-                line: "Your GitHub account is connected, but Lemma's GitHub App isn't installed on anything it can reach. Install it on the GitHub organization " + lemma + " works in.",
+                line: "The GitHub account is connected, but Lemma's GitHub App isn't installed on anything it can reach. Install it on the GitHub organization " + lemma + " works in.",
                 status: { word: "App not installed", tone: "bad" },
             };
         case "choose":
@@ -345,7 +347,7 @@ export function githubSaid(github: GithubStanding | null, lemma: string): { line
                 };
             }
             return {
-                line: "Lemma's GitHub App is installed on " + github.choices.length + " GitHub accounts you can reach. Pick the one " + lemma + " works in.",
+                line: "Lemma's GitHub App is installed on " + github.choices.length + " GitHub accounts this account can reach. Pick the one " + lemma + " works in.",
                 status: { word: "Pick one", tone: "warn" },
             };
         case "github_admin":
@@ -360,16 +362,16 @@ export function githubSaid(github: GithubStanding | null, lemma: string): { line
             };
         case "lemma_admin":
             return {
-                line: "You're an admin of " + on + " on GitHub, but adding it to your organization here takes someone who manages its apps. Once they connect GitHub, it works for everyone.",
+                line: (whose === "you" ? "You're an admin of " : whose ? whose + " is an admin of " : "The account's owner is an admin of ") + on + " on GitHub, but adding it to your organization here takes someone who manages its apps. Once they connect GitHub, it works for everyone.",
                 status: { word: "Waiting on an owner", tone: "warn" },
             };
         case "check":
             return {
-                line: "GitHub didn't answer in time to say what your account can reach. Check again in a moment.",
+                line: "GitHub didn't answer when " + lemma + " asked what this account can reach. Check again in a moment. If it keeps saying this, the account may need signing in to GitHub again.",
                 status: { word: "GitHub didn't answer", tone: "off" },
             };
         default:
-            return { line: "Your GitHub account is connected, but it can't reach any repository here yet.", status: { word: "Not ready", tone: "off" } };
+            return { line: "The GitHub account is connected, but it can't reach any repository here yet.", status: { word: "Not ready", tone: "off" } };
     }
 }
 

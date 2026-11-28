@@ -537,6 +537,11 @@ test("a connected GitHub account that reaches nothing here is install, and says 
     assert.deepEqual(said({ wait: "choose", choices: [{ installation_id: "1", login: "octo" }] }).status, { word: "Not in use", tone: "warn" });
     assert.match(said({ wait: "choose", choices: [{ installation_id: "1", login: "octo" }] }).line, /octo, and your organization here stopped using it/);
     assert.deepEqual(said({ wait: "check" }).status, { word: "GitHub didn't answer", tone: "off" });
+    assert.match(said({ wait: "lemma_admin", login: "octo" }).line, /^You're an admin of octo on GitHub/);
+    assert.match(said({ wait: "install" }).line, /^The GitHub account is connected/, "not \"Your\": a shared row is somebody else's account");
+    const shared = (github: unknown) => connectionSaid(row(github, { mode: "SHARED", runs_as: { kind: "person", owner_user_id: "alice", owner_name: "Alice" } }), "Kit", "me");
+    assert.match(shared({ wait: "install" }).line, /^Alice's account, for everyone\. The GitHub account is connected/);
+    assert.match(shared({ wait: "lemma_admin", login: "octo" }).line, /Alice is an admin of octo on GitHub/, "the reader is not the admin of somebody else's account");
     assert.equal(said({ wait: "later" }).status.word, "Not ready", "a reason this client doesn't know is still not ready");
     assert.equal(row({ wait: "install", install_url: "javascript:alert(1)" }).me.github?.installUrl, "", "only a GitHub link is offered as one");
     assert.equal(row(null, { me: { standing: "ready", github: { wait: "install" } } }).me.github, null, "only install carries a reason");
