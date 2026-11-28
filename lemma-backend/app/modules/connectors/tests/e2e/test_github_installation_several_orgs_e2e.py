@@ -10,7 +10,8 @@ GitHub organization and may install apps for the Lemma one -- and from then on:
 - a delivery from it runs the schedules of every organization that holds it,
   and of no other;
 - GitHub's ``installation.deleted`` lets go of it everywhere;
-- an organization can let go of its own binding, and the others keep theirs.
+- an organization can let go of its own binding, and the others keep theirs;
+  its schedules on the installation are switched off, theirs keep running.
 
 What a plain member, a contractor who only sees a repository, or a forged
 state can do is unchanged, and covered in ``test_github_installation_binding_e2e``.
@@ -93,6 +94,50 @@ async def _both_hold(scenario, db_session, see, installation_id):
     assert seen.json()["install_state"] == "READY", seen.json()
     assert seen.json()["installation_id"] == installation_id
     return org_b, account_id
+
+
+async def _pod_in(scenario, headers, org_id: str, prefix: str) -> UUID:
+    created = await scenario.async_client.post(
+        "/pods",
+        headers=headers,
+        json={"organization_id": org_id, "name": f"{prefix} {uuid4().hex[:6]}"},
+    )
+    assert created.status_code == 201, created.text
+    return UUID(created.json()["id"])
+
+
+async def _github_schedule(db_session, *, pod_id: UUID, user_id, installation_id):
+    """A webhook schedule routed on the installation, as provisioning writes
+    its key."""
+    from app.modules.schedule.domain.schedule import ScheduleType
+    from app.modules.schedule.infrastructure.models.schedule import Schedule
+
+    schedule = Schedule(
+        user_id=UUID(str(user_id)),
+        pod_id=pod_id,
+        schedule_type=ScheduleType.WEBHOOK.value,
+        config={"source": "github", "installation_id": installation_id},
+    )
+    db_session.add(schedule)
+    await db_session.commit()
+    return schedule.id
+
+
+async def _schedule_standing(db_session, schedule_id) -> tuple[bool, str | None]:
+    """Whether the schedule is on, and the reason it was switched off."""
+    from sqlalchemy import select
+
+    from app.modules.schedule.infrastructure.models.schedule import Schedule
+
+    db_session.expire_all()
+    is_active, config = (
+        await db_session.execute(
+            select(Schedule.is_active, Schedule.config).where(
+                Schedule.id == schedule_id
+            )
+        )
+    ).one()
+    return is_active, (config or {}).get("deactivated_reason")
 
 
 async def _routable(db_session, account_id) -> str | None:
@@ -239,6 +284,19 @@ async def test_an_org_lets_go_of_its_own_binding_and_the_other_keeps_its(
     org_b, b_account = await _both_hold(
         scenario, db_session, github_sees, installation_id
     )
+    owner = scenario.owner_user
+    a_schedule = await _github_schedule(
+        db_session,
+        pod_id=UUID((await scenario.create_pod(name_prefix="Let go A"))["id"]),
+        user_id=owner["id"],
+        installation_id=installation_id,
+    )
+    b_schedule = await _github_schedule(
+        db_session,
+        pod_id=await _pod_in(scenario, auth_headers(owner), org_b, "Let go B"),
+        user_id=owner["id"],
+        installation_id=installation_id,
+    )
     url = f"/organizations/{org_b}/connectors/github/installations/{installation_id}"
 
     released = await scenario.owner_client.delete(url)
@@ -253,6 +311,11 @@ async def test_an_org_lets_go_of_its_own_binding_and_the_other_keeps_its(
     normalized = await _verified_delivery(installation_id)
     assert normalized is not None
     assert normalized.organization_ids == frozenset({scenario.org_id})
+    assert await _schedule_standing(db_session, b_schedule) == (
+        False,
+        "github_installation_released",
+    ), "a schedule that can no longer fire still reads as on"
+    assert await _schedule_standing(db_session, a_schedule) == (True, None)
 
     again = await scenario.owner_client.delete(url)
     assert again.status_code == 404, again.text

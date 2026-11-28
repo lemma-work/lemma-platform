@@ -38,14 +38,21 @@ An organization can let go of an installation it holds
 (``release_for_organization``). The row stays, marked released, and stops
 counting everywhere a binding counts; it is kept so that the next read of an
 account does not quietly bind the installation again on the same person's
-proof. Taking it back is an explicit claim -- picking it on an account, or
-connecting through it -- which clears the mark.
+proof. Its schedules on the installation are stood down, with the reason, so
+a trigger that can no longer fire does not read as live. Taking it back is an
+explicit claim -- picking it on an account, or connecting through it -- which
+clears the mark.
 
 There is no unbound path. Migration 0063 bound every existing installation
 whose organization could be derived and unbound the accounts of the rest. A
 derived binding is *unproven* (``proven_at`` NULL): it keeps working for the
 organization holding it, but nobody showed GitHub's proof for it, so the bot
 (APP mode) never acts on it. The holder's own next proven claim stamps it.
+Another organization's proven claim ends it: an unproven binding is let go of
+the moment someone proves control of the installation elsewhere, so a
+binding nobody proved cannot keep the App's tokens and webhooks beside the
+owner's. Its organization can take it back on its own proof, like any it let
+go of.
 """
 
 from __future__ import annotations
@@ -267,6 +274,7 @@ async def claim_installation(
             and await _may_install(session, user_id, organization_id)
         ):
             await _stamp(session, installation_id, organization_id)
+            await _end_unproven_elsewhere(session, installation_id, organization_id)
         return
     if not administered:
         logger.warning(
@@ -296,6 +304,7 @@ async def claim_installation(
             "connectors.github_bindings.installation_reclaimed",
             organization_id=str(organization_id),
         )
+        await _end_unproven_elsewhere(session, installation_id, organization_id)
         return
     # Nothing on conflict: a second claim from this organization racing this
     # one bound the same row, and either way the organization holds it.
@@ -319,6 +328,50 @@ async def claim_installation(
             "connectors.github_bindings.installation_bound",
             organization_id=str(organization_id),
         )
+    await _end_unproven_elsewhere(session, installation_id, organization_id)
+
+
+async def _end_unproven_elsewhere(
+    session: AsyncSession, installation_id: str, organization_id: UUID
+) -> None:
+    """A proven claim lets go of every other organization's unproven binding.
+
+    Migration 0063 derived some bindings nobody proved. Before several
+    organizations could hold one installation, a proven claim from elsewhere
+    took such a row over; now that each organization keeps its own, nothing
+    else would end one, and the organization holding it would keep the App's
+    tokens and webhooks on the installation for good -- beside the GitHub
+    account's real owner, who has no way to end it from Lemma. So it is let
+    go of here, exactly as if its organization had: accounts forget it,
+    schedules stand down, and its organization may take it back on its own
+    proof. A proven row elsewhere is that organization's own and is left be.
+    """
+    # Only 0063 wrote unproven rows, one per installation then, so this is
+    # one page at most; paged anyway, since each release takes its row out of
+    # the next page, and a cap that stopped early would leave one standing.
+    while True:
+        others = (
+            await session.scalars(
+                select(ConnectorInstallation.organization_id)
+                .where(
+                    ConnectorInstallation.connector_id == GITHUB,
+                    ConnectorInstallation.external_id == str(installation_id),
+                    ConnectorInstallation.organization_id != organization_id,
+                    ConnectorInstallation.proven_at.is_(None),
+                    held(),
+                )
+                .limit(_ORGANIZATIONS_PAGE)
+            )
+        ).all()
+        if not others:
+            return
+        for other in others:
+            await release_for_organization(session, installation_id, other)
+            logger.warning(
+                "connectors.github_bindings.unproven_binding_ended.denied",
+                organization_id=str(other),
+                proven_by=str(organization_id),
+            )
 
 
 async def _stamp(
@@ -381,9 +434,11 @@ async def release_for_organization(
 
     Its accounts naming the installation forget it, so the next read of each
     asks GitHub again instead of resting on a routing key that no longer acts
-    on anything. Its schedules routing on it hear nothing from then on: a
-    delivery reaches only organizations that hold the installation. The
-    caller has checked the person may manage the organization's installations.
+    on anything. Its schedules routing on it are stood down, with
+    ``github_installation_released`` as the reason, rather than left reading
+    active while no delivery reaches them; other organizations' schedules on
+    the same installation keep running. The caller has checked the person may
+    manage the organization's installations.
 
     The row is kept, marked released and unproven, rather than deleted: an
     account in the organization that can still see the installation would
@@ -415,6 +470,16 @@ async def release_for_organization(
         )
         .values(external_ref=None)
         .returning(Account.id)
+    )
+    from app.modules.schedule.contracts.retirement import (
+        deactivate_matching_schedules,
+    )
+
+    await deactivate_matching_schedules(
+        session,
+        criteria={"source": GITHUB, "installation_id": str(installation_id)},
+        reason="github_installation_released",
+        organization_id=organization_id,
     )
     logger.info(
         "connectors.github_bindings.installation_released",

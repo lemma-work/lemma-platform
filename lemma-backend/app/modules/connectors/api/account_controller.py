@@ -349,8 +349,8 @@ async def bind_account_installation(
     description=(
         "This organization lets go of a GitHub App installation it holds. "
         "Other organizations holding the same installation keep theirs. Its "
-        "accounts naming the installation forget it, and its schedules stop "
-        "hearing the installation's events. Reading an account does not take "
+        "accounts naming the installation forget it, and its schedules on it "
+        "are switched off, with the reason. Reading an account does not take "
         "it back; picking it on an account, or connecting through it, does. "
         "Needs `org.installation.manage`."
     ),

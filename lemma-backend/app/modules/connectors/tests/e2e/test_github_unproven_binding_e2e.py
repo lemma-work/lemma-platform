@@ -6,8 +6,10 @@ stayed theirs. Such a binding is *unproven* (``proven_at`` NULL): it keeps
 working for its holder's accounts, the bot (APP mode) never acts on it, and
 the holder's own next proven claim stamps it. Another organization's proven
 claim -- a GitHub admin of the installation who may install apps for their
-Lemma organization -- binds it there too and leaves the derived binding as it
-was: each organization's binding is its own. An unproven claim binds nothing.
+Lemma organization -- binds it there and ends the derived binding, as if its
+organization had let go of it: its accounts forget the installation and its
+schedules on it are switched off. A proven binding elsewhere is its own
+organization's and is left be. An unproven claim binds nothing.
 
 A binding is seeded the way the migration leaves one; the claims run against
 Postgres, and GitHub is answered at the HTTP boundary for the two journeys
@@ -30,10 +32,16 @@ from app.modules.connectors.infrastructure.models.connector_installation import 
     ConnectorInstallation,
 )
 from app.modules.connectors.services.auth.github_bindings import claim_installation
+from app.modules.connectors.tests.e2e.test_github_installation_several_orgs_e2e import (
+    _github_schedule,
+    _pod_in,
+    _schedule_standing,
+)
 from app.modules.connectors.tests.e2e.test_github_installation_binding_e2e import (  # noqa: F401
     _account_in,
     _accounts_on,
     _github_connector,
+    _holders,
     _install_github,
     _installation_id,
     _org_of_someone_else,
@@ -91,12 +99,30 @@ async def _squatter_and_claimant(scenario):
     return squatter, scenario.owner_user, scenario.owner_client, scenario.org_id
 
 
-async def test_a_proven_claim_from_another_org_binds_it_there_and_moves_nothing(
+async def test_a_proven_claim_from_another_org_ends_the_unproven_binding(
     scenario, db_session
 ):
+    """Review of #1259: with several holders allowed, nothing ended a binding
+    nobody proved, so its organization kept the App's tokens and webhooks on
+    the installation beside the owner's for good."""
     installation_id = _installation_id()
-    squatter, claimant, _, org_id = await _squatter_and_claimant(scenario)
+    person, headers, squatter = await _org_of_someone_else(scenario, "h4-squatter")
+    await scenario.create_org(name_prefix="H4 claimant")
+    claimant, org_id = scenario.owner_user, scenario.org_id
     await _derived_binding(db_session, installation_id, squatter, proven=False)
+    await _github_connector(db_session)
+    squatter_account = await _account_in(
+        db_session,
+        org_id=squatter,
+        user_id=person["id"],
+        external_ref=installation_id,
+    )
+    squatter_schedule = await _github_schedule(
+        db_session,
+        pod_id=await _pod_in(scenario, headers, squatter, "Squatter"),
+        user_id=person["id"],
+        installation_id=installation_id,
+    )
 
     await claim_installation(
         db_session,
@@ -107,10 +133,18 @@ async def test_a_proven_claim_from_another_org_binds_it_there_and_moves_nothing(
     )
     await db_session.commit()
 
+    assert await _holders(db_session, installation_id) == {UUID(org_id)}
     assert await _bindings(db_session, installation_id) == {
         UUID(squatter): (False, None),
         UUID(org_id): (True, UUID(claimant["id"])),
     }
+    [account] = await _accounts_on(db_session, squatter)
+    assert str(account.id) == squatter_account
+    assert account.external_ref is None
+    assert await _schedule_standing(db_session, squatter_schedule) == (
+        False,
+        "github_installation_released",
+    )
 
 
 async def test_a_proven_claim_beside_a_proven_binding_binds_it_there_too(
@@ -198,8 +232,7 @@ async def test_a_github_admin_binds_a_squatted_installation_through_setup(
 ):
     """The installation's real admin comes back from GitHub's install page
     naming it, and their organization holds it, proven, from then on. The
-    squatter's derived binding is left as it was: never proven, so the bot
-    never acts on it there."""
+    squatter's derived binding, never proven, ends there."""
     installation_id = _installation_id()
     squatter, _, _, org_id = await _squatter_and_claimant(scenario)
     await _derived_binding(db_session, installation_id, squatter, proven=False)
@@ -219,7 +252,7 @@ async def test_a_github_admin_binds_a_squatted_installation_through_setup(
     assert claimed.status_code == 200, claimed.text
     bindings = await _bindings(db_session, installation_id)
     assert bindings[UUID(org_id)][0] is True
-    assert bindings[UUID(squatter)] == (False, None)
+    assert await _holders(db_session, installation_id) == {UUID(org_id)}
     [account] = await _accounts_on(db_session, org_id)
     assert account.external_ref == installation_id
 
